@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5" />
+    <title>Tree Friend – Trees & Plants for Every Home | Bangladesh</title>
+    <meta name="description" content="Shop fruit trees, indoor plants, and saplings in Bangladesh. Quality plants from trusted nurseries, fair pricing, delivered responsibly." />
+    <meta name="keywords" content="trees Bangladesh, plant nursery, fruit trees, indoor plants, saplings, buy trees online" />
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#fdf6f0" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Tree Friend" />
+    <meta property="og:title" content="Tree Friend – Trees & Plants for Every Home" />
+    <meta property="og:description" content="Shop fruit trees, indoor plants, and saplings in Bangladesh. Fair pricing, delivered responsibly." />
+    <meta property="og:image" content="/opengraph.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Tree Friend – Trees & Plants for Every Home" />
+    <meta name="twitter:description" content="Shop fruit trees, indoor plants, and saplings in Bangladesh." />
+    <meta name="twitter:image" content="/opengraph.jpg" />
+
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Tree Friend" />
+
+    <!-- Canonical -->
+    <link rel="canonical" href="https://treefriend.com/" />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/logo.webp" />
+
+    <!-- Preconnect for performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://images.unsplash.com" crossorigin />
+    <link rel="preconnect" href="https://res.cloudinary.com" crossorigin />
+    <link rel="preconnect" href="https://treefriend-api.onrender.com" crossorigin />
+    <link rel="dns-prefetch" href="https://clerk.treefriend.com" />
+
+    <!-- Preload LCP hero image so browser fetches it immediately -->
+    <link rel="preload" as="image" href="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783747272/IMG_20260711_111454-removebg-preview_11zon_wsnwgd.png" fetchpriority="high" />
+
+    <!-- Fonts: DM Sans for body + DM Serif Display for headings (matches index.css) -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" media="print" onload="this.media='all'" />
+    <noscript><link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" /></noscript>
+
+    <!-- Fonts: Jost + Lora for the new footer design -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&family=Lora:wght@600;700&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&family=Lora:wght@600;700&family=Outfit:wght@400;500;600&display=swap" media="print" onload="this.media='all'" />
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&family=Lora:wght@600;700&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet" /></noscript>
+
+    <!-- Structured Data: Organization -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "Tree Friend",
+      "url": "https://treefriend.com",
+      "logo": "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783743859/IMG_20260710_151144-removebg-preview_11zon_ck95ax.png",
+      "description": "Trees, plants, and saplings in Bangladesh",
+      "sameAs": []
+    }
+    </script>
+
+    <!-- Structured Data: WebSite with SearchAction -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "Tree Friend",
+      "url": "https://treefriend.com",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": {
+          "@type": "EntryPoint",
+          "urlTemplate": "https://treefriend.com/products?q={search_term_string}"
+        },
+        "query-input": "required name=search_term_string"
+      }
+    }
+    </script>
+
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(() => {});
+        });
+      }
+    </script>
+
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

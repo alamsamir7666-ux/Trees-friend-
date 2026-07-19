@@ -1,0 +1,24 @@
+{
+  "installCommand": "npm install -g pnpm@9.15.0 && pnpm install --no-frozen-lockfile",
+  "buildCommand": "pnpm run build",
+  "outputDirectory": "dist/public",
+  "routes": [
+    { "handle": "filesystem" },
+    {
+      "src": "/sitemap.xml",
+      "dest": "/api/sitemap"
+    },
+    {
+      "src": "/products/(\\d+)",
+      "dest": "/api/og-product"
+    },
+    {
+      "src": "/blog/([^/]+)",
+      "dest": "/api/og-blog"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}

@@ -1,0 +1,3474 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: Tree Friend E-Commerce API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: products
+    description: Product operations
+  - name: categories
+    description: Category operations
+  - name: cart
+    description: Cart operations
+  - name: orders
+    description: Order operations
+  - name: reviews
+    description: Review operations
+  - name: wishlist
+    description: Wishlist operations
+  - name: coupons
+    description: Coupon operations
+  - name: users
+    description: User operations
+  - name: sellers
+    description: Seller marketplace operations
+  - name: sellerListings
+    description: Seller listing marketplace operations (plan doc §10.2)
+  - name: sellerOrders
+    description: Seller order management + courier booking operations (plan doc §4, §8 — Part 4)
+  - name: sellerPaymentConfigs
+    description: Seller bKash payment settings CRUD (plan doc §4, §7 — Part 5)
+  - name: admin
+    description: Admin operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /categories:
+    get:
+      operationId: listCategories
+      tags: [categories]
+      summary: List all categories
+      responses:
+        "200":
+          description: Categories list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Category"
+    post:
+      operationId: createCategory
+      tags: [categories]
+      summary: Create a category (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCategoryBody"
+      responses:
+        "201":
+          description: Created category
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+
+  /categories/{id}:
+    put:
+      operationId: updateCategory
+      tags: [categories]
+      summary: Update a category (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCategoryBody"
+      responses:
+        "200":
+          description: Updated category
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+    delete:
+      operationId: deleteCategory
+      tags: [categories]
+      summary: Delete a category (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /products:
+    get:
+      operationId: listProducts
+      tags: [products]
+      summary: List products with optional filters
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: minPrice
+          in: query
+          schema:
+            type: number
+        - name: maxPrice
+          in: query
+          schema:
+            type: number
+        - name: minRating
+          in: query
+          schema:
+            type: number
+        - name: sortBy
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Products list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListResponse"
+    post:
+      operationId: createProduct
+      tags: [products]
+      summary: Create a product (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductBody"
+      responses:
+        "201":
+          description: Created product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+
+  /products/featured:
+    get:
+      operationId: getFeaturedProducts
+      tags: [products]
+      summary: Get featured products for homepage
+      responses:
+        "200":
+          description: Featured products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+
+  /products/homepage:
+    get:
+      operationId: getHomepageProducts
+      tags: [products]
+      summary: Get top and bottom homepage section products
+      responses:
+        "200":
+          description: Homepage section products
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [top, bottom]
+                properties:
+                  top:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Product"
+                  bottom:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Product"
+
+  /products/{id}:
+    get:
+      operationId: getProduct
+      tags: [products]
+      summary: Get a product by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "404":
+          description: Not found
+    put:
+      operationId: updateProduct
+      tags: [products]
+      summary: Update a product (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProductBody"
+      responses:
+        "200":
+          description: Updated product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+    delete:
+      operationId: deleteProduct
+      tags: [products]
+      summary: Delete a product (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /cart:
+    get:
+      operationId: getCart
+      tags: [cart]
+      summary: Get current user's cart
+      responses:
+        "200":
+          description: Cart
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+    delete:
+      operationId: clearCart
+      tags: [cart]
+      summary: Clear cart
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /cart/items:
+    post:
+      operationId: addToCart
+      tags: [cart]
+      summary: Add item to cart
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddToCartBody"
+      responses:
+        "200":
+          description: Updated cart
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+
+  /cart/items/{id}:
+    put:
+      operationId: updateCartItem
+      tags: [cart]
+      summary: Update cart item quantity
+      description: >-
+        id is the cart_items row's own primary key, not a variantId --
+        a seller-listing cart line has no variantId, so the row id is the
+        only identifier that addresses both line kinds (plan doc §2, §7;
+        see schema/cart.ts doc comment).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCartItemBody"
+      responses:
+        "200":
+          description: Updated cart
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+    delete:
+      operationId: removeFromCart
+      tags: [cart]
+      summary: Remove item from cart
+      description: id is the cart_items row's own primary key, not a variantId.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated cart
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+
+  /orders:
+    get:
+      operationId: listOrders
+      tags: [orders]
+      summary: List current user's orders
+      responses:
+        "200":
+          description: Orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+    post:
+      operationId: createOrder
+      tags: [orders]
+      summary: Place an order
+      description: >-
+        Always returns an array. A cart spanning multiple sellers splits
+        into one order per seller (plus one for admin-direct lines, if
+        any) -- plan doc §2, §7. A single-seller or all-admin-direct cart
+        still returns an array, just with one element, so callers never
+        need to branch on whether checkout split.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderBody"
+      responses:
+        "201":
+          description: Created order(s)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      tags: [orders]
+      summary: Get order by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /orders/track/{trackingId}:
+    get:
+      operationId: trackOrder
+      tags: [orders]
+      summary: Track order by tracking ID (public)
+      parameters:
+        - name: trackingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Order tracking info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderTracking"
+
+  /reviews/{productId}/eligibility:
+    get:
+      operationId: getReviewEligibility
+      tags: [reviews]
+      summary: Check if current user can review this product
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Eligibility result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewEligibility"
+
+  /reviews/{productId}:
+    get:
+      operationId: listReviews
+      tags: [reviews]
+      summary: Get reviews for a product
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reviews
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Review"
+    post:
+      operationId: createReview
+      tags: [reviews]
+      summary: Create a review (auth required)
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReviewBody"
+      responses:
+        "201":
+          description: Created review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Review"
+
+  /reviews/{reviewId}:
+    put:
+      operationId: updateReview
+      tags: [reviews]
+      summary: Update own review
+      parameters:
+        - name: reviewId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReviewBody"
+      responses:
+        "200":
+          description: Updated review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Review"
+
+  /reviews/{productId}/{reviewId}:
+    delete:
+      operationId: deleteReview
+      tags: [reviews]
+      summary: Delete a review (admin or owner)
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: reviewId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /admin/reviews:
+    get:
+      operationId: listAllReviews
+      tags: [admin]
+      summary: Admin — list all reviews with product info
+      responses:
+        "200":
+          description: All reviews
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminReview"
+
+  /wishlist:
+    get:
+      operationId: getWishlist
+      tags: [wishlist]
+      summary: Get user's wishlist
+      responses:
+        "200":
+          description: Wishlist
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WishlistItem"
+
+  /wishlist/{productId}:
+    post:
+      operationId: addToWishlist
+      tags: [wishlist]
+      summary: Add product to wishlist
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+    delete:
+      operationId: removeFromWishlist
+      tags: [wishlist]
+      summary: Remove product from wishlist
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /coupons/validate:
+    post:
+      operationId: validateCoupon
+      tags: [coupons]
+      summary: Validate a coupon code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidateCouponBody"
+      responses:
+        "200":
+          description: Coupon details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Coupon"
+
+  /coupons:
+    get:
+      operationId: listCoupons
+      tags: [coupons]
+      summary: List all coupons (admin only)
+      responses:
+        "200":
+          description: Coupons
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Coupon"
+    post:
+      operationId: createCoupon
+      tags: [coupons]
+      summary: Create a coupon (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCouponBody"
+      responses:
+        "201":
+          description: Created coupon
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Coupon"
+
+  /coupons/{id}:
+    delete:
+      operationId: deleteCoupon
+      tags: [coupons]
+      summary: Delete a coupon (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /users/me:
+    get:
+      operationId: getMe
+      tags: [users]
+      summary: Get current user profile
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+    put:
+      operationId: updateMe
+      tags: [users]
+      summary: Update current user profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileBody"
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+
+  /users/me/addresses:
+    get:
+      operationId: listAddresses
+      tags: [users]
+      summary: Get user's saved addresses
+      responses:
+        "200":
+          description: Addresses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Address"
+    post:
+      operationId: addAddress
+      tags: [users]
+      summary: Add a new address
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddressBody"
+      responses:
+        "201":
+          description: Added address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Address"
+
+  /users/me/addresses/{id}:
+    put:
+      operationId: updateAddress
+      tags: [users]
+      summary: Update an address
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddressBody"
+      responses:
+        "200":
+          description: Updated address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Address"
+    delete:
+      operationId: deleteAddress
+      tags: [users]
+      summary: Delete an address
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /sellers/me:
+    get:
+      operationId: getMySeller
+      tags: [sellers]
+      summary: Get the current user's seller application/account, if any
+      responses:
+        "200":
+          description: Seller record, or null if the user has never applied
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Seller"
+                  - type: "null"
+    patch:
+      operationId: updateMySellerProfile
+      tags: [sellers]
+      summary: Seller — update own business/nursery profile fields (post-approval self-service editing)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSellerProfileBody"
+      responses:
+        "200":
+          description: Updated seller record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Seller"
+
+  /sellers/me/status:
+    put:
+      operationId: updateMySellerStatus
+      tags: [sellers]
+      summary: Seller — toggle own vacation mode (status active <-> vacation only; cannot self-set other statuses)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSellerStatusBody"
+      responses:
+        "200":
+          description: Updated seller record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Seller"
+
+  /sellers:
+    post:
+      operationId: becomeSeller
+      tags: [sellers]
+      summary: Apply to become a seller (creates a pending_verification seller row)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SellerApplicationBody"
+      responses:
+        "201":
+          description: Created seller application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Seller"
+
+  /categories/{categoryId}/listing-attribute-options:
+    get:
+      operationId: listListingAttributeOptions
+      tags: [sellerListings]
+      summary: Get the controlled option set for a category, optionally filtered by attribute (plan doc §3a)
+      parameters:
+        - name: categoryId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: attributeName
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [height, pot_size, age, root_type]
+      responses:
+        "200":
+          description: Option values for this category
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ListingAttributeOption"
+
+  /admin/listing-attribute-options:
+    post:
+      operationId: createListingAttributeOption
+      tags: [sellerListings]
+      summary: Admin — add an option value to a category/attribute pair
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateListingAttributeOptionBody"
+      responses:
+        "201":
+          description: Created option
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListingAttributeOption"
+
+  /admin/listing-attribute-options/{id}:
+    put:
+      operationId: updateListingAttributeOption
+      tags: [sellerListings]
+      summary: Admin — update an option's value/display order
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateListingAttributeOptionBody"
+      responses:
+        "200":
+          description: Updated option
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListingAttributeOption"
+    delete:
+      operationId: deleteListingAttributeOption
+      tags: [sellerListings]
+      summary: Admin — delete an option value
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /seller-listings/mine:
+    get:
+      operationId: listMySellerListings
+      tags: [sellerListings]
+      summary: Seller — list the current seller's own listings (all statuses/visibility)
+      responses:
+        "200":
+          description: The current seller's listings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SellerListing"
+
+  /seller-listings:
+    post:
+      operationId: createSellerListing
+      tags: [sellerListings]
+      summary: Seller — create a listing against an existing admin-owned variety
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSellerListingBody"
+      responses:
+        "201":
+          description: Created listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerListing"
+
+  /seller-listings/{id}:
+    put:
+      operationId: updateSellerListing
+      tags: [sellerListings]
+      summary: Seller — update their own listing
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSellerListingBody"
+      responses:
+        "200":
+          description: Updated listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerListing"
+    delete:
+      operationId: deleteSellerListing
+      tags: [sellerListings]
+      summary: Seller — delete their own listing
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /products/{productId}/seller-listings:
+    get:
+      operationId: listProductSellerListings
+      tags: [sellerListings]
+      summary: Buyer-facing — seller cards for a variety detail page (plan doc §6)
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [price_asc, price_desc, delivery_time, rating]
+      responses:
+        "200":
+          description: Approved, visible, active-seller listings for this variety
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SellerListingCard"
+
+  /admin/seller-listings:
+    get:
+      operationId: listAdminSellerListings
+      tags: [sellerListings]
+      summary: Admin — list all seller listings, optionally filtered by approval status
+      parameters:
+        - name: approvalStatus
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, approved, rejected]
+      responses:
+        "200":
+          description: Listings with seller/product context
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminSellerListing"
+
+  /admin/seller-listings/{id}/approve:
+    put:
+      operationId: approveSellerListing
+      tags: [sellerListings]
+      summary: Admin — approve a pending listing
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Approved listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerListing"
+
+  /admin/seller-listings/{id}/reject:
+    put:
+      operationId: rejectSellerListing
+      tags: [sellerListings]
+      summary: Admin — reject a pending listing
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectSellerListingBody"
+      responses:
+        "200":
+          description: Rejected listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerListing"
+
+  /seller-courier-configs/mine:
+    get:
+      operationId: getMySellerCourierConfig
+      tags: [sellerOrders]
+      summary: Seller — get their own courier config (masked credentials). 404 means not set up yet (manual fallback).
+      responses:
+        "200":
+          description: Masked courier config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerCourierConfig"
+    delete:
+      operationId: deleteMySellerCourierConfig
+      tags: [sellerOrders]
+      summary: Seller — remove their courier config (falls back to manual status updates)
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /seller-courier-configs:
+    post:
+      operationId: createSellerCourierConfig
+      tags: [sellerOrders]
+      summary: Seller — create/replace their courier config (Pathao or Steadfast)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSellerCourierConfigBody"
+      responses:
+        "201":
+          description: Created (masked) courier config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerCourierConfig"
+
+  /seller-payment-configs/mine:
+    get:
+      operationId: getMySellerPaymentConfig
+      tags: [sellerPaymentConfigs]
+      summary: Seller — get their own bKash payment config (masked credentials). 404 means not set up yet (COD-only).
+      responses:
+        "200":
+          description: Masked payment config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerPaymentConfig"
+    delete:
+      operationId: deleteMySellerPaymentConfig
+      tags: [sellerPaymentConfigs]
+      summary: Seller — remove their payment config (listings fall back to COD-only)
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /seller-payment-configs:
+    post:
+      operationId: createSellerPaymentConfig
+      tags: [sellerPaymentConfigs]
+      summary: Seller — create/replace their bKash merchant payment config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSellerPaymentConfigBody"
+      responses:
+        "201":
+          description: Created (masked) payment config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerPaymentConfig"
+
+  /seller/orders:
+    get:
+      operationId: listSellerOrders
+      tags: [sellerOrders]
+      summary: Seller — list orders belonging to them (Manage Orders, plan doc §4)
+      parameters:
+        - name: orderStatus
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, confirmed, processing, shipped, delivered, cancelled]
+      responses:
+        "200":
+          description: Seller's orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SellerOrder"
+
+  /seller/orders/{id}:
+    get:
+      operationId: getSellerOrder
+      tags: [sellerOrders]
+      summary: Seller — get one of their own orders by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerOrder"
+
+  /seller/orders/{id}/status:
+    put:
+      operationId: updateSellerOrderStatus
+      tags: [sellerOrders]
+      summary: Seller — advance or cancel one of their own orders
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSellerOrderStatusBody"
+      responses:
+        "200":
+          description: Updated order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerOrder"
+
+  /seller/orders/{orderId}/shipment:
+    get:
+      operationId: getSellerOrderShipment
+      tags: [sellerOrders]
+      summary: Seller — get shipment/courier status for one of their own orders
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Shipment, or null if not booked/set yet
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/OrderShipment"
+                  - type: "null"
+
+  /seller/orders/{orderId}/book-courier:
+    post:
+      operationId: bookCourierForOrder
+      tags: [sellerOrders]
+      summary: Seller — book a Pathao/Steadfast shipment for this order using their configured courier account (plan doc §8)
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "201":
+          description: Booked shipment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderShipment"
+
+  /seller/orders/{orderId}/shipment-status:
+    put:
+      operationId: updateShipmentStatus
+      tags: [sellerOrders]
+      summary: Seller — manually set shipment status (required for manual-fallback sellers, plan doc §8)
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateShipmentStatusBody"
+      responses:
+        "200":
+          description: Updated shipment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderShipment"
+
+  /orders/{orderId}/shipment:
+    get:
+      operationId: getOrderShipment
+      tags: [orders]
+      summary: Buyer — get shipment/tracking status for one of their own orders. Reads only order_shipments, never calls the courier directly (plan doc §8).
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Shipment, or null if not booked/set yet
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/OrderShipment"
+                  - type: "null"
+
+  /admin/dashboard:
+    get:
+      operationId: getAdminDashboard
+      tags: [admin]
+      summary: Get admin dashboard analytics
+      responses:
+        "200":
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
+  /admin/orders:
+    get:
+      operationId: listAllOrders
+      tags: [admin]
+      summary: List all orders (admin only)
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: All orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+
+  /admin/orders/{id}/status:
+    put:
+      operationId: updateOrderStatus
+      tags: [admin]
+      summary: Update order status (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrderStatusBody"
+      responses:
+        "200":
+          description: Updated order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /admin/orders/{id}/payment:
+    put:
+      operationId: updateOrderPayment
+      tags: [admin]
+      summary: Verify/update order payment status (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePaymentStatusBody"
+      responses:
+        "200":
+          description: Updated order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /admin/users:
+    get:
+      operationId: listAllUsers
+      tags: [admin]
+      summary: List all users (admin only)
+      responses:
+        "200":
+          description: All users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UserProfile"
+
+  /admin/users/{id}/block:
+    put:
+      operationId: toggleUserBlock
+      tags: [admin]
+      summary: Block/unblock user (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToggleBlockBody"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+
+  /admin/sellers:
+    get:
+      operationId: listSellers
+      tags: [admin]
+      summary: List seller applications/accounts (admin only), optionally filtered by status
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending_verification, active, suspended, vacation]
+      responses:
+        "200":
+          description: Sellers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Seller"
+
+  /admin/sellers/{id}/approve:
+    put:
+      operationId: approveSeller
+      tags: [admin]
+      summary: Approve a pending seller application (admin only) — sets status to active
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Approved seller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Seller"
+
+  /admin/sellers/{id}/reject:
+    put:
+      operationId: rejectSeller
+      tags: [admin]
+      summary: Reject a pending seller application (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectSellerBody"
+      responses:
+        "200":
+          description: Rejected seller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Seller"
+
+  /admin/sellers/{id}/suspend:
+    put:
+      operationId: suspendSeller
+      tags: [admin]
+      summary: Suspend an active seller (admin only) — hides their listings without deleting them
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Suspended seller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Seller"
+
+  /admin/seller-payment-configs:
+    get:
+      operationId: listAdminSellerPaymentConfigs
+      tags: [admin]
+      summary: >-
+        List seller bKash payment configs for admin review (admin only).
+        Defaults to unverified/pending-review configs; pass verified=true
+        to see already-verified ones instead.
+      parameters:
+        - name: verified
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Payment configs (masked)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SellerPaymentConfig"
+
+  /admin/seller-payment-configs/{id}/verify:
+    put:
+      operationId: verifySellerPaymentConfig
+      tags: [admin]
+      summary: >-
+        Mark a seller's bKash payment config as verified (admin only,
+        manual review — no live bKash API check). Unlocks
+        "advance"/"both"/"bkash" for that seller.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Verified payment config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerPaymentConfig"
+
+  /admin/seller-payment-configs/{id}/unverify:
+    put:
+      operationId: unverifySellerPaymentConfig
+      tags: [admin]
+      summary: Revoke verification on a seller's bKash payment config (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Unverified payment config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerPaymentConfig"
+
+  /admin/seller-courier-configs:
+    get:
+      operationId: listAdminSellerCourierConfigs
+      tags: [admin]
+      summary: >-
+        List seller Pathao/Steadfast courier configs for admin review
+        (admin only). Defaults to unverified/pending-review configs; pass
+        verified=true to see already-verified ones instead.
+      parameters:
+        - name: verified
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Courier configs (masked)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SellerCourierConfig"
+
+  /admin/seller-courier-configs/{id}/verify:
+    put:
+      operationId: verifySellerCourierConfig
+      tags: [admin]
+      summary: >-
+        Mark a seller's courier config as verified (admin only, manual
+        review — no live Pathao/Steadfast API check).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Verified courier config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerCourierConfig"
+
+  /admin/seller-courier-configs/{id}/unverify:
+    put:
+      operationId: unverifySellerCourierConfig
+      tags: [admin]
+      summary: Revoke verification on a seller's courier config (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Unverified courier config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerCourierConfig"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message
+
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        slug:
+          type: string
+        icon:
+          type: ["string", "null"]
+        displayOrder:
+          type: integer
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - name
+        - slug
+        - icon
+        - displayOrder
+        - createdAt
+        - updatedAt
+
+    CreateCategoryBody:
+      type: object
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        icon:
+          type: ["string", "null"]
+        displayOrder:
+          type: integer
+      required:
+        - name
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        slug:
+          type: string
+        categoryId:
+          type: integer
+        scientificName:
+          type: ["string", "null"]
+        description:
+          type: string
+        sunlight:
+          type: ["string", "null"]
+        watering:
+          type: ["string", "null"]
+        soilType:
+          type: ["string", "null"]
+        matureHeight:
+          type: ["string", "null"]
+        climateZone:
+          type: ["string", "null"]
+        growthRate:
+          type: ["string", "null"]
+        bloomSeason:
+          type: ["string", "null"]
+        keyBenefits:
+          type: array
+          items:
+            type: string
+        bestFor:
+          type: array
+          items:
+            type: string
+        careTips:
+          type: array
+          items:
+            type: string
+        images:
+          type: array
+          items:
+            type: string
+        videoUrl:
+          type: ["string", "null"]
+        homepageTag:
+          type: ["string", "null"]
+        productStatus:
+          type: string
+        startingPrice:
+          type: ["number", "null"]
+        totalStock:
+          type: integer
+        inStock:
+          type: boolean
+        variants:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductVariant"
+        averageRating:
+          type: number
+        reviewCount:
+          type: integer
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - slug
+        - categoryId
+        - description
+        - keyBenefits
+        - bestFor
+        - careTips
+        - images
+        - productStatus
+        - startingPrice
+        - totalStock
+        - inStock
+        - variants
+        - averageRating
+        - reviewCount
+        - createdAt
+
+    ProductListResponse:
+      type: object
+      properties:
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        total:
+          type: integer
+        page:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - products
+        - total
+        - page
+        - totalPages
+
+    ProductVariant:
+      type: object
+      properties:
+        id:
+          type: integer
+        productId:
+          type: integer
+        name:
+          type: string
+        variantType:
+          type: string
+        form:
+          type: ["string", "null"]
+        price:
+          type: number
+        discountPrice:
+          type: ["number", "null"]
+        stock:
+          type: integer
+        deliveryCharge:
+          type: number
+        sku:
+          type: ["string", "null"]
+      required:
+        - id
+        - productId
+        - name
+        - variantType
+        - price
+        - stock
+        - deliveryCharge
+
+    ProductVariantInput:
+      type: object
+      properties:
+        name:
+          type: string
+        variantType:
+          type: string
+        form:
+          type: ["string", "null"]
+        price:
+          type: number
+        discountPrice:
+          type: ["number", "null"]
+        stock:
+          type: integer
+        deliveryCharge:
+          type: number
+        sku:
+          type: ["string", "null"]
+      required:
+        - name
+        - price
+
+    CreateProductBody:
+      type: object
+      properties:
+        name:
+          type: string
+        categoryId:
+          type: integer
+        scientificName:
+          type: ["string", "null"]
+        description:
+          type: string
+        sunlight:
+          type: ["string", "null"]
+        watering:
+          type: ["string", "null"]
+        soilType:
+          type: ["string", "null"]
+        matureHeight:
+          type: ["string", "null"]
+        climateZone:
+          type: ["string", "null"]
+        growthRate:
+          type: ["string", "null"]
+        bloomSeason:
+          type: ["string", "null"]
+        homepageTag:
+          type: ["string", "null"]
+        keyBenefits:
+          type: array
+          items:
+            type: string
+        bestFor:
+          type: array
+          items:
+            type: string
+        careTips:
+          type: array
+          items:
+            type: string
+        images:
+          type: array
+          items:
+            type: string
+        videoUrl:
+          type: string
+        productStatus:
+          type: string
+        variants:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductVariantInput"
+      required:
+        - name
+        - categoryId
+        - description
+        - images
+        - variants
+
+    UpdateProductBody:
+      type: object
+      properties:
+        name:
+          type: string
+        categoryId:
+          type: integer
+        scientificName:
+          type: ["string", "null"]
+        description:
+          type: string
+        sunlight:
+          type: ["string", "null"]
+        watering:
+          type: ["string", "null"]
+        soilType:
+          type: ["string", "null"]
+        matureHeight:
+          type: ["string", "null"]
+        climateZone:
+          type: ["string", "null"]
+        growthRate:
+          type: ["string", "null"]
+        bloomSeason:
+          type: ["string", "null"]
+        homepageTag:
+          type: ["string", "null"]
+        keyBenefits:
+          type: array
+          items:
+            type: string
+        bestFor:
+          type: array
+          items:
+            type: string
+        careTips:
+          type: array
+          items:
+            type: string
+        images:
+          type: array
+          items:
+            type: string
+        videoUrl:
+          type: string
+        productStatus:
+          type: string
+        variants:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductVariantInput"
+
+    CartItemProduct:
+      type: object
+      description: Trimmed product info attached to a cart line (not the full Product shape).
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        slug:
+          type: string
+        categoryId:
+          type: integer
+        description:
+          type: string
+        images:
+          type: array
+          items:
+            type: string
+        averageRating:
+          type: number
+        reviewCount:
+          type: integer
+        isFeatured:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - slug
+        - categoryId
+        - description
+        - images
+        - averageRating
+        - reviewCount
+        - createdAt
+
+    CartItemSeller:
+      type: object
+      description: Present only on seller_listing-kind cart lines.
+      properties:
+        id:
+          type: integer
+        businessName:
+          type: string
+        nurseryName:
+          type: string
+        location:
+          type: string
+        hasVerifiedPaymentConfig:
+          type: boolean
+          description: >-
+            True only if this seller has a seller_payment_configs row with
+            isVerified = true. Reflects the seller's live config state, which
+            can drift from the listing's own paymentMethod field (e.g. after
+            an admin unverifies a seller without touching their listings).
+            Checkout uses this, not listing.paymentMethod alone, to decide
+            whether bKash can actually be offered for this line.
+      required:
+        - id
+        - businessName
+        - nurseryName
+        - location
+        - hasVerifiedPaymentConfig
+
+    CartItemListing:
+      type: object
+      description: Present only on seller_listing-kind cart lines.
+      properties:
+        id:
+          type: integer
+        form:
+          type: ["string", "null"]
+        rootType:
+          type: ["string", "null"]
+        potSize:
+          type: ["string", "null"]
+        age:
+          type: ["string", "null"]
+        height:
+          type: ["string", "null"]
+        condition:
+          type: ["string", "null"]
+        price:
+          type: number
+        discountPrice:
+          type: ["number", "null"]
+        stock:
+          type: integer
+        availableQuantity:
+          type: integer
+        deliveryTimeDays:
+          type: ["integer", "null"]
+        paymentMethod:
+          type: string
+      required:
+        - id
+        - price
+        - stock
+        - availableQuantity
+        - paymentMethod
+
+    CartItem:
+      type: object
+      description: >-
+        A cart line is EITHER kind "variant" (admin-direct, variant +
+        variantId populated) OR kind "seller_listing" (marketplace,
+        sellerListingId/sellerId/seller/listing populated) -- never both.
+        See schema/cart.ts doc comment for the full rationale.
+      properties:
+        id:
+          type: integer
+        kind:
+          type: string
+          enum: [variant, seller_listing]
+        productId:
+          type: integer
+        variantId:
+          type: ["integer", "null"]
+        sellerListingId:
+          type: ["integer", "null"]
+        sellerId:
+          type: ["integer", "null"]
+        quantity:
+          type: integer
+        variant:
+          oneOf:
+            - $ref: "#/components/schemas/ProductVariant"
+            - type: "null"
+        seller:
+          oneOf:
+            - $ref: "#/components/schemas/CartItemSeller"
+            - type: "null"
+        listing:
+          $ref: "#/components/schemas/CartItemListing"
+        product:
+          $ref: "#/components/schemas/CartItemProduct"
+      required:
+        - id
+        - kind
+        - productId
+        - variantId
+        - sellerListingId
+        - sellerId
+        - quantity
+        - product
+
+    Cart:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CartItem"
+        subtotal:
+          type: number
+        discount:
+          type: number
+        deliveryTotal:
+          type: number
+        total:
+          type: number
+      required:
+        - items
+        - subtotal
+        - discount
+        - deliveryTotal
+        - total
+
+    AddToCartBody:
+      type: object
+      description: >-
+        Specify exactly one of variantId or sellerListingId, never both.
+      properties:
+        productId:
+          type: integer
+        variantId:
+          type: integer
+          nullable: true
+        sellerListingId:
+          type: integer
+          nullable: true
+        quantity:
+          type: integer
+      required:
+        - productId
+        - quantity
+
+    UpdateCartItemBody:
+      type: object
+      properties:
+        quantity:
+          type: integer
+      required:
+        - quantity
+
+    OrderLineItem:
+      type: object
+      description: >-
+        Snapshot of a purchased line item, stored as JSON on the order at
+        checkout time. Either variantId+variantName are set (admin-direct
+        line) or sellerListingId+sellerId are set (marketplace line) --
+        never both. Every line on a given order has the same kind and, for
+        marketplace orders, the same sellerId as the order itself.
+      properties:
+        productId:
+          type: integer
+        productName:
+          type: string
+        productImage:
+          type: string
+        variantId:
+          type: integer
+        variantName:
+          type: string
+        sellerListingId:
+          type: integer
+        sellerId:
+          type: integer
+        quantity:
+          type: integer
+        price:
+          type: number
+        deliveryCharge:
+          type: number
+      required:
+        - productId
+        - productName
+        - productImage
+        - quantity
+        - price
+        - deliveryCharge
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: integer
+        trackingId:
+          type: string
+        userId:
+          type: string
+        sellerId:
+          type: ["integer", "null"]
+          description: Null for admin-direct orders; set for marketplace orders.
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderLineItem"
+        totalAmount:
+          type: number
+        paymentMethod:
+          type: string
+        paymentStatus:
+          type: string
+        senderNumber:
+          type: ["string", "null"]
+        paidAt:
+          type: ["string", "null"]
+        orderStatus:
+          type: string
+        transactionId:
+          type: ["string", "null"]
+        shippingAddress:
+          $ref: "#/components/schemas/AddressBody"
+        couponCode:
+          type: ["string", "null"]
+        discountAmount:
+          type: number
+        cancellationReason:
+          type: ["string", "null"]
+        giftWrap:
+          type: string
+        giftMessage:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - trackingId
+        - userId
+        - items
+        - totalAmount
+        - paymentMethod
+        - paymentStatus
+        - orderStatus
+        - transactionId
+        - shippingAddress
+        - couponCode
+        - discountAmount
+        - createdAt
+        - updatedAt
+
+    SellerCourierConfig:
+      type: object
+      description: >-
+        Masked seller courier credentials (plan doc §4, §8). Never contains
+        decrypted apiKey/apiSecret -- only a last-4-style mask, per the
+        schema's security note.
+      properties:
+        id:
+          type: integer
+        sellerId:
+          type: integer
+        provider:
+          type: string
+          enum: [pathao, steadfast]
+        apiKeyMasked:
+          type: string
+        apiSecretMasked:
+          type: string
+        storeId:
+          type: ["string", "null"]
+        isVerified:
+          type: boolean
+        createdAt:
+          type: string
+      required:
+        - id
+        - sellerId
+        - provider
+        - apiKeyMasked
+        - apiSecretMasked
+        - isVerified
+        - createdAt
+
+    CreateSellerCourierConfigBody:
+      type: object
+      description: >-
+        For provider "pathao", apiSecret must be packed as
+        "clientSecret|username|password" (Pathao's OAuth needs 3 fields
+        beyond the 2-field apiKey/apiSecret shape this table provides --
+        see lib/courierAdapters/pathao.ts). storeId is required for pathao,
+        unused for steadfast.
+      properties:
+        provider:
+          type: string
+          enum: [pathao, steadfast]
+        apiKey:
+          type: string
+        apiSecret:
+          type: string
+        storeId:
+          type: string
+      required:
+        - provider
+        - apiKey
+        - apiSecret
+
+    SellerPaymentConfig:
+      type: object
+      description: >-
+        Masked seller bKash merchant credentials (plan doc §4, §7 — Part 5).
+        Never contains decrypted merchantAppKey/merchantAppSecret/
+        merchantUsername/merchantPassword -- only a last-4-style mask, per
+        the schema's security note. isVerified is never set true by the
+        create/replace route itself (no live-credential check exists) --
+        it stays false until some future verification step sets it, and
+        routes/sellerListings.ts + routes/orders.ts both gate
+        "advance"/"both"/"bkash" on isVerified specifically, not just row
+        existence.
+      properties:
+        id:
+          type: integer
+        sellerId:
+          type: integer
+        provider:
+          type: string
+          enum: [bkash]
+        merchantAppKeyMasked:
+          type: string
+        merchantAppSecretMasked:
+          type: string
+        merchantUsernameMasked:
+          type: string
+        merchantPasswordMasked:
+          type: string
+        isVerified:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - sellerId
+        - provider
+        - merchantAppKeyMasked
+        - merchantAppSecretMasked
+        - merchantUsernameMasked
+        - merchantPasswordMasked
+        - isVerified
+        - createdAt
+        - updatedAt
+
+    CreateSellerPaymentConfigBody:
+      type: object
+      description: >-
+        provider defaults to "bkash" (the only provider this schema/plan
+        support today) if omitted. All four merchant credential fields are
+        required -- bKash's merchant API needs all of them together, there
+        is no partial-credential state.
+      properties:
+        provider:
+          type: string
+          enum: [bkash]
+        merchantAppKey:
+          type: string
+        merchantAppSecret:
+          type: string
+        merchantUsername:
+          type: string
+        merchantPassword:
+          type: string
+      required:
+        - merchantAppKey
+        - merchantAppSecret
+        - merchantUsername
+        - merchantPassword
+
+    OrderShipment:
+      type: object
+      description: >-
+        Normalized shipment/tracking status, sourced from the seller's own
+        Pathao/Steadfast account or manual updates. Buyer-facing tracking UI
+        reads only this -- never calls the courier directly (plan doc §8).
+      properties:
+        id:
+          type: integer
+        orderId:
+          type: integer
+        courierProvider:
+          type: string
+          enum: [pathao, steadfast, manual]
+        courierTrackingId:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [pending, picked_up, in_transit, delivered, returned, failed]
+        lastSyncedAt:
+          type: ["string", "null"]
+      required:
+        - id
+        - orderId
+        - courierProvider
+        - status
+
+    UpdateShipmentStatusBody:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [pending, picked_up, in_transit, delivered, returned, failed]
+      required:
+        - status
+
+    SellerOrder:
+      type: object
+      description: >-
+        Seller-facing order view (Manage Orders, plan doc §4) -- a subset of
+        Order's fields plus the buyer's contact and current shipment status
+        folded in, omitting fields only the buyer/platform need (userId,
+        senderNumber, couponCode, discountAmount, giftWrap/giftMessage).
+      properties:
+        id:
+          type: integer
+        trackingId:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderLineItem"
+        totalAmount:
+          type: number
+        paymentMethod:
+          type: string
+        paymentStatus:
+          type: string
+        orderStatus:
+          type: string
+        shippingAddress:
+          $ref: "#/components/schemas/AddressBody"
+        buyerEmail:
+          type: ["string", "null"]
+        cancellationReason:
+          type: ["string", "null"]
+        shipment:
+          oneOf:
+            - type: object
+              properties:
+                courierProvider:
+                  type: string
+                courierTrackingId:
+                  type: ["string", "null"]
+                status:
+                  type: string
+                lastSyncedAt:
+                  type: ["string", "null"]
+              required:
+                - courierProvider
+                - status
+            - type: "null"
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - trackingId
+        - items
+        - totalAmount
+        - paymentMethod
+        - paymentStatus
+        - orderStatus
+        - shippingAddress
+        - createdAt
+        - updatedAt
+
+    UpdateSellerOrderStatusBody:
+      type: object
+      properties:
+        orderStatus:
+          type: string
+          enum: [pending, confirmed, processing, shipped, delivered, cancelled]
+        cancellationReason:
+          type: string
+          description: Required when orderStatus is "cancelled"
+      required:
+        - orderStatus
+
+    OrderTracking:
+      type: object
+      properties:
+        id:
+          type: integer
+        trackingId:
+          type: string
+        userId:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderLineItem"
+        totalAmount:
+          type: number
+        subtotal:
+          type: number
+        paymentMethod:
+          type: string
+        paymentStatus:
+          type: string
+        senderNumber:
+          type: ["string", "null"]
+        paidAt:
+          type: ["string", "null"]
+        orderStatus:
+          type: string
+        transactionId:
+          type: ["string", "null"]
+        shippingAddress:
+          $ref: "#/components/schemas/AddressBody"
+        couponCode:
+          type: ["string", "null"]
+        discountAmount:
+          type: number
+        cancellationReason:
+          type: ["string", "null"]
+        giftWrap:
+          type: string
+        giftMessage:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        timeline:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrackingEvent"
+      required:
+        - id
+        - trackingId
+        - userId
+        - items
+        - totalAmount
+        - subtotal
+        - paymentMethod
+        - paymentStatus
+        - orderStatus
+        - transactionId
+        - shippingAddress
+        - couponCode
+        - discountAmount
+        - createdAt
+        - updatedAt
+        - timeline
+
+    TrackingEvent:
+      type: object
+      properties:
+        status:
+          type: string
+        label:
+          type: string
+        timestamp:
+          type: ["string", "null"]
+        completed:
+          type: boolean
+      required:
+        - status
+        - label
+        - timestamp
+        - completed
+
+    CreateOrderBody:
+      type: object
+      description: >-
+        A cart spanning multiple sellers splits into one order per seller
+        group (plan doc §2, §7). paymentMethod is the fallback/default used
+        for any group not present in sellerPaymentMethods; a single-seller
+        or all-admin-direct cart can just send paymentMethod and omit
+        sellerPaymentMethods entirely.
+      properties:
+        paymentMethod:
+          type: string
+          description: Fallback payment method for any seller group not present in sellerPaymentMethods.
+        sellerPaymentMethods:
+          type: object
+          additionalProperties:
+            type: string
+          description: >-
+            Per-seller-group payment method override, keyed by sellerId as
+            a string ("null" for the admin-direct group). Each seller only
+            accepts the payment methods enabled on their listings (plan doc
+            §7) -- the buyer picks per group at checkout, not once
+            globally.
+        transactionId:
+          type: ["string", "null"]
+        senderNumber:
+          type: ["string", "null"]
+          description: >-
+            Fallback bKash sending number for any seller group not present
+            in sellerSenderNumbers. Required when the resolved payment
+            method for a group is "bkash" and that group has no override
+            in sellerSenderNumbers.
+        sellerSenderNumbers:
+          type: object
+          additionalProperties:
+            type: ["string", "null"]
+          description: >-
+            Per-seller-group bKash sending number override, keyed by
+            sellerId as a string ("null" for the admin-direct group) --
+            same key convention as sellerPaymentMethods. Added in Part 5:
+            previously a single top-level senderNumber was reused across
+            every seller group resolving to "bkash", which doesn't hold up
+            once a cart has multiple sellers with separate bKash merchant
+            accounts (PHASE3_HANDOFF.md flagged this as a known gap).
+        shippingAddress:
+          $ref: "#/components/schemas/AddressBody"
+        couponCode:
+          type: ["string", "null"]
+        loyaltyPointsToRedeem:
+          type: integer
+        giftWrap:
+          type: boolean
+        giftMessage:
+          type: ["string", "null"]
+      required:
+        - shippingAddress
+
+    UpdateOrderStatusBody:
+      type: object
+      properties:
+        orderStatus:
+          type: string
+        cancellationReason:
+          type: ["string", "null"]
+      required:
+        - orderStatus
+
+    UpdatePaymentStatusBody:
+      type: object
+      properties:
+        paymentStatus:
+          type: string
+      required:
+        - paymentStatus
+
+    ReviewEligibility:
+      type: object
+      properties:
+        canReview:
+          type: boolean
+        reason:
+          type: string
+          nullable: true
+          enum: [already_reviewed, not_purchased, null]
+      required:
+        - canReview
+
+    Review:
+      type: object
+      properties:
+        id:
+          type: integer
+        productId:
+          type: integer
+        userId:
+          type: string
+        userName:
+          type: string
+        rating:
+          type: integer
+        comment:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - productId
+        - userId
+        - userName
+        - rating
+        - comment
+        - createdAt
+
+    CreateReviewBody:
+      type: object
+      properties:
+        rating:
+          type: integer
+        comment:
+          type: string
+      required:
+        - rating
+        - comment
+
+    AdminReview:
+      type: object
+      properties:
+        id:
+          type: integer
+        productId:
+          type: integer
+        userId:
+          type: string
+        userName:
+          type: string
+        rating:
+          type: integer
+        comment:
+          type: string
+        createdAt:
+          type: string
+        productName:
+          type: string
+        productImage:
+          type: string
+          nullable: true
+      required:
+        - id
+        - productId
+        - userId
+        - userName
+        - rating
+        - comment
+        - createdAt
+        - productName
+
+    WishlistItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        productId:
+          type: integer
+        product:
+          $ref: "#/components/schemas/Product"
+        addedAt:
+          type: string
+      required:
+        - id
+        - productId
+        - product
+        - addedAt
+
+    Coupon:
+      type: object
+      properties:
+        id:
+          type: integer
+        code:
+          type: string
+        discountType:
+          type: string
+        discountValue:
+          type: number
+        minOrderAmount:
+          type: ["number", "null"]
+        expiryDate:
+          type: ["string", "null"]
+        isActive:
+          type: boolean
+      required:
+        - id
+        - code
+        - discountType
+        - discountValue
+        - minOrderAmount
+        - expiryDate
+        - isActive
+
+    ValidateCouponBody:
+      type: object
+      properties:
+        code:
+          type: string
+        orderAmount:
+          type: number
+      required:
+        - code
+        - orderAmount
+
+    CreateCouponBody:
+      type: object
+      properties:
+        code:
+          type: string
+        discountType:
+          type: string
+        discountValue:
+          type: number
+        minOrderAmount:
+          type: ["number", "null"]
+        expiryDate:
+          type: ["string", "null"]
+      required:
+        - code
+        - discountType
+        - discountValue
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: integer
+        clerkId:
+          type: string
+        email:
+          type: string
+        firstName:
+          type: ["string", "null"]
+        lastName:
+          type: ["string", "null"]
+        phone:
+          type: ["string", "null"]
+        role:
+          type: string
+        isBlocked:
+          type: boolean
+        createdAt:
+          type: string
+      required:
+        - id
+        - clerkId
+        - email
+        - firstName
+        - lastName
+        - phone
+        - role
+        - isBlocked
+        - createdAt
+
+    UpdateProfileBody:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+
+    AddressBody:
+      type: object
+      properties:
+        fullName:
+          type: string
+        phone:
+          type: string
+        street:
+          type: string
+        city:
+          type: string
+        district:
+          type: string
+        postalCode:
+          type: ["string", "null"]
+        isDefault:
+          type: boolean
+      required:
+        - fullName
+        - phone
+        - street
+        - city
+        - district
+
+    Address:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: string
+        fullName:
+          type: string
+        phone:
+          type: string
+        street:
+          type: string
+        city:
+          type: string
+        district:
+          type: string
+        postalCode:
+          type: ["string", "null"]
+        isDefault:
+          type: boolean
+      required:
+        - id
+        - userId
+        - fullName
+        - phone
+        - street
+        - city
+        - district
+        - postalCode
+        - isDefault
+
+    DashboardStats:
+      type: object
+      properties:
+        totalSales:
+          type: number
+        totalOrders:
+          type: integer
+        totalUsers:
+          type: integer
+        pendingOrders:
+          type: integer
+        recentOrders:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+        salesByCategory:
+          type: array
+          items:
+            $ref: "#/components/schemas/CategorySales"
+        monthlySales:
+          type: array
+          items:
+            $ref: "#/components/schemas/MonthlySales"
+      required:
+        - totalSales
+        - totalOrders
+        - totalUsers
+        - pendingOrders
+        - recentOrders
+        - salesByCategory
+        - monthlySales
+
+    CategorySales:
+      type: object
+      properties:
+        category:
+          type: string
+        total:
+          type: number
+        count:
+          type: integer
+      required:
+        - category
+        - total
+        - count
+
+    MonthlySales:
+      type: object
+      properties:
+        month:
+          type: string
+        total:
+          type: number
+        orders:
+          type: integer
+      required:
+        - month
+        - total
+        - orders
+
+    ToggleBlockBody:
+      type: object
+      properties:
+        isBlocked:
+          type: boolean
+      required:
+        - isBlocked
+
+    Seller:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: integer
+        businessName:
+          type: string
+        nurseryName:
+          type: string
+        ownerName:
+          type: string
+        nidOrTradeLicenseUrl:
+          type: ["string", "null"]
+        contactPhone:
+          type: string
+        contactEmail:
+          type: string
+        location:
+          type: string
+        description:
+          type: ["string", "null"]
+        nurseryImages:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [pending_verification, active, suspended, vacation]
+        subscriptionStatus:
+          type: string
+          enum: [trial, active, expired]
+        trialEndsAt:
+          type: ["string", "null"]
+        subscriptionExpiresAt:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - userId
+        - businessName
+        - nurseryName
+        - ownerName
+        - nidOrTradeLicenseUrl
+        - contactPhone
+        - contactEmail
+        - location
+        - description
+        - nurseryImages
+        - status
+        - subscriptionStatus
+        - trialEndsAt
+        - subscriptionExpiresAt
+        - createdAt
+        - updatedAt
+
+    SellerApplicationBody:
+      type: object
+      properties:
+        businessName:
+          type: string
+        nurseryName:
+          type: string
+        ownerName:
+          type: string
+        nidOrTradeLicenseUrl:
+          type: ["string", "null"]
+        contactPhone:
+          type: string
+        contactEmail:
+          type: string
+        location:
+          type: string
+        description:
+          type: ["string", "null"]
+        nurseryImages:
+          type: array
+          items:
+            type: string
+      required:
+        - businessName
+        - nurseryName
+        - ownerName
+        - contactPhone
+        - contactEmail
+        - location
+
+    UpdateSellerProfileBody:
+      type: object
+      description: >-
+        Post-approval self-service profile edit. All fields optional (partial
+        update) -- unlike SellerApplicationBody, status/subscriptionStatus/
+        trialEndsAt/subscriptionExpiresAt are never accepted here, same
+        server-derived-only rule as the initial application.
+      properties:
+        businessName:
+          type: string
+        nurseryName:
+          type: string
+        ownerName:
+          type: string
+        nidOrTradeLicenseUrl:
+          type: ["string", "null"]
+        contactPhone:
+          type: string
+        contactEmail:
+          type: string
+        location:
+          type: string
+        description:
+          type: ["string", "null"]
+        nurseryImages:
+          type: array
+          items:
+            type: string
+
+    UpdateSellerStatusBody:
+      type: object
+      description: >-
+        Seller-initiated status change -- only "active" and "vacation" are
+        accepted (vacation mode toggle). Suspending/approving/rejecting a
+        seller stays admin-only via the existing admin routes.
+      properties:
+        status:
+          type: string
+          enum: [active, vacation]
+      required:
+        - status
+
+    RejectSellerBody:
+      type: object
+      properties:
+        reason:
+          type: ["string", "null"]
+
+    ListingAttributeOption:
+      type: object
+      properties:
+        id:
+          type: integer
+        categoryId:
+          type: integer
+        attributeName:
+          type: string
+          enum: [height, pot_size, age, root_type]
+        value:
+          type: string
+        displayOrder:
+          type: integer
+      required:
+        - id
+        - categoryId
+        - attributeName
+        - value
+        - displayOrder
+
+    CreateListingAttributeOptionBody:
+      type: object
+      properties:
+        categoryId:
+          type: integer
+        attributeName:
+          type: string
+          enum: [height, pot_size, age, root_type]
+        value:
+          type: string
+        displayOrder:
+          type: integer
+      required:
+        - categoryId
+        - attributeName
+        - value
+
+    UpdateListingAttributeOptionBody:
+      type: object
+      properties:
+        value:
+          type: string
+        displayOrder:
+          type: integer
+
+    SellerListing:
+      type: object
+      properties:
+        id:
+          type: integer
+        productId:
+          type: integer
+        sellerId:
+          type: integer
+        form:
+          type: ["string", "null"]
+        rootType:
+          type: ["string", "null"]
+        potSize:
+          type: ["string", "null"]
+        age:
+          type: ["string", "null"]
+        height:
+          type: ["string", "null"]
+        condition:
+          type: ["string", "null"]
+        price:
+          type: number
+        discountPrice:
+          type: ["number", "null"]
+        stock:
+          type: integer
+        availableQuantity:
+          type: integer
+        deliveryTimeDays:
+          type: ["integer", "null"]
+        warrantyDays:
+          type: ["integer", "null"]
+        returnPolicyText:
+          type: ["string", "null"]
+        paymentMethod:
+          type: string
+          enum: [cod, advance, both]
+        images:
+          type: array
+          items:
+            type: string
+        videoUrl:
+          type: ["string", "null"]
+        description:
+          type: ["string", "null"]
+        offerText:
+          type: ["string", "null"]
+        certification:
+          type: ["string", "null"]
+        tags:
+          type: array
+          items:
+            type: string
+        visibility:
+          type: string
+          enum: [public, hidden]
+        hiddenReason:
+          type: ["string", "null"]
+        approvalStatus:
+          type: string
+          enum: [pending, approved, rejected]
+        rejectionReason:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - productId
+        - sellerId
+        - price
+        - stock
+        - availableQuantity
+        - paymentMethod
+        - images
+        - tags
+        - visibility
+        - approvalStatus
+        - createdAt
+        - updatedAt
+
+    CreateSellerListingBody:
+      type: object
+      properties:
+        productId:
+          type: integer
+        form:
+          type: ["string", "null"]
+        rootType:
+          type: ["string", "null"]
+        potSize:
+          type: ["string", "null"]
+        age:
+          type: ["string", "null"]
+        height:
+          type: ["string", "null"]
+        condition:
+          type: ["string", "null"]
+        price:
+          type: number
+        discountPrice:
+          type: ["number", "null"]
+        stock:
+          type: integer
+        deliveryTimeDays:
+          type: ["integer", "null"]
+        warrantyDays:
+          type: ["integer", "null"]
+        returnPolicyText:
+          type: ["string", "null"]
+        paymentMethod:
+          type: string
+          enum: [cod, advance, both]
+        images:
+          type: array
+          items:
+            type: string
+        videoUrl:
+          type: ["string", "null"]
+        description:
+          type: ["string", "null"]
+        offerText:
+          type: ["string", "null"]
+        certification:
+          type: ["string", "null"]
+        tags:
+          type: array
+          items:
+            type: string
+      required:
+        - productId
+        - price
+
+    UpdateSellerListingBody:
+      type: object
+      properties:
+        form:
+          type: ["string", "null"]
+        rootType:
+          type: ["string", "null"]
+        potSize:
+          type: ["string", "null"]
+        age:
+          type: ["string", "null"]
+        height:
+          type: ["string", "null"]
+        condition:
+          type: ["string", "null"]
+        price:
+          type: number
+        discountPrice:
+          type: ["number", "null"]
+        stock:
+          type: integer
+        deliveryTimeDays:
+          type: ["integer", "null"]
+        warrantyDays:
+          type: ["integer", "null"]
+        returnPolicyText:
+          type: ["string", "null"]
+        paymentMethod:
+          type: string
+          enum: [cod, advance, both]
+        images:
+          type: array
+          items:
+            type: string
+        videoUrl:
+          type: ["string", "null"]
+        description:
+          type: ["string", "null"]
+        offerText:
+          type: ["string", "null"]
+        certification:
+          type: ["string", "null"]
+        tags:
+          type: array
+          items:
+            type: string
+        visibility:
+          type: string
+          enum: [public, hidden]
+
+    SellerListingCardSellerInfo:
+      type: object
+      properties:
+        id:
+          type: integer
+        businessName:
+          type: string
+        nurseryName:
+          type: string
+        location:
+          type: string
+      required:
+        - id
+        - businessName
+        - nurseryName
+        - location
+
+    SellerListingCard:
+      type: object
+      properties:
+        listing:
+          $ref: "#/components/schemas/SellerListing"
+        seller:
+          $ref: "#/components/schemas/SellerListingCardSellerInfo"
+        rating:
+          type: number
+        reviewCount:
+          type: integer
+      required:
+        - listing
+        - seller
+        - rating
+        - reviewCount
+
+    AdminSellerListing:
+      allOf:
+        - $ref: "#/components/schemas/SellerListing"
+        - type: object
+          properties:
+            sellerBusinessName:
+              type: string
+            productName:
+              type: string
+          required:
+            - sellerBusinessName
+            - productName
+
+    RejectSellerListingBody:
+      type: object
+      properties:
+        reason:
+          type: ["string", "null"]
+
