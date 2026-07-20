@@ -8,10 +8,12 @@ import {
   productsTable,
   listingAttributeOptionsTable,
   reviewsTable,
-  sellerPaymentConfigsTable,
 } from "@workspace/db";
 import { eq, and, inArray, sql, desc, asc } from "drizzle-orm";
 import { requireAuth, requireSeller, requireAdmin } from "../middlewares/auth";
+import { hasVerifiedPaymentConfig } from "@workspace/db/logic";
+
+export { hasVerifiedPaymentConfig };
 
 cloudinaryV2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -123,24 +125,13 @@ async function validateControlledAttributes(
  * Phase 2 and Phase 4 handoffs; this is the actual enforcement, added in
  * Part 5.
  *
- * Checks for a row with isVerified = true specifically, not just any row
- * existing. routes/sellerPaymentConfigs.ts itself never sets isVerified
- * true (same "no live-credential check" convention as courier configs) --
- * the only place that happens is routes/adminSellers.ts's
- * PUT /admin/seller-payment-configs/:id/verify (Part 6's manual
- * admin-review toggle). So this returns false for every seller until an
- * admin explicitly verifies their config, which matches the plan doc's
- * wording ("verified seller_payment_configs row") -- a seller merely
- * saving bKash credentials does not by itself unlock advance payment.
+ * hasVerifiedPaymentConfig itself now lives in @workspace/db/logic (moved
+ * there post-Phase-9 so scripts/src/verify-seller-marketplace.ts can import
+ * the real implementation instead of reimplementing it -- see that
+ * module's doc comment for why). Imported above and re-exported here so
+ * every existing caller of this file's hasVerifiedPaymentConfig export is
+ * unaffected.
  */
-async function hasVerifiedPaymentConfig(sellerId: number): Promise<boolean> {
-  const [config] = await db
-    .select({ isVerified: sellerPaymentConfigsTable.isVerified })
-    .from(sellerPaymentConfigsTable)
-    .where(eq(sellerPaymentConfigsTable.sellerId, sellerId))
-    .limit(1);
-  return config?.isVerified === true;
-}
 
 const PAYMENT_METHOD_ERROR =
   'You need a verified bKash payment config before offering "advance" or "both" as a payment method. ' +

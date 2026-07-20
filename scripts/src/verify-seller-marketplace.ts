@@ -9,10 +9,12 @@ import {
   sellerCourierConfigsTable,
   cartItemsTable,
 } from "@workspace/db/schema";
+import { hasVerifiedPaymentConfig, groupBySellerAndAllocateDiscount } from "@workspace/db/logic";
 import { eq, and, ne } from "drizzle-orm";
 
 /**
- * Phase 8 real-database verification script.
+ * Phase 8 real-database verification script (extended across several
+ * subsequent phases).
  *
  * Bypasses the HTTP/auth layer entirely (no Clerk credentials exist in this
  * sandbox -- see routes/middlewares/auth.ts, mobileJwt.ts) and instead
@@ -24,10 +26,25 @@ import { eq, and, ne } from "drizzle-orm";
  * verify-seller-marketplace` (see scripts/package.json) with a real
  * DATABASE_URL set.
  *
+ * §2 and §3 below now import the REAL hasVerifiedPaymentConfig and
+ * groupBySellerAndAllocateDiscount from @workspace/db/logic, rather than
+ * reimplementing them verbatim as this script did through Phase 9. That
+ * reimplementation was flagged across multiple prior handoffs as a drift
+ * risk (the copy could silently diverge from production logic over time).
+ * Both functions were moved out of their original route files
+ * (sellerListings.ts, orders.ts) into @workspace/db/logic specifically so
+ * this script could import them without pulling in Express, Clerk,
+ * Cloudinary, or Resend, and without needing MOBILE_JWT_SECRET set --
+ * importing the route files directly was tried and fails immediately, since
+ * both transitively import middlewares/auth.ts -> mobileJwt.ts, which
+ * throws at module-load time if that secret is absent. Both route files
+ * still re-export the same functions from their original locations, so
+ * every existing call site elsewhere in the app is unaffected.
+ *
  * What this does NOT cover: anything requiring actual HTTP requests through
  * Express (route-level validation, requireSeller/requireAuth middleware
  * behavior, OpenAPI request/response shape). Those still only have
- * structural (typecheck/build) verification -- see PHASE8_HANDOFF.md.
+ * structural (typecheck/build) verification -- see prior phase handoffs.
  */
 
 let passed = 0;
@@ -41,53 +58,6 @@ function check(label: string, condition: boolean, detail?: string) {
     console.log(`  FAIL: ${label}${detail ? ` -- ${detail}` : ""}`);
     failed++;
   }
-}
-
-/**
- * Exact reimplementation of routes/orders.ts's groupBySellerAndAllocateDiscount.
- * That function is NOT exported (module-local to orders.ts), so per the task
- * brief's own fallback instruction ("import ... or inline the same grouping
- * query"), this is copied verbatim rather than modified into an export --
- * this session was told not to touch cart.ts/CheckoutPage.tsx/checkout-side
- * files, and orders.ts's checkout route is adjacent to that boundary, so it
- * was left untouched. If this drifts from the real implementation in a
- * future session, that's a real risk worth flagging (noted in the handoff).
- */
-function groupBySellerAndAllocateDiscount<
-  L extends { sellerId: number | null; lineTotal: number },
->(lines: L[], totalDiscount: number) {
-  const groups = new Map<number | null, L[]>();
-  for (const line of lines) {
-    const key = line.sellerId;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(line);
-  }
-
-  const groupList = Array.from(groups.entries()).map(([sellerId, groupLines]) => ({
-    sellerId,
-    lines: groupLines,
-    subtotal: groupLines.reduce((s, l) => s + l.lineTotal, 0),
-  }));
-
-  let largestIdx = 0;
-  for (let i = 1; i < groupList.length; i++) {
-    if (groupList[i].subtotal > groupList[largestIdx].subtotal) largestIdx = i;
-  }
-
-  return groupList.map((g, i) => ({
-    ...g,
-    discountAmount: i === largestIdx ? Math.min(totalDiscount, g.subtotal) : 0,
-  }));
-}
-
-/** Exact reimplementation of sellerListings.ts's hasVerifiedPaymentConfig (also module-local). */
-async function hasVerifiedPaymentConfig(sellerId: number): Promise<boolean> {
-  const [config] = await db
-    .select({ isVerified: sellerPaymentConfigsTable.isVerified })
-    .from(sellerPaymentConfigsTable)
-    .where(eq(sellerPaymentConfigsTable.sellerId, sellerId))
-    .limit(1);
-  return config?.isVerified === true;
 }
 
 async function main() {

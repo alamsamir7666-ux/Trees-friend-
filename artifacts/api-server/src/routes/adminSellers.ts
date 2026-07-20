@@ -117,7 +117,7 @@ router.put("/admin/sellers/:id/reject", requireAdmin, async (req: any, res) => {
       res.status(400).json({ error: "Invalid seller id" });
       return;
     }
-    const { reason } = req.body as { reason?: string };
+    const { reason } = (req.body ?? {}) as { reason?: string };
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
     if (!existing) {

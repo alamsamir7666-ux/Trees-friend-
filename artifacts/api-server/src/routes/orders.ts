@@ -19,6 +19,9 @@ import { sendOrderConfirmation } from "../lib/email";
 import crypto from "crypto";
 import { awardPoints, redeemPoints, TAKA_PER_POINT } from "./loyalty";
 import type { OrderItem } from "@workspace/db";
+import { groupBySellerAndAllocateDiscount } from "@workspace/db/logic";
+
+export { groupBySellerAndAllocateDiscount };
 
 const router = Router();
 
@@ -61,48 +64,17 @@ router.get("/orders", requireAuth, async (req: any, res) => {
 });
 
 /**
- * Shared helper: given a flat list of resolved lines (each already tagged
- * with sellerId -- null for admin-direct), groups them by seller and
- * computes one order's worth of items[]/subtotal per group. Both the
- * guest and authenticated checkout paths use this so the split-by-seller
- * behavior (plan doc §2, §7) can't drift between them.
+ * Shared helper used by both the guest and authenticated checkout paths
+ * below, so the split-by-seller behavior (plan doc §2, §7) can't drift
+ * between them.
  *
- * Discount (coupon + loyalty) assignment: per industry-standard practice
- * for split-cart marketplace checkout, a platform-wide coupon or loyalty
- * redemption is NOT pro-rated across every resulting order -- it is
- * applied in full to exactly ONE resulting order (the largest by
- * subtotal), and the others show no discount. This avoids partial-discount
- * reconciliation problems if one of the split orders is later cancelled.
- * Caller passes the total discount amount to allocate; this function picks
- * the largest group and assigns it there.
+ * groupBySellerAndAllocateDiscount itself now lives in @workspace/db/logic
+ * (moved there post-Phase-9 so scripts/src/verify-seller-marketplace.ts can
+ * import the real implementation instead of reimplementing it -- see that
+ * module's doc comment for the full rationale, including why this couldn't
+ * just stay here with an `export` keyword added). Imported above and
+ * re-exported here so this file's existing export surface is unaffected.
  */
-function groupBySellerAndAllocateDiscount<
-  L extends { sellerId: number | null; lineTotal: number },
->(lines: L[], totalDiscount: number) {
-  const groups = new Map<number | null, L[]>();
-  for (const line of lines) {
-    const key = line.sellerId;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(line);
-  }
-
-  const groupList = Array.from(groups.entries()).map(([sellerId, groupLines]) => ({
-    sellerId,
-    lines: groupLines,
-    subtotal: groupLines.reduce((s, l) => s + l.lineTotal, 0),
-  }));
-
-  // Assign the full discount to the single largest-subtotal group.
-  let largestIdx = 0;
-  for (let i = 1; i < groupList.length; i++) {
-    if (groupList[i].subtotal > groupList[largestIdx].subtotal) largestIdx = i;
-  }
-
-  return groupList.map((g, i) => ({
-    ...g,
-    discountAmount: i === largestIdx ? Math.min(totalDiscount, g.subtotal) : 0,
-  }));
-}
 
 router.post("/orders/guest", async (req: any, res) => {
   try {
