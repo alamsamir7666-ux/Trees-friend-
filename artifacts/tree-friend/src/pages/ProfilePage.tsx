@@ -102,13 +102,13 @@ export function ProfilePage() {
 
         {/* Profile tabs */}
         <Tabs value={profileTab} onValueChange={setProfileTab} className="mb-6">
-          <TabsList className="rounded-full">
-            <TabsTrigger value="overview" className="rounded-full text-xs gap-1.5">
-              <Package2 className="h-3.5 w-3.5" />Overview
+          <TabsList className="rounded-full h-auto p-1 flex w-full overflow-x-auto md:inline-flex md:w-auto gap-1">
+            <TabsTrigger value="overview" className="rounded-full text-xs gap-1.5 shrink-0">
+              <Package2 className="h-3.5 w-3.5 shrink-0" />Overview
             </TabsTrigger>
             <TabsTrigger
               value="seller"
-              className="rounded-full text-xs gap-1.5"
+              className="rounded-full text-xs gap-1.5 shrink-0"
               onClick={(e) => {
                 // Active sellers jump straight to their real dashboard instead
                 // of opening this tab -- same as the "Seller" badge up top.
@@ -118,11 +118,11 @@ export function ProfilePage() {
                 }
               }}
             >
-              <StoreIcon className="h-3.5 w-3.5" />
+              <StoreIcon className="h-3.5 w-3.5 shrink-0" />
               {seller?.status === "active" ? "Seller Dashboard" : "Become a Seller"}
             </TabsTrigger>
-            <TabsTrigger value="rewards" className="rounded-full text-xs gap-1.5">
-              <Star className="h-3.5 w-3.5" />Rewards & Referral
+            <TabsTrigger value="rewards" className="rounded-full text-xs gap-1.5 shrink-0">
+              <Star className="h-3.5 w-3.5 shrink-0" />Rewards & Referral
             </TabsTrigger>
           </TabsList>
         </Tabs>
