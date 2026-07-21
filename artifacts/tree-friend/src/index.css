@@ -313,3 +313,13 @@
     transform: translateY(0);
   }
 }
+
+/* ── Hide native scrollbar on horizontally-scrollable strips (e.g. the
+   mobile Profile page tab bar) while keeping the element scrollable. ── */
+.scrollbar-hide {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Android WebView */
+}

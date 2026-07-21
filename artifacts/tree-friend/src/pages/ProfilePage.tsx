@@ -7,7 +7,7 @@ import { Star, Users, Package2, ArrowRight, Sprout } from "lucide-react";
 import { StoreIcon } from "@/components/ui/StoreIcon";
 import { BecomeSellerContent } from "@/pages/BecomeSellerPage";
 import { useGetMe, useListOrders, useGetMySeller, getGetMySellerQueryKey } from "@workspace/api-client-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Link, useLocation } from "wouter";
@@ -46,6 +46,14 @@ export function ProfilePage() {
   const recentOrders = (orders ?? []).slice(0, 3);
   const isAdmin = dbUser?.role === "admin";
   const [profileTab, setProfileTab] = useState("overview");
+  const tabsListRef = useRef<HTMLDivElement>(null);
+
+  // The horizontally-scrollable tab strip (mobile) can end up auto-scrolled
+  // away from the start by the browser/Radix focus behavior, cropping
+  // "Overview" on the left edge. Force it back to the start on mount.
+  useEffect(() => {
+    tabsListRef.current?.scrollTo({ left: 0 });
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">
@@ -102,7 +110,10 @@ export function ProfilePage() {
 
         {/* Profile tabs */}
         <Tabs value={profileTab} onValueChange={setProfileTab} className="mb-6">
-          <TabsList className="rounded-full h-auto p-1 flex w-full overflow-x-auto md:inline-flex md:w-auto gap-1">
+          <TabsList
+            ref={tabsListRef}
+            className="rounded-full h-auto p-1 flex w-full overflow-x-auto scrollbar-hide md:inline-flex md:w-auto gap-1"
+          >
             <TabsTrigger value="overview" className="rounded-full text-xs gap-1.5 shrink-0">
               <Package2 className="h-3.5 w-3.5 shrink-0" />Overview
             </TabsTrigger>
