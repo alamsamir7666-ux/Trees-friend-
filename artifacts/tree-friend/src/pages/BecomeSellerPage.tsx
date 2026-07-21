@@ -40,7 +40,13 @@ const EMPTY = {
  * first. A seller can apply now and add documents from their dashboard
  * once §4's Business Verification tab is built.
  */
-export function BecomeSellerPage() {
+/**
+ * The actual seller-application UI: status card if already applied, form if
+ * not. No outer page container/breadcrumb -- those are added by whichever
+ * caller renders this (the standalone /become-seller route, or inline as a
+ * tab on the Profile page).
+ */
+export function BecomeSellerContent() {
   const qc = useQueryClient();
   const { isSignedIn } = useAuth();
   const { data: seller, isLoading } = useGetMySeller({
@@ -79,7 +85,7 @@ export function BecomeSellerPage() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-16 flex justify-center">
+      <div className="py-16 flex justify-center">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     );
@@ -116,26 +122,22 @@ export function BecomeSellerPage() {
     const info = statusMap[seller.status] ?? statusMap.pending_verification;
     const Icon = info.icon;
     return (
-      <div className="container mx-auto px-4 py-10 max-w-lg">
-        <PageBreadcrumb crumbs={[{ label: "Become a Seller", icon: <Sprout className="h-3 w-3" /> }]} className="mb-4" />
-        <div className={`rounded-2xl border p-6 ${info.color}`}>
-          <Icon className="h-8 w-8 mb-3" />
-          <h1 className="font-serif text-xl font-medium mb-1">{info.title}</h1>
-          <p className="text-sm opacity-90">{info.body}</p>
-          {seller.status === "active" && (
-            <Link href="/seller/dashboard">
-              <Button className="mt-4 rounded-full">Go to Seller Dashboard</Button>
-            </Link>
-          )}
-        </div>
+      <div className={`rounded-2xl border p-6 ${info.color}`}>
+        <Icon className="h-8 w-8 mb-3" />
+        <h1 className="font-serif text-xl font-medium mb-1">{info.title}</h1>
+        <p className="text-sm opacity-90">{info.body}</p>
+        {seller.status === "active" && (
+          <Link href="/seller/dashboard">
+            <Button className="mt-4 rounded-full">Go to Seller Dashboard</Button>
+          </Link>
+        )}
       </div>
     );
   }
 
   // Never applied -- show the form.
   return (
-    <div className="container mx-auto px-4 py-10 max-w-lg">
-      <PageBreadcrumb crumbs={[{ label: "Become a Seller", icon: <Sprout className="h-3 w-3" /> }]} className="mb-4" />
+    <div>
       <div className="mb-6">
         <h1 className="font-serif text-2xl font-medium flex items-center gap-2">
           <Sprout className="h-6 w-6 text-accent" />
@@ -181,6 +183,15 @@ export function BecomeSellerPage() {
           {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Submit Application"}
         </Button>
       </form>
+    </div>
+  );
+}
+
+export function BecomeSellerPage() {
+  return (
+    <div className="container mx-auto px-4 py-10 max-w-lg">
+      <PageBreadcrumb crumbs={[{ label: "Become a Seller", icon: <Sprout className="h-3 w-3" /> }]} className="mb-4" />
+      <BecomeSellerContent />
     </div>
   );
 }

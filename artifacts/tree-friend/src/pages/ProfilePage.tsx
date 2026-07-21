@@ -4,11 +4,13 @@ import { LoyaltyBanner } from "@/components/ui/LoyaltyBanner";
 import { ReferralSection } from "@/components/ui/ReferralSection";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Star, Users, Package2, ArrowRight, Sprout } from "lucide-react";
+import { StoreIcon } from "@/components/ui/StoreIcon";
+import { BecomeSellerContent } from "@/pages/BecomeSellerPage";
 import { useGetMe, useListOrders, useGetMySeller, getGetMySellerQueryKey } from "@workspace/api-client-react";
 import { useState, useEffect } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 
 const statusColors: Record<string, string> = {
   pending: "bg-yellow-100 text-yellow-800",
@@ -21,6 +23,7 @@ const statusColors: Record<string, string> = {
 
 export function ProfilePage() {
   const { user } = useUser();
+  const [, navigate] = useLocation();
   const { data: dbUser } = useGetMe({ query: { retry: false, queryKey: ["me"] } });
   const { data: orders, isLoading: ordersLoading } = useListOrders();
   const { data: seller } = useGetMySeller({ query: { retry: false, queryKey: getGetMySellerQueryKey() } });
@@ -103,11 +106,32 @@ export function ProfilePage() {
             <TabsTrigger value="overview" className="rounded-full text-xs gap-1.5">
               <Package2 className="h-3.5 w-3.5" />Overview
             </TabsTrigger>
+            <TabsTrigger
+              value="seller"
+              className="rounded-full text-xs gap-1.5"
+              onClick={(e) => {
+                // Active sellers jump straight to their real dashboard instead
+                // of opening this tab -- same as the "Seller" badge up top.
+                if (seller?.status === "active") {
+                  e.preventDefault();
+                  navigate("/seller/dashboard");
+                }
+              }}
+            >
+              <StoreIcon className="h-3.5 w-3.5" />
+              {seller?.status === "active" ? "Seller Dashboard" : "Become a Seller"}
+            </TabsTrigger>
             <TabsTrigger value="rewards" className="rounded-full text-xs gap-1.5">
               <Star className="h-3.5 w-3.5" />Rewards & Referral
             </TabsTrigger>
           </TabsList>
         </Tabs>
+
+        {profileTab === "seller" && seller?.status !== "active" && (
+          <div className="mb-8">
+            <BecomeSellerContent />
+          </div>
+        )}
 
         {profileTab === "rewards" && (
           <div className="mb-8">
