@@ -109,12 +109,32 @@ export function ProductsTab() {
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-right">
-                      {p.productStatus === "pre_order" ? (
+                      {/* Phase 5: was p.productStatus === "pre_order" (an
+                          admin-set product-level flag, removed -- see
+                          ProductModal.tsx). Pre-order is seller/variant
+                          data; this now reads listingHasPreOrder, true if
+                          ANY qualifying seller listing has a variant marked
+                          isPreOrder. Note this can't distinguish "the only
+                          listing is pre-order" from "one of five listings
+                          has one pre-order variant" -- it's a simple
+                          existence check, matching what a single boolean
+                          badge can represent. */}
+                      {((p as any).listingHasPreOrder ?? false) ? (
                         <span className="font-semibold text-blue-600">Pre-Order</span>
                       ) : (
                         <>
-                          <span className={`font-semibold ${p.inStock ? "text-gray-700" : "text-red-500"}`}>{p.inStock ? "In Stock" : "Out of Stock"}</span>
-                          {!p.inStock && <p className="text-xs text-red-400">Restock needed</p>}
+                          {/* Stock, like Price two rows up, must read the
+                              Phase 2 marketplace-derived listingCount, not
+                              the frozen admin-owned Product.inStock (which
+                              is permanently false for every product created
+                              after Phase 2 since admin no longer writes
+                              productVariantsTable). listingCount = number of
+                              distinct qualifying seller listings; see
+                              toProduct()'s doc comment in products.ts. */}
+                          <span className={`font-semibold ${((p as any).listingCount ?? 0) > 0 ? "text-gray-700" : "text-red-500"}`}>
+                            {((p as any).listingCount ?? 0) > 0 ? "In Stock" : "Out of Stock"}
+                          </span>
+                          {((p as any).listingCount ?? 0) === 0 && <p className="text-xs text-red-400">Restock needed</p>}
                         </>
                       )}
                     </td>

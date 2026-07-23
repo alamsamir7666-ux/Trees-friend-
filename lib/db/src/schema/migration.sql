@@ -181,3 +181,24 @@ ALTER TABLE reviews
 ALTER TABLE reviews
   ADD CONSTRAINT reviews_seller_listing_variant_user_unique
     UNIQUE (seller_listing_variant_id, user_id);
+
+-- ─── Phase 6: pre_orders gets seller_listing_variant_id ────────────────────
+-- Fixes the over-notification gap logged in PHASE5_HANDOFF.md:
+-- notifyPreOrderCustomers() could only ever scope to "everyone with a
+-- pending pre-order on this product," not "everyone who pre-ordered this
+-- specific variant," because pre_orders had no column to key on besides
+-- product_id. POST /pre-orders already received sellerListingVariantId in
+-- its request body for validation but discarded it before insert -- this
+-- column lets the route persist it instead.
+--
+-- Nullable, no FK constraint -- matching product_id's existing convention
+-- on this same table (a plain id, not a references() FK), since pre_orders
+-- is a denormalized/historical record (see product_name/product_image
+-- snapshot columns) that shouldn't cascade or break if the referenced
+-- seller_listing_variants row is later edited or deleted. Existing rows
+-- created before this migration get NULL here; routes/preOrders.ts's
+-- notifyPreOrderCustomers() falls back to the old, broader product-wide
+-- notify condition for any row where this is null.
+ALTER TABLE pre_orders
+  ADD COLUMN IF NOT EXISTS seller_listing_variant_id INTEGER;
+

@@ -11,6 +11,18 @@ export const preOrdersTable = pgTable("pre_orders", {
   productId: integer("product_id").notNull(),
   productName: text("product_name").notNull(),
   productImage: text("product_image").notNull().default(""),
+  // Phase 6: added to fix the over-notification gap logged in Phase 5's
+  // handoff. Nullable, and deliberately a bare integer (no references() FK)
+  // -- matching this table's existing convention for productId above, which
+  // is also a plain id, not a live FK, because pre_orders is a
+  // denormalized/historical record (see productName/productImage snapshot
+  // fields) rather than something that should break or cascade if the
+  // referenced seller_listing_variants row is later edited or deleted.
+  // Null on any row created before this migration (legacy rows) --
+  // notifyPreOrderCustomers in routes/preOrders.ts falls back to its old,
+  // broader product-wide behavior for those, see that function's doc
+  // comment.
+  sellerListingVariantId: integer("seller_listing_variant_id"),
   quantity: integer("quantity").notNull().default(1),
   productPrice: numeric("product_price", { precision: 10, scale: 2 }).notNull(),
   discountedPrice: numeric("discounted_price", { precision: 10, scale: 2 }).notNull(),

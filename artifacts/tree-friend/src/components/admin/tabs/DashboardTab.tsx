@@ -114,7 +114,10 @@ const {
         {
           label: "Products",
           value: (productsData?.total ?? products.length) > 0 ? (productsData?.total ?? products.length) : "-",
-          change: products.length > 0 ? `${products.filter(p => !p.inStock).length} low stock` : "No products yet",
+          // Same Phase 2 marketplace-derived fix as ProductsTab.tsx's Stock
+          // column: Product.inStock is frozen false post-Phase-2, so this
+          // must read listingCount instead.
+          change: products.length > 0 ? `${products.filter(p => ((p as any).listingCount ?? 0) === 0).length} low stock` : "No products yet",
           icon: Package2,
           color: "bg-violet-50 text-violet-600",
         },

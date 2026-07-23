@@ -13,6 +13,7 @@ import {
 import { eq, and, inArray, sql, desc, asc } from "drizzle-orm";
 import { requireAuth, requireSeller, requireAdmin } from "../middlewares/auth";
 import { hasVerifiedPaymentConfig } from "@workspace/db/logic";
+import { notifyPreOrderCustomers } from "./preOrders";
 
 export { hasVerifiedPaymentConfig };
 
@@ -561,6 +562,26 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
       await db.delete(sellerListingVariantsTable).where(inArray(sellerListingVariantsTable.id, toDelete));
     }
 
+    // Phase 5: replaces the removed admin-productStatus-driven
+    // notifyPreOrderCustomers trigger in products.ts (pre_order -> in_stock
+    // on the frozen product-level field, which had no real relationship to
+    // any actual pre-order). The real signal is here: a seller editing a
+    // variant that was previously "pending pre-order" -- isPreOrder=true
+    // AND availableQuantity===0 -- into either isPreOrder=false or
+    // availableQuantity>0.
+    //
+    // RESOLVED (Phase 6): previously this collapsed every transitioned
+    // variant in the request into a single boolean and fired one
+    // product-wide notifyPreOrderCustomers call, which is exactly the
+    // over-notification gap logged as an Open Item in PHASE5_HANDOFF.md.
+    // Now each transitioned variant id is collected individually and gets
+    // its own notify call, scoped to that specific
+    // sellerListingVariantId -- see notifyPreOrderCustomers's doc comment
+    // in preOrders.ts for how the query uses it (falls back to
+    // product-wide only for legacy null-variant pre-order rows).
+    const existingVariantsById = new Map(existingVariants.map((v) => [v.id, v]));
+    const transitionedVariantIds: number[] = [];
+
     for (const v of toUpdate) {
       const variantUpdates: Record<string, unknown> = { updatedAt: new Date() };
       if (v.form !== undefined) variantUpdates.form = v.form || null;
@@ -580,7 +601,26 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
       }
       if (v.deliveryCharge !== undefined) variantUpdates.deliveryCharge = String(v.deliveryCharge);
       if (v.isPreOrder !== undefined) variantUpdates.isPreOrder = v.isPreOrder === true;
+
+      const before = existingVariantsById.get(v.id);
+      if (before && before.isPreOrder && before.availableQuantity === 0) {
+        const nextIsPreOrder = variantUpdates.isPreOrder !== undefined ? variantUpdates.isPreOrder as boolean : before.isPreOrder;
+        const nextAvailableQuantity = variantUpdates.availableQuantity !== undefined ? variantUpdates.availableQuantity as number : before.availableQuantity;
+        if (!nextIsPreOrder || nextAvailableQuantity > 0) {
+          transitionedVariantIds.push(v.id);
+        }
+      }
+
       await db.update(sellerListingVariantsTable).set(variantUpdates).where(eq(sellerListingVariantsTable.id, v.id));
+    }
+
+    if (transitionedVariantIds.length > 0) {
+      const [product] = await db.select().from(productsTable).where(eq(productsTable.id, existing.productId)).limit(1);
+      if (product) {
+        for (const variantId of transitionedVariantIds) {
+          notifyPreOrderCustomers(product.id, product.name, variantId).catch(() => {});
+        }
+      }
     }
 
     let createdVariants: SellerListingVariantRow[] = [];

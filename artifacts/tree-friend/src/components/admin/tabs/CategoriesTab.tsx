@@ -91,7 +91,17 @@ export function CategoriesTab() {
                       <td className="px-5 py-3">
                         <p className="font-medium text-gray-800">{p.name}</p>
                       </td>
-                      <td className="px-5 py-3 text-right text-gray-500 text-xs">{p.productStatus}</td>
+                      {/* Phase 5: was a raw dump of p.productStatus (the
+                          removed admin-set field -- see ProductModal.tsx).
+                          Same listingCount/listingHasPreOrder signal as
+                          ProductsTab.tsx's Stock/Status column. */}
+                      <td className="px-5 py-3 text-right text-gray-500 text-xs">
+                        {((p as any).listingHasPreOrder ?? false)
+                          ? "Pre-Order"
+                          : ((p as any).listingCount ?? 0) > 0
+                            ? "In Stock"
+                            : "Out of Stock"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

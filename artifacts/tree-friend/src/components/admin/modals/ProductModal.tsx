@@ -79,7 +79,6 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
     climateZone: product?.climateZone ?? "",
     growthRate: product?.growthRate ?? "",
     bloomSeason: product?.bloomSeason ?? "",
-    productStatus: product?.productStatus ?? "in_stock",
     images: product?.images?.join(", ") ?? "",
     videoUrl: product?.videoUrl ?? "",
     keyBenefits: (product?.keyBenefits ?? []).join("\n"),
@@ -115,7 +114,6 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
       homepageTag: form.homepageTag || null,
       images: String(form.images).split(",").map((s) => s.trim()).filter(Boolean),
       videoUrl: form.videoUrl ?? "",
-      productStatus: form.productStatus ?? "in_stock",
     };
 
     const invalidateAll = () => {
@@ -266,18 +264,6 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
                   <Plus className="h-3 w-3" /> Add new section
                 </button>
               )}
-            </div>
-            <div>
-              <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Product Status</Label>
-              <select
-                value={form.productStatus}
-                onChange={e => setForm(f => ({ ...f, productStatus: e.target.value }))}
-                className="mt-1.5 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value="in_stock">🟢 In Stock</option>
-                <option value="pre_order">🔵 Pre-Order</option>
-                <option value="out_of_stock">🔴 Out of Stock</option>
-              </select>
             </div>
           </div>
 

@@ -11,10 +11,11 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Star, MapPin, Sprout, Truck, ShieldCheck, RotateCcw, Award, ShoppingBag,
-  LogIn, ChevronLeft, PackageX, Ship,
+  LogIn, ChevronLeft, PackageX, Ship, AlertTriangle, RefreshCw,
 } from "lucide-react";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { useToast } from "@/hooks/use-toast";
+import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 
 /**
  * Buyer-facing detail page for ONE seller's listing (Phase 3b Part 3).
@@ -48,12 +49,10 @@ export function SellerListingDetailPage() {
   const [activeImg, setActiveImg] = useState(0);
   const [addingVariantId, setAddingVariantId] = useState<number | null>(null);
 
-  const { data: card, isLoading } = useGetSellerListing(listingId, {
+  const { data: card, isLoading, isError, refetch, isRefetching } = useGetSellerListing(listingId, {
     query: { enabled: !!listingId, queryKey: ["seller-listing", listingId] },
   });
-  const images = card && card.listing.images.length > 0
-    ? card.listing.images
-    : ["https://images.unsplash.com/photo-1556228578-8c89e6adf883?w=600&q=80&fm=webp"];
+  const images = card ? card.listing.images : [];
 
   function handleAddToBag(variant: SellerListingVariant) {
     if (!user) {
@@ -105,12 +104,33 @@ export function SellerListingDetailPage() {
     );
   }
 
+  if (isError) {
+    return (
+      <div className="min-h-screen bg-background">
+        <div className="container mx-auto px-4 py-20 text-center text-muted-foreground">
+          <AlertTriangle className="h-8 w-8 mx-auto mb-3 text-destructive" />
+          <p className="font-medium text-foreground">Couldn't load this listing</p>
+          <p className="text-sm mt-1">Something went wrong on our end. Please try again.</p>
+          <div className="mt-4 flex items-center justify-center gap-2">
+            <Button variant="outline" onClick={() => refetch()} disabled={isRefetching}>
+              <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${isRefetching ? "animate-spin" : ""}`} /> {isRefetching ? "Retrying…" : "Try again"}
+            </Button>
+            <Link href="/products"><Button variant="ghost">Back to shop</Button></Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!card) {
     return (
-      <div className="py-20 text-center text-muted-foreground">
-        Listing not found.
-        <div className="mt-4">
-          <Link href="/products"><Button variant="outline">Back to shop</Button></Link>
+      <div className="min-h-screen bg-background">
+        <div className="container mx-auto px-4 py-20 text-center text-muted-foreground">
+          <PackageX className="h-8 w-8 mx-auto mb-3" />
+          Listing not found.
+          <div className="mt-4">
+            <Link href="/products"><Button variant="outline">Back to shop</Button></Link>
+          </div>
         </div>
       </div>
     );
@@ -138,7 +158,11 @@ export function SellerListingDetailPage() {
           {/* Images + video */}
           <div className="space-y-4">
             <div className="aspect-square rounded-2xl overflow-hidden bg-muted/20 border">
-              <img src={images[activeImg]} alt={seller.nurseryName} className="w-full h-full object-cover" />
+              {images.length > 0 ? (
+                <img src={images[activeImg]} alt={seller.nurseryName} className="w-full h-full object-cover" />
+              ) : (
+                <NoImagePlaceholder />
+              )}
             </div>
             {images.length > 1 && (
               <div className="flex gap-3 flex-wrap">

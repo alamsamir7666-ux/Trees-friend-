@@ -7,6 +7,7 @@ import { Minus, Plus, Trash2, ShoppingBag, ArrowRight, LogIn, Sprout } from "luc
 import { useUser } from "@clerk/react";
 import { useGuestCart } from "@/hooks/useGuestCart";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
+import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 
 function EmptyCart() {
   return (
@@ -52,11 +53,15 @@ function GuestCartPage() {
           <div className="lg:col-span-2 space-y-4">
             {items.map((item) => {
               const price = item.discountPrice ?? item.price;
-              const img = item.image || "https://images.unsplash.com/photo-1556228578-8c89e6adf883?w=200&q=80&fm=webp";
+              const img = item.image || null;
               return (
                 <div key={item.productId} className="flex gap-4 bg-card border rounded-xl p-4">
                   <Link href={`/products/${item.productId}`}>
-                    <img src={img} alt={item.name} className="w-24 h-24 object-cover rounded-lg shrink-0 cursor-pointer" />
+                    {img ? (
+                      <img src={img} alt={item.name} className="w-24 h-24 object-cover rounded-lg shrink-0 cursor-pointer" />
+                    ) : (
+                      <NoImagePlaceholder className="w-24 h-24 rounded-lg shrink-0 cursor-pointer" />
+                    )}
                   </Link>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start">
@@ -227,14 +232,18 @@ function AuthenticatedCartPage() {
                     ? (item.listing!.discountPrice ?? item.listing!.price)
                     : (item.variant!.discountPrice ?? item.variant!.price);
                   const originalPrice = isListing ? item.listing!.price : item.variant!.price;
-                  const img = item.product.images?.[0] ?? "https://images.unsplash.com/photo-1556228578-8c89e6adf883?w=200&q=80&fm=webp";
+                  const img = item.product.images?.[0] ?? null;
                   const label = isListing
                     ? [item.listing!.height, item.listing!.potSize, item.listing!.age].filter(Boolean).join(" · ")
                     : item.variant!.name;
                   return (
                     <div key={item.id} className="flex gap-4 bg-card border rounded-xl p-4">
                       <Link href={`/products/${item.productId}`}>
-                        <img src={img} alt={item.product.name} className="w-24 h-24 object-cover rounded-lg shrink-0 cursor-pointer" />
+                        {img ? (
+                          <img src={img} alt={item.product.name} className="w-24 h-24 object-cover rounded-lg shrink-0 cursor-pointer" />
+                        ) : (
+                          <NoImagePlaceholder className="w-24 h-24 rounded-lg shrink-0 cursor-pointer" />
+                        )}
                       </Link>
                       <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-start">

@@ -14,6 +14,7 @@ import { Heart, ShoppingBag, Trash2, Loader2 } from "lucide-react";
 import { useGuestWishlist } from "@/hooks/useGuestWishlist";
 import { useToast } from "@/hooks/use-toast";
 import { SellerListingVariantPickerDialog } from "@/components/ui/SellerListingVariantPickerDialog";
+import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 
 // Normalized wishlist line. wishlist.ts's price/inStock fields (see
 // PHASE2_HANDOFF.md §5) are a single "best available number" computed
@@ -202,14 +203,18 @@ export function WishlistPage() {
       <div className="container mx-auto px-4 py-8">
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
           {items.map((item) => {
-            const img = item.image || "https://images.unsplash.com/photo-1556228578-8c89e6adf883?w=400&q=80&fm=webp";
+            const img = item.image || null;
             const price = item.discountPrice ?? item.price;
             const isAdding = loadingItemId === item.productId;
             return (
               <div key={item.id} className="group bg-card border rounded-xl overflow-hidden">
                 <Link href={`/products/${item.productId}`}>
                   <div className="relative aspect-square overflow-hidden bg-muted/20 cursor-pointer">
-                    <img src={img} alt={item.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                    {img ? (
+                      <img src={img} alt={item.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                    ) : (
+                      <NoImagePlaceholder />
+                    )}
                     <button
                       onClick={(e) => { e.preventDefault(); handleRemove(item.productId); }}
                       className="absolute top-3 right-3 p-2 rounded-full bg-background/80 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive text-muted-foreground"

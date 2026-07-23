@@ -61,12 +61,22 @@ type MarketplaceStats = {
   listingMinPrice: number | null;
   listingMaxPrice: number | null;
   listingCount: number;
+  // Phase 5: true if any qualifying seller listing variant has
+  // isPreOrder=true. Replaces the admin-set productStatus === "pre_order"
+  // badge (removed -- pre-order is per-variant seller data, not a
+  // product-level admin concept post-Phase-2). Same qualifying filter as
+  // listingCount/listingMinPrice/listingMaxPrice (public, approved, active
+  // seller) -- deliberately NOT gated on availableQuantity>0 like those
+  // are, since a variant can be legitimately pre-order-flagged while at
+  // zero stock (that's the whole point of pre-order).
+  listingHasPreOrder: boolean;
 };
 
 const EMPTY_MARKETPLACE_STATS: MarketplaceStats = {
   listingMinPrice: null,
   listingMaxPrice: null,
   listingCount: 0,
+  listingHasPreOrder: false,
 };
 
 function toProduct(
@@ -129,6 +139,7 @@ function toProduct(
     listingMinPrice: marketplaceStats.listingMinPrice,
     listingMaxPrice: marketplaceStats.listingMaxPrice,
     listingCount: marketplaceStats.listingCount,
+    listingHasPreOrder: marketplaceStats.listingHasPreOrder,
 
     averageRating: avgRating,
     reviewCount,
@@ -177,8 +188,8 @@ async function fetchVariantsFor(productIds: number[]): Promise<Map<number, Varia
  * Batch marketplace stats (Phase 2) for a set of products -- qualifying
  * seller listing variants only: listing.visibility=public AND
  * listing.approvalStatus=approved AND seller.status=active AND
- * variant.availableQuantity>0. Mirrors the exact purchasability filter
- * routes/sellerListings.ts's buyer-facing GET
+ * (variant.availableQuantity>0 OR variant.isPreOrder=true). Mirrors the
+ * exact purchasability filter routes/sellerListings.ts's buyer-facing GET
  * /products/:productId/seller-listings uses (reused conceptually, not
  * imported, since that route works per-product while this one batches
  * across an arbitrary product id list for list/browse pages).
@@ -187,6 +198,16 @@ async function fetchVariantsFor(productIds: number[]): Promise<Map<number, Varia
  * qualifying variant for that product, not number of variants -- a seller
  * with 2 in-stock variants still counts once toward "Available From N
  * Sellers".
+ *
+ * Phase 5: the WHERE clause was widened from availableQuantity>0 alone to
+ * also include isPreOrder=true rows, so listingHasPreOrder can be computed
+ * (a pre-order variant is typically AT zero stock -- that's the point of
+ * pre-order -- so it would never appear under the original condition).
+ * listingCount/listingMinPrice/listingMaxPrice deliberately keep their
+ * original meaning and only aggregate over the availableQuantity>0 subset
+ * of these now-wider rows, filtered in JS below, so this widening does not
+ * silently change "Available From N Sellers" or price-range semantics for
+ * any existing caller of this function.
  */
 async function fetchMarketplaceStatsFor(productIds: number[]): Promise<Map<number, MarketplaceStats>> {
   if (productIds.length === 0) return new Map();
@@ -197,6 +218,8 @@ async function fetchMarketplaceStatsFor(productIds: number[]): Promise<Map<numbe
       sellerListingId: sellerListingsTable.id,
       price: sellerListingVariantsTable.price,
       discountPrice: sellerListingVariantsTable.discountPrice,
+      availableQuantity: sellerListingVariantsTable.availableQuantity,
+      isPreOrder: sellerListingVariantsTable.isPreOrder,
     })
     .from(sellerListingVariantsTable)
     .innerJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
@@ -207,16 +230,21 @@ async function fetchMarketplaceStatsFor(productIds: number[]): Promise<Map<numbe
         eq(sellerListingsTable.visibility, "public"),
         eq(sellerListingsTable.approvalStatus, "approved"),
         eq(sellersTable.status, "active"),
-        sql`${sellerListingVariantsTable.availableQuantity} > 0`,
+        sql`(${sellerListingVariantsTable.availableQuantity} > 0 OR ${sellerListingVariantsTable.isPreOrder} = true)`,
       ),
     );
 
-  const byProduct = new Map<number, { prices: number[]; listingIds: Set<number> }>();
+  const byProduct = new Map<number, { prices: number[]; listingIds: Set<number>; hasPreOrder: boolean }>();
   for (const r of rows) {
-    const entry = byProduct.get(r.productId) ?? { prices: [], listingIds: new Set<number>() };
-    const price = r.discountPrice != null ? Number(r.discountPrice) : Number(r.price);
-    entry.prices.push(price);
-    entry.listingIds.add(r.sellerListingId);
+    const entry = byProduct.get(r.productId) ?? { prices: [], listingIds: new Set<number>(), hasPreOrder: false };
+    if (r.isPreOrder) entry.hasPreOrder = true;
+    // listingCount/prices: only rows that qualify under the ORIGINAL
+    // availableQuantity>0 condition -- unchanged semantics, see doc comment.
+    if (r.availableQuantity > 0) {
+      const price = r.discountPrice != null ? Number(r.discountPrice) : Number(r.price);
+      entry.prices.push(price);
+      entry.listingIds.add(r.sellerListingId);
+    }
     byProduct.set(r.productId, entry);
   }
 
@@ -226,6 +254,7 @@ async function fetchMarketplaceStatsFor(productIds: number[]): Promise<Map<numbe
       listingMinPrice: entry.prices.length > 0 ? Math.min(...entry.prices) : null,
       listingMaxPrice: entry.prices.length > 0 ? Math.max(...entry.prices) : null,
       listingCount: entry.listingIds.size,
+      listingHasPreOrder: entry.hasPreOrder,
     });
   }
   return map;
@@ -729,7 +758,13 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
     if (req.body.videoUrl !== undefined) updates.videoUrl = req.body.videoUrl;
     if (images !== undefined) updates.images = images;
     if (homepageTag !== undefined) updates.homepageTag = homepageTag || null;
-    if (req.body.productStatus !== undefined) updates.productStatus = req.body.productStatus;
+    // Phase 5: productStatus is no longer admin-settable. There is no
+    // admin-fulfilled inventory path post-Phase-2 -- every product is sold
+    // through sellers, so a product-level "in_stock/pre_order/out_of_stock"
+    // status has no legitimate meaning to write here. The column itself is
+    // left in place (read below only for the legacy notify no-op comment,
+    // and by CategoriesTab.tsx's display, being cleaned up separately) but
+    // this route no longer accepts client input for it.
     updates.updatedAt = new Date();
 
     // Read-only as of Phase 2 (admin no longer writes productVariantsTable)
@@ -743,12 +778,6 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
       .from(productVariantsTable)
       .where(eq(productVariantsTable.productId, id));
     const wasOutOfStock = before.length > 0 && before.every((v) => v.stock === 0);
-
-    const [beforeProduct] = await db
-      .select({ productStatus: productsTable.productStatus })
-      .from(productsTable)
-      .where(eq(productsTable.id, id))
-      .limit(1);
 
     const [p] = await db
       .update(productsTable)
@@ -764,9 +793,13 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
     if (wasOutOfStock && nowInStock) {
       notifyStockAlerts(p.id, p.name).catch(() => {});
     }
-    if (req.body.productStatus === "in_stock" && beforeProduct?.productStatus === "pre_order") {
-      notifyPreOrderCustomers(p.id, p.name).catch(() => {});
-    }
+    // Phase 5: the old productStatus (pre_order -> in_stock) trigger for
+    // notifyPreOrderCustomers was removed here -- admin no longer sets
+    // productStatus at all (see updates above), so this condition could
+    // never fire again anyway. The real trigger now lives in
+    // routes/sellerListings.ts's PUT handler, keyed off a seller's variant
+    // actually transitioning out of a pending-pre-order state. See that
+    // route for the new trigger condition and reasoning.
 
     const [stats] = await db
       .select({

@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, Circle, Package, Truck, Home, ChevronLeft, XCircle, RotateCcw, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
+import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 
 const STEPS = ["pending", "confirmed", "processing", "shipped", "delivered"];
 
@@ -234,10 +235,14 @@ export function OrderDetailPage() {
           <h2 className="font-medium mb-4">Items Ordered</h2>
           <div className="divide-y">
             {(order.items ?? []).map((item: any) => {
-              const img = item.productImage ?? "https://images.unsplash.com/photo-1556228578-8c89e6adf883?w=200&q=80&fm=webp";
+              const img = item.productImage ?? null;
               return (
                 <div key={item.productId} className="flex gap-4 py-4 first:pt-0 last:pb-0">
-                  <img src={img} alt={item.productName} className="w-16 h-16 object-cover rounded-lg shrink-0" />
+                  {img ? (
+                    <img src={img} alt={item.productName} className="w-16 h-16 object-cover rounded-lg shrink-0" />
+                  ) : (
+                    <NoImagePlaceholder className="w-16 h-16 rounded-lg shrink-0" compact />
+                  )}
                   <div className="flex-1 flex justify-between items-center">
                     <div>
                       <p className="font-medium text-sm">{item.productName}</p>

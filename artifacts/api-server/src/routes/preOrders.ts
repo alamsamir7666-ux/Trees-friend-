@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { preOrdersTable, productsTable, sellerListingVariantsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, or, isNull } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 
 const router = Router();
@@ -52,6 +52,7 @@ router.post("/pre-orders", requireAuth, async (req, res) => {
       productId: Number(productId),
       productName: product.name,
       productImage: ((product.images as string[]) ?? [])[0] ?? "",
+      sellerListingVariantId: Number(sellerListingVariantId),
       quantity: Number(quantity),
       productPrice: String(basePrice),
       discountedPrice: String(discountedPrice),
@@ -111,22 +112,60 @@ router.post("/pre-orders/:id/status", async (req, res) => {
 });
 
 /**
- * NOTE (Phase 2, unrelated to the variant migration): notifyPreOrderCustomers
- * is still keyed by admin productId + productStatus flip (products.ts calls
- * this when productStatus goes pre_order -> in_stock). This is now
- * INCONSISTENT with the pre-order creation flow above, which is
- * variant-based and has nothing to do with productsTable.productStatus --
- * admin no longer owns any price/stock data, so "admin flips productStatus
- * to in_stock" no longer has a clear relationship to "a specific seller
- * listing variant's isPreOrder flag/stock became available". This function
- * is left AS-IS this phase (not in the files-to-change list, and changing
- * its trigger condition/semantics is a product decision, not a mechanical
- * variant-shape update) -- flagging as a real gap for a future phase to
- * resolve, not fixing here.
+ * RESOLVED (Phase 5): the trigger inconsistency flagged in this comment
+ * since Phase 2 is fixed. productsTable.productStatus is no longer
+ * admin-settable (see products.ts's PATCH route) and no longer drives this
+ * function -- the old pre_order -> in_stock trigger there was removed
+ * entirely. The real trigger now lives in sellerListings.ts's PUT handler:
+ * it fires when a seller edit transitions a variant out of "pending
+ * pre-order" (isPreOrder=true, availableQuantity=0), either by turning
+ * isPreOrder off or by making stock available.
+ *
+ * RESOLVED (Phase 6): the over-notification gap flagged below since Phase 5
+ * is fixed for any row that has a sellerListingVariantId (every row created
+ * from this point forward, since POST /pre-orders now persists it -- see
+ * that route). This function takes the specific variant id that
+ * transitioned and, when present, scopes the notify query to
+ * (productId AND sellerListingVariantId) instead of productId alone -- a
+ * customer who pre-ordered seller A's variant will no longer be notified
+ * when only seller B's unrelated variant becomes available.
+ *
+ * Legacy rows created before the Phase 6 migration have
+ * sellerListingVariantId = null and cannot be scoped this precisely (the
+ * data was never captured) -- those rows still match under the old,
+ * broader "any pending pre-order on this product" condition, via the `OR
+ * sellerListingVariantId IS NULL` branch below. This is intentional
+ * backward-compatible behavior, not a bug: a legacy row has no way to know
+ * which variant it was really for, so still notifying it under the old
+ * product-wide rule is strictly better than never notifying it again.
+ *
+ * Residual imprecision, deliberately accepted: a legacy (null-variant) row
+ * can still be notified more than once if a product has multiple variants
+ * that each transition out of pending-pre-order separately (once per
+ * transitioned variant, since each gets its own call from
+ * sellerListings.ts). This is a strictly smaller version of the original
+ * over-notification gap -- new (non-null) rows are now scoped exactly, and
+ * legacy rows are notified at most as often as variants transition, not
+ * notified about every seller's unrelated variant on every stock change
+ * project-wide. A future phase could de-dupe consecutive notifies to the
+ * same legacy row if this turns out to matter in practice; not done here
+ * since it's a minor UX nuisance, not a correctness bug, and this phase's
+ * scope is the specific over-notification case named in PHASE6_PROMPT.md.
  */
-export async function notifyPreOrderCustomers(productId: number, productName: string) {
+export async function notifyPreOrderCustomers(productId: number, productName: string, sellerListingVariantId?: number) {
   try {
-    const orders = await db.select().from(preOrdersTable).where(and(eq(preOrdersTable.productId, productId), eq(preOrdersTable.status, "pending")));
+    const scope = sellerListingVariantId != null
+      ? and(
+          eq(preOrdersTable.productId, productId),
+          eq(preOrdersTable.status, "pending"),
+          or(
+            eq(preOrdersTable.sellerListingVariantId, sellerListingVariantId),
+            isNull(preOrdersTable.sellerListingVariantId),
+          ),
+        )
+      : and(eq(preOrdersTable.productId, productId), eq(preOrdersTable.status, "pending"));
+
+    const orders = await db.select().from(preOrdersTable).where(scope);
     console.log(`[pre-order] Notifying ${orders.length} customers`);
     for (const order of orders) {
       if (order.whatsappPhone) {

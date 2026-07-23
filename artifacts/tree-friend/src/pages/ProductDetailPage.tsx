@@ -17,6 +17,7 @@ import { Star, Heart, ShoppingBag, ChevronLeft, Check, ShieldCheck, Package, Tru
   ArrowRight, Info, Sun, Droplets, Layers, Ruler, Thermometer, Gauge, Calendar, Sprout, Award, Target, Leaf,
 } from "lucide-react";
 import { ProductCard } from "@/components/ui/ProductCard";
+import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { saveRecentlyViewed, useRecentlyViewed } from "@/hooks/useRecentlyViewed";
 import { ImageZoom } from "@/components/ui/ImageZoom";
 import { ProductQA } from "@/components/ui/ProductQA";
@@ -153,7 +154,7 @@ export function ProductDetailPage() {
     priceCurrency: "BDT",
   });
 
-  const imgs = (product.images.length > 0 ? product.images : ["https://images.unsplash.com/photo-1556228578-8c89e6adf883?w=600&q=80&fm=webp"]).map((img: string, i: number) =>
+  const imgs = product.images.map((img: string, i: number) =>
     img.includes("res.cloudinary.com")
       ? (i === 0
           ? img.replace("/upload/", "/upload/w_800,h_800,c_fill,q_85/")
@@ -234,7 +235,11 @@ export function ProductDetailPage() {
           {/* Images */}
           <div className="space-y-4">
             <div className="aspect-square rounded-2xl overflow-hidden bg-muted/20 border">
-              <img src={imgs[activeImg]} alt={product.name} className="w-full h-full object-cover" />
+              {imgs.length > 0 ? (
+                <img src={imgs[activeImg]} alt={product.name} className="w-full h-full object-cover" />
+              ) : (
+                <NoImagePlaceholder />
+              )}
             </div>
             {imgs.length > 1 && (
               <div className="flex gap-3">

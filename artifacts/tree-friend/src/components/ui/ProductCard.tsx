@@ -6,9 +6,7 @@ import { type Product } from "@workspace/api-client-react";
 import { useComparison } from "@/components/ui/ProductComparison";
 import { useWishlist } from "@/contexts/WishlistContext";
 import { BarChart2 } from "lucide-react";
-
-const FALLBACK_IMG =
-  "https://images.unsplash.com/photo-1556228578-8c89e6adf883?w=400&q=80&fm=webp";
+import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 
 /**
  * Phase 3b Part 5: this card is a browse/discovery surface, not a purchase
@@ -58,8 +56,8 @@ function ProductCardInner({
     });
   }
 
-  const rawImg = product.images[0] || FALLBACK_IMG;
-  const img = rawImg.includes("res.cloudinary.com")
+  const rawImg = product.images[0] || null;
+  const img = rawImg && rawImg.includes("res.cloudinary.com")
     ? rawImg.replace("/upload/", "/upload/w_400,h_400,c_fill,f_webp,q_75/")
     : rawImg;
   const href = backContext
@@ -73,15 +71,19 @@ function ProductCardInner({
         aria-label={product.name + (hasListings ? " - from Tk" + product.listingMinPrice!.toLocaleString() : "")}
       >
         <div className="relative aspect-square overflow-hidden bg-muted/30">
-          <img
-            src={img}
-            alt={product.name}
-            className={"w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 " + (!hasListings ? "opacity-60 grayscale" : "")}
-            loading={priority ? "eager" : "lazy"}
-            decoding="async"
-            width="400"
-            height="400"
-          />
+          {img ? (
+            <img
+              src={img}
+              alt={product.name}
+              className={"w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 " + (!hasListings ? "opacity-60 grayscale" : "")}
+              loading={priority ? "eager" : "lazy"}
+              decoding="async"
+              width="400"
+              height="400"
+            />
+          ) : (
+            <NoImagePlaceholder />
+          )}
           <div className="absolute top-3 left-3 flex flex-col gap-1">
             {!hasListings && (
               <Badge className="bg-gray-500 text-white text-xs font-medium shadow-sm">

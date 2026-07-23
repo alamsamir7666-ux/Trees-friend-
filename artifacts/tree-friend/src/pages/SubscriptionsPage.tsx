@@ -16,6 +16,7 @@ import { apiClient } from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { updateSEO } from "@/lib/seo";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
+import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import {
   RefreshCw, Pause, Play, X, Package, ChevronRight, Plus, CalendarDays,
 } from "lucide-react";
@@ -187,11 +188,15 @@ export function SubscriptionsPage() {
               <div className="px-6 py-4 space-y-3">
                 {sub.items.map((item) => (
                   <div key={item.productId} className="flex items-center gap-3">
-                    <img
-                      src={item.productImage || "https://images.unsplash.com/photo-1556228578-8c89e6adf883?w=80&q=70&fm=webp"}
-                      alt={item.productName}
-                      className="h-12 w-12 object-cover rounded-xl bg-muted"
-                    />
+                    {item.productImage ? (
+                      <img
+                        src={item.productImage}
+                        alt={item.productName}
+                        className="h-12 w-12 object-cover rounded-xl bg-muted"
+                      />
+                    ) : (
+                      <NoImagePlaceholder className="h-12 w-12 rounded-xl shrink-0" compact />
+                    )}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{item.productName}</p>
                       <p className="text-xs text-muted-foreground">Qty: {item.quantity}</p>
