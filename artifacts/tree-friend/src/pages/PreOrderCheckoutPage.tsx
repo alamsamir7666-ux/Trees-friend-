@@ -23,6 +23,7 @@ export function PreOrderCheckoutPage() {
   const { getToken } = useAuth();
 
   const productId = Number(params.get("productId") ?? "0");
+  const sellerListingVariantId = Number(params.get("sellerListingVariantId") ?? "0");
   const quantity = Number(params.get("qty") ?? "1");
   const productName = decodeURIComponent(params.get("name") ?? "");
   const productImage = decodeURIComponent(params.get("image") ?? "");
@@ -64,6 +65,9 @@ export function PreOrderCheckoutPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    if (!sellerListingVariantId) {
+      setError("Please select an option before pre-ordering."); return;
+    }
     if (!address.fullName || !address.phone || !address.street || !address.city) {
       setError("Please fill in all required address fields."); return;
     }
@@ -77,7 +81,7 @@ export function PreOrderCheckoutPage() {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
-          productId, quantity,
+          productId, sellerListingVariantId, quantity,
           shippingAddress: { fullName: address.fullName, phone: address.phone, street: address.street, city: address.city, district: address.district, postalCode: address.postalCode || null },
           paymentMethod, senderNumber: bkashNumber,
           whatsappPhone: whatsappPhone || null,

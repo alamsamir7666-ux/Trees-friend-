@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { preOrdersTable, productsTable, productVariantsTable } from "@workspace/db";
+import { preOrdersTable, productsTable, sellerListingVariantsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 
@@ -10,18 +10,37 @@ function generateTrackingId() {
   return "PRE-" + Date.now().toString(36).toUpperCase() + "-" + Math.random().toString(36).substring(2, 6).toUpperCase();
 }
 
+/**
+ * Phase 2: pre-order now requires a sellerListingVariantId against
+ * sellerListingVariantsTable, not a variantId against productVariantsTable
+ * -- pre-order is a per-variant flag on a marketplace seller's listing
+ * variant (isPreOrder), not a concept admin's productVariantsTable
+ * participates in at all. Requires that specific variant's isPreOrder flag
+ * to be true, rather than assuming any variant can be pre-ordered (the old
+ * code had no such check -- any admin variant could be "pre-ordered"
+ * regardless of the parent product's productStatus field being the only
+ * gate). basePrice/deliveryCharge are pulled from the seller listing
+ * variant, the same way routes/orders.ts now resolves marketplace lines.
+ */
 router.post("/pre-orders", requireAuth, async (req, res) => {
   try {
-    const { productId, variantId, quantity = 1, shippingAddress, paymentMethod, senderNumber, transactionId, whatsappPhone } = req.body;
+    const { productId, sellerListingVariantId, quantity = 1, shippingAddress, paymentMethod, senderNumber, transactionId, whatsappPhone } = req.body;
     if (!productId || !shippingAddress) { res.status(400).json({ error: "Product and shipping address are required" }); return; }
-    if (!variantId) { res.status(400).json({ error: "Please select an option (e.g. Seed, Sapling, Grafted, Potted)" }); return; }
+    if (!sellerListingVariantId) { res.status(400).json({ error: "Please select an option (e.g. Seed, Sapling, Grafted, Potted) before pre-ordering" }); return; }
 
     const [product] = await db.select().from(productsTable).where(eq(productsTable.id, Number(productId))).limit(1);
     if (!product) { res.status(404).json({ error: "Product not found" }); return; }
-    if (product.productStatus !== "pre_order") { res.status(400).json({ error: "Not available for pre-order" }); return; }
 
-    const [variant] = await db.select().from(productVariantsTable).where(eq(productVariantsTable.id, Number(variantId))).limit(1);
-    if (!variant || variant.productId !== product.id) { res.status(404).json({ error: "Variant not found for this product" }); return; }
+    const [variant] = await db
+      .select()
+      .from(sellerListingVariantsTable)
+      .where(eq(sellerListingVariantsTable.id, Number(sellerListingVariantId)))
+      .limit(1);
+    if (!variant) { res.status(404).json({ error: "Listing variant not found" }); return; }
+    if (!variant.isPreOrder) {
+      res.status(400).json({ error: "This option is not currently available for pre-order" });
+      return;
+    }
 
     const basePrice = Number(variant.discountPrice ?? variant.price);
     const discountedPrice = Math.round(basePrice * 0.95 * 100) / 100;
@@ -91,6 +110,20 @@ router.post("/pre-orders/:id/status", async (req, res) => {
   } catch { res.status(500).json({ error: "Failed" }); }
 });
 
+/**
+ * NOTE (Phase 2, unrelated to the variant migration): notifyPreOrderCustomers
+ * is still keyed by admin productId + productStatus flip (products.ts calls
+ * this when productStatus goes pre_order -> in_stock). This is now
+ * INCONSISTENT with the pre-order creation flow above, which is
+ * variant-based and has nothing to do with productsTable.productStatus --
+ * admin no longer owns any price/stock data, so "admin flips productStatus
+ * to in_stock" no longer has a clear relationship to "a specific seller
+ * listing variant's isPreOrder flag/stock became available". This function
+ * is left AS-IS this phase (not in the files-to-change list, and changing
+ * its trigger condition/semantics is a product decision, not a mechanical
+ * variant-shape update) -- flagging as a real gap for a future phase to
+ * resolve, not fixing here.
+ */
 export async function notifyPreOrderCustomers(productId: number, productName: string) {
   try {
     const orders = await db.select().from(preOrdersTable).where(and(eq(preOrdersTable.productId, productId), eq(preOrdersTable.status, "pending")));

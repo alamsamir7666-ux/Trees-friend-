@@ -30,6 +30,7 @@ export * from "./homepageSections";
 
 export * from "./sellers";
 export * from "./sellerListings";
+export * from "./sellerListingVariants";
 export * from "./sellerSubscriptions";
 export * from "./sellerPaymentConfigs";
 export * from "./sellerCourierConfigs";

@@ -27,6 +27,25 @@ const STATUS_BADGE: Record<string, { icon: React.ElementType; className: string 
 };
 
 /**
+ * Phase 3a compile fix (not a redesign -- see phase prompt's "Do NOT touch
+ * this phase" note on this file): price/stock moved from the listing to a
+ * nested `variants` array, so this read-only admin queue can no longer
+ * show a single price/stock pair. Summarizes across all variants instead
+ * (price range + total stock) so admin still sees enough at a glance to
+ * make an approve/reject decision; a full per-variant breakdown is Phase
+ * 3b's job if wanted.
+ */
+function variantSummary(variants: { price: number; discountPrice?: number | null; stock: number }[]): string {
+  if (variants.length === 0) return "No variants";
+  const prices = variants.map((v) => v.discountPrice ?? v.price);
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const priceLabel = min === max ? `Tk${min}` : `Tk${min}–${max}`;
+  const totalStock = variants.reduce((sum, v) => sum + v.stock, 0);
+  return `${priceLabel} · Stock: ${totalStock} (${variants.length} variant${variants.length === 1 ? "" : "s"})`;
+}
+
+/**
  * Admin-side counterpart to the seller dashboard's listing creation --
  * approve/reject queue for seller_listings. Mirrors SellersTab.tsx's
  * status-filter + card-list pattern (that tab does the same thing one
@@ -114,7 +133,7 @@ export function SellerListingsTab() {
                       </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Seller: {l.sellerBusinessName} · Tk{l.discountPrice ?? l.price} · Stock: {l.stock}
+                      Seller: {l.sellerBusinessName} · {variantSummary(l.variants)}
                     </p>
                     {l.rejectionReason && (
                       <p className="text-xs text-red-600 mt-1">Previously rejected: {l.rejectionReason}</p>

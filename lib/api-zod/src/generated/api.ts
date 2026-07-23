@@ -130,6 +130,9 @@ export const ListProductsResponse = zod.object({
   "deliveryCharge": zod.number(),
   "sku": zod.string().nullish()
 })),
+  "listingMinPrice": zod.number().nullable(),
+  "listingMaxPrice": zod.number().nullable(),
+  "listingCount": zod.number(),
   "averageRating": zod.number(),
   "reviewCount": zod.number(),
   "createdAt": zod.string()
@@ -171,7 +174,7 @@ export const CreateProductBody = zod.object({
   "stock": zod.number().optional(),
   "deliveryCharge": zod.number().optional(),
   "sku": zod.string().nullish()
-}))
+})).optional().describe('Deprecated \/ ignored as of Phase 2: admin no longer creates variant data. If present, this field is silently ignored by POST \/products -- it is not read or persisted. Kept in the spec (rather than removed) only because the route accepts and discards it instead of rejecting it; do not rely on it.')
 })
 
 
@@ -214,6 +217,9 @@ export const GetFeaturedProductsResponseItem = zod.object({
   "deliveryCharge": zod.number(),
   "sku": zod.string().nullish()
 })),
+  "listingMinPrice": zod.number().nullable(),
+  "listingMaxPrice": zod.number().nullable(),
+  "listingCount": zod.number(),
   "averageRating": zod.number(),
   "reviewCount": zod.number(),
   "createdAt": zod.string()
@@ -261,6 +267,9 @@ export const GetHomepageProductsResponse = zod.object({
   "deliveryCharge": zod.number(),
   "sku": zod.string().nullish()
 })),
+  "listingMinPrice": zod.number().nullable(),
+  "listingMaxPrice": zod.number().nullable(),
+  "listingCount": zod.number(),
   "averageRating": zod.number(),
   "reviewCount": zod.number(),
   "createdAt": zod.string()
@@ -301,6 +310,9 @@ export const GetHomepageProductsResponse = zod.object({
   "deliveryCharge": zod.number(),
   "sku": zod.string().nullish()
 })),
+  "listingMinPrice": zod.number().nullable(),
+  "listingMaxPrice": zod.number().nullable(),
+  "listingCount": zod.number(),
   "averageRating": zod.number(),
   "reviewCount": zod.number(),
   "createdAt": zod.string()
@@ -351,6 +363,9 @@ export const GetProductResponse = zod.object({
   "deliveryCharge": zod.number(),
   "sku": zod.string().nullish()
 })),
+  "listingMinPrice": zod.number().nullable(),
+  "listingMaxPrice": zod.number().nullable(),
+  "listingCount": zod.number(),
   "averageRating": zod.number(),
   "reviewCount": zod.number(),
   "createdAt": zod.string()
@@ -392,7 +407,7 @@ export const UpdateProductBody = zod.object({
   "stock": zod.number().optional(),
   "deliveryCharge": zod.number().optional(),
   "sku": zod.string().nullish()
-})).optional()
+})).optional().describe('Deprecated \/ ignored as of Phase 2: admin no longer edits variant data. If present, this field is silently ignored by PUT \/products\/:id -- it is not read or persisted.')
 })
 
 export const UpdateProductResponse = zod.object({
@@ -431,6 +446,9 @@ export const UpdateProductResponse = zod.object({
   "deliveryCharge": zod.number(),
   "sku": zod.string().nullish()
 })),
+  "listingMinPrice": zod.number().nullable(),
+  "listingMaxPrice": zod.number().nullable(),
+  "listingCount": zod.number(),
   "averageRating": zod.number(),
   "reviewCount": zod.number(),
   "createdAt": zod.string()
@@ -529,9 +547,10 @@ export const ClearCartResponse = zod.object({
 export const AddToCartBody = zod.object({
   "productId": zod.number(),
   "variantId": zod.number().nullish(),
-  "sellerListingId": zod.number().nullish(),
+  "sellerListingId": zod.number().nullish().describe('Deprecated\/ignored -- see description above. Prefer sellerListingVariantId.'),
+  "sellerListingVariantId": zod.number().nullish(),
   "quantity": zod.number()
-}).describe('Specify exactly one of variantId or sellerListingId, never both.')
+}).describe('Specify exactly one of variantId (admin-direct product variant) or sellerListingVariantId (marketplace seller listing variant), never both, never neither -- confirmed against cart.ts\'s POST \/cart\/items handler, which rejects the request with 400 if hasVariant === hasListingVariant. sellerListingId is still accepted in the request body for backward compat with older clients, but is IGNORED for line-creation purposes -- the route derives sellerListingId itself from sellerListingVariantId\'s own FK rather than trusting a client-sent value.')
 
 export const AddToCartResponse = zod.object({
   "items": zod.array(zod.object({
@@ -1061,6 +1080,9 @@ export const GetWishlistResponseItem = zod.object({
   "deliveryCharge": zod.number(),
   "sku": zod.string().nullish()
 })),
+  "listingMinPrice": zod.number().nullable(),
+  "listingMaxPrice": zod.number().nullable(),
+  "listingCount": zod.number(),
   "averageRating": zod.number(),
   "reviewCount": zod.number(),
   "createdAt": zod.string()
@@ -1439,16 +1461,6 @@ export const ListMySellerListingsResponseItem = zod.object({
   "id": zod.number(),
   "productId": zod.number(),
   "sellerId": zod.number(),
-  "form": zod.string().nullish(),
-  "rootType": zod.string().nullish(),
-  "potSize": zod.string().nullish(),
-  "age": zod.string().nullish(),
-  "height": zod.string().nullish(),
-  "condition": zod.string().nullish(),
-  "price": zod.number(),
-  "discountPrice": zod.number().nullish(),
-  "stock": zod.number(),
-  "availableQuantity": zod.number(),
   "deliveryTimeDays": zod.number().nullish(),
   "warrantyDays": zod.number().nullish(),
   "returnPolicyText": zod.string().nullish(),
@@ -1463,6 +1475,24 @@ export const ListMySellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "variants": zod.array(zod.object({
+  "id": zod.number(),
+  "sellerListingId": zod.number(),
+  "form": zod.string().nullish(),
+  "rootType": zod.string().nullish(),
+  "potSize": zod.string().nullish(),
+  "age": zod.string().nullish(),
+  "height": zod.string().nullish(),
+  "condition": zod.string().nullish(),
+  "price": zod.number(),
+  "discountPrice": zod.number().nullish(),
+  "stock": zod.number(),
+  "availableQuantity": zod.number(),
+  "deliveryCharge": zod.number(),
+  "isPreOrder": zod.boolean(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })
@@ -1472,8 +1502,12 @@ export const ListMySellerListingsResponse = zod.array(ListMySellerListingsRespon
 /**
  * @summary Seller — create a listing against an existing admin-owned variety
  */
+
+
+
 export const CreateSellerListingBody = zod.object({
   "productId": zod.number(),
+  "variants": zod.array(zod.object({
   "form": zod.string().nullish(),
   "rootType": zod.string().nullish(),
   "potSize": zod.string().nullish(),
@@ -1483,6 +1517,9 @@ export const CreateSellerListingBody = zod.object({
   "price": zod.number(),
   "discountPrice": zod.number().nullish(),
   "stock": zod.number().optional(),
+  "deliveryCharge": zod.number().optional(),
+  "isPreOrder": zod.boolean().optional()
+}).describe('Shape of one entry in CreateSellerListingBody.variants (no id -- every variant in a create request is new).')).min(1),
   "deliveryTimeDays": zod.number().nullish(),
   "warrantyDays": zod.number().nullish(),
   "returnPolicyText": zod.string().nullish(),
@@ -1497,6 +1534,64 @@ export const CreateSellerListingBody = zod.object({
 
 
 /**
+ * @summary Buyer-facing: one listing's full detail by id, publicly, nested variants + seller info. Powers the listing-detail page (Phase 3b Part 3). Same visibility/approval/active-seller gate as listProductSellerListings, but does not drop sold-out listings -- each variant's own availableQuantity communicates availability.
+ */
+export const GetSellerListingParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetSellerListingResponse = zod.object({
+  "listing": zod.object({
+  "id": zod.number(),
+  "productId": zod.number(),
+  "sellerId": zod.number(),
+  "deliveryTimeDays": zod.number().nullish(),
+  "warrantyDays": zod.number().nullish(),
+  "returnPolicyText": zod.string().nullish(),
+  "paymentMethod": zod.enum(['cod', 'advance', 'both']),
+  "images": zod.array(zod.string()),
+  "videoUrl": zod.string().nullish(),
+  "description": zod.string().nullish(),
+  "offerText": zod.string().nullish(),
+  "certification": zod.string().nullish(),
+  "tags": zod.array(zod.string()),
+  "visibility": zod.enum(['public', 'hidden']),
+  "hiddenReason": zod.string().nullish(),
+  "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
+  "rejectionReason": zod.string().nullish(),
+  "variants": zod.array(zod.object({
+  "id": zod.number(),
+  "sellerListingId": zod.number(),
+  "form": zod.string().nullish(),
+  "rootType": zod.string().nullish(),
+  "potSize": zod.string().nullish(),
+  "age": zod.string().nullish(),
+  "height": zod.string().nullish(),
+  "condition": zod.string().nullish(),
+  "price": zod.number(),
+  "discountPrice": zod.number().nullish(),
+  "stock": zod.number(),
+  "availableQuantity": zod.number(),
+  "deliveryCharge": zod.number(),
+  "isPreOrder": zod.boolean(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+}),
+  "seller": zod.object({
+  "id": zod.number(),
+  "businessName": zod.string(),
+  "nurseryName": zod.string(),
+  "location": zod.string()
+}),
+  "rating": zod.number(),
+  "reviewCount": zod.number()
+})
+
+
+/**
  * @summary Seller — update their own listing
  */
 export const UpdateSellerListingParams = zod.object({
@@ -1504,6 +1599,8 @@ export const UpdateSellerListingParams = zod.object({
 })
 
 export const UpdateSellerListingBody = zod.object({
+  "variants": zod.array(zod.object({
+  "id": zod.number().optional(),
   "form": zod.string().nullish(),
   "rootType": zod.string().nullish(),
   "potSize": zod.string().nullish(),
@@ -1513,6 +1610,10 @@ export const UpdateSellerListingBody = zod.object({
   "price": zod.number().optional(),
   "discountPrice": zod.number().nullish(),
   "stock": zod.number().optional(),
+  "deliveryCharge": zod.number().optional(),
+  "isPreOrder": zod.boolean().optional()
+}).describe('Shape of one entry in UpdateSellerListingBody.variants. An entry WITH id updates that existing variant (partial update -- only fields present in the object are changed). An entry with NO id creates a new variant under the listing.')).optional(),
+  "deletedVariantIds": zod.array(zod.number()).optional(),
   "deliveryTimeDays": zod.number().nullish(),
   "warrantyDays": zod.number().nullish(),
   "returnPolicyText": zod.string().nullish(),
@@ -1530,16 +1631,6 @@ export const UpdateSellerListingResponse = zod.object({
   "id": zod.number(),
   "productId": zod.number(),
   "sellerId": zod.number(),
-  "form": zod.string().nullish(),
-  "rootType": zod.string().nullish(),
-  "potSize": zod.string().nullish(),
-  "age": zod.string().nullish(),
-  "height": zod.string().nullish(),
-  "condition": zod.string().nullish(),
-  "price": zod.number(),
-  "discountPrice": zod.number().nullish(),
-  "stock": zod.number(),
-  "availableQuantity": zod.number(),
   "deliveryTimeDays": zod.number().nullish(),
   "warrantyDays": zod.number().nullish(),
   "returnPolicyText": zod.string().nullish(),
@@ -1554,6 +1645,24 @@ export const UpdateSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "variants": zod.array(zod.object({
+  "id": zod.number(),
+  "sellerListingId": zod.number(),
+  "form": zod.string().nullish(),
+  "rootType": zod.string().nullish(),
+  "potSize": zod.string().nullish(),
+  "age": zod.string().nullish(),
+  "height": zod.string().nullish(),
+  "condition": zod.string().nullish(),
+  "price": zod.number(),
+  "discountPrice": zod.number().nullish(),
+  "stock": zod.number(),
+  "availableQuantity": zod.number(),
+  "deliveryCharge": zod.number(),
+  "isPreOrder": zod.boolean(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })
@@ -1587,16 +1696,6 @@ export const ListProductSellerListingsResponseItem = zod.object({
   "id": zod.number(),
   "productId": zod.number(),
   "sellerId": zod.number(),
-  "form": zod.string().nullish(),
-  "rootType": zod.string().nullish(),
-  "potSize": zod.string().nullish(),
-  "age": zod.string().nullish(),
-  "height": zod.string().nullish(),
-  "condition": zod.string().nullish(),
-  "price": zod.number(),
-  "discountPrice": zod.number().nullish(),
-  "stock": zod.number(),
-  "availableQuantity": zod.number(),
   "deliveryTimeDays": zod.number().nullish(),
   "warrantyDays": zod.number().nullish(),
   "returnPolicyText": zod.string().nullish(),
@@ -1611,6 +1710,24 @@ export const ListProductSellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "variants": zod.array(zod.object({
+  "id": zod.number(),
+  "sellerListingId": zod.number(),
+  "form": zod.string().nullish(),
+  "rootType": zod.string().nullish(),
+  "potSize": zod.string().nullish(),
+  "age": zod.string().nullish(),
+  "height": zod.string().nullish(),
+  "condition": zod.string().nullish(),
+  "price": zod.number(),
+  "discountPrice": zod.number().nullish(),
+  "stock": zod.number(),
+  "availableQuantity": zod.number(),
+  "deliveryCharge": zod.number(),
+  "isPreOrder": zod.boolean(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 }),
@@ -1637,16 +1754,6 @@ export const ListAdminSellerListingsResponseItem = zod.object({
   "id": zod.number(),
   "productId": zod.number(),
   "sellerId": zod.number(),
-  "form": zod.string().nullish(),
-  "rootType": zod.string().nullish(),
-  "potSize": zod.string().nullish(),
-  "age": zod.string().nullish(),
-  "height": zod.string().nullish(),
-  "condition": zod.string().nullish(),
-  "price": zod.number(),
-  "discountPrice": zod.number().nullish(),
-  "stock": zod.number(),
-  "availableQuantity": zod.number(),
   "deliveryTimeDays": zod.number().nullish(),
   "warrantyDays": zod.number().nullish(),
   "returnPolicyText": zod.string().nullish(),
@@ -1661,6 +1768,24 @@ export const ListAdminSellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "variants": zod.array(zod.object({
+  "id": zod.number(),
+  "sellerListingId": zod.number(),
+  "form": zod.string().nullish(),
+  "rootType": zod.string().nullish(),
+  "potSize": zod.string().nullish(),
+  "age": zod.string().nullish(),
+  "height": zod.string().nullish(),
+  "condition": zod.string().nullish(),
+  "price": zod.number(),
+  "discountPrice": zod.number().nullish(),
+  "stock": zod.number(),
+  "availableQuantity": zod.number(),
+  "deliveryCharge": zod.number(),
+  "isPreOrder": zod.boolean(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 }).and(zod.object({
@@ -1681,16 +1806,6 @@ export const ApproveSellerListingResponse = zod.object({
   "id": zod.number(),
   "productId": zod.number(),
   "sellerId": zod.number(),
-  "form": zod.string().nullish(),
-  "rootType": zod.string().nullish(),
-  "potSize": zod.string().nullish(),
-  "age": zod.string().nullish(),
-  "height": zod.string().nullish(),
-  "condition": zod.string().nullish(),
-  "price": zod.number(),
-  "discountPrice": zod.number().nullish(),
-  "stock": zod.number(),
-  "availableQuantity": zod.number(),
   "deliveryTimeDays": zod.number().nullish(),
   "warrantyDays": zod.number().nullish(),
   "returnPolicyText": zod.string().nullish(),
@@ -1705,6 +1820,24 @@ export const ApproveSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "variants": zod.array(zod.object({
+  "id": zod.number(),
+  "sellerListingId": zod.number(),
+  "form": zod.string().nullish(),
+  "rootType": zod.string().nullish(),
+  "potSize": zod.string().nullish(),
+  "age": zod.string().nullish(),
+  "height": zod.string().nullish(),
+  "condition": zod.string().nullish(),
+  "price": zod.number(),
+  "discountPrice": zod.number().nullish(),
+  "stock": zod.number(),
+  "availableQuantity": zod.number(),
+  "deliveryCharge": zod.number(),
+  "isPreOrder": zod.boolean(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })
@@ -1725,16 +1858,6 @@ export const RejectSellerListingResponse = zod.object({
   "id": zod.number(),
   "productId": zod.number(),
   "sellerId": zod.number(),
-  "form": zod.string().nullish(),
-  "rootType": zod.string().nullish(),
-  "potSize": zod.string().nullish(),
-  "age": zod.string().nullish(),
-  "height": zod.string().nullish(),
-  "condition": zod.string().nullish(),
-  "price": zod.number(),
-  "discountPrice": zod.number().nullish(),
-  "stock": zod.number(),
-  "availableQuantity": zod.number(),
   "deliveryTimeDays": zod.number().nullish(),
   "warrantyDays": zod.number().nullish(),
   "returnPolicyText": zod.string().nullish(),
@@ -1749,6 +1872,24 @@ export const RejectSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "variants": zod.array(zod.object({
+  "id": zod.number(),
+  "sellerListingId": zod.number(),
+  "form": zod.string().nullish(),
+  "rootType": zod.string().nullish(),
+  "potSize": zod.string().nullish(),
+  "age": zod.string().nullish(),
+  "height": zod.string().nullish(),
+  "condition": zod.string().nullish(),
+  "price": zod.number(),
+  "discountPrice": zod.number().nullish(),
+  "stock": zod.number(),
+  "availableQuantity": zod.number(),
+  "deliveryCharge": zod.number(),
+  "isPreOrder": zod.boolean(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })

@@ -20,6 +20,25 @@ const APPROVAL_BADGE: Record<string, { icon: React.ElementType; className: strin
 };
 
 /**
+ * Phase 3a compile fix (not a redesign -- see phase prompt's "Do NOT touch
+ * this phase" note on this file): price/stock moved off the listing onto a
+ * nested `variants` array, so this read-only inventory row can no longer
+ * show a single price/stock pair. Summarizes across all variants (price
+ * range, using each variant's discount price when set, + total stock) so
+ * the seller still sees enough at a glance; a full per-variant breakdown is
+ * Phase 3b's job if wanted.
+ */
+function variantPriceStockSummary(variants: SellerListing["variants"]): string {
+  if (variants.length === 0) return "No variants";
+  const prices = variants.map((v) => v.discountPrice ?? v.price);
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const priceLabel = min === max ? `Tk${min}` : `Tk${min}–${max}`;
+  const totalStock = variants.reduce((sum, v) => sum + v.stock, 0);
+  return `${priceLabel} · Stock: ${totalStock} (${variants.length} variant${variants.length === 1 ? "" : "s"})`;
+}
+
+/**
  * Listings management -- functionally identical to the pre-redesign inline
  * tab in SellerDashboardPage.tsx (same hooks, same actions, same gating),
  * restyled to admin's rounded-2xl card / Skeleton loading conventions.
@@ -130,8 +149,7 @@ export function SellerListingsTab() {
                     </Badge>
                   </div>
                   <p className="text-xs text-gray-500 mt-1">
-                    Tk{l.discountPrice ?? l.price}{l.discountPrice && <span className="line-through ml-1">Tk{l.price}</span>}
-                    {" · "}Stock: {l.stock}
+                    {variantPriceStockSummary(l.variants)}
                   </p>
                   {l.approvalStatus === "rejected" && l.rejectionReason && (
                     <p className="text-xs text-red-600 mt-1">Rejected: {l.rejectionReason}</p>

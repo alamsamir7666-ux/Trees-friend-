@@ -3,7 +3,6 @@ import {
   serial,
   text,
   integer,
-  numeric,
   timestamp,
   jsonb,
 } from "drizzle-orm/pg-core";
@@ -15,19 +14,19 @@ import { sellersTable } from "./sellers";
 /**
  * A seller's sellable instance of an admin-owned variety (productsTable).
  * Admin owns the variety/taxonomy; sellers own listings against it. Many
- * sellers can list against the same product, each with their own price,
- * stock, condition, images, etc.
+ * sellers can list against the same product.
+ *
+ * This table holds only listing-level fields shared across all of a
+ * seller's variants for this product (images, description, delivery/
+ * warranty/return terms, payment method, visibility, approval status).
+ * One listing can contain multiple variants (e.g. "Sapling" at one price,
+ * "Grafted" at another); price, stock, form, condition, and the other
+ * variant-level fields live in sellerListingVariantsTable, not here.
  *
  * This REPLACES productVariantsTable's customer-facing role. productVariants
  * is deprecated once migration to this table is complete (see plan doc §2)
  * -- it is not deleted here, and existing data/routes on it are untouched
  * by this file alone.
- *
- * height/pot_size/age/root_type are comparison-critical fields and MUST be
- * validated server-side against listingAttributeOptionsTable for the
- * listing's product's category before accepting a write (plan doc §3a).
- * This file does not enforce that -- it belongs in the API route/service
- * layer, not the schema.
  */
 export const sellerListingsTable = pgTable("seller_listings", {
   id: serial("id").primaryKey(),
@@ -37,23 +36,6 @@ export const sellerListingsTable = pgTable("seller_listings", {
   sellerId: integer("seller_id")
     .notNull()
     .references(() => sellersTable.id, { onDelete: "cascade" }),
-
-  form: text("form"), // "seed" | "sapling" | "grafted" | "potted"
-
-  // Comparison-critical -- must be a controlled value from
-  // listingAttributeOptionsTable, enforced at the API layer.
-  rootType: text("root_type"),
-  potSize: text("pot_size"),
-  age: text("age"),
-  height: text("height"),
-
-  // Free text -- no standardization needed.
-  condition: text("condition"),
-
-  price: numeric("price", { precision: 10, scale: 2 }).notNull(),
-  discountPrice: numeric("discount_price", { precision: 10, scale: 2 }),
-  stock: integer("stock").notNull().default(0),
-  availableQuantity: integer("available_quantity").notNull().default(0),
 
   deliveryTimeDays: integer("delivery_time_days"),
   warrantyDays: integer("warranty_days"),

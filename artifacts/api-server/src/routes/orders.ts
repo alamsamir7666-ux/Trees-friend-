@@ -6,6 +6,7 @@ import {
   productsTable,
   productVariantsTable,
   sellerListingsTable,
+  sellerListingVariantsTable,
   sellersTable,
   sellerPaymentConfigsTable,
   couponsTable,
@@ -274,11 +275,17 @@ router.post("/orders", requireAuth, async (req: any, res) => {
         .innerJoin(productsTable, eq(cartItemsTable.productId, productsTable.id))
         .innerJoin(productVariantsTable, eq(cartItemsTable.variantId, productVariantsTable.id))
         .where(eq(cartItemsTable.userId, req.userId)),
+      // Phase 2: resolves through sellerListingVariantsTable now, not
+      // sellerListingsTable directly -- price/discountPrice/
+      // availableQuantity/deliveryCharge all moved to the variant. Still
+      // joins sellerListingsTable for listing-level fields (id, sellerId,
+      // approvalStatus, visibility).
       db
-        .select({ cart: cartItemsTable, product: productsTable, listing: sellerListingsTable })
+        .select({ cart: cartItemsTable, product: productsTable, listing: sellerListingsTable, variant: sellerListingVariantsTable })
         .from(cartItemsTable)
         .innerJoin(productsTable, eq(cartItemsTable.productId, productsTable.id))
-        .innerJoin(sellerListingsTable, eq(cartItemsTable.sellerListingId, sellerListingsTable.id))
+        .innerJoin(sellerListingVariantsTable, eq(cartItemsTable.sellerListingVariantId, sellerListingVariantsTable.id))
+        .innerJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
         .where(eq(cartItemsTable.userId, req.userId)),
     ]);
 
@@ -293,9 +300,11 @@ router.post("/orders", requireAuth, async (req: any, res) => {
         return;
       }
     }
-    for (const { cart, product, listing } of listingLines) {
-      if (listing.availableQuantity < cart.quantity) {
-        res.status(400).json({ error: `Insufficient stock for "${product.name}" from this seller. Only ${listing.availableQuantity} left.` });
+    for (const { cart, product, listing, variant } of listingLines) {
+      // Stock-sufficiency check moves to the VARIANT's availableQuantity
+      // (Phase 2) -- the listing itself no longer carries stock data.
+      if (variant.availableQuantity < cart.quantity) {
+        res.status(400).json({ error: `Insufficient stock for "${product.name}" from this seller. Only ${variant.availableQuantity} left.` });
         return;
       }
       if (listing.approvalStatus !== "approved" || listing.visibility !== "public") {
@@ -326,12 +335,30 @@ router.post("/orders", requireAuth, async (req: any, res) => {
       };
     });
 
-    const resolvedListingLines: ResolvedLine[] = listingLines.map(({ cart, product, listing }) => {
-      const price = listing.discountPrice != null ? Number(listing.discountPrice) : Number(listing.price);
+    // Phase 2: price/discountPrice/deliveryCharge now come from the
+    // seller-listing VARIANT the cart line points to, not the listing.
+    //
+    // deliveryCharge here is real, seller-set data (courier fee for THIS
+    // variant -- a seed packet and a mature potted tree of the same
+    // listing ship very differently) that MUST be shown to the buyer on the
+    // order (orderItem.deliveryCharge, populated below from the variant's
+    // real value) so they know what they'll owe the courier. But the
+    // platform does NOT collect it at checkout -- the buyer pays the
+    // courier directly (plan doc §4, §8). That's why `deliveryCharge` on
+    // ResolvedLine itself (the field groupDeliveryFee below actually sums
+    // into groupTotal, the platform-collected total) is hard-coded to 0
+    // here, structurally separate from orderItem.deliveryCharge: this is
+    // not a comment-only convention, it's two different fields carrying two
+    // different numbers on purpose, so a future edit to one can't
+    // accidentally leak courier money into the platform total by
+    // "simplifying" what looks like a duplicate field.
+    const resolvedListingLines: ResolvedLine[] = listingLines.map(({ cart, product, listing, variant }) => {
+      const price = variant.discountPrice != null ? Number(variant.discountPrice) : Number(variant.price);
+      const deliveryCharge = Number(variant.deliveryCharge);
       return {
         sellerId: listing.sellerId,
         lineTotal: price * cart.quantity,
-        deliveryCharge: 0, // buyer pays courier directly to seller, not collected here (plan doc §4, §8)
+        deliveryCharge: 0, // buyer pays courier directly to seller, NOT collected in groupTotal -- see doc comment above
         orderItem: {
           productId: product.id,
           productName: product.name,
@@ -340,7 +367,9 @@ router.post("/orders", requireAuth, async (req: any, res) => {
           sellerId: listing.sellerId,
           quantity: cart.quantity,
           price,
-          deliveryCharge: 0,
+          // Real, visible, buyer-owes-the-courier charge -- NOT summed into
+          // any platform-collected total (see doc comment above).
+          deliveryCharge,
         },
       };
     });
@@ -457,12 +486,14 @@ router.post("/orders", requireAuth, async (req: any, res) => {
       ...variantLines.map(({ cart, variant }) =>
         db.update(productVariantsTable).set({ stock: Math.max(0, variant.stock - cart.quantity) }).where(eq(productVariantsTable.id, variant.id))
       ),
-      ...listingLines.map(({ cart, listing }) =>
-        db.update(sellerListingsTable).set({
-          stock: Math.max(0, listing.stock - cart.quantity),
-          availableQuantity: Math.max(0, listing.availableQuantity - cart.quantity),
+      // Phase 2: stock decrement moves to sellerListingVariantsTable -- the
+      // listing itself no longer carries stock/availableQuantity.
+      ...listingLines.map(({ cart, variant }) =>
+        db.update(sellerListingVariantsTable).set({
+          stock: Math.max(0, variant.stock - cart.quantity),
+          availableQuantity: Math.max(0, variant.availableQuantity - cart.quantity),
           updatedAt: new Date(),
-        }).where(eq(sellerListingsTable.id, listing.id))
+        }).where(eq(sellerListingVariantsTable.id, variant.id))
       ),
     ]);
 

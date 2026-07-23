@@ -84,6 +84,11 @@ export interface Product {
   totalStock: number;
   inStock: boolean;
   variants: ProductVariant[];
+  /** @nullable */
+  listingMinPrice: number | null;
+  /** @nullable */
+  listingMaxPrice: number | null;
+  listingCount: number;
   averageRating: number;
   reviewCount: number;
   createdAt: string;
@@ -138,7 +143,8 @@ export interface CreateProductBody {
   images: string[];
   videoUrl?: string;
   productStatus?: string;
-  variants: ProductVariantInput[];
+  /** Deprecated / ignored as of Phase 2: admin no longer creates variant data. If present, this field is silently ignored by POST /products -- it is not read or persisted. Kept in the spec (rather than removed) only because the route accepts and discards it instead of rejecting it; do not rely on it. */
+  variants?: ProductVariantInput[];
 }
 
 export interface UpdateProductBody {
@@ -169,6 +175,7 @@ export interface UpdateProductBody {
   images?: string[];
   videoUrl?: string;
   productStatus?: string;
+  /** Deprecated / ignored as of Phase 2: admin no longer edits variant data. If present, this field is silently ignored by PUT /products/:id -- it is not read or persisted. */
   variants?: ProductVariantInput[];
 }
 
@@ -265,12 +272,14 @@ export interface Cart {
 }
 
 /**
- * Specify exactly one of variantId or sellerListingId, never both.
+ * Specify exactly one of variantId (admin-direct product variant) or sellerListingVariantId (marketplace seller listing variant), never both, never neither -- confirmed against cart.ts's POST /cart/items handler, which rejects the request with 400 if hasVariant === hasListingVariant. sellerListingId is still accepted in the request body for backward compat with older clients, but is IGNORED for line-creation purposes -- the route derives sellerListingId itself from sellerListingVariantId's own FK rather than trusting a client-sent value.
  */
 export interface AddToCartBody {
   productId: number;
   variantId?: number | null;
+  /** Deprecated/ignored -- see description above. Prefer sellerListingVariantId. */
   sellerListingId?: number | null;
+  sellerListingVariantId?: number | null;
   quantity: number;
 }
 
@@ -897,10 +906,9 @@ export const SellerListingApprovalStatus = {
   rejected: 'rejected',
 } as const;
 
-export interface SellerListing {
+export interface SellerListingVariant {
   id: number;
-  productId: number;
-  sellerId: number;
+  sellerListingId: number;
   /** @nullable */
   form?: string | null;
   /** @nullable */
@@ -918,6 +926,16 @@ export interface SellerListing {
   discountPrice?: number | null;
   stock: number;
   availableQuantity: number;
+  deliveryCharge: number;
+  isPreOrder: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SellerListing {
+  id: number;
+  productId: number;
+  sellerId: number;
   /** @nullable */
   deliveryTimeDays?: number | null;
   /** @nullable */
@@ -941,21 +959,15 @@ export interface SellerListing {
   approvalStatus: SellerListingApprovalStatus;
   /** @nullable */
   rejectionReason?: string | null;
+  variants: SellerListingVariant[];
   createdAt: string;
   updatedAt: string;
 }
 
-export type CreateSellerListingBodyPaymentMethod = typeof CreateSellerListingBodyPaymentMethod[keyof typeof CreateSellerListingBodyPaymentMethod];
-
-
-export const CreateSellerListingBodyPaymentMethod = {
-  cod: 'cod',
-  advance: 'advance',
-  both: 'both',
-} as const;
-
-export interface CreateSellerListingBody {
-  productId: number;
+/**
+ * Shape of one entry in CreateSellerListingBody.variants (no id -- every variant in a create request is new).
+ */
+export interface SellerListingVariantCreateInput {
   /** @nullable */
   form?: string | null;
   /** @nullable */
@@ -972,6 +984,48 @@ export interface CreateSellerListingBody {
   /** @nullable */
   discountPrice?: number | null;
   stock?: number;
+  deliveryCharge?: number;
+  isPreOrder?: boolean;
+}
+
+/**
+ * Shape of one entry in UpdateSellerListingBody.variants. An entry WITH id updates that existing variant (partial update -- only fields present in the object are changed). An entry with NO id creates a new variant under the listing.
+ */
+export interface SellerListingVariantUpdateInput {
+  id?: number;
+  /** @nullable */
+  form?: string | null;
+  /** @nullable */
+  rootType?: string | null;
+  /** @nullable */
+  potSize?: string | null;
+  /** @nullable */
+  age?: string | null;
+  /** @nullable */
+  height?: string | null;
+  /** @nullable */
+  condition?: string | null;
+  price?: number;
+  /** @nullable */
+  discountPrice?: number | null;
+  stock?: number;
+  deliveryCharge?: number;
+  isPreOrder?: boolean;
+}
+
+export type CreateSellerListingBodyPaymentMethod = typeof CreateSellerListingBodyPaymentMethod[keyof typeof CreateSellerListingBodyPaymentMethod];
+
+
+export const CreateSellerListingBodyPaymentMethod = {
+  cod: 'cod',
+  advance: 'advance',
+  both: 'both',
+} as const;
+
+export interface CreateSellerListingBody {
+  productId: number;
+  /** @minItems 1 */
+  variants: SellerListingVariantCreateInput[];
   /** @nullable */
   deliveryTimeDays?: number | null;
   /** @nullable */
@@ -1009,22 +1063,8 @@ export const UpdateSellerListingBodyVisibility = {
 } as const;
 
 export interface UpdateSellerListingBody {
-  /** @nullable */
-  form?: string | null;
-  /** @nullable */
-  rootType?: string | null;
-  /** @nullable */
-  potSize?: string | null;
-  /** @nullable */
-  age?: string | null;
-  /** @nullable */
-  height?: string | null;
-  /** @nullable */
-  condition?: string | null;
-  price?: number;
-  /** @nullable */
-  discountPrice?: number | null;
-  stock?: number;
+  variants?: SellerListingVariantUpdateInput[];
+  deletedVariantIds?: number[];
   /** @nullable */
   deliveryTimeDays?: number | null;
   /** @nullable */

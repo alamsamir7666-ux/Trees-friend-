@@ -4,6 +4,7 @@ import { v2 as cloudinaryV2 } from "cloudinary";
 import { db } from "@workspace/db";
 import {
   sellerListingsTable,
+  sellerListingVariantsTable,
   sellersTable,
   productsTable,
   listingAttributeOptionsTable,
@@ -30,6 +31,11 @@ const router = Router();
 // listingAttributeOptionsTable for the listing's product's category
 // (plan doc §3a). Free-text fields (condition, description, certification,
 // tags, offerText, returnPolicyText) are never checked here.
+//
+// Phase 2: these fields moved from sellerListingsTable to
+// sellerListingVariantsTable, so validation now runs PER VARIANT rather
+// than once per listing (a listing with a "Sapling" variant at 1-2ft and a
+// "Grafted" variant at 3-4ft needs each checked against its own values).
 const CONTROLLED_ATTRIBUTES = ["height", "potSize", "age", "rootType"] as const;
 const ATTRIBUTE_NAME_MAP: Record<(typeof CONTROLLED_ATTRIBUTES)[number], string> = {
   height: "height",
@@ -39,22 +45,20 @@ const ATTRIBUTE_NAME_MAP: Record<(typeof CONTROLLED_ATTRIBUTES)[number], string>
 };
 
 type SellerListingRow = typeof sellerListingsTable.$inferSelect;
+type SellerListingVariantRow = typeof sellerListingVariantsTable.$inferSelect;
 
+/**
+ * Listing-level fields only (Phase 2 shape). No price/stock/form/etc. here
+ * anymore -- those live on variants, see toVariant() below. Existing
+ * callers that expect a flat listing+variant shape (pre-Phase-2 toListing())
+ * must move to toListingWithVariants() -- see the "which consumers need
+ * which shape" note near the bottom of this file's route handlers.
+ */
 function toListing(l: SellerListingRow) {
   return {
     id: l.id,
     productId: l.productId,
     sellerId: l.sellerId,
-    form: l.form ?? null,
-    rootType: l.rootType ?? null,
-    potSize: l.potSize ?? null,
-    age: l.age ?? null,
-    height: l.height ?? null,
-    condition: l.condition ?? null,
-    price: Number(l.price),
-    discountPrice: l.discountPrice != null ? Number(l.discountPrice) : null,
-    stock: l.stock,
-    availableQuantity: l.availableQuantity,
     deliveryTimeDays: l.deliveryTimeDays ?? null,
     warrantyDays: l.warrantyDays ?? null,
     returnPolicyText: l.returnPolicyText ?? null,
@@ -74,6 +78,40 @@ function toListing(l: SellerListingRow) {
   };
 }
 
+function toVariant(v: SellerListingVariantRow) {
+  return {
+    id: v.id,
+    sellerListingId: v.sellerListingId,
+    form: v.form ?? null,
+    rootType: v.rootType ?? null,
+    potSize: v.potSize ?? null,
+    age: v.age ?? null,
+    height: v.height ?? null,
+    condition: v.condition ?? null,
+    price: Number(v.price),
+    discountPrice: v.discountPrice != null ? Number(v.discountPrice) : null,
+    stock: v.stock,
+    availableQuantity: v.availableQuantity,
+    deliveryCharge: Number(v.deliveryCharge),
+    isPreOrder: v.isPreOrder,
+    createdAt: v.createdAt.toISOString(),
+    updatedAt: v.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * toListing() + its variants, nested. This is the shape every route in this
+ * file that returns listings to a client now uses (GET /seller-listings/mine,
+ * GET /admin/seller-listings, POST/PUT responses) -- see the doc comment
+ * above each route for why nested-over-flat is correct for that consumer.
+ */
+function toListingWithVariants(l: SellerListingRow, variants: SellerListingVariantRow[]) {
+  return {
+    ...toListing(l),
+    variants: variants.map(toVariant),
+  };
+}
+
 /**
  * Validates height/potSize/age/rootType against listingAttributeOptionsTable
  * for the given product's category, per plan doc §3a: "Enforce at the API
@@ -83,6 +121,9 @@ function toListing(l: SellerListingRow) {
  * partial updates don't require re-submitting every controlled field).
  * A field left as null/undefined is not validated -- it's optional, not a
  * value that needs to match an option set.
+ *
+ * Phase 2: called once PER VARIANT now (height/potSize/age/rootType moved
+ * to sellerListingVariantsTable), not once per listing.
  */
 async function validateControlledAttributes(
   categoryId: number,
@@ -118,19 +159,35 @@ async function validateControlledAttributes(
 }
 
 /**
+ * Validates a single incoming variant payload's shape (independent of the
+ * controlled-attribute DB check above, which needs the product's
+ * categoryId and is async). Returns a human-readable error or null.
+ */
+function validateVariantShape(v: any, label: string): string | null {
+  if (!v || typeof v !== "object") return `Variant "${label}" must be an object`;
+  if (v.price === undefined || isNaN(Number(v.price)) || Number(v.price) <= 0) {
+    return `A valid price is required for variant "${label}"`;
+  }
+  if (v.discountPrice != null && Number(v.discountPrice) >= Number(v.price)) {
+    return `Discount price must be less than regular price for variant "${label}"`;
+  }
+  return null;
+}
+
+/**
  * Payment-method enforcement (plan doc §7): "A seller with no verified
  * seller_payment_configs row can only offer COD -- enforce this at the
  * listing level (reject payment_method = 'advance' or 'both' if no
  * verified config exists)." This was flagged as unenforced in both the
  * Phase 2 and Phase 4 handoffs; this is the actual enforcement, added in
- * Part 5.
+ * Part 5. Unaffected by the Phase 2 listing/variant split -- payment method
+ * is a listing-level field, not a variant-level one.
  *
- * hasVerifiedPaymentConfig itself now lives in @workspace/db/logic (moved
- * there post-Phase-9 so scripts/src/verify-seller-marketplace.ts can import
- * the real implementation instead of reimplementing it -- see that
- * module's doc comment for why). Imported above and re-exported here so
- * every existing caller of this file's hasVerifiedPaymentConfig export is
- * unaffected.
+ * hasVerifiedPaymentConfig itself lives in @workspace/db/logic (moved there
+ * post-Phase-9 so scripts/src/verify-seller-marketplace.ts can import the
+ * real implementation instead of reimplementing it -- see that module's doc
+ * comment for why). Imported above and re-exported here so every existing
+ * caller of this file's hasVerifiedPaymentConfig export is unaffected.
  */
 
 const PAYMENT_METHOD_ERROR =
@@ -142,6 +199,12 @@ const PAYMENT_METHOD_ERROR =
  * all visibility) -- this is the "Manage Inventory" view, not the
  * buyer-facing one below, so it must show pending/rejected/hidden listings
  * too, not just what buyers can currently see.
+ *
+ * Returns the NESTED shape (toListingWithVariants) -- "Manage Inventory"
+ * needs to show/edit every variant under each listing, not just the
+ * listing's shared fields. Grepped artifacts/tree-friend's seller inventory
+ * UI (out of scope to edit this phase, Phase 3's job) to confirm this is
+ * the consumer; flagging here so Phase 3 knows the shape it will receive.
  */
 router.get("/seller-listings/mine", requireSeller, async (req, res) => {
   try {
@@ -150,7 +213,22 @@ router.get("/seller-listings/mine", requireSeller, async (req, res) => {
       .from(sellerListingsTable)
       .where(eq(sellerListingsTable.sellerId, req.dbSeller!.id))
       .orderBy(desc(sellerListingsTable.createdAt));
-    res.json(listings.map(toListing));
+
+    const listingIds = listings.map((l) => l.id);
+    const variants = listingIds.length > 0
+      ? await db
+          .select()
+          .from(sellerListingVariantsTable)
+          .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
+      : [];
+    const variantsByListing = new Map<number, SellerListingVariantRow[]>();
+    for (const v of variants) {
+      const list = variantsByListing.get(v.sellerListingId) ?? [];
+      list.push(v);
+      variantsByListing.set(v.sellerListingId, list);
+    }
+
+    res.json(listings.map((l) => toListingWithVariants(l, variantsByListing.get(l.id) ?? [])));
   } catch (err) {
     console.error("List my seller listings error:", err);
     res.status(500).json({ error: "Failed to fetch your listings" });
@@ -159,12 +237,21 @@ router.get("/seller-listings/mine", requireSeller, async (req, res) => {
 
 /**
  * Seller: create a listing against an existing admin-owned product
- * (variety). Per plan doc §1.6, sellers never create products/varieties --
- * only listings against ones that already exist, hence the explicit product
- * lookup/404 rather than trusting productId blindly. New listings start
- * approvalStatus "pending" -- whether that requires actual admin review
- * before going visible, or is auto-approved, is a product decision this
- * route does not make; see note near approvalStatus below.
+ * (variety), plus one or more variants inside it. Per plan doc §1.6,
+ * sellers never create products/varieties -- only listings against ones
+ * that already exist, hence the explicit product lookup/404 rather than
+ * trusting productId blindly. New listings start approvalStatus "pending"
+ * -- whether that requires actual admin review before going visible, or is
+ * auto-approved, is a product decision this route does not make; see note
+ * near approvalStatus below.
+ *
+ * Phase 2 shape: body carries listing-level fields as before, PLUS a
+ * required `variants: [...]` array (at least one entry) -- a listing with
+ * zero variants isn't purchasable, so creating one with none is rejected.
+ * Each variant object carries form/rootType/potSize/age/height/condition/
+ * price/discountPrice/stock/deliveryCharge/isPreOrder.
+ * validateControlledAttributes runs once PER VARIANT now, since
+ * height/potSize/age/rootType moved there from the listing.
  *
  * paymentMethod "advance"/"both" requires a verified seller_payment_configs
  * row per plan doc §7 -- ENFORCED here as of Part 5 (see
@@ -176,15 +263,7 @@ router.post("/seller-listings", requireSeller, async (req, res) => {
   try {
     const {
       productId,
-      form,
-      rootType,
-      potSize,
-      age,
-      height,
-      condition,
-      price,
-      discountPrice,
-      stock,
+      variants,
       deliveryTimeDays,
       warrantyDays,
       returnPolicyText,
@@ -201,9 +280,16 @@ router.post("/seller-listings", requireSeller, async (req, res) => {
       res.status(400).json({ error: "productId is required" });
       return;
     }
-    if (price === undefined || isNaN(Number(price)) || Number(price) <= 0) {
-      res.status(400).json({ error: "A valid price is required" });
+    if (!Array.isArray(variants) || variants.length === 0) {
+      res.status(400).json({ error: "At least one variant (e.g. Seed, Sapling, Grafted, Potted) is required" });
       return;
+    }
+    for (let i = 0; i < variants.length; i++) {
+      const err = validateVariantShape(variants[i], variants[i]?.form || `#${i + 1}`);
+      if (err) {
+        res.status(400).json({ error: err });
+        return;
+      }
     }
     if (paymentMethod !== undefined && !["cod", "advance", "both"].includes(paymentMethod)) {
       res.status(400).json({ error: 'paymentMethod must be "cod", "advance", or "both"' });
@@ -235,33 +321,24 @@ router.post("/seller-listings", requireSeller, async (req, res) => {
       return;
     }
 
-    const validationError = await validateControlledAttributes(product.categoryId, {
-      height,
-      potSize,
-      age,
-      rootType,
-    });
-    if (validationError) {
-      res.status(400).json({ error: validationError });
-      return;
+    for (const v of variants) {
+      const validationError = await validateControlledAttributes(product.categoryId, {
+        height: v.height,
+        potSize: v.potSize,
+        age: v.age,
+        rootType: v.rootType,
+      });
+      if (validationError) {
+        res.status(400).json({ error: validationError });
+        return;
+      }
     }
 
-    const stockNum = stock !== undefined ? Number(stock) : 0;
     const [listing] = await db
       .insert(sellerListingsTable)
       .values({
         productId: Number(productId),
         sellerId: req.dbSeller!.id,
-        form: form || null,
-        rootType: rootType || null,
-        potSize: potSize || null,
-        age: age || null,
-        height: height || null,
-        condition: condition || null,
-        price: String(price),
-        discountPrice: discountPrice != null ? String(discountPrice) : null,
-        stock: stockNum,
-        availableQuantity: stockNum,
         deliveryTimeDays: deliveryTimeDays != null ? Number(deliveryTimeDays) : null,
         warrantyDays: warrantyDays != null ? Number(warrantyDays) : null,
         returnPolicyText: returnPolicyText || null,
@@ -277,7 +354,31 @@ router.post("/seller-listings", requireSeller, async (req, res) => {
       })
       .returning();
 
-    res.status(201).json(toListing(listing));
+    const insertedVariants = await db
+      .insert(sellerListingVariantsTable)
+      .values(
+        variants.map((v: any) => {
+          const stockNum = v.stock !== undefined ? Number(v.stock) : 0;
+          return {
+            sellerListingId: listing.id,
+            form: v.form || null,
+            rootType: v.rootType || null,
+            potSize: v.potSize || null,
+            age: v.age || null,
+            height: v.height || null,
+            condition: v.condition || null,
+            price: String(v.price),
+            discountPrice: v.discountPrice != null ? String(v.discountPrice) : null,
+            stock: stockNum,
+            availableQuantity: stockNum,
+            deliveryCharge: String(v.deliveryCharge ?? 0),
+            isPreOrder: v.isPreOrder === true,
+          };
+        }),
+      )
+      .returning();
+
+    res.status(201).json(toListingWithVariants(listing, insertedVariants));
   } catch (err) {
     console.error("Create seller listing error:", err);
     res.status(500).json({ error: "Failed to create listing" });
@@ -285,9 +386,33 @@ router.post("/seller-listings", requireSeller, async (req, res) => {
 });
 
 /**
- * Seller: update their own listing. Ownership is checked explicitly
- * (sellerId must match req.dbSeller.id) -- requireSeller only confirms the
- * caller IS an active seller, not that they own THIS listing.
+ * Seller: update their own listing, and manage its variants. Ownership is
+ * checked explicitly (sellerId must match req.dbSeller.id) -- requireSeller
+ * only confirms the caller IS an active seller, not that they own THIS
+ * listing.
+ *
+ * Phase 2 request shape (documented here since this is a new concept, not
+ * in the original file): body may include listing-level fields as before
+ * (unchanged behavior), PLUS an optional `variants` array to manage
+ * variants in the same request:
+ *   - `variants: [{ id: 5, price: 700, ... }, ...]` -- an item WITH an `id`
+ *     updates that existing variant (partial update, same
+ *     only-set-what's-present convention as listing-level fields below).
+ *   - `variants: [{ price: 400, form: "seed", ... }, ...]` -- an item with
+ *     NO `id` creates a new variant under this listing.
+ *   - `deletedVariantIds: [3, 7]` -- an optional separate top-level array;
+ *     any variant id listed here is deleted from this listing.
+ * A single PUT can mix all three (update some, create some, delete some) in
+ * one request. This shape was chosen over e.g. "always replace the whole
+ * variants array" because it lets the frontend send only what changed
+ * (matches this route's existing partial-update convention for
+ * listing-level fields, where a field is only touched if present in the
+ * body) rather than needing to resend every untouched variant's full data
+ * on every edit.
+ *
+ * Guard: a listing must always end this request with at least one variant
+ * (same "a listing needs >=1 variant to be purchasable" rule as POST) --
+ * rejected if deletions would leave zero.
  */
 router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
   try {
@@ -308,9 +433,9 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
     }
 
     const {
-      form, rootType, potSize, age, height, condition,
-      price, discountPrice, stock, deliveryTimeDays, warrantyDays, returnPolicyText,
+      deliveryTimeDays, warrantyDays, returnPolicyText,
       paymentMethod, images, videoUrl, description, offerText, certification, tags, visibility,
+      variants, deletedVariantIds,
     } = req.body;
 
     if (paymentMethod !== undefined && !["cod", "advance", "both"].includes(paymentMethod)) {
@@ -336,6 +461,56 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
       res.status(400).json({ error: "tags must be an array of strings" });
       return;
     }
+    if (variants !== undefined && !Array.isArray(variants)) {
+      res.status(400).json({ error: "variants must be an array" });
+      return;
+    }
+    if (deletedVariantIds !== undefined && !Array.isArray(deletedVariantIds)) {
+      res.status(400).json({ error: "deletedVariantIds must be an array" });
+      return;
+    }
+
+    const existingVariants = await db
+      .select()
+      .from(sellerListingVariantsTable)
+      .where(eq(sellerListingVariantsTable.sellerListingId, id));
+    const existingVariantIds = new Set(existingVariants.map((v) => v.id));
+
+    const toDelete: number[] = Array.isArray(deletedVariantIds)
+      ? deletedVariantIds.map((n: any) => Number(n)).filter((n: number) => existingVariantIds.has(n))
+      : [];
+
+    const toUpdate: any[] = [];
+    const toCreate: any[] = [];
+    if (Array.isArray(variants)) {
+      for (const v of variants) {
+        if (v && v.id != null) {
+          const vid = Number(v.id);
+          if (!existingVariantIds.has(vid)) {
+            res.status(404).json({ error: `Variant ${vid} not found on this listing` });
+            return;
+          }
+          if (toDelete.includes(vid)) {
+            res.status(400).json({ error: `Variant ${vid} is both being updated and deleted -- pick one` });
+            return;
+          }
+          toUpdate.push({ ...v, id: vid });
+        } else {
+          const shapeError = validateVariantShape(v, v?.form || "(new)");
+          if (shapeError) {
+            res.status(400).json({ error: shapeError });
+            return;
+          }
+          toCreate.push(v);
+        }
+      }
+    }
+
+    const resultingVariantCount = existingVariantIds.size - toDelete.length + toCreate.length;
+    if (resultingVariantCount <= 0) {
+      res.status(400).json({ error: "A listing must have at least one variant -- can't remove the last one" });
+      return;
+    }
 
     const [product] = await db
       .select()
@@ -345,33 +520,18 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
     // product should always exist (FK constraint), but guard anyway rather
     // than crash on categoryId lookup if data is ever in a bad state.
     if (product) {
-      const validationError = await validateControlledAttributes(product.categoryId, {
-        height, potSize, age, rootType,
-      });
-      if (validationError) {
-        res.status(400).json({ error: validationError });
-        return;
+      for (const v of [...toUpdate, ...toCreate]) {
+        const validationError = await validateControlledAttributes(product.categoryId, {
+          height: v.height, potSize: v.potSize, age: v.age, rootType: v.rootType,
+        });
+        if (validationError) {
+          res.status(400).json({ error: validationError });
+          return;
+        }
       }
     }
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (form !== undefined) updates.form = form || null;
-    if (rootType !== undefined) updates.rootType = rootType || null;
-    if (potSize !== undefined) updates.potSize = potSize || null;
-    if (age !== undefined) updates.age = age || null;
-    if (height !== undefined) updates.height = height || null;
-    if (condition !== undefined) updates.condition = condition || null;
-    if (price !== undefined) updates.price = String(price);
-    if (discountPrice !== undefined) updates.discountPrice = discountPrice != null ? String(discountPrice) : null;
-    if (stock !== undefined) {
-      // availableQuantity mirrors stock on every stock edit -- this route
-      // has no separate "reserve stock for a pending order" concept yet
-      // (that's checkout/order-fulfillment territory, phase 3), so the two
-      // fields stay in lockstep here rather than availableQuantity silently
-      // drifting from stock with no mechanism to reconcile them.
-      updates.stock = Number(stock);
-      updates.availableQuantity = Number(stock);
-    }
     if (deliveryTimeDays !== undefined) updates.deliveryTimeDays = deliveryTimeDays != null ? Number(deliveryTimeDays) : null;
     if (warrantyDays !== undefined) updates.warrantyDays = warrantyDays != null ? Number(warrantyDays) : null;
     if (returnPolicyText !== undefined) updates.returnPolicyText = returnPolicyText || null;
@@ -397,7 +557,65 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
       .where(eq(sellerListingsTable.id, id))
       .returning();
 
-    res.json(toListing(updated));
+    if (toDelete.length > 0) {
+      await db.delete(sellerListingVariantsTable).where(inArray(sellerListingVariantsTable.id, toDelete));
+    }
+
+    for (const v of toUpdate) {
+      const variantUpdates: Record<string, unknown> = { updatedAt: new Date() };
+      if (v.form !== undefined) variantUpdates.form = v.form || null;
+      if (v.rootType !== undefined) variantUpdates.rootType = v.rootType || null;
+      if (v.potSize !== undefined) variantUpdates.potSize = v.potSize || null;
+      if (v.age !== undefined) variantUpdates.age = v.age || null;
+      if (v.height !== undefined) variantUpdates.height = v.height || null;
+      if (v.condition !== undefined) variantUpdates.condition = v.condition || null;
+      if (v.price !== undefined) variantUpdates.price = String(v.price);
+      if (v.discountPrice !== undefined) variantUpdates.discountPrice = v.discountPrice != null ? String(v.discountPrice) : null;
+      if (v.stock !== undefined) {
+        // availableQuantity mirrors stock on every stock edit -- same
+        // lockstep convention this route used pre-Phase-2 (no separate
+        // "reserve stock for a pending order" concept exists yet).
+        variantUpdates.stock = Number(v.stock);
+        variantUpdates.availableQuantity = Number(v.stock);
+      }
+      if (v.deliveryCharge !== undefined) variantUpdates.deliveryCharge = String(v.deliveryCharge);
+      if (v.isPreOrder !== undefined) variantUpdates.isPreOrder = v.isPreOrder === true;
+      await db.update(sellerListingVariantsTable).set(variantUpdates).where(eq(sellerListingVariantsTable.id, v.id));
+    }
+
+    let createdVariants: SellerListingVariantRow[] = [];
+    if (toCreate.length > 0) {
+      createdVariants = await db
+        .insert(sellerListingVariantsTable)
+        .values(
+          toCreate.map((v: any) => {
+            const stockNum = v.stock !== undefined ? Number(v.stock) : 0;
+            return {
+              sellerListingId: id,
+              form: v.form || null,
+              rootType: v.rootType || null,
+              potSize: v.potSize || null,
+              age: v.age || null,
+              height: v.height || null,
+              condition: v.condition || null,
+              price: String(v.price),
+              discountPrice: v.discountPrice != null ? String(v.discountPrice) : null,
+              stock: stockNum,
+              availableQuantity: stockNum,
+              deliveryCharge: String(v.deliveryCharge ?? 0),
+              isPreOrder: v.isPreOrder === true,
+            };
+          }),
+        )
+        .returning();
+    }
+
+    const finalVariants = await db
+      .select()
+      .from(sellerListingVariantsTable)
+      .where(eq(sellerListingVariantsTable.sellerListingId, id));
+
+    res.json(toListingWithVariants(updated, finalVariants));
   } catch (err) {
     console.error("Update seller listing error:", err);
     res.status(500).json({ error: "Failed to update listing" });
@@ -405,11 +623,17 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
 });
 
 /**
- * Seller: delete their own listing. Existing reviews referencing this
- * sellerListingId cascade-delete per the schema's onDelete: "cascade" --
- * that's a real, deliberate loss of review history, not a bug, and matches
- * how productVariantsTable deletion already works elsewhere in this
- * codebase (no soft-delete convention exists here to follow instead).
+ * Seller: delete their own listing. Variants cascade-delete with it --
+ * sellerListingVariantsTable.sellerListingId has onDelete: "cascade" (see
+ * lib/db/src/schema/sellerListingVariants.ts), confirmed by inspecting that
+ * FK definition; not re-verified against a live DB this phase (no DB
+ * connection available in this environment -- see handoff doc). Existing
+ * reviews referencing this sellerListingId (and, as of Phase 2,
+ * sellerListingVariantId) also cascade-delete per their own onDelete:
+ * "cascade" FKs -- that's a real, deliberate loss of review history, not a
+ * bug, matching how productVariantsTable deletion already works elsewhere
+ * in this codebase (no soft-delete convention exists here to follow
+ * instead).
  */
 router.delete("/seller-listings/:id", requireSeller, async (req: any, res) => {
   try {
@@ -478,6 +702,26 @@ router.post("/seller-listings/upload-image", requireSeller, uploadMiddleware.arr
  *   - listing.visibility = "public" AND approvalStatus = "approved"
  *   - seller.status = "active" (not suspended/vacation/pending) -- per
  *     adminSellers.ts's own note, this is exactly where that check belongs.
+ *
+ * Phase 2: each card now represents one listing with potentially SEVERAL
+ * variants, each independently addressable (nested, via
+ * toListingWithVariants) -- the frontend can show a price range per seller
+ * (min/max across variants) or list each variant individually. The
+ * `availableQuantity > 0` purchasability check moves to the VARIANT level:
+ * a listing is included if it has at least one variant with
+ * availableQuantity > 0, but variants with availableQuantity = 0 (e.g.
+ * sold-out or pre-order-only) are still returned nested (not filtered out
+ * entirely) so the frontend can show them as unavailable/pre-order rather
+ * than silently hiding them -- only listings with ZERO purchasable variants
+ * are dropped from the response.
+ *
+ * price_asc/price_desc sort: sorts by the listing's CHEAPEST QUALIFYING
+ * variant (a variant counts as "qualifying" for this purpose if
+ * availableQuantity > 0 -- consistent with the inclusion filter above; an
+ * out-of-stock variant's price shouldn't be able to make an otherwise
+ * pricier listing look cheap in the sort). See handoff doc for a worked
+ * example trace of this.
+ *
  * Supports sort by price/deliveryTime/rating; "More Filters" (plan doc §6
  * mentions it but doesn't specify which filters) is intentionally not
  * built here since the plan doesn't define its filter set -- flagging
@@ -506,47 +750,75 @@ router.get("/products/:productId/seller-listings", async (req: any, res) => {
       );
 
     const listingIds = rows.map((r) => r.listing.id);
+
+    const [variantRows, statsRows] = await Promise.all([
+      listingIds.length > 0
+        ? db
+            .select()
+            .from(sellerListingVariantsTable)
+            .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
+        : Promise.resolve([] as SellerListingVariantRow[]),
+      listingIds.length > 0
+        ? db
+            .select({
+              sellerListingId: reviewsTable.sellerListingId,
+              avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
+              count: sql<string>`COUNT(*)`,
+            })
+            .from(reviewsTable)
+            .where(inArray(reviewsTable.sellerListingId, listingIds))
+            .groupBy(reviewsTable.sellerListingId)
+        : Promise.resolve([]),
+    ]);
+
+    const variantsByListing = new Map<number, SellerListingVariantRow[]>();
+    for (const v of variantRows) {
+      const list = variantsByListing.get(v.sellerListingId) ?? [];
+      list.push(v);
+      variantsByListing.set(v.sellerListingId, list);
+    }
+
     const statsMap = new Map<number, { avg: number; count: number }>();
-    if (listingIds.length > 0) {
-      const stats = await db
-        .select({
-          sellerListingId: reviewsTable.sellerListingId,
-          avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
-          count: sql<string>`COUNT(*)`,
-        })
-        .from(reviewsTable)
-        .where(inArray(reviewsTable.sellerListingId, listingIds))
-        .groupBy(reviewsTable.sellerListingId);
-      for (const s of stats) {
-        if (s.sellerListingId != null) {
-          statsMap.set(s.sellerListingId, { avg: Number(Number(s.avg).toFixed(1)), count: Number(s.count) });
-        }
+    for (const s of statsRows) {
+      if (s.sellerListingId != null) {
+        statsMap.set(s.sellerListingId, { avg: Number(Number(s.avg).toFixed(1)), count: Number(s.count) });
       }
     }
 
-    let cards = rows.map(({ listing, seller }) => {
-      const stats = statsMap.get(listing.id) ?? { avg: 0, count: 0 };
-      return {
-        listing: toListing(listing),
-        seller: {
-          id: seller.id,
-          businessName: seller.businessName,
-          nurseryName: seller.nurseryName,
-          location: seller.location,
-        },
-        rating: stats.avg,
-        reviewCount: stats.count,
-      };
-    });
+    let cards = rows
+      .map(({ listing, seller }) => {
+        const variants = variantsByListing.get(listing.id) ?? [];
+        const qualifyingVariants = variants.filter((v) => v.availableQuantity > 0);
+        const stats = statsMap.get(listing.id) ?? { avg: 0, count: 0 };
+        return {
+          listing: toListingWithVariants(listing, variants),
+          qualifyingVariants,
+          seller: {
+            id: seller.id,
+            businessName: seller.businessName,
+            nurseryName: seller.nurseryName,
+            location: seller.location,
+          },
+          rating: stats.avg,
+          reviewCount: stats.count,
+        };
+      })
+      // Drop listings with zero purchasable variants entirely -- see doc
+      // comment above for why sold-out/pre-order-only variants inside an
+      // otherwise-qualifying listing are kept nested instead.
+      .filter((card) => card.qualifyingVariants.length > 0);
+
+    function cheapestQualifyingPrice(card: (typeof cards)[number]): number {
+      const prices = card.qualifyingVariants.map((v) =>
+        v.discountPrice != null ? Number(v.discountPrice) : Number(v.price),
+      );
+      return Math.min(...prices);
+    }
 
     if (sort === "price_asc") {
-      cards = cards.sort(
-        (a, b) => (a.listing.discountPrice ?? a.listing.price) - (b.listing.discountPrice ?? b.listing.price),
-      );
+      cards = cards.sort((a, b) => cheapestQualifyingPrice(a) - cheapestQualifyingPrice(b));
     } else if (sort === "price_desc") {
-      cards = cards.sort(
-        (a, b) => (b.listing.discountPrice ?? b.listing.price) - (a.listing.discountPrice ?? a.listing.price),
-      );
+      cards = cards.sort((a, b) => cheapestQualifyingPrice(b) - cheapestQualifyingPrice(a));
     } else if (sort === "delivery_time") {
       cards = cards.sort(
         (a, b) => (a.listing.deliveryTimeDays ?? Infinity) - (b.listing.deliveryTimeDays ?? Infinity),
@@ -555,10 +827,87 @@ router.get("/products/:productId/seller-listings", async (req: any, res) => {
       cards = cards.sort((a, b) => b.rating - a.rating);
     }
 
-    res.json(cards);
+    res.json(cards.map(({ qualifyingVariants, ...card }) => card));
   } catch (err) {
     console.error("List product seller listings error:", err);
     res.status(500).json({ error: "Failed to fetch seller listings" });
+  }
+});
+
+/**
+ * Buyer-facing: ONE listing's full detail by id, publicly, nested variants +
+ * seller info (Phase 3b Part 3 -- added because no existing route served
+ * this: GET /seller-listings/mine is seller-auth-scoped to the caller's own
+ * listings, and GET /products/:productId/seller-listings returns a LIST of
+ * cards, not one listing's full detail alone by id). Powers the new
+ * "See details" listing-detail page.
+ *
+ * Same visibility/approval/active-seller gate as the list route above
+ * (public + approved + seller active) -- a listing that wouldn't appear in
+ * the list shouldn't be independently reachable by guessing its id either.
+ * Unlike the list route, this does NOT drop the listing if it has zero
+ * qualifying (in-stock) variants -- a listing detail page should still be
+ * able to show a sold-out listing's variants (each individually marked
+ * unavailable), not 404 it outright, since "sold out" is a real, showable
+ * state here rather than a reason to hide the whole listing from a list.
+ */
+router.get("/seller-listings/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid listing id" });
+      return;
+    }
+
+    const [row] = await db
+      .select({ listing: sellerListingsTable, seller: sellersTable })
+      .from(sellerListingsTable)
+      .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+      .where(
+        and(
+          eq(sellerListingsTable.id, id),
+          eq(sellerListingsTable.visibility, "public"),
+          eq(sellerListingsTable.approvalStatus, "approved"),
+          eq(sellersTable.status, "active"),
+        ),
+      )
+      .limit(1);
+
+    if (!row) {
+      res.status(404).json({ error: "Listing not found" });
+      return;
+    }
+
+    const [variants, reviewStats] = await Promise.all([
+      db
+        .select()
+        .from(sellerListingVariantsTable)
+        .where(eq(sellerListingVariantsTable.sellerListingId, id)),
+      db
+        .select({
+          avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
+          count: sql<string>`COUNT(*)`,
+        })
+        .from(reviewsTable)
+        .where(eq(reviewsTable.sellerListingId, id)),
+    ]);
+
+    const stats = reviewStats[0] ?? { avg: "0", count: "0" };
+
+    res.json({
+      listing: toListingWithVariants(row.listing, variants),
+      seller: {
+        id: row.seller.id,
+        businessName: row.seller.businessName,
+        nurseryName: row.seller.nurseryName,
+        location: row.seller.location,
+      },
+      rating: Number(Number(stats.avg).toFixed(1)),
+      reviewCount: Number(stats.count),
+    });
+  } catch (err) {
+    console.error("Get seller listing by id error:", err);
+    res.status(500).json({ error: "Failed to fetch listing" });
   }
 });
 
@@ -571,6 +920,10 @@ router.get("/products/:productId/seller-listings", async (req: any, res) => {
  * above on approvalStatus = "approved", but if that's not the intended
  * workflow, this is the piece to revisit, not something to silently change
  * on the buyer-facing side alone.
+ *
+ * Returns the NESTED shape (toListingWithVariants) -- admin review needs to
+ * see what a seller is actually offering (variants, prices, stock) to make
+ * an approve/reject decision, not just the listing's shared fields.
  */
 router.get("/admin/seller-listings", requireAdmin, async (req, res) => {
   try {
@@ -584,9 +937,23 @@ router.get("/admin/seller-listings", requireAdmin, async (req, res) => {
       .where(approvalStatus && valid.includes(approvalStatus) ? eq(sellerListingsTable.approvalStatus, approvalStatus) : undefined)
       .orderBy(asc(sellerListingsTable.createdAt));
 
+    const listingIds = rows.map((r) => r.listing.id);
+    const variants = listingIds.length > 0
+      ? await db
+          .select()
+          .from(sellerListingVariantsTable)
+          .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
+      : [];
+    const variantsByListing = new Map<number, SellerListingVariantRow[]>();
+    for (const v of variants) {
+      const list = variantsByListing.get(v.sellerListingId) ?? [];
+      list.push(v);
+      variantsByListing.set(v.sellerListingId, list);
+    }
+
     res.json(
       rows.map(({ listing, seller, product }) => ({
-        ...toListing(listing),
+        ...toListingWithVariants(listing, variantsByListing.get(listing.id) ?? []),
         sellerBusinessName: seller.businessName,
         productName: product.name,
       })),
@@ -612,7 +979,11 @@ router.put("/admin/seller-listings/:id/approve", requireAdmin, async (req: any, 
       res.status(404).json({ error: "Listing not found" });
       return;
     }
-    res.json(toListing(listing));
+    const variants = await db
+      .select()
+      .from(sellerListingVariantsTable)
+      .where(eq(sellerListingVariantsTable.sellerListingId, listing.id));
+    res.json(toListingWithVariants(listing, variants));
   } catch (err) {
     res.status(500).json({ error: "Failed to approve listing" });
   }
@@ -635,7 +1006,11 @@ router.put("/admin/seller-listings/:id/reject", requireAdmin, async (req: any, r
       res.status(404).json({ error: "Listing not found" });
       return;
     }
-    res.json(toListing(listing));
+    const variants = await db
+      .select()
+      .from(sellerListingVariantsTable)
+      .where(eq(sellerListingVariantsTable.sellerListingId, listing.id));
+    res.json(toListingWithVariants(listing, variants));
   } catch (err) {
     res.status(500).json({ error: "Failed to reject listing" });
   }

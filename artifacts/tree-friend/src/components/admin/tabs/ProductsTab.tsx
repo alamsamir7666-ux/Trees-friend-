@@ -88,10 +88,24 @@ export function ProductsTab() {
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-right">
-                      {(p as any).startingPrice != null ? (
-                        <p className="font-semibold text-gray-800">from Tk{(p as any).startingPrice.toLocaleString()}</p>
+                      {/* Phase 4: startingPrice is the admin-set price, permanently
+                          null for every product created after Phase 2
+                          (PHASE2_HANDOFF.md §5) since admin no longer creates
+                          variants at all. listingMinPrice/listingMaxPrice --
+                          confirmed present here via toProduct()'s marketplace
+                          stats, same as every other list/browse endpoint
+                          (products.ts GET /products, verified directly) -- is
+                          what sellers are actually charging, which is more
+                          useful to admin than a field that will just say
+                          "No variants" for every product going forward. */}
+                      {(p as any).listingMinPrice != null ? (
+                        <p className="font-semibold text-gray-800">
+                          {(p as any).listingMinPrice === (p as any).listingMaxPrice
+                            ? `Tk${Number((p as any).listingMinPrice).toLocaleString()}`
+                            : `Tk${Number((p as any).listingMinPrice).toLocaleString()}–${Number((p as any).listingMaxPrice).toLocaleString()}`}
+                        </p>
                       ) : (
-                        <p className="text-xs text-gray-400">No variants</p>
+                        <p className="text-xs text-gray-400">No listings</p>
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-right">

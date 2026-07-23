@@ -1,8 +1,15 @@
 // Fast autocomplete endpoint — add this to routes/index.ts
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { productsTable, productVariantsTable, categoriesTable } from "@workspace/db";
-import { ilike, or, eq, sql, inArray } from "drizzle-orm";
+import {
+  productsTable,
+  productVariantsTable,
+  categoriesTable,
+  sellerListingsTable,
+  sellerListingVariantsTable,
+  sellersTable,
+} from "@workspace/db";
+import { ilike, or, eq, and, sql, inArray } from "drizzle-orm";
 
 const router = Router();
 
@@ -49,21 +56,72 @@ router.get("/search/autocomplete", async (req, res) => {
     ]);
 
     const productIds = products.map((p) => p.id);
-    const variantRows = productIds.length > 0
-      ? await db.select().from(productVariantsTable).where(inArray(productVariantsTable.productId, productIds))
-      : [];
+
+    // Phase 2: admin variants are legacy data now (admin no longer creates
+    // productVariantsTable rows -- see routes/products.ts). For any product
+    // created post-Phase-2, `variantRows` below will always be empty, so
+    // the price shown here needs a marketplace fallback or every new
+    // product's search result would silently show no price at all.
+    const [variantRows, listingVariantRows] = await Promise.all([
+      productIds.length > 0
+        ? db.select().from(productVariantsTable).where(inArray(productVariantsTable.productId, productIds))
+        : Promise.resolve([]),
+      productIds.length > 0
+        ? db
+            .select({
+              productId: sellerListingsTable.productId,
+              price: sellerListingVariantsTable.price,
+              discountPrice: sellerListingVariantsTable.discountPrice,
+            })
+            .from(sellerListingVariantsTable)
+            .innerJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
+            .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+            .where(
+              and(
+                inArray(sellerListingsTable.productId, productIds),
+                eq(sellerListingsTable.visibility, "public"),
+                eq(sellerListingsTable.approvalStatus, "approved"),
+                eq(sellersTable.status, "active"),
+                sql`${sellerListingVariantsTable.availableQuantity} > 0`,
+              ),
+            )
+        : Promise.resolve([]),
+    ]);
+
     const variantsByProduct = new Map<number, typeof variantRows>();
     for (const v of variantRows) {
       const list = variantsByProduct.get(v.productId) ?? [];
       list.push(v);
       variantsByProduct.set(v.productId, list);
     }
+    const listingPricesByProduct = new Map<number, number[]>();
+    for (const r of listingVariantRows) {
+      const price = r.discountPrice != null ? Number(r.discountPrice) : Number(r.price);
+      const list = listingPricesByProduct.get(r.productId) ?? [];
+      list.push(price);
+      listingPricesByProduct.set(r.productId, list);
+    }
 
     res.json({
       products: products.map((p) => {
         const variants = variantsByProduct.get(p.id) ?? [];
         const effectivePrices = variants.map((v) => v.discountPrice != null ? Number(v.discountPrice) : Number(v.price));
-        const startingPrice = effectivePrices.length > 0 ? Math.min(...effectivePrices) : null;
+        // Admin variant price wins if any legacy rows exist (unchanged
+        // behavior for pre-Phase-2 products); otherwise fall back to the
+        // cheapest qualifying marketplace listing variant. This endpoint's
+        // `startingPrice` field means "the price to show for this search
+        // result" -- distinct from routes/products.ts's toProduct(), where
+        // `startingPrice` specifically means "admin-set price" and
+        // marketplace data instead gets its own separate
+        // listingMinPrice/listingMaxPrice fields. There's no such
+        // admin-vs-marketplace distinction visible in this autocomplete
+        // dropdown response shape, so one field serving as "best available
+        // price, whichever source has one" is the correct behavior here,
+        // not an inconsistency with that convention.
+        const adminPrice = effectivePrices.length > 0 ? Math.min(...effectivePrices) : null;
+        const listingPrices = listingPricesByProduct.get(p.id) ?? [];
+        const marketplacePrice = listingPrices.length > 0 ? Math.min(...listingPrices) : null;
+        const startingPrice = adminPrice ?? marketplacePrice;
         return {
           id: p.id,
           name: p.name,

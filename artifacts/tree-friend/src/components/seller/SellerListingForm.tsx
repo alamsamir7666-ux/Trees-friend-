@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@clerk/react";
-import { Search, X, Loader2, Upload } from "lucide-react";
+import { Search, X, Loader2, Upload, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,8 +33,20 @@ const CONTROLLED_FIELDS = [
   { key: "rootType", attributeName: "root_type", label: "Root Type" },
 ] as const;
 
-type Draft = {
-  productId: number | null;
+/**
+ * One repeatable variant block's local form state (Phase 3a: variant-level
+ * fields moved off the listing, see PHASE2_HANDOFF.md). `key` is a stable
+ * local identifier for React list rendering/removal -- it is NEVER sent to
+ * the API. `id` is the real sellerListingVariantsTable id and is only
+ * present for a variant that already exists on the server (loaded from
+ * `editing.variants`); a block created via "Add another variant" in this
+ * session has `id: undefined`. That id/no-id distinction is exactly what
+ * submit uses to decide update-existing vs. create-new, mirroring the PUT
+ * handler's own convention (see handleSubmit below).
+ */
+type VariantDraft = {
+  key: string;
+  id?: number;
   form: string;
   height: string;
   potSize: string;
@@ -44,6 +56,54 @@ type Draft = {
   price: string;
   discountPrice: string;
   stock: string;
+  deliveryCharge: string;
+  isPreOrder: boolean;
+};
+
+let nextDraftKey = 0;
+function newDraftKey(): string {
+  nextDraftKey += 1;
+  return `new-${nextDraftKey}`;
+}
+
+function emptyVariantDraft(): VariantDraft {
+  return {
+    key: newDraftKey(),
+    form: "",
+    height: "",
+    potSize: "",
+    age: "",
+    rootType: "",
+    condition: "",
+    price: "",
+    discountPrice: "",
+    stock: "0",
+    deliveryCharge: "0",
+    isPreOrder: false,
+  };
+}
+
+function variantDraftFromVariant(v: SellerListing["variants"][number]): VariantDraft {
+  return {
+    key: `existing-${v.id}`,
+    id: v.id,
+    form: v.form ?? "",
+    height: v.height ?? "",
+    potSize: v.potSize ?? "",
+    age: v.age ?? "",
+    rootType: v.rootType ?? "",
+    condition: v.condition ?? "",
+    price: String(v.price),
+    discountPrice: v.discountPrice != null ? String(v.discountPrice) : "",
+    stock: String(v.stock),
+    deliveryCharge: String(v.deliveryCharge ?? 0),
+    isPreOrder: v.isPreOrder === true,
+  };
+}
+
+/** Listing-level-only form state (Phase 3a). */
+type Draft = {
+  productId: number | null;
   deliveryTimeDays: string;
   warrantyDays: string;
   returnPolicyText: string;
@@ -59,15 +119,6 @@ type Draft = {
 function draftFromListing(l: SellerListing): Draft {
   return {
     productId: l.productId,
-    form: l.form ?? "",
-    height: l.height ?? "",
-    potSize: l.potSize ?? "",
-    age: l.age ?? "",
-    rootType: l.rootType ?? "",
-    condition: l.condition ?? "",
-    price: String(l.price),
-    discountPrice: l.discountPrice != null ? String(l.discountPrice) : "",
-    stock: String(l.stock),
     deliveryTimeDays: l.deliveryTimeDays != null ? String(l.deliveryTimeDays) : "",
     warrantyDays: l.warrantyDays != null ? String(l.warrantyDays) : "",
     returnPolicyText: l.returnPolicyText ?? "",
@@ -83,15 +134,6 @@ function draftFromListing(l: SellerListing): Draft {
 
 const EMPTY_DRAFT: Draft = {
   productId: null,
-  form: "",
-  height: "",
-  potSize: "",
-  age: "",
-  rootType: "",
-  condition: "",
-  price: "",
-  discountPrice: "",
-  stock: "0",
   deliveryTimeDays: "",
   warrantyDays: "",
   returnPolicyText: "",
@@ -241,10 +283,12 @@ function ControlledAttributeSelect({
 }
 
 /**
- * Create/edit form for a single seller_listings row. `editing` is passed
- * for update, omitted for create; `onDone` is called after a successful
- * save so the parent (SellerDashboardPage) can close the form and refresh
- * the inventory list.
+ * Create/edit form for a single seller_listings row, now representing ONE
+ * listing containing MULTIPLE variant blocks (Phase 3a, see
+ * PHASE2_HANDOFF.md -- price/stock/form/etc. moved to
+ * sellerListingVariantsTable). `editing` is passed for update, omitted for
+ * create; `onDone` is called after a successful save so the parent
+ * (SellerDashboardPage) can close the form and refresh the inventory list.
  */
 export function SellerListingForm({ editing, onDone, onCancel }: { editing?: SellerListing; onDone: () => void; onCancel: () => void }) {
   const qc = useQueryClient();
@@ -252,6 +296,25 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
   const [product, setProduct] = useState<Product | null>(null);
   const [draft, setDraft] = useState<Draft>(editing ? draftFromListing(editing) : EMPTY_DRAFT);
   const [uploading, setUploading] = useState(false);
+
+  // Variant blocks for this listing. For edit mode, seeded from
+  // editing.variants (the nested array Part 0's codegen fix now returns) --
+  // each carries its real `id` so submit can tell the API which to update.
+  // For create mode, start with a single empty block so the seller always
+  // has at least one to fill in (mirrors the backend's ">=1 variant" rule).
+  const [variants, setVariants] = useState<VariantDraft[]>(() =>
+    editing && editing.variants.length > 0
+      ? editing.variants.map(variantDraftFromVariant)
+      : [emptyVariantDraft()],
+  );
+  // Existing (has an id) variants the seller removed from the form this
+  // session. Tracked separately from `variants` rather than just filtering
+  // them out of that array, because the PUT request needs their ids sent
+  // back explicitly as `deletedVariantIds` -- simply omitting them from
+  // `variants` would NOT delete them (PUT only touches variants it's told
+  // about; anything not mentioned is left alone).
+  const [deletedVariantIds, setDeletedVariantIds] = useState<number[]>([]);
+  const [variantsError, setVariantsError] = useState("");
 
   const createListing = useCreateSellerListing();
   const updateListing = useUpdateSellerListing();
@@ -276,6 +339,28 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((d) => ({ ...d, [key]: value }));
+  }
+
+  function setVariantField<K extends keyof VariantDraft>(variantKey: string, key: K, value: VariantDraft[K]) {
+    setVariants((prev) => prev.map((v) => (v.key === variantKey ? { ...v, [key]: value } : v)));
+  }
+
+  function addVariant() {
+    setVariants((prev) => [...prev, emptyVariantDraft()]);
+  }
+
+  function removeVariant(variantKey: string) {
+    setVariants((prev) => {
+      const target = prev.find((v) => v.key === variantKey);
+      const next = prev.filter((v) => v.key !== variantKey);
+      // An existing (server-side) variant being removed needs to go on
+      // deletedVariantIds so the PUT request actually deletes it -- see
+      // the doc comment on the deletedVariantIds state above.
+      if (target?.id != null) {
+        setDeletedVariantIds((ids) => [...ids, target.id!]);
+      }
+      return next;
+    });
   }
 
   async function handleImageUpload(files: FileList | null) {
@@ -305,27 +390,30 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
     set("images", draft.images.filter((i) => i !== url));
   }
 
+  function validateVariantsLocally(): string | null {
+    if (variants.length === 0) return "At least one variant (e.g. Seed, Sapling, Grafted, Potted) is required";
+    for (const v of variants) {
+      const label = v.form || "this variant";
+      if (!v.price || isNaN(Number(v.price)) || Number(v.price) <= 0) return `A valid price is required for ${label}`;
+      if (v.discountPrice && Number(v.discountPrice) >= Number(v.price)) return `Discount price must be less than regular price for ${label}`;
+    }
+    return null;
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!editing && !draft.productId) {
       toast.error("Select a variety to list against");
       return;
     }
-    if (!draft.price || isNaN(Number(draft.price)) || Number(draft.price) <= 0) {
-      toast.error("Enter a valid price");
+    const variantIssue = validateVariantsLocally();
+    if (variantIssue) {
+      setVariantsError(variantIssue);
       return;
     }
+    setVariantsError("");
 
-    const body = {
-      form: draft.form || undefined,
-      height: draft.height || undefined,
-      potSize: draft.potSize || undefined,
-      age: draft.age || undefined,
-      rootType: draft.rootType || undefined,
-      condition: draft.condition || undefined,
-      price: Number(draft.price),
-      discountPrice: draft.discountPrice ? Number(draft.discountPrice) : undefined,
-      stock: Number(draft.stock || 0),
+    const listingFields = {
       deliveryTimeDays: draft.deliveryTimeDays ? Number(draft.deliveryTimeDays) : undefined,
       warrantyDays: draft.warrantyDays ? Number(draft.warrantyDays) : undefined,
       returnPolicyText: draft.returnPolicyText || undefined,
@@ -339,6 +427,29 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
     };
 
     if (editing) {
+      // Update: send every variant block back with its id if it has one
+      // (partial update of an existing variant) or without one (create a
+      // new variant under this listing), plus deletedVariantIds for any
+      // removed this session -- mirrors the PUT handler's documented
+      // "update some, create some, delete some in one request" shape.
+      const body = {
+        ...listingFields,
+        variants: variants.map((v) => ({
+          ...(v.id != null ? { id: v.id } : {}),
+          form: v.form || undefined,
+          height: v.height || undefined,
+          potSize: v.potSize || undefined,
+          age: v.age || undefined,
+          rootType: v.rootType || undefined,
+          condition: v.condition || undefined,
+          price: Number(v.price),
+          discountPrice: v.discountPrice ? Number(v.discountPrice) : undefined,
+          stock: Number(v.stock || 0),
+          deliveryCharge: Number(v.deliveryCharge || 0),
+          isPreOrder: v.isPreOrder,
+        })),
+        deletedVariantIds: deletedVariantIds.length > 0 ? deletedVariantIds : undefined,
+      };
       updateListing.mutate(
         { id: editing.id, data: body },
         {
@@ -351,8 +462,26 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
         },
       );
     } else {
+      // Create: every block is new, so no ids are ever sent.
+      const body = {
+        ...listingFields,
+        productId: draft.productId!,
+        variants: variants.map((v) => ({
+          form: v.form || undefined,
+          height: v.height || undefined,
+          potSize: v.potSize || undefined,
+          age: v.age || undefined,
+          rootType: v.rootType || undefined,
+          condition: v.condition || undefined,
+          price: Number(v.price),
+          discountPrice: v.discountPrice ? Number(v.discountPrice) : undefined,
+          stock: Number(v.stock || 0),
+          deliveryCharge: Number(v.deliveryCharge || 0),
+          isPreOrder: v.isPreOrder,
+        })),
+      };
       createListing.mutate(
-        { data: { ...body, productId: draft.productId! } },
+        { data: body },
         {
           onSuccess: () => {
             qc.invalidateQueries({ queryKey: getListMySellerListingsQueryKey() });
@@ -377,54 +506,6 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <Label className="text-xs text-muted-foreground">Form</Label>
-          <select value={draft.form} onChange={(e) => set("form", e.target.value)} className="w-full mt-1 h-9 rounded-lg border border-input px-3 text-sm bg-background">
-            <option value="">Not specified</option>
-            <option value="seed">Seed</option>
-            <option value="sapling">Sapling</option>
-            <option value="grafted">Grafted</option>
-            <option value="potted">Potted</option>
-          </select>
-        </div>
-        <div>
-          <Label className="text-xs text-muted-foreground">Condition</Label>
-          <Input value={draft.condition} onChange={(e) => set("condition", e.target.value)} placeholder="e.g. Healthy, disease-free" className="mt-1 h-9 rounded-lg text-sm" />
-        </div>
-      </div>
-
-      {product ? (
-        <div className="grid grid-cols-2 gap-3">
-          {CONTROLLED_FIELDS.map((f) => (
-            <ControlledAttributeSelect
-              key={f.key}
-              categoryId={product.categoryId}
-              attributeName={f.attributeName}
-              label={f.label}
-              value={draft[f.key]}
-              onChange={(v) => set(f.key, v)}
-            />
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground border rounded-lg px-3 py-2 bg-muted/20">
-          Select a variety above to set Height, Pot Size, Age, and Root Type — these come from a fixed list per category, not free text.
-        </p>
-      )}
-
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label className="text-xs text-muted-foreground">Price (Tk) *</Label>
-          <Input type="number" value={draft.price} onChange={(e) => set("price", e.target.value)} placeholder="0" className="mt-1 h-9 rounded-lg text-sm" />
-        </div>
-        <div>
-          <Label className="text-xs text-muted-foreground">Discount Price (Tk)</Label>
-          <Input type="number" value={draft.discountPrice} onChange={(e) => set("discountPrice", e.target.value)} placeholder="Optional" className="mt-1 h-9 rounded-lg text-sm" />
-        </div>
-        <div>
-          <Label className="text-xs text-muted-foreground">Stock</Label>
-          <Input type="number" value={draft.stock} onChange={(e) => set("stock", e.target.value)} placeholder="0" className="mt-1 h-9 rounded-lg text-sm" />
-        </div>
-        <div>
           <Label className="text-xs text-muted-foreground">Delivery Time (days)</Label>
           <Input type="number" value={draft.deliveryTimeDays} onChange={(e) => set("deliveryTimeDays", e.target.value)} placeholder="Optional" className="mt-1 h-9 rounded-lg text-sm" />
         </div>
@@ -432,7 +513,7 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
           <Label className="text-xs text-muted-foreground">Warranty (days)</Label>
           <Input type="number" value={draft.warrantyDays} onChange={(e) => set("warrantyDays", e.target.value)} placeholder="Optional" className="mt-1 h-9 rounded-lg text-sm" />
         </div>
-        <div>
+        <div className="col-span-2">
           <Label className="text-xs text-muted-foreground">Payment Method</Label>
           <select value={draft.paymentMethod} onChange={(e) => set("paymentMethod", e.target.value)} className="w-full mt-1 h-9 rounded-lg border border-input px-3 text-sm bg-background">
             {PAYMENT_METHODS.map((m) => (<option key={m.value} value={m.value}>{m.label}</option>))}
@@ -444,6 +525,102 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
         there isn't enough by itself — an admin has to verify the account first, so selecting advance/both here
         will be rejected until that happens.
       </p>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Variants *</Label>
+          <Button type="button" variant="outline" size="sm" className="rounded-full h-7 text-xs gap-1" onClick={addVariant}>
+            <Plus className="h-3 w-3" /> Add another variant
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground -mt-1">
+          Each variant is a separately priced/stocked option under this listing (e.g. Seed, Sapling, Grafted). A listing needs at least one.
+        </p>
+
+        {variants.map((v, i) => (
+          <div key={v.key} className="border rounded-xl p-4 space-y-3 bg-muted/10">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-muted-foreground">Variant {i + 1}</p>
+              {variants.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => removeVariant(v.key)}
+                  className="text-muted-foreground hover:text-destructive transition-colors"
+                  aria-label="Remove this variant"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-muted-foreground">Form</Label>
+                <select value={v.form} onChange={(e) => setVariantField(v.key, "form", e.target.value)} className="w-full mt-1 h-9 rounded-lg border border-input px-3 text-sm bg-background">
+                  <option value="">Not specified</option>
+                  <option value="seed">Seed</option>
+                  <option value="sapling">Sapling</option>
+                  <option value="grafted">Grafted</option>
+                  <option value="potted">Potted</option>
+                </select>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Condition</Label>
+                <Input value={v.condition} onChange={(e) => setVariantField(v.key, "condition", e.target.value)} placeholder="e.g. Healthy, disease-free" className="mt-1 h-9 rounded-lg text-sm" />
+              </div>
+            </div>
+
+            {product ? (
+              <div className="grid grid-cols-2 gap-3">
+                {CONTROLLED_FIELDS.map((f) => (
+                  <ControlledAttributeSelect
+                    key={f.key}
+                    categoryId={product.categoryId}
+                    attributeName={f.attributeName}
+                    label={f.label}
+                    value={v[f.key]}
+                    onChange={(val) => setVariantField(v.key, f.key, val)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground border rounded-lg px-3 py-2 bg-muted/20">
+                Select a variety above to set Height, Pot Size, Age, and Root Type — these come from a fixed list per category, not free text.
+              </p>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-muted-foreground">Price (Tk) *</Label>
+                <Input type="number" value={v.price} onChange={(e) => setVariantField(v.key, "price", e.target.value)} placeholder="0" className="mt-1 h-9 rounded-lg text-sm" />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Discount Price (Tk)</Label>
+                <Input type="number" value={v.discountPrice} onChange={(e) => setVariantField(v.key, "discountPrice", e.target.value)} placeholder="Optional" className="mt-1 h-9 rounded-lg text-sm" />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Stock</Label>
+                <Input type="number" value={v.stock} onChange={(e) => setVariantField(v.key, "stock", e.target.value)} placeholder="0" className="mt-1 h-9 rounded-lg text-sm" />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Delivery Charge (Tk)</Label>
+                <Input type="number" value={v.deliveryCharge} onChange={(e) => setVariantField(v.key, "deliveryCharge", e.target.value)} placeholder="0" className="mt-1 h-9 rounded-lg text-sm" />
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={v.isPreOrder}
+                onChange={(e) => setVariantField(v.key, "isPreOrder", e.target.checked)}
+                className="rounded border-input"
+              />
+              <span className="text-muted-foreground">Available for pre-order</span>
+            </label>
+          </div>
+        ))}
+        {variantsError && <p className="text-xs text-destructive">{variantsError}</p>}
+      </div>
 
       <div>
         <Label className="text-xs text-muted-foreground">Return Policy</Label>

@@ -71,11 +71,27 @@ function LazyProductCard({ product, backContext }: { product: any; backContext?:
 }
 
 // ?? Sort helper ????????????????????????????????????????????????????????????
+// Phase 4: startingPrice alone made price-asc/price-desc a no-op for every
+// product created after Phase 2, since it's the admin-set price and nothing
+// writes it anymore (PHASE2_HANDOFF.md §5) -- every product sorted as if
+// priced at 0. listingMinPrice (the real, marketplace-derived cheapest
+// qualifying price, computed server-side per PHASE3A_HANDOFF.md §1.1) is
+// the correct primary key. Kept `?? a.startingPrice` as a secondary
+// fallback rather than dropping it: toProduct() still legitimately
+// populates startingPrice from any pre-Phase-2 legacy admin-variant rows
+// that still exist (products.ts confirms this -- see its own
+// startingPrice computation), so a handful of older products could still
+// have a real, non-null admin price with zero marketplace listings. Without
+// this fallback those products would sort as if priced at 0 (jumping to
+// the front of price-asc) instead of by their one real price signal. Both
+// null (no marketplace listing AND no legacy admin price) falls through to
+// 0, same as before -- a product with literally no price data anywhere
+// has no better sort key available.
 function sortProducts(products: Product[], sort: string) {
   const arr = [...products];
   switch (sort) {
-    case "price-asc":   return arr.sort((a, b) => (a.startingPrice ?? 0) - (b.startingPrice ?? 0));
-    case "price-desc":  return arr.sort((a, b) => (b.startingPrice ?? 0) - (a.startingPrice ?? 0));
+    case "price-asc":   return arr.sort((a, b) => (a.listingMinPrice ?? a.startingPrice ?? 0) - (b.listingMinPrice ?? b.startingPrice ?? 0));
+    case "price-desc":  return arr.sort((a, b) => (b.listingMinPrice ?? b.startingPrice ?? 0) - (a.listingMinPrice ?? a.startingPrice ?? 0));
     case "rating-desc": return arr.sort((a, b) => (b.averageRating ?? 0) - (a.averageRating ?? 0));
     case "newest":      return arr.sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
     default:            return arr;

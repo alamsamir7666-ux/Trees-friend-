@@ -1,23 +1,19 @@
 import { useState, useEffect } from "react";
-import { createPortal } from "react-dom";
 import { useParams, useLocation, useSearch, Link } from "wouter";
 import {
-  useGetProduct, useListReviews, useCreateReview, useUpdateReview, useDeleteReview, useAddToCart,
+  useGetProduct, useListReviews, useCreateReview, useUpdateReview, useDeleteReview,
   useAddToWishlist, useRemoveFromWishlist, useGetWishlist, useListProducts, useListCategories,
   useGetReviewEligibility,
-  getGetCartQueryKey, getGetWishlistQueryKey, getListReviewsQueryKey,
+  getGetWishlistQueryKey, getListReviewsQueryKey,
   getGetReviewEligibilityQueryKey,
-  type ProductVariant,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useUser } from "@clerk/react";
-import { useGuestCart } from "@/hooks/useGuestCart";
-import { VariantSelector } from "@/components/ui/VariantSelector";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { Star, Heart, ShoppingBag, Minus, Plus, ChevronLeft, Check, ShieldCheck, Package, Truck, Bike, Pencil, Trash2, AlertTriangle, Lock,
+import { Star, Heart, ShoppingBag, ChevronLeft, Check, ShieldCheck, Package, Truck, Bike, Pencil, Trash2, Lock,
   ArrowRight, Info, Sun, Droplets, Layers, Ruler, Thermometer, Gauge, Calendar, Sprout, Award, Target, Leaf,
 } from "lucide-react";
 import { ProductCard } from "@/components/ui/ProductCard";
@@ -25,10 +21,8 @@ import { saveRecentlyViewed, useRecentlyViewed } from "@/hooks/useRecentlyViewed
 import { ImageZoom } from "@/components/ui/ImageZoom";
 import { ProductQA } from "@/components/ui/ProductQA";
 import { SellerListingsSection } from "@/components/ui/SellerListingsSection";
-import { StockAlertButton } from "@/components/ui/StockAlertButton";
 import { updateSEO } from "@/lib/seo";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
-import { useToast } from "@/hooks/use-toast";
 
 export function ProductDetailPage() {
   const params = useParams<{ id: string }>();
@@ -75,31 +69,21 @@ export function ProductDetailPage() {
     { query: { enabled: !!product?.categoryId, queryKey: ["relatedProducts", product?.categoryId] } }
   );
 
-  const addToCart = useAddToCart();
-  const guestCart = useGuestCart();
   const addToWishlist = useAddToWishlist();
   const removeFromWishlist = useRemoveFromWishlist();
   const createReview = useCreateReview();
   const updateReview = useUpdateReview();
   const deleteReview = useDeleteReview();
-  const { toast } = useToast();
 
-  const [qty, setQty] = useState(1);
   const [activeImg, setActiveImg] = useState(0);
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState("");
   const [showReviewForm, setShowReviewForm] = useState(false);
-  const [justAdded, setJustAdded] = useState(false);
-  const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
-  const [showStockSheet, setShowStockSheet] = useState(false);
   const [editingReviewId, setEditingReviewId] = useState<number | null>(null);
   const [editRating, setEditRating] = useState(5);
   const [editComment, setEditComment] = useState("");
 
   const isWishlisted = wishlist?.some((w) => w.productId === id) ?? false;
-  const displayPrice = selectedVariant
-    ? (selectedVariant.discountPrice ?? selectedVariant.price)
-    : (product?.startingPrice ?? 0);
 
   const relatedProducts = (relatedData?.products ?? [])
     .filter((p) => p.id !== id && p.categoryId === product?.categoryId)
@@ -110,13 +94,6 @@ export function ProductDetailPage() {
     if (!product) return;
     saveRecentlyViewed(product);
   }, [product?.id]);
-
-  useEffect(() => {
-    if (isLoading || !product || product.inStock) return;
-    // Wait briefly after loading completes so page fully paints
-    const t = setTimeout(() => setShowStockSheet(true), 300);
-    return () => clearTimeout(t);
-  }, [isLoading, product?.id]);
 
   if (isLoading) {
     return (
@@ -172,7 +149,7 @@ export function ProductDetailPage() {
     description: product.description,
     image: product.images[0],
     type: "product",
-    priceAmount: product.startingPrice ?? 0,
+    priceAmount: product.listingMinPrice ?? 0,
     priceCurrency: "BDT",
   });
 
@@ -183,35 +160,6 @@ export function ProductDetailPage() {
           : img.replace("/upload/", "/upload/w_800,h_800,c_fill,f_webp,q_80/"))
       : img
   );
-
-  function handleAddToCart() {
-    if (!product) return;
-    if (!selectedVariant) {
-      toast({ title: "Select an option first", description: "Please choose a variant before adding to bag.", variant: "destructive" });
-      return;
-    }
-    if (!user) {
-      guestCart.addItem({
-        productId: id,
-        variantId: selectedVariant.id,
-        quantity: qty,
-        name: product.name,
-        price: selectedVariant.price,
-        discountPrice: selectedVariant.discountPrice ?? null,
-        image: product.images[0] ?? "",
-      });
-      setJustAdded(true);
-      setTimeout(() => setJustAdded(false), 2200);
-      return;
-    }
-    addToCart.mutate({ data: { productId: id, variantId: selectedVariant.id, quantity: qty } }, {
-      onSuccess: () => {
-        qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
-        setJustAdded(true);
-        setTimeout(() => setJustAdded(false), 2200);
-      },
-    });
-  }
 
   function handleWishlist() {
     if (!user) { setLocation("/sign-in"); return; }
@@ -258,12 +206,6 @@ export function ProductDetailPage() {
       },
     });
   }
-
-  const originalPriceForDisplay = selectedVariant ? selectedVariant.price : (product.startingPrice ?? 0);
-  const hasDiscount = selectedVariant ? selectedVariant.discountPrice != null : false;
-  const discountPct = hasDiscount && originalPriceForDisplay > 0
-    ? Math.round(((originalPriceForDisplay - displayPrice) / originalPriceForDisplay) * 100)
-    : null;
 
   // Determine review UI state
   const canReview = eligibility?.canReview ?? false;
@@ -319,94 +261,17 @@ export function ProductDetailPage() {
               <p className="text-sm text-muted-foreground italic mb-3">{product.scientificName}</p>
             )}
 
-            <div className="flex items-center gap-2 mb-5">
-              <div className="flex">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Star key={i} className={`h-4 w-4 ${i < Math.round(product.averageRating) ? "fill-accent text-accent" : "text-muted"}`} />
-                ))}
+            <div className="flex items-center gap-3 mb-6">
+              <div className="flex items-center gap-2">
+                <div className="flex">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Star key={i} className={`h-4 w-4 ${i < Math.round(product.averageRating) ? "fill-accent text-accent" : "text-muted"}`} />
+                  ))}
+                </div>
+                <span className="text-sm text-muted-foreground">({product.reviewCount} reviews)</span>
               </div>
-              <span className="text-sm text-muted-foreground">({product.reviewCount} reviews)</span>
-            </div>
-
-            <div className="flex items-baseline gap-3 mb-6">
-              <span className="text-3xl font-semibold">Tk{displayPrice.toLocaleString()}</span>
-              {hasDiscount && (
-                <>
-                  <span className="text-lg text-muted-foreground line-through">Tk{originalPriceForDisplay.toLocaleString()}</span>
-                  <Badge className="bg-accent/15 text-accent border-accent/30">{discountPct}% off</Badge>
-                </>
-              )}
-            </div>
-
-            <VariantSelector
-              variants={product.variants ?? []}
-              selected={selectedVariant}
-              onVariantChange={setSelectedVariant}
-            />
-
-            <div className="flex items-center gap-2 mb-4 mt-4">
-              {product.productStatus === "out_of_stock" || !product.inStock ? (
-                <button onClick={() => setShowStockSheet(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium">
-                  🔔 Out of stock — Notify me
-                </button>
-              ) : product.productStatus === "pre_order" ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-sm font-medium">
-                   Pre-order - 5% discount + Ships in 20-23 days
-                </span>
-              ) : selectedVariant && selectedVariant.stock <= 3 ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-50 border border-red-200 text-red-600 text-sm font-semibold animate-pulse">
-                  <AlertTriangle className="h-3.5 w-3.5" /> Only {selectedVariant.stock} left!
-                </span>
-              ) : selectedVariant && selectedVariant.stock <= 10 ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium">
-                  <AlertTriangle className="h-3.5 w-3.5" /> Only {selectedVariant.stock} left
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-50 border border-green-200 text-green-700 text-sm font-medium">
-                  In stock
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-3 mb-4">
-              <div className="inline-flex items-center border border-border rounded-full h-11">
-                <button onClick={() => setQty(Math.max(1, qty - 1))} className="h-full px-3.5 flex items-center justify-center text-muted-foreground hover:text-foreground rounded-l-full transition-colors" aria-label="Decrease quantity">
-                  <Minus className="h-4 w-4" />
-                </button>
-                <span className="w-10 font-medium text-center select-none tabular-nums text-sm">{qty}</span>
-                <button onClick={() => setQty(Math.min(selectedVariant?.stock ?? 99, qty + 1))} className="h-full px-3.5 flex items-center justify-center text-muted-foreground hover:text-foreground rounded-r-full transition-colors" aria-label="Increase quantity">
-                  <Plus className="h-4 w-4" />
-                </button>
-              </div>
-              {product.productStatus === "pre_order" ? (
-                <Link href={`/pre-order-checkout?productId=${product.id}&name=${encodeURIComponent(product.name)}&image=${encodeURIComponent((product.images as string[])[0] ?? "")}&price=${displayPrice}&qty=${qty}&shipmentDate=${encodeURIComponent(localStorage.getItem("nextShipmentDate") ?? "")}`} className="flex-1">
-                  <Button
-                    className="w-full rounded-full bg-blue-500 text-white hover:bg-blue-600"
-                    size="default"
-                  >
-                    <ShoppingBag className="h-4 w-4 mr-2" /> Pre-Order Now
-                  </Button>
-                </Link>
-              ) : product.productStatus === "out_of_stock" || !product.inStock ? (
-                <Button
-                  className="flex-1 rounded-full cursor-not-allowed bg-foreground text-background"
-                  size="lg"
-                  disabled
-                >
-                  Out of Stock
-                </Button>
-              ) : (
-                <Button
-                  className={`flex-1 rounded-full transition-all duration-200 ${justAdded ? "bg-green-600 hover:bg-green-600" : ""}`}
-                  size="lg"
-                  onClick={handleAddToCart}
-                  disabled={addToCart.isPending}
-                >
-                  {justAdded ? (<><Check className="h-4 w-4 mr-2" /> Added to Bag</>) : (<><ShoppingBag className="h-4 w-4 mr-2" /> Add to Bag</>)}
-                </Button>
-              )}
-              <Button variant="outline" size="icon" className="rounded-full h-12 w-12" onClick={handleWishlist}>
-                <Heart className={`h-5 w-5 ${isWishlisted ? "fill-rose-500 text-rose-500" : ""}`} />
+              <Button variant="outline" size="icon" className="rounded-full h-9 w-9 ml-auto" onClick={handleWishlist}>
+                <Heart className={`h-4 w-4 ${isWishlisted ? "fill-rose-500 text-rose-500" : ""}`} />
               </Button>
             </div>
           </div>
@@ -709,24 +574,6 @@ export function ProductDetailPage() {
           </section>
         )}
       </div>
-
-      {showStockSheet && product && createPortal(
-        <>
-
-          <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 9999, background: 'white', borderRadius: '20px 20px 0 0', padding: '24px', boxShadow: '0 -8px 32px rgba(0,0,0,0.2)', minHeight: '300px' }}>
-            <div style={{ width: 40, height: 4, background: '#e5e7eb', borderRadius: 99, margin: '0 auto 16px' }} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-              <div>
-                <p style={{ fontWeight: 700, fontSize: 18, marginBottom: 4, color: '#111' }}>Back in Stock Soon!</p>
-                <p style={{ color: '#6b7280', fontSize: 14 }}>Get notified the moment this product is available again.</p>
-              </div>
-              <button onClick={() => setShowStockSheet(false)} style={{ background: '#f3f4f6', border: 'none', borderRadius: '50%', width: 32, height: 32, cursor: 'pointer', fontSize: 16 }}>✕</button>
-            </div>
-            <StockAlertButton productId={product.id} productName={product.name} sheetMode />
-          </div>
-        </>,
-        document.body
-      )}
     </div>
   );
 }

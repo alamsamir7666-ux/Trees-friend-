@@ -1,7 +1,14 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { blogPostsTable, productsTable, productVariantsTable } from "@workspace/db";
-import { eq, desc, inArray } from "drizzle-orm";
+import {
+  blogPostsTable,
+  productsTable,
+  productVariantsTable,
+  sellerListingsTable,
+  sellerListingVariantsTable,
+  sellersTable,
+} from "@workspace/db";
+import { eq, desc, and, inArray, sql } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
 
@@ -41,10 +48,12 @@ async function resolveLinkedProducts(post: typeof blogPostsTable.$inferSelect) {
     .from(productsTable)
     .where(inArray(productsTable.id, ids));
 
+  const productIds = rows.map((r) => r.id);
+
   const variantRows = await db
     .select()
     .from(productVariantsTable)
-    .where(inArray(productVariantsTable.productId, rows.map((r) => r.id)));
+    .where(inArray(productVariantsTable.productId, productIds));
   const variantsByProduct = new Map<number, typeof variantRows>();
   for (const v of variantRows) {
     const list = variantsByProduct.get(v.productId) ?? [];
@@ -52,11 +61,52 @@ async function resolveLinkedProducts(post: typeof blogPostsTable.$inferSelect) {
     variantsByProduct.set(v.productId, list);
   }
 
+  // Phase 2 marketplace fallback -- same rationale as routes/search.ts and
+  // routes/wishlist.ts: admin variants are legacy-only going forward, so a
+  // linked product with none needs a marketplace-sourced price/stock
+  // signal or "Related Products" on every new blog post would show no
+  // price at all.
+  const listingRows = productIds.length > 0
+    ? await db
+        .select({
+          productId: sellerListingsTable.productId,
+          price: sellerListingVariantsTable.price,
+          discountPrice: sellerListingVariantsTable.discountPrice,
+          availableQuantity: sellerListingVariantsTable.availableQuantity,
+        })
+        .from(sellerListingVariantsTable)
+        .innerJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
+        .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+        .where(
+          and(
+            inArray(sellerListingsTable.productId, productIds),
+            eq(sellerListingsTable.visibility, "public"),
+            eq(sellerListingsTable.approvalStatus, "approved"),
+            eq(sellersTable.status, "active"),
+          ),
+        )
+    : [];
+  const listingsByProduct = new Map<number, typeof listingRows>();
+  for (const r of listingRows) {
+    const list = listingsByProduct.get(r.productId) ?? [];
+    list.push(r);
+    listingsByProduct.set(r.productId, list);
+  }
+
   const withPricing = rows.map((r) => {
     const variants = variantsByProduct.get(r.id) ?? [];
     const effectivePrices = variants.map((v) => v.discountPrice != null ? Number(v.discountPrice) : Number(v.price));
-    const startingPrice = effectivePrices.length > 0 ? Math.min(...effectivePrices) : null;
-    const inStock = variants.some((v) => v.stock > 0);
+    const adminPrice = effectivePrices.length > 0 ? Math.min(...effectivePrices) : null;
+    const adminInStock = variants.some((v) => v.stock > 0);
+
+    const listings = listingsByProduct.get(r.id) ?? [];
+    const qualifyingListings = listings.filter((l) => l.availableQuantity > 0);
+    const listingPrices = qualifyingListings.map((l) => l.discountPrice != null ? Number(l.discountPrice) : Number(l.price));
+    const marketplacePrice = listingPrices.length > 0 ? Math.min(...listingPrices) : null;
+    const marketplaceInStock = qualifyingListings.length > 0;
+
+    const startingPrice = adminPrice ?? marketplacePrice;
+    const inStock = variants.length > 0 ? adminInStock : marketplaceInStock;
     return { ...r, startingPrice, inStock };
   });
 

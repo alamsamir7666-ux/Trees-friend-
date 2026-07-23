@@ -1,20 +1,27 @@
 import { useState } from "react";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
-import { Link } from "wouter";
-import { useGetWishlist, useRemoveFromWishlist, useAddToCart, getGetWishlistQueryKey, getGetCartQueryKey, type Product, type ProductVariant } from "@workspace/api-client-react";
+import { Link, useLocation } from "wouter";
+import {
+  useGetWishlist, useRemoveFromWishlist, useAddToCart, getGetWishlistQueryKey, getGetCartQueryKey,
+  listProductSellerListings, ListProductSellerListingsSort,
+  type SellerListingCard, type SellerListingVariant,
+} from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useUser } from "@clerk/react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Heart, ShoppingBag, Trash2 } from "lucide-react";
+import { Heart, ShoppingBag, Trash2, Loader2 } from "lucide-react";
 import { useGuestWishlist } from "@/hooks/useGuestWishlist";
-import { useGuestCart } from "@/hooks/useGuestCart";
-import { VariantPickerDialog } from "@/components/ui/VariantPickerDialog";
+import { useToast } from "@/hooks/use-toast";
+import { SellerListingVariantPickerDialog } from "@/components/ui/SellerListingVariantPickerDialog";
 
-// Normalized wishlist line: guest (localStorage) items don't carry the full
-// Product/variants list, only a price snapshot from when they were added --
-// so guest "Add to Bag" can't offer variant selection the way the
-// logged-in path (which has the real Product with variants) can.
+// Normalized wishlist line. wishlist.ts's price/inStock fields (see
+// PHASE2_HANDOFF.md §5) are a single "best available number" computed
+// server-side -- no listing/variant ids are exposed there, since that
+// endpoint never needed them before Add to Bag existed on this page. Real
+// listing/variant data for a given product is fetched on demand (see
+// handleAddToCart) rather than eagerly per card, both because wishlist.ts
+// doesn't return it and to avoid an extra request per card on page load.
 type WishlistLine = {
   id: number;
   productId: number;
@@ -23,16 +30,29 @@ type WishlistLine = {
   image: string;
   price: number;
   discountPrice: number | null;
-  product: Product | null; // full product only available for logged-in users
 };
 
 export function WishlistPage() {
   const qc = useQueryClient();
   const { user, isLoaded } = useUser();
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
   const isGuest = isLoaded && !user;
   const guestWishlist = useGuestWishlist();
-  const guestCart = useGuestCart();
-  const [pickerFor, setPickerFor] = useState<Product | null>(null);
+
+  // Phase 4: the picker is scoped to ONE listing (mirrors
+  // SellerListingsSection.tsx's single-listing picker), chosen as the
+  // cheapest qualifying listing for the product just clicked -- see
+  // handleAddToCart for why "cheapest listing, then variant within it" is
+  // the right two-step reduction for a wishlist card, which (unlike
+  // SellerListingsSection.tsx) has no per-seller card UI of its own to
+  // let the buyer pick a seller first.
+  const [pickerState, setPickerState] = useState<{
+    item: WishlistLine;
+    sellerName: string;
+    variants: SellerListingVariant[];
+  } | null>(null);
+  const [loadingItemId, setLoadingItemId] = useState<number | null>(null);
 
   const { data: wishlistData, isLoading: wishlistLoading } = useGetWishlist({
     query: { enabled: !isGuest, queryKey: getGetWishlistQueryKey() },
@@ -51,7 +71,6 @@ export function WishlistPage() {
         image: g.image,
         price: g.price,
         discountPrice: g.discountPrice,
-        product: null,
       }))
     : (wishlistData ?? []).map((w) => ({
         id: w.id,
@@ -59,9 +78,15 @@ export function WishlistPage() {
         name: w.product.name,
         slug: w.product.slug,
         image: w.product.images?.[0] ?? "",
+        // startingPrice here is wishlist.ts's own custom field (falls back
+        // to the cheapest qualifying marketplace price when no legacy admin
+        // price exists) -- NOT the generated Product type's startingPrice,
+        // which is permanently null post-Phase-2. Confirmed by reading
+        // wishlist.ts directly; see PHASE2_HANDOFF.md §5 and this phase's
+        // handoff doc for the full trace. No fix needed here, this was
+        // already reading the correctly-computed value.
         price: w.product.startingPrice ?? 0,
         discountPrice: null,
-        product: w.product,
       }));
 
   function handleRemove(productId: number) {
@@ -74,36 +99,71 @@ export function WishlistPage() {
     });
   }
 
-  function addVariantToCart(item: WishlistLine, variant: ProductVariant) {
-    if (isGuest) {
-      guestCart.addItem({
-        productId: item.productId,
-        variantId: variant.id,
-        quantity: 1,
-        name: item.name,
-        price: variant.price,
-        discountPrice: variant.discountPrice ?? null,
-        image: item.image,
-      });
-      return;
-    }
-    addToCart.mutate({ data: { productId: item.productId, variantId: variant.id, quantity: 1 } }, {
-      onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
-    });
+  function addVariantToCart(item: WishlistLine, variant: SellerListingVariant) {
+    addToCart.mutate(
+      { data: { productId: item.productId, sellerListingVariantId: variant.id, quantity: 1 } },
+      {
+        onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
+        onError: (err: any) => {
+          toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+        },
+      },
+    );
   }
 
-  function handleAddToCart(item: WishlistLine) {
-    // Guest wishlist entries don't carry variant data (they were snapshotted
-    // at add-to-wishlist time without a variant). Send them to the product
-    // page to pick one rather than guessing.
-    if (!item.product) return;
-    const variants = item.product.variants ?? [];
-    if (variants.length === 0) return;
-    if (variants.length === 1) {
-      addVariantToCart(item, variants[0]);
+  // Phase 4: this used to read item.product.variants (the frozen admin
+  // ProductVariant[], permanently empty since Phase 2) and either silently
+  // no-op or open the old admin VariantPickerDialog -- both broken, and
+  // the picker was the wrong one besides (VariantPickerDialog/
+  // VariantSelector are shaped around admin ProductVariant, not
+  // SellerListingVariant, same reason Phase 3b built a fresh
+  // SellerListingVariantPickerDialog rather than reusing them -- see
+  // PHASE3B_HANDOFF.md Part 2). Rewired rather than removed: unlike
+  // ComparisonDrawer (this phase, see ProductComparison.tsx), buying
+  // directly from a saved item is core to what a wishlist page is for, and
+  // the data needed to do it for real (GET /products/:id/seller-listings)
+  // already exists and needs no backend change -- removing the button here
+  // would be a real feature regression, not just a display cleanup.
+  //
+  // "Cheapest listing, then variant within it" -- sort=price_asc and take
+  // the first card -- mirrors the same "cheapest qualifying option wins"
+  // rule used sitewide (PHASE2_HANDOFF.md §7, ProductCard.tsx's price,
+  // SellerListingsSection.tsx's per-card price). A wishlist card has no
+  // per-seller UI of its own to let the buyer choose a seller first the
+  // way SellerListingsSection.tsx's cards do, so defaulting to the
+  // cheapest seller and asking only if THAT seller has more than one
+  // qualifying variant is the closest one-click equivalent.
+  async function handleAddToCart(item: WishlistLine) {
+    if (!user) {
+      toast({ title: "Sign in required", description: "Please sign in to buy from marketplace sellers.", variant: "destructive" });
+      setLocation("/sign-in");
       return;
     }
-    setPickerFor(item.product);
+    setLoadingItemId(item.productId);
+    try {
+      const cards: SellerListingCard[] = await listProductSellerListings(item.productId, {
+        sort: ListProductSellerListingsSort.price_asc,
+      });
+      if (cards.length === 0) {
+        toast({ title: "No longer available", description: `${item.name} currently has no seller listings.`, variant: "destructive" });
+        return;
+      }
+      const cheapest = cards[0];
+      const qualifying = cheapest.listing.variants.filter((v) => v.availableQuantity > 0);
+      if (qualifying.length === 0) {
+        toast({ title: "Out of stock", description: `${item.name} is currently out of stock from all sellers.`, variant: "destructive" });
+        return;
+      }
+      if (qualifying.length === 1) {
+        addVariantToCart(item, qualifying[0]);
+        return;
+      }
+      setPickerState({ item, sellerName: cheapest.seller.businessName, variants: qualifying });
+    } catch {
+      toast({ title: "Couldn't add to bag", description: "Please try again.", variant: "destructive" });
+    } finally {
+      setLoadingItemId(null);
+    }
   }
 
   if (isLoading) {
@@ -144,6 +204,7 @@ export function WishlistPage() {
           {items.map((item) => {
             const img = item.image || "https://images.unsplash.com/photo-1556228578-8c89e6adf883?w=400&q=80&fm=webp";
             const price = item.discountPrice ?? item.price;
+            const isAdding = loadingItemId === item.productId;
             return (
               <div key={item.id} className="group bg-card border rounded-xl overflow-hidden">
                 <Link href={`/products/${item.productId}`}>
@@ -163,7 +224,7 @@ export function WishlistPage() {
                   </Link>
                   <div className="flex items-center gap-2 mb-3">
                     <span className="font-semibold text-sm">
-                      {item.product ? `From Tk${price.toLocaleString()}` : `Tk${price.toLocaleString()}`}
+                      {price > 0 ? `From Tk${price.toLocaleString()}` : "Not currently available"}
                     </span>
                     {item.discountPrice != null && (
                       <span className="text-xs text-muted-foreground line-through">Tk{item.price.toLocaleString()}</span>
@@ -180,9 +241,14 @@ export function WishlistPage() {
                     <Button
                       size="sm"
                       className="w-full text-xs"
+                      disabled={isAdding}
                       onClick={() => handleAddToCart(item)}
                     >
-                      <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />
+                      {isAdding ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                      ) : (
+                        <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />
+                      )}
                       Add to Bag
                     </Button>
                   )}
@@ -193,16 +259,13 @@ export function WishlistPage() {
         </div>
       </div>
 
-      {pickerFor && (
-        <VariantPickerDialog
-          open={!!pickerFor}
-          onOpenChange={(o) => { if (!o) setPickerFor(null); }}
-          productName={pickerFor.name}
-          variants={pickerFor.variants ?? []}
-          onConfirm={(variant) => {
-            const item = items.find((i) => i.productId === pickerFor.id);
-            if (item) addVariantToCart(item, variant);
-          }}
+      {pickerState && (
+        <SellerListingVariantPickerDialog
+          open={!!pickerState}
+          onOpenChange={(o) => { if (!o) setPickerState(null); }}
+          sellerName={pickerState.sellerName}
+          variants={pickerState.variants}
+          onConfirm={(variant) => addVariantToCart(pickerState.item, variant)}
         />
       )}
     </div>

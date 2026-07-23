@@ -5,7 +5,6 @@ import {
   useCreateProduct, useUpdateProduct,
   getGetFeaturedProductsQueryKey, getGetHomepageProductsQueryKey,
 } from "@workspace/api-client-react";
-import { VariantEditor, VariantDraft, emptyVariantDraft } from "@/components/admin/VariantEditor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -89,32 +88,6 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
     homepageTag: product?.homepageTag ?? "",
   });
 
-  const [variants, setVariants] = useState<VariantDraft[]>(() => {
-    if (product?.variants?.length) {
-      return product.variants.map((v: any) => ({
-        form: v.form ?? "sapling",
-        name: v.name,
-        price: String(v.price),
-        discountPrice: v.discountPrice != null ? String(v.discountPrice) : "",
-        stock: String(v.stock),
-        deliveryCharge: String(v.deliveryCharge ?? 0),
-        sku: v.sku ?? "",
-      }));
-    }
-    return [emptyVariantDraft()];
-  });
-  const [variantError, setVariantError] = useState("");
-
-  function validateVariantsLocally(): string | null {
-    if (variants.length === 0) return "At least one variant is required";
-    for (const v of variants) {
-      if (!v.name.trim()) return "Every variant needs a display name";
-      if (!v.price || isNaN(Number(v.price)) || Number(v.price) < 0) return `Valid price is required for "${v.name || v.form}"`;
-      if (v.discountPrice && Number(v.discountPrice) >= Number(v.price)) return `Sale price must be less than regular price for "${v.name}"`;
-    }
-    return null;
-  }
-
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
@@ -122,12 +95,6 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
       alert("Please select a category");
       return;
     }
-    const variantIssue = validateVariantsLocally();
-    if (variantIssue) {
-      setVariantError(variantIssue);
-      return;
-    }
-    setVariantError("");
 
     const data = {
       name: form.name,
@@ -149,16 +116,6 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
       images: String(form.images).split(",").map((s) => s.trim()).filter(Boolean),
       videoUrl: form.videoUrl ?? "",
       productStatus: form.productStatus ?? "in_stock",
-      variants: variants.map(v => ({
-        form: v.form,
-        name: v.name.trim(),
-        variantType: "form",
-        price: Number(v.price),
-        discountPrice: v.discountPrice ? Number(v.discountPrice) : undefined,
-        stock: parseInt(v.stock) || 0,
-        deliveryCharge: Number(v.deliveryCharge) || 0,
-        sku: v.sku.trim() || undefined,
-      })),
     };
 
     const invalidateAll = () => {
@@ -469,9 +426,6 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
             <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">YouTube Video URL (optional)</Label>
             <Input value={form.videoUrl ?? ""} onChange={e => setForm(f => ({ ...f, videoUrl: e.target.value }))} className="mt-1.5 rounded-xl" placeholder="https://www.youtube.com/watch?v=..." />
           </div>
-
-          <VariantEditor variants={variants} onChange={setVariants} />
-          {variantError && <p className="text-xs text-destructive -mt-3">{variantError}</p>}
 
           <div className="flex gap-3 pt-2">
             <Button type="submit" disabled={createProduct.isPending || updateProduct.isPending} className="flex-1 rounded-xl bg-pink-500 hover:bg-pink-600 text-white">

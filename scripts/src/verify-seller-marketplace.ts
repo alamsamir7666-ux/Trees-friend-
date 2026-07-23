@@ -5,6 +5,7 @@ import {
   categoriesTable,
   productsTable,
   sellerListingsTable,
+  sellerListingVariantsTable,
   sellerPaymentConfigsTable,
   sellerCourierConfigsTable,
   cartItemsTable,
@@ -134,31 +135,55 @@ async function main() {
     .returning();
   check("product created", !!product.id);
 
+  // Phase 2: sellerListingsTable no longer has price/stock/availableQuantity
+  // columns at all -- those moved to sellerListingVariantsTable in the
+  // Phase 1 schema split. This script (last touched pre-Phase-1) was still
+  // inserting the old flat shape, which no longer typechecks; fixed here to
+  // create a listing (listing-level fields only) plus one variant each
+  // (where price/stock actually live now).
   const [listing1] = await db
     .insert(sellerListingsTable)
     .values({
       productId: product.id,
       sellerId: seller1.id,
-      price: "500.00",
-      stock: 10,
-      availableQuantity: 10,
       paymentMethod: "cod",
     })
     .returning();
   check("seller_listing created against seller 1", listing1.sellerId === seller1.id);
+
+  const [listing1Variant] = await db
+    .insert(sellerListingVariantsTable)
+    .values({
+      sellerListingId: listing1.id,
+      price: "500.00",
+      stock: 10,
+      availableQuantity: 10,
+      deliveryCharge: "0",
+    })
+    .returning();
+  check("seller_listing_variant created for listing 1", listing1Variant.sellerListingId === listing1.id);
 
   const [listing2] = await db
     .insert(sellerListingsTable)
     .values({
       productId: product.id,
       sellerId: seller2.id,
-      price: "300.00",
-      stock: 5,
-      availableQuantity: 5,
       paymentMethod: "cod",
     })
     .returning();
   check("seller_listing created against seller 2 (same product)", listing2.sellerId === seller2.id);
+
+  const [listing2Variant] = await db
+    .insert(sellerListingVariantsTable)
+    .values({
+      sellerListingId: listing2.id,
+      price: "300.00",
+      stock: 5,
+      availableQuantity: 5,
+      deliveryCharge: "0",
+    })
+    .returning();
+  check("seller_listing_variant created for listing 2", listing2Variant.sellerListingId === listing2.id);
 
   // --- 2. seller_payment_configs isVerified logic ---
   console.log("\n--- 2. hasVerifiedPaymentConfig() real-query behavior ---");
@@ -191,20 +216,27 @@ async function main() {
   const cartUserId = "verify-script-cart-user";
   await db.delete(cartItemsTable).where(eq(cartItemsTable.userId, cartUserId));
 
+  // Phase 2: cart_items now addresses a seller_listing_variant, not a
+  // seller_listing directly (schema/cart.ts doc comment) -- price/stock
+  // moved to the variant, so that's what a cart line must point at to be
+  // resolvable. sellerListingId is still populated (denormalized from the
+  // variant's own FK), matching what routes/cart.ts actually does on
+  // insert.
   await db.insert(cartItemsTable).values([
-    { userId: cartUserId, productId: product.id, sellerListingId: listing1.id, quantity: 2 }, // seller1: 500*2=1000
-    { userId: cartUserId, productId: product.id, sellerListingId: listing2.id, quantity: 1 }, // seller2: 300*1=300
+    { userId: cartUserId, productId: product.id, sellerListingId: listing1.id, sellerListingVariantId: listing1Variant.id, quantity: 2 }, // seller1: 500*2=1000
+    { userId: cartUserId, productId: product.id, sellerListingId: listing2.id, sellerListingVariantId: listing2Variant.id, quantity: 1 }, // seller2: 300*1=300
   ]);
 
   const cartRows = await db
     .select({
-      sellerListingId: cartItemsTable.sellerListingId,
+      sellerListingVariantId: cartItemsTable.sellerListingVariantId,
       quantity: cartItemsTable.quantity,
-      price: sellerListingsTable.price,
+      price: sellerListingVariantsTable.price,
       sellerId: sellerListingsTable.sellerId,
     })
     .from(cartItemsTable)
-    .innerJoin(sellerListingsTable, eq(cartItemsTable.sellerListingId, sellerListingsTable.id))
+    .innerJoin(sellerListingVariantsTable, eq(cartItemsTable.sellerListingVariantId, sellerListingVariantsTable.id))
+    .innerJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
     .where(eq(cartItemsTable.userId, cartUserId));
 
   check("real cart query returns 2 rows", cartRows.length === 2, `got ${cartRows.length}`);

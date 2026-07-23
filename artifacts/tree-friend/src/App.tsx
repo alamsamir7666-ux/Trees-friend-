@@ -27,13 +27,13 @@ const BlogArticlePage = lazy(() => import("@/pages/BlogArticlePage").then(m => (
 import { I18nProvider } from "@/lib/i18n";
 import { ThemeProvider } from "next-themes";
 import { CurrencyProvider } from "@/lib/currency";
-import { FlashSaleBanner } from "@/components/ui/FlashSaleBanner";
 import { FloatingCartIcon } from "./components/ui/FloatingCartIcon";
 import { PageTransition } from "@/components/ui/PageTransition";
 import { ProfileSync } from "./components/auth/ProfileSync";
 import { HomePage } from "./pages/HomePage";
 import { ProductsPage } from "./pages/ProductsPage";
 import { ProductDetailPage } from "./pages/ProductDetailPage";
+import { SellerListingDetailPage } from "./pages/SellerListingDetailPage";
 import { CartPage } from "./pages/CartPage";
 import { CheckoutPage } from "./pages/CheckoutPage";
 import { PreOrderCheckoutPage } from "./pages/PreOrderCheckoutPage";
@@ -315,23 +315,12 @@ function AdminRoute() {
   return <Suspense fallback={<div className="min-h-[60vh]" />}><AdminPage /></Suspense>;
 }
 
-// Compute flash sale end time once at module level - not inside the component
-// to avoid creating a new Date() reference on every render which confuses the timer.
-function getTodayMidnight(): Date {
-  const d = new Date();
-  d.setHours(23, 59, 59, 999);
-  return d;
-}
-const FLASH_SALE_END = getTodayMidnight();
-
 function AppLayout({ children }: { children: React.ReactNode }) {
   const { pageReady } = usePageContext();
-  const flashSaleEnd = FLASH_SALE_END;
 
   return (
     <>
       <div className="min-h-[100dvh] flex flex-col">
-        <FlashSaleBanner label="Flash Sale - Up to 30% Off" endsAt={flashSaleEnd} href="/products" />
         <Navbar />
         <main className="flex-1">
           {children}
@@ -376,6 +365,7 @@ function ClerkProviderWithRoutes() {
               <Switch>
                 <Route path="/" component={HomePage} />
                 <Route path="/products" component={ProductsPage} />
+                <Route path="/products/:productId/listings/:listingId" component={SellerListingDetailPage} />
                 <Route path="/products/:id" component={ProductDetailPage} />
                 <Route path="/cart" component={CartPage} />
                 <Route path="/checkout" component={CheckoutPage} />

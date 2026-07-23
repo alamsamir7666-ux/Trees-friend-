@@ -3767,6 +3767,83 @@ export const useCreateSellerListing = <TError = ErrorType<unknown>,
       return useMutation(getCreateSellerListingMutationOptions(options));
     }
 
+export const getGetSellerListingUrl = (id: number,) => {
+
+
+
+
+  return `/api/seller-listings/${id}`
+}
+
+/**
+ * @summary Buyer-facing: one listing's full detail by id, publicly, nested variants + seller info. Powers the listing-detail page (Phase 3b Part 3). Same visibility/approval/active-seller gate as listProductSellerListings, but does not drop sold-out listings -- each variant's own availableQuantity communicates availability.
+ */
+export const getSellerListing = async (id: number, options?: RequestInit): Promise<SellerListingCard> => {
+
+  return customFetch<SellerListingCard>(getGetSellerListingUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetSellerListingQueryKey = (id: number,) => {
+    return [
+    `/api/seller-listings/${id}`
+    ] as const;
+    }
+
+
+export const getGetSellerListingQueryOptions = <TData = Awaited<ReturnType<typeof getSellerListing>>, TError = ErrorType<void>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSellerListing>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSellerListingQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSellerListing>>> = ({ signal }) => getSellerListing(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSellerListing>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetSellerListingQueryResult = NonNullable<Awaited<ReturnType<typeof getSellerListing>>>
+export type GetSellerListingQueryError = ErrorType<void>
+
+
+/**
+ * @summary Buyer-facing: one listing's full detail by id, publicly, nested variants + seller info. Powers the listing-detail page (Phase 3b Part 3). Same visibility/approval/active-seller gate as listProductSellerListings, but does not drop sold-out listings -- each variant's own availableQuantity communicates availability.
+ */
+
+export function useGetSellerListing<TData = Awaited<ReturnType<typeof getSellerListing>>, TError = ErrorType<void>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSellerListing>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetSellerListingQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
 export const getUpdateSellerListingUrl = (id: number,) => {
 
 

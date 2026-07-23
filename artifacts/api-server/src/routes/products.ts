@@ -8,6 +8,9 @@ import {
   productVariantsTable,
   categoriesTable,
   reviewsTable,
+  sellerListingsTable,
+  sellerListingVariantsTable,
+  sellersTable,
 } from "@workspace/db";
 import { eq, ilike, gte, lte, and, desc, sql, inArray, or } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../middlewares/auth";
@@ -42,11 +45,36 @@ function toVariant(v: VariantRow) {
   };
 }
 
+/**
+ * Marketplace-derived stats for a product's qualifying seller listing
+ * variants (visibility=public AND approvalStatus=approved AND
+ * availableQuantity>0 at the VARIANT level -- see fetchMarketplaceStatsFor
+ * below for the actual query). Deliberately separate fields from
+ * startingPrice/totalStock/inStock (which stay admin-productVariants-based,
+ * see toProduct doc note) rather than overloading them -- grepped the whole
+ * repo for `startingPrice` first (see PHASE2_HANDOFF.md for the full list);
+ * every remaining reference reads it as "the admin-set price", so repointing
+ * it at marketplace data would silently change behavior for every one of
+ * those call sites instead of adding new, clearly-named fields alongside.
+ */
+type MarketplaceStats = {
+  listingMinPrice: number | null;
+  listingMaxPrice: number | null;
+  listingCount: number;
+};
+
+const EMPTY_MARKETPLACE_STATS: MarketplaceStats = {
+  listingMinPrice: null,
+  listingMaxPrice: null,
+  listingCount: 0,
+};
+
 function toProduct(
   p: typeof productsTable.$inferSelect,
   variants: VariantRow[],
   avgRating: number,
   reviewCount: number,
+  marketplaceStats: MarketplaceStats = EMPTY_MARKETPLACE_STATS,
 ) {
   const effectivePrices = variants.map((v) =>
     v.discountPrice != null ? Number(v.discountPrice) : Number(v.price)
@@ -80,10 +108,27 @@ function toProduct(
     homepageTag: p.homepageTag,
     productStatus: p.productStatus ?? "in_stock",
 
+    // startingPrice/totalStock/inStock/variants: UNCHANGED meaning --
+    // still admin productVariantsTable-derived. As of Phase 2, admin never
+    // writes to productVariantsTable (see POST/PUT /products below), so
+    // these will read as null/0/false/[] for every product going forward
+    // except legacy rows created before this phase. Kept as-is rather than
+    // repointed at marketplace data -- see MarketplaceStats doc comment
+    // above for why.
     startingPrice,
     totalStock,
     inStock,
     variants: variants.map(toVariant),
+
+    // Phase 2 marketplace fields: derived from qualifying seller listing
+    // variants (visibility=public AND approvalStatus=approved AND
+    // availableQuantity>0 at the variant level). listingCount counts
+    // LISTINGS (distinct sellers with >=1 qualifying variant), not
+    // variants -- "Available From N Sellers" on the product detail page
+    // means N sellers, not N variants.
+    listingMinPrice: marketplaceStats.listingMinPrice,
+    listingMaxPrice: marketplaceStats.listingMaxPrice,
+    listingCount: marketplaceStats.listingCount,
 
     averageRating: avgRating,
     reviewCount,
@@ -128,6 +173,174 @@ async function fetchVariantsFor(productIds: number[]): Promise<Map<number, Varia
   return map;
 }
 
+/**
+ * Batch marketplace stats (Phase 2) for a set of products -- qualifying
+ * seller listing variants only: listing.visibility=public AND
+ * listing.approvalStatus=approved AND seller.status=active AND
+ * variant.availableQuantity>0. Mirrors the exact purchasability filter
+ * routes/sellerListings.ts's buyer-facing GET
+ * /products/:productId/seller-listings uses (reused conceptually, not
+ * imported, since that route works per-product while this one batches
+ * across an arbitrary product id list for list/browse pages).
+ *
+ * listingCount = number of DISTINCT LISTINGS (sellers) with at least one
+ * qualifying variant for that product, not number of variants -- a seller
+ * with 2 in-stock variants still counts once toward "Available From N
+ * Sellers".
+ */
+async function fetchMarketplaceStatsFor(productIds: number[]): Promise<Map<number, MarketplaceStats>> {
+  if (productIds.length === 0) return new Map();
+
+  const rows = await db
+    .select({
+      productId: sellerListingsTable.productId,
+      sellerListingId: sellerListingsTable.id,
+      price: sellerListingVariantsTable.price,
+      discountPrice: sellerListingVariantsTable.discountPrice,
+    })
+    .from(sellerListingVariantsTable)
+    .innerJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
+    .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+    .where(
+      and(
+        inArray(sellerListingsTable.productId, productIds),
+        eq(sellerListingsTable.visibility, "public"),
+        eq(sellerListingsTable.approvalStatus, "approved"),
+        eq(sellersTable.status, "active"),
+        sql`${sellerListingVariantsTable.availableQuantity} > 0`,
+      ),
+    );
+
+  const byProduct = new Map<number, { prices: number[]; listingIds: Set<number> }>();
+  for (const r of rows) {
+    const entry = byProduct.get(r.productId) ?? { prices: [], listingIds: new Set<number>() };
+    const price = r.discountPrice != null ? Number(r.discountPrice) : Number(r.price);
+    entry.prices.push(price);
+    entry.listingIds.add(r.sellerListingId);
+    byProduct.set(r.productId, entry);
+  }
+
+  const map = new Map<number, MarketplaceStats>();
+  for (const [productId, entry] of byProduct) {
+    map.set(productId, {
+      listingMinPrice: entry.prices.length > 0 ? Math.min(...entry.prices) : null,
+      listingMaxPrice: entry.prices.length > 0 ? Math.max(...entry.prices) : null,
+      listingCount: entry.listingIds.size,
+    });
+  }
+  return map;
+}
+
+/**
+ * Single-product version of routes/sellerListings.ts's GET
+ * /products/:productId/seller-listings -- same purchasability filter, same
+ * nested listing+variants shape, same "drop listings with zero qualifying
+ * variants" rule (see that route's doc comment for the full rationale).
+ * Not literally imported/called (that route is buyer-facing standalone,
+ * this one packages the same data into the product detail response) but
+ * deliberately kept in lockstep field-for-field so the "Available From N
+ * Sellers" section on the product detail page and the standalone seller
+ * cards list render identical data for the same product.
+ */
+async function fetchSellerListingCardsFor(productId: number) {
+  const rows = await db
+    .select({ listing: sellerListingsTable, seller: sellersTable })
+    .from(sellerListingsTable)
+    .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+    .where(
+      and(
+        eq(sellerListingsTable.productId, productId),
+        eq(sellerListingsTable.visibility, "public"),
+        eq(sellerListingsTable.approvalStatus, "approved"),
+        eq(sellersTable.status, "active"),
+      ),
+    );
+
+  const listingIds = rows.map((r) => r.listing.id);
+  const [variantRows, statsRows] = await Promise.all([
+    listingIds.length > 0
+      ? db.select().from(sellerListingVariantsTable).where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
+      : Promise.resolve([]),
+    listingIds.length > 0
+      ? db
+          .select({
+            sellerListingId: reviewsTable.sellerListingId,
+            avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
+            count: sql<string>`COUNT(*)`,
+          })
+          .from(reviewsTable)
+          .where(inArray(reviewsTable.sellerListingId, listingIds))
+          .groupBy(reviewsTable.sellerListingId)
+      : Promise.resolve([]),
+  ]);
+
+  const variantsByListing = new Map<number, typeof variantRows>();
+  for (const v of variantRows) {
+    const list = variantsByListing.get(v.sellerListingId) ?? [];
+    list.push(v);
+    variantsByListing.set(v.sellerListingId, list);
+  }
+  const statsMap = new Map<number, { avg: number; count: number }>();
+  for (const s of statsRows) {
+    if (s.sellerListingId != null) {
+      statsMap.set(s.sellerListingId, { avg: Number(Number(s.avg).toFixed(1)), count: Number(s.count) });
+    }
+  }
+
+  return rows
+    .map(({ listing, seller }) => {
+      const variants = variantsByListing.get(listing.id) ?? [];
+      const hasQualifyingVariant = variants.some((v) => v.availableQuantity > 0);
+      const stats = statsMap.get(listing.id) ?? { avg: 0, count: 0 };
+      return {
+        hasQualifyingVariant,
+        listing: {
+          id: listing.id,
+          productId: listing.productId,
+          sellerId: listing.sellerId,
+          deliveryTimeDays: listing.deliveryTimeDays ?? null,
+          warrantyDays: listing.warrantyDays ?? null,
+          returnPolicyText: listing.returnPolicyText ?? null,
+          paymentMethod: listing.paymentMethod,
+          images: listing.images,
+          videoUrl: listing.videoUrl ?? null,
+          description: listing.description ?? null,
+          offerText: listing.offerText ?? null,
+          certification: listing.certification ?? null,
+          tags: listing.tags,
+          visibility: listing.visibility,
+          approvalStatus: listing.approvalStatus,
+          variants: variants.map((v) => ({
+            id: v.id,
+            sellerListingId: v.sellerListingId,
+            form: v.form ?? null,
+            rootType: v.rootType ?? null,
+            potSize: v.potSize ?? null,
+            age: v.age ?? null,
+            height: v.height ?? null,
+            condition: v.condition ?? null,
+            price: Number(v.price),
+            discountPrice: v.discountPrice != null ? Number(v.discountPrice) : null,
+            stock: v.stock,
+            availableQuantity: v.availableQuantity,
+            deliveryCharge: Number(v.deliveryCharge),
+            isPreOrder: v.isPreOrder,
+          })),
+        },
+        seller: {
+          id: seller.id,
+          businessName: seller.businessName,
+          nurseryName: seller.nurseryName,
+          location: seller.location,
+        },
+        rating: stats.avg,
+        reviewCount: stats.count,
+      };
+    })
+    .filter((card) => card.hasQualifyingVariant)
+    .map(({ hasQualifyingVariant, ...card }) => card);
+}
+
 router.get("/products/featured", async (_req, res) => {
   try {
     const products = await db
@@ -137,13 +350,14 @@ router.get("/products/featured", async (_req, res) => {
       .limit(8);
 
     const ids = products.map((p) => p.id);
-    const [statsMap, variantsMap] = await Promise.all([
+    const [statsMap, variantsMap, marketplaceMap] = await Promise.all([
       fetchReviewStats(ids),
       fetchVariantsFor(ids),
+      fetchMarketplaceStatsFor(ids),
     ]);
     const result = products.map((p) => {
       const stats = statsMap.get(p.id) ?? { avg: 0, count: 0 };
-      return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count);
+      return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count, marketplaceMap.get(p.id));
     });
     res.json(result);
   } catch (err) {
@@ -185,15 +399,16 @@ router.get("/products/homepage", async (_req, res) => {
 
     const allProducts = [...topProducts, ...bottomProducts];
     const ids = allProducts.map((p) => p.id);
-    const [statsMap, variantsMap] = await Promise.all([
+    const [statsMap, variantsMap, marketplaceMap] = await Promise.all([
       fetchReviewStats(ids),
       fetchVariantsFor(ids),
+      fetchMarketplaceStatsFor(ids),
     ]);
 
     function withStats(products: typeof topProducts) {
       return products.map((p) => {
         const stats = statsMap.get(p.id) ?? { avg: 0, count: 0 };
-        return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count);
+        return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count, marketplaceMap.get(p.id));
       });
     }
 
@@ -243,6 +458,17 @@ router.post("/products/upload-image", requireAuth, requireAdmin, uploadMiddlewar
   }
 });
 
+/**
+ * Phase 2: now also returns full seller-listing + nested-variant data for
+ * the "Available From N Sellers" section (previously out of scope; the
+ * plan explicitly puts it in scope this phase). Reuses
+ * routes/sellerListings.ts's buyer-facing query shape/filter (visibility=
+ * public AND approvalStatus=approved AND seller.status=active, variant
+ * availableQuantity>0 to decide listing inclusion) rather than
+ * reimplementing it, so the two endpoints can't silently drift -- see that
+ * route's doc comment for the full purchasability-filter rationale and the
+ * price-sort/qualifying-variant semantics, which are identical here.
+ */
 router.get("/products/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -269,14 +495,20 @@ router.get("/products/:id", async (req, res) => {
       })
       .from(reviewsTable)
       .where(eq(reviewsTable.productId, p.id));
-    res.json(
-      toProduct(
+    const [marketplaceMap, sellerListingCards] = await Promise.all([
+      fetchMarketplaceStatsFor([p.id]),
+      fetchSellerListingCardsFor(p.id),
+    ]);
+    res.json({
+      ...toProduct(
         p,
         variants,
         Number(Number(stats.avg).toFixed(1)),
         Number(stats.count),
+        marketplaceMap.get(p.id),
       ),
-    );
+      sellerListings: sellerListingCards,
+    });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch product" });
   }
@@ -333,14 +565,15 @@ router.get("/products", async (req, res) => {
       .offset(offset);
 
     const ids = products.map((p) => p.id);
-    const [statsMap, variantsMap] = await Promise.all([
+    const [statsMap, variantsMap, marketplaceMap] = await Promise.all([
       fetchReviewStats(ids),
       fetchVariantsFor(ids),
+      fetchMarketplaceStatsFor(ids),
     ]);
 
     let result = products.map((p) => {
       const stats = statsMap.get(p.id) ?? { avg: 0, count: 0 };
-      return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count);
+      return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count, marketplaceMap.get(p.id));
     });
 
     if (minPrice) result = result.filter((p) => p.startingPrice != null && p.startingPrice >= Number(minPrice));
@@ -365,34 +598,16 @@ router.get("/products", async (req, res) => {
   }
 });
 
-type VariantInput = {
-  name: string;
-  variantType?: string;
-  form?: string | null;
-  price: number | string;
-  discountPrice?: number | string | null;
-  stock?: number;
-  deliveryCharge?: number | string;
-  sku?: string | null;
-};
-
-function validateVariants(variants: unknown): { ok: true; value: VariantInput[] } | { ok: false; error: string } {
-  if (!Array.isArray(variants) || variants.length === 0) {
-    return { ok: false, error: "At least one variant (e.g. Seed, Sapling, Grafted, Potted) is required" };
-  }
-  for (const v of variants) {
-    if (!v || typeof v !== "object") return { ok: false, error: "Each variant must be an object" };
-    if (!v.name || typeof v.name !== "string") return { ok: false, error: "Each variant needs a name" };
-    if (v.price === undefined || isNaN(Number(v.price)) || Number(v.price) < 0) {
-      return { ok: false, error: `Valid price is required for variant "${v.name}"` };
-    }
-    if (v.discountPrice != null && Number(v.discountPrice) >= Number(v.price)) {
-      return { ok: false, error: `Discount price must be less than regular price for variant "${v.name}"` };
-    }
-  }
-  return { ok: true, value: variants as VariantInput[] };
-}
-
+/**
+ * Phase 2: admin creates the product/variety ONLY -- no price/stock/variant
+ * data of any kind. A `variants` field in the request body, if present, is
+ * silently ignored (not an error) rather than rejected: rejecting it would
+ * break any existing admin client that still sends an empty/legacy
+ * `variants` array out of habit, for zero benefit, since it's simply never
+ * read below. productVariantsTable is not written to by this route at all
+ * as of this phase -- sellers create their own price/stock data via
+ * seller-listings.ts instead (plan doc's overall goal for this migration).
+ */
 router.post("/products", requireAdmin, async (req: any, res) => {
   try {
     const {
@@ -412,7 +627,6 @@ router.post("/products", requireAdmin, async (req: any, res) => {
       keyBenefits,
       bestFor,
       careTips,
-      variants,
     } = req.body;
 
     if (!name || typeof name !== "string" || name.trim().length === 0) {
@@ -425,11 +639,6 @@ router.post("/products", requireAdmin, async (req: any, res) => {
     }
     if (!description || typeof description !== "string") {
       res.status(400).json({ error: "Description is required" });
-      return;
-    }
-    const variantCheck = validateVariants(variants);
-    if (!variantCheck.ok) {
-      res.status(400).json({ error: variantCheck.error });
       return;
     }
 
@@ -465,24 +674,7 @@ router.post("/products", requireAdmin, async (req: any, res) => {
       })
       .returning();
 
-    const insertedVariants = await db
-      .insert(productVariantsTable)
-      .values(
-        variantCheck.value.map((v) => ({
-          productId: p.id,
-          name: v.name,
-          variantType: v.variantType || "form",
-          form: v.form ?? null,
-          price: String(v.price),
-          discountPrice: v.discountPrice != null ? String(v.discountPrice) : null,
-          stock: v.stock ?? 0,
-          deliveryCharge: String(v.deliveryCharge ?? 0),
-          sku: v.sku ?? null,
-        }))
-      )
-      .returning();
-
-    res.status(201).json(toProduct(p, insertedVariants, 0, 0));
+    res.status(201).json(toProduct(p, [], 0, 0));
   } catch (err) {
     console.error("Create product error:", err);
     res.status(500).json({ error: "Failed to create product" });
@@ -513,16 +705,11 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
       keyBenefits,
       bestFor,
       careTips,
-      variants,
     } = req.body;
 
-    if (variants !== undefined) {
-      const variantCheck = validateVariants(variants);
-      if (!variantCheck.ok) {
-        res.status(400).json({ error: variantCheck.error });
-        return;
-      }
-    }
+    // Phase 2: a `variants` field in the body, if present, is silently
+    // ignored -- same rationale as POST /products above. admin no longer
+    // writes to productVariantsTable at all.
 
     const updates: Record<string, unknown> = {};
     if (name !== undefined) updates.name = name.trim();
@@ -545,6 +732,12 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
     if (req.body.productStatus !== undefined) updates.productStatus = req.body.productStatus;
     updates.updatedAt = new Date();
 
+    // Read-only as of Phase 2 (admin no longer writes productVariantsTable)
+    // -- kept so wasOutOfStock/notifyStockAlerts still function correctly
+    // for pre-Phase-2 legacy rows that already have admin variants. For any
+    // product created after this phase, `before` will always be [] and this
+    // whole notify path is naturally a no-op, not because it was special-
+    // cased, but because there's nothing left to read.
     const before = await db
       .select()
       .from(productVariantsTable)
@@ -567,28 +760,7 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
       return;
     }
 
-    let currentVariants = before;
-    if (variants !== undefined) {
-      await db.delete(productVariantsTable).where(eq(productVariantsTable.productId, id));
-      currentVariants = await db
-        .insert(productVariantsTable)
-        .values(
-          (variants as VariantInput[]).map((v) => ({
-            productId: id,
-            name: v.name,
-            variantType: v.variantType || "form",
-            form: v.form ?? null,
-            price: String(v.price),
-            discountPrice: v.discountPrice != null ? String(v.discountPrice) : null,
-            stock: v.stock ?? 0,
-            deliveryCharge: String(v.deliveryCharge ?? 0),
-            sku: v.sku ?? null,
-          }))
-        )
-        .returning();
-    }
-
-    const nowInStock = currentVariants.some((v) => v.stock > 0);
+    const nowInStock = before.some((v) => v.stock > 0);
     if (wasOutOfStock && nowInStock) {
       notifyStockAlerts(p.id, p.name).catch(() => {});
     }
@@ -606,7 +778,7 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
     res.json(
       toProduct(
         p,
-        currentVariants,
+        before,
         Number(Number(stats.avg).toFixed(1)),
         Number(stats.count),
       ),
@@ -652,11 +824,6 @@ router.post("/products/:id/duplicate", requireAdmin, async (req: any, res) => {
       return;
     }
 
-    const originalVariants = await db
-      .select()
-      .from(productVariantsTable)
-      .where(eq(productVariantsTable.productId, id));
-
     const newSlug =
       original.slug.replace(/-\d+$/, "") + "-" + Date.now();
 
@@ -683,26 +850,17 @@ router.post("/products/:id/duplicate", requireAdmin, async (req: any, res) => {
       })
       .returning();
 
-    const copiedVariants = originalVariants.length > 0
-      ? await db
-          .insert(productVariantsTable)
-          .values(
-            originalVariants.map((v) => ({
-              productId: copy.id,
-              name: v.name,
-              variantType: v.variantType,
-              form: v.form,
-              price: v.price,
-              discountPrice: v.discountPrice,
-              stock: 0,
-              deliveryCharge: v.deliveryCharge,
-              sku: null,
-            }))
-          )
-          .returning()
-      : [];
-
-    res.status(201).json(toProduct(copy, copiedVariants, 0, 0));
+    // Phase 2: no longer copies productVariantsTable rows -- this route
+    // isn't in the prompt's explicit files-to-change list for products.ts,
+    // but it's an admin route that was creating NEW productVariantsTable
+    // rows, which directly conflicts with "admin will no longer create any
+    // variant/price data at all -- not in productVariantsTable, not
+    // anywhere." Flagging this as a fix made beyond the explicit list,
+    // since leaving it would have been a side door around that rule. A
+    // duplicated product now starts with zero variants, same as any
+    // admin-created product post-Phase-2; sellers create their own listings
+    // against it same as any other product.
+    res.status(201).json(toProduct(copy, [], 0, 0));
   } catch {
     res.status(500).json({ error: "Failed to duplicate product" });
   }

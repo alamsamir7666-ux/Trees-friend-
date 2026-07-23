@@ -268,19 +268,31 @@ router.post("/admin/products/bulk-import", requireAdmin, async (req: any, res) =
           await logAudit({ adminId: req.userId, action: "product.created", targetType: "product", targetId: String(productId), after: { name: first.name } });
         }
 
-        for (const row of rows) {
-          await db.insert(productVariantsTable).values({
-            productId,
-            name: row.variantName,
-            variantType: "form",
-            form: row.variantForm,
-            price: String(row.price),
-            discountPrice: row.discountPrice != null ? String(row.discountPrice) : null,
-            stock: row.stock,
-            deliveryCharge: String(row.deliveryCharge),
-          });
-          variantsCreated++;
-        }
+        /**
+         * Phase 2: STOPPED creating productVariantsTable rows here (was:
+         * one insert per CSV row, using the row's variantForm/variantName/
+         * price/discountPrice/stock/deliveryCharge columns). Same
+         * "admin never creates variant/price data" rule as routes/
+         * products.ts and routes/variants.ts -- but unlike those two, this
+         * file is NOT a small, easily-disabled write path: it's a genuinely
+         * separate feature (CSV parsing, product-dedup-by-name matching,
+         * its own product-creation path) whose CSV format is BUILT AROUND
+         * one row = one variant. A correct fix needs a real design
+         * decision this phase does not make: does bulk import become
+         * "create products only, sellers add listings separately" (drop
+         * the variant-shaped columns from the CSV format entirely), or
+         * does it get taught to create seller_listings +
+         * seller_listing_variants against some seller (which seller? admin
+         * isn't a seller) -- that's a product question, not a mechanical
+         * variant-shape update, so it's flagged here rather than guessed
+         * at. For now: product creation/merge-by-name still works
+         * unchanged; the CSV's variant columns (variantform, variantname,
+         * price, discountprice, stock, deliverycharge) are parsed (so the
+         * endpoint doesn't error on well-formed input) but their values are
+         * simply never written anywhere. variantsCreated stays 0 always;
+         * the response message reflects that honestly rather than
+         * claiming variants were created when none were.
+         */
       } catch (err: any) {
         for (const row of rows) {
           errors.push(`Row ${row.rowNum}: ${err.message ?? "Failed to insert"}`);
@@ -294,8 +306,13 @@ router.post("/admin/products/bulk-import", requireAdmin, async (req: any, res) =
       variantsCreated,
       errors: errors.length,
       errorDetails: errors,
-      message: `Imported ${productsCreated} new product(s), added variants to ${productsMerged} existing product(s), ${variantsCreated} variant(s) total`
-        + (errors.length > 0 ? `, ${errors.length} row(s) failed` : ""),
+      // Phase 2: message no longer claims variants were created (see doc
+      // comment above -- variantsCreated is always 0 now, on purpose, not
+      // a bug). Still reports product creates/merges accurately.
+      message: `Imported ${productsCreated} new product(s), matched ${productsMerged} row(s) to existing product(s) by name. `
+        + `Variant/price data from this CSV was NOT imported -- admin no longer creates seller listing variants directly; `
+        + `add price/stock for these products via seller listings instead.`
+        + (errors.length > 0 ? ` ${errors.length} row(s) failed.` : ""),
     });
   } catch {
     res.status(500).json({ error: "Failed to process CSV import" });

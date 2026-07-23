@@ -20,12 +20,24 @@ const COMPARE_ROWS = [
 
 function renderCell(key: (typeof COMPARE_ROWS)[number]["key"], product: Product) {
   switch (key) {
-    case "price":
+    case "price": {
+      // startingPrice is the admin-set price and is permanently null for
+      // every product created after Phase 2 (see PHASE2_HANDOFF.md §5) --
+      // the real marketplace price lives in listingMinPrice/listingMaxPrice.
+      // Mirrors ProductCard.tsx's range-or-single-figure-or-"no listings"
+      // pattern for consistency.
+      const hasListings = product.listingCount > 0 && product.listingMinPrice != null;
+      const priceRange = hasListings && product.listingMinPrice !== product.listingMaxPrice;
       return (
         <span className="font-semibold">
-          {product.startingPrice != null ? `From Tk${product.startingPrice.toLocaleString()}` : "-"}
+          {hasListings
+            ? priceRange
+              ? `Tk${product.listingMinPrice!.toLocaleString()} – Tk${product.listingMaxPrice!.toLocaleString()}`
+              : `Tk${product.listingMinPrice!.toLocaleString()}`
+            : <span className="text-muted-foreground font-normal">Not currently available</span>}
         </span>
       );
+    }
     case "averageRating":
       return (
         <div className="flex items-center gap-1">
@@ -34,12 +46,17 @@ function renderCell(key: (typeof COMPARE_ROWS)[number]["key"], product: Product)
           <span className="text-xs text-muted-foreground">({product.reviewCount})</span>
         </div>
       );
-    case "stock":
-      return product.inStock ? (
+    case "stock": {
+      // Same fix as "price": inStock is admin-variant-derived and
+      // permanently false post-Phase-2. listingCount > 0 (with a real min
+      // price) is the real marketplace-availability signal.
+      const hasListings = product.listingCount > 0 && product.listingMinPrice != null;
+      return hasListings ? (
         <span className="text-green-600 text-sm font-medium">In Stock</span>
       ) : (
         <span className="text-destructive text-sm font-medium">Out of Stock</span>
       );
+    }
     case "watering":
       return <span className="text-sm text-muted-foreground">{product.watering || "-"}</span>;
     case "sunlight":

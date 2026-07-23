@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, memo } from "react";
-import { X, BarChart2, Plus, Star, ShoppingBag } from "lucide-react";
+import { X, BarChart2, Plus, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -8,15 +8,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { useAddToCart, getGetCartQueryKey, type Product } from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useUser } from "@clerk/react";
-import { useGuestCart } from "@/hooks/useGuestCart";
-import { useToast } from "@/hooks/use-toast";
+import { type Product } from "@workspace/api-client-react";
 
-// A comparable product is just the real Product shape -- price comes from
-// startingPrice (lowest effective price across variants), since there is
-// no single product-level price anymore.
+// A comparable product is just the real Product shape. Price comes from
+// listingMinPrice/listingMaxPrice (the marketplace-derived range), NOT
+// startingPrice -- startingPrice is the admin-set price and is permanently
+// null for every product created after Phase 2 (PHASE2_HANDOFF.md §5). The
+// comment this replaced was itself stale/wrong about which field to use;
+// fixed as part of Phase 4's startingPrice/variants sweep.
 type ComparableProduct = Product;
 
 // Global comparison state (max 3 products) - persisted to localStorage
@@ -104,42 +103,34 @@ export const ComparisonDrawer = memo(function ComparisonDrawer({
   products,
 }: ComparisonDrawerProps) {
   const { removeFromCompare } = useComparison();
-  const { user } = useUser();
-  const addToCart = useAddToCart();
-  const guestCart = useGuestCart();
-  const qc = useQueryClient();
-  const { toast } = useToast();
 
-  function handleAddToCart(product: ComparableProduct) {
-    const variants = product.variants ?? [];
-    if (variants.length === 0) return;
-    if (variants.length > 1) {
-      toast({ title: "Choose an option", description: `${product.name} has multiple options — open the product page to pick one.` });
-      return;
-    }
-    const variant = variants[0];
-    if (user) {
-      addToCart.mutate(
-        { data: { productId: product.id, variantId: variant.id, quantity: 1 } },
-        { onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }) },
-      );
-    } else {
-      guestCart.addItem({
-        productId: product.id,
-        variantId: variant.id,
-        quantity: 1,
-        name: product.name,
-        price: variant.price,
-        discountPrice: variant.discountPrice ?? null,
-        image: product.images?.[0] ?? "",
-      });
-    }
-  }
+  // Phase 4: the "Add to Bag" row below used to read product.variants
+  // (admin-only, permanently empty since Phase 2 -- see
+  // PHASE2_HANDOFF.md §5) and either silently no-op or offer only the
+  // first admin variant, both broken. Removed rather than rewired: like
+  // ProductCard.tsx (Phase 3b Part 5), this drawer is a discovery/
+  // comparison surface with no seller-listing context for any of its
+  // products -- buying now always requires picking a seller's listing
+  // (and often a variant of that listing), which isn't information this
+  // component has for N products at once. Both actions remain one click
+  // away via each product's link to its detail page's seller cards.
 
   if (products.length < 2) return null;
 
   const rows = [
-    { label: "Price", render: (p: ComparableProduct) => p.startingPrice != null ? `From Tk${p.startingPrice.toLocaleString()}` : "-" },
+    {
+      label: "Price",
+      render: (p: ComparableProduct) => {
+        // startingPrice is the admin-set price, permanently null post-
+        // Phase-2. listingMinPrice/listingMaxPrice is the real marketplace
+        // price, mirroring ProductCard.tsx's range/single/unavailable rule.
+        const hasListings = p.listingCount > 0 && p.listingMinPrice != null;
+        if (!hasListings) return "Not currently available";
+        return p.listingMinPrice !== p.listingMaxPrice
+          ? `Tk${p.listingMinPrice!.toLocaleString()} – Tk${p.listingMaxPrice!.toLocaleString()}`
+          : `Tk${p.listingMinPrice!.toLocaleString()}`;
+      },
+    },
     {
       label: "Rating",
       render: (p: ComparableProduct) => (
@@ -223,17 +214,6 @@ export const ComparisonDrawer = memo(function ComparisonDrawer({
                   ))}
                 </tr>
               ))}
-              <tr className="border-t">
-                <td className="py-3 pr-4" />
-                {products.map((p) => (
-                  <td key={p.id} className="py-3 pr-4">
-                    <Button size="sm" className="rounded-full text-xs gap-1.5 w-full" onClick={() => handleAddToCart(p)}>
-                      <ShoppingBag className="h-3.5 w-3.5" />
-                      Add to Bag
-                    </Button>
-                  </td>
-                ))}
-              </tr>
             </tbody>
           </table>
         </div>
