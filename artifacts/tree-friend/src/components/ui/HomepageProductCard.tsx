@@ -165,28 +165,28 @@ function HomepageProductCardInner({
         <hr className="border-border" />
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-start justify-between gap-2">
           {growth && (
-            <div className="flex items-center gap-1.5 sm:gap-3 flex-1 min-w-0">
-              <img src={GROWTH_ICON} alt="" aria-hidden="true" className="h-[18px] w-[18px] sm:h-[22px] sm:w-[22px] shrink-0" />
-              <span className="text-xs sm:text-[15.5px] font-medium text-foreground truncate">{growth}</span>
+            <div className="flex items-start gap-1.5 sm:gap-3 flex-1 min-w-0">
+              <img src={GROWTH_ICON} alt="" aria-hidden="true" className="h-[18px] w-[18px] sm:h-[22px] sm:w-[22px] shrink-0 mt-0.5" />
+              <span className="text-xs sm:text-[15.5px] font-medium text-foreground leading-snug">{growth}</span>
             </div>
           )}
 
-          {growth && care && <div className="w-px h-6 bg-border shrink-0 mx-1 sm:mx-2" aria-hidden="true" />}
+          {growth && care && <div className="w-px self-stretch bg-border shrink-0 mx-1 sm:mx-2" aria-hidden="true" />}
 
           {care && (
-            <div className="flex items-center gap-1.5 sm:gap-3 flex-1 min-w-0">
-              <img src={CARE_ICON} alt="" aria-hidden="true" className="h-[18px] w-[18px] sm:h-[22px] sm:w-[22px] shrink-0" />
-              <span className="text-xs sm:text-[15.5px] font-medium text-foreground truncate">{care}</span>
+            <div className="flex items-start gap-1.5 sm:gap-3 flex-1 min-w-0">
+              <img src={CARE_ICON} alt="" aria-hidden="true" className="h-[18px] w-[18px] sm:h-[22px] sm:w-[22px] shrink-0 mt-0.5" />
+              <span className="text-xs sm:text-[15.5px] font-medium text-foreground leading-snug">{care}</span>
             </div>
           )}
 
-          {(growth || care) && <div className="w-px h-6 bg-border shrink-0 mx-1 sm:mx-2" aria-hidden="true" />}
+          {(growth || care) && <div className="w-px self-stretch bg-border shrink-0 mx-1 sm:mx-2" aria-hidden="true" />}
 
-          <span className="flex items-center justify-end gap-1 flex-1 min-w-0 text-primary font-semibold text-xs sm:text-[15.5px] group-hover:opacity-80 transition-opacity">
+          <span className="flex items-start justify-end gap-1 flex-1 min-w-0 text-primary font-semibold text-xs sm:text-[15.5px] group-hover:opacity-80 transition-opacity">
             <span className="whitespace-nowrap">View details</span>
-            <svg viewBox="0 0 24 24" className="h-4 w-4 sm:h-[18px] sm:w-[18px] stroke-primary fill-none shrink-0" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg viewBox="0 0 24 24" className="h-4 w-4 sm:h-[18px] sm:w-[18px] stroke-primary fill-none shrink-0 mt-0.5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M9 18l6-6-6-6" />
             </svg>
           </span>
