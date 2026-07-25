@@ -4,6 +4,7 @@ import { ArrowRight, ShieldCheck, Leaf, Truck, ChevronLeft, ChevronRight, Search
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ProductCard } from "@/components/ui/ProductCard";
+import { HomepageProductCard } from "@/components/ui/HomepageProductCard";
 import { ProductCardSkeleton, ProductGridSkeleton } from "@/components/ui/ProductCardSkeleton";
 import { useListProducts, useListCategories, getListCategoriesQueryKey } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
@@ -176,6 +177,16 @@ export function HomePage() {
   const { data: trendingData,   isLoading: trendingLoading }   = useListProducts({ homepageTag: "trending",     limit: 22 } as any);
   const { data: newArrivalsData, isLoading: newArrivalsLoading } = useListProducts({ homepageTag: "new_arrivals", limit: 22 } as any);
 
+  // Product cards on the homepage show a category badge (e.g. "Fruit
+  // Trees"), but Product only carries categoryId, not a name -- so we fetch
+  // the category list once here and look names up by id.
+  const { data: cardCategories = [] } = useListCategories({
+    query: { staleTime: 60_000, queryKey: getListCategoriesQueryKey() },
+  });
+  const categoryNameById = new Map<number, string>(
+    cardCategories.map((c: { id: number; name: string }) => [c.id, c.name])
+  );
+
   const { data: homepageSections = [] as HomeSection[], isLoading: sectionsLoading } = useQuery({
     queryKey: ["homepage-sections"],
     queryFn: async (): Promise<HomeSection[]> => {
@@ -306,9 +317,14 @@ export function HomePage() {
               <p className="text-muted-foreground text-sm">Check back soon for exciting new arrivals.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {activeProducts.map((product) => (
-                <ProductCard key={product.id} product={product as any} backContext="featured" />
+                <HomepageProductCard
+                  key={product.id}
+                  product={product as any}
+                  categoryName={categoryNameById.get((product as any).categoryId)}
+                  backContext="featured"
+                />
               ))}
             </div>
           )}
@@ -366,9 +382,13 @@ export function HomePage() {
               <p className="text-muted-foreground text-sm">Check back soon for exciting new arrivals.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {bestProducts.map(product => (
-                <ProductCard key={product.id} product={product as any} />
+                <HomepageProductCard
+                  key={product.id}
+                  product={product as any}
+                  categoryName={categoryNameById.get(product.categoryId)}
+                />
               ))}
             </div>
           )}
