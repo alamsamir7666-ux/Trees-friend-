@@ -14,22 +14,27 @@ const GROWTH_ICON =
 const CARE_ICON =
   "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784964252/cropped-8a860daf-2b7c-47df-bbb7-32935c65b173_f388pi.svg";
 
-// products.growthRate is stored lowercase ("slow" | "moderate" | "fast").
+// products.growthRate comes from a fixed dropdown in the admin form
+// ("slow" | "moderate" | "fast"), stored lowercase.
 function growthLabel(rate?: string | null): string | null {
   if (!rate) return null;
   return rate.charAt(0).toUpperCase() + rate.slice(1) + " Growth";
 }
 
-// There's no standalone "care level" column in the schema -- watering is the
-// closest proxy and the shorthand nurseries commonly use: low watering need
-// reads as "Easy Care", moderate as "Moderate Care", high as "High
-// Maintenance".
+// Unlike growthRate, `watering` is free text in the admin form (e.g.
+// "medium", "water twice a week") -- there's no fixed set of values to map
+// against, so classifying it into "Easy Care"/"Moderate Care" would silently
+// drop anything that isn't an exact "low"/"moderate"/"high" match (as
+// happened with "medium"). Simplest correct fix: recognize the common
+// low/moderate/high family case-insensitively, and otherwise just show
+// whatever the admin typed, title-cased, rather than hiding it.
 function careLabel(watering?: string | null): string | null {
   if (!watering) return null;
-  if (watering === "low") return "Easy Care";
-  if (watering === "moderate") return "Moderate Care";
-  if (watering === "high") return "High Maintenance";
-  return null;
+  const w = watering.trim().toLowerCase();
+  if (w === "low") return "Easy Care";
+  if (w === "moderate" || w === "medium") return "Moderate Care";
+  if (w === "high") return "High Maintenance";
+  return watering.charAt(0).toUpperCase() + watering.slice(1);
 }
 
 /**
@@ -152,7 +157,7 @@ function HomepageProductCardInner({
 
         {/* Description */}
         {product.description && (
-          <p className="text-[13px] sm:text-base leading-relaxed text-muted-foreground line-clamp-4">
+          <p className="text-[13px] sm:text-base leading-relaxed text-muted-foreground line-clamp-2">
             {product.description}
           </p>
         )}
