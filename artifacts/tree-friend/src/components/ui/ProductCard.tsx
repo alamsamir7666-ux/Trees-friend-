@@ -53,6 +53,8 @@ function ProductCardInner({
       price: product.listingMinPrice ?? 0,
       discountPrice: null,
       image: product.images?.[0] || "",
+      scientificName: product.scientificName,
+      categoryId: product.categoryId,
     });
   }
 

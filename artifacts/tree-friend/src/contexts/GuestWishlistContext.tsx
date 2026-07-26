@@ -9,6 +9,12 @@ export type GuestWishlistItem = {
   price: number;
   discountPrice: number | null;
   image: string;
+  // Added so the Wishlist page can show a category badge + scientific name
+  // without needing a per-item product fetch for guests (logged-in users
+  // get these for free via WishlistItem.product, which is the full Product
+  // type already).
+  scientificName?: string | null;
+  categoryId?: number | null;
 };
 
 function readStorage(): GuestWishlistItem[] {

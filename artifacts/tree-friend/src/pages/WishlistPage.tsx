@@ -4,17 +4,23 @@ import { Link, useLocation } from "wouter";
 import {
   useGetWishlist, useRemoveFromWishlist, useAddToCart, getGetWishlistQueryKey, getGetCartQueryKey,
   listProductSellerListings, ListProductSellerListingsSort,
+  useListCategories, getListCategoriesQueryKey,
   type SellerListingCard, type SellerListingVariant,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useUser } from "@clerk/react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Heart, ShoppingBag, Trash2, Loader2 } from "lucide-react";
+import { Heart, ShoppingBag, Trash2, Loader2, ChevronRight } from "lucide-react";
 import { useGuestWishlist } from "@/hooks/useGuestWishlist";
 import { useToast } from "@/hooks/use-toast";
 import { SellerListingVariantPickerDialog } from "@/components/ui/SellerListingVariantPickerDialog";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
+
+// Same category badge icon used on HomepageProductCard.tsx, for visual
+// consistency between the homepage cards and this page.
+const CATEGORY_ICON =
+  "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784963644/cropped-8e9b0a45-dd2d-4fad-9149-ee5858cbc4ca_zskxxe_au7ckt.svg";
 
 // Normalized wishlist line. wishlist.ts's price/inStock fields (see
 // PHASE2_HANDOFF.md §5) are a single "best available number" computed
@@ -31,6 +37,8 @@ type WishlistLine = {
   image: string;
   price: number;
   discountPrice: number | null;
+  scientificName: string | null;
+  categoryId: number | null;
 };
 
 export function WishlistPage() {
@@ -61,6 +69,16 @@ export function WishlistPage() {
   const removeFromWishlist = useRemoveFromWishlist();
   const addToCart = useAddToCart();
 
+  // Cards show a category badge (e.g. "Fruit Trees"); items only carry
+  // categoryId, so look the name up here once, same approach as
+  // HomePage.tsx's HomepageProductCard usage.
+  const { data: wishlistCategories = [] } = useListCategories({
+    query: { staleTime: 60_000, queryKey: getListCategoriesQueryKey() },
+  });
+  const categoryNameById = new Map<number, string>(
+    wishlistCategories.map((c: { id: number; name: string }) => [c.id, c.name])
+  );
+
   const isLoading = !isLoaded || (!isGuest && wishlistLoading);
 
   const items: WishlistLine[] = isGuest
@@ -72,8 +90,10 @@ export function WishlistPage() {
         image: g.image,
         price: g.price,
         discountPrice: g.discountPrice,
+        scientificName: g.scientificName ?? null,
+        categoryId: g.categoryId ?? null,
       }))
-    : (wishlistData ?? []).map((w) => ({
+    : (wishlistData ?? []).map((w: { id: number; productId: number; product: { name: string; slug: string; images?: string[] | null; startingPrice?: number | null; scientificName?: string | null; categoryId?: number | null } }) => ({
         id: w.id,
         productId: w.productId,
         name: w.product.name,
@@ -88,6 +108,8 @@ export function WishlistPage() {
         // already reading the correctly-computed value.
         price: w.product.startingPrice ?? 0,
         discountPrice: null,
+        scientificName: w.product.scientificName ?? null,
+        categoryId: w.product.categoryId ?? null,
       }));
 
   function handleRemove(productId: number) {
@@ -204,7 +226,7 @@ export function WishlistPage() {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
           {items.map((item) => {
             const img = item.image || null;
-            const price = item.discountPrice ?? item.price;
+            const categoryName = item.categoryId != null ? categoryNameById.get(item.categoryId) : undefined;
             const isAdding = loadingItemId === item.productId;
             return (
               <div key={item.id} className="group bg-card border rounded-xl overflow-hidden">
@@ -225,38 +247,48 @@ export function WishlistPage() {
                 </Link>
                 <div className="p-3">
                   <Link href={`/products/${item.productId}`}>
-                    <p className="font-medium text-sm leading-snug mb-2 line-clamp-2 cursor-pointer hover:text-accent">{item.name}</p>
+                    <p className="font-medium text-sm leading-snug cursor-pointer hover:text-accent">{item.name}</p>
                   </Link>
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className="font-semibold text-sm">
-                      {price > 0 ? `From Tk${price.toLocaleString()}` : "Not currently available"}
+                  {item.scientificName && (
+                    <p className="text-xs italic text-muted-foreground mt-0.5">{item.scientificName}</p>
+                  )}
+                  {categoryName && (
+                    <span className="inline-flex items-center gap-1 bg-primary/10 text-primary px-2.5 py-1 rounded-full text-xs font-medium mt-2">
+                      <img src={CATEGORY_ICON} alt="" aria-hidden="true" className="h-3.5 w-3.5" />
+                      {categoryName}
                     </span>
-                    {item.discountPrice != null && (
-                      <span className="text-xs text-muted-foreground line-through">Tk{item.price.toLocaleString()}</span>
-                    )}
-                  </div>
-                  {isGuest ? (
-                    <Link href={`/products/${item.productId}`}>
-                      <Button size="sm" className="w-full text-xs">
-                        <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />
-                        View Options
+                  )}
+                  <hr className="border-border mt-3 mb-3" />
+                  <div className="flex items-center gap-2">
+                    <Link href={`/products/${item.productId}`} className="flex-1">
+                      <Button size="sm" variant="outline" className="w-full text-xs border-primary text-primary hover:bg-primary/5 hover:text-primary">
+                        View Details
+                        <ChevronRight className="h-3.5 w-3.5 ml-1" />
                       </Button>
                     </Link>
-                  ) : (
-                    <Button
-                      size="sm"
-                      className="w-full text-xs"
-                      disabled={isAdding}
-                      onClick={() => handleAddToCart(item)}
-                    >
-                      {isAdding ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                      ) : (
-                        <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />
-                      )}
-                      Add to Bag
-                    </Button>
-                  )}
+                    {isGuest ? (
+                      <Link href={`/products/${item.productId}`} className="flex-1">
+                        <Button size="sm" className="w-full text-xs">
+                          <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />
+                          Add to Bag
+                        </Button>
+                      </Link>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="flex-1 text-xs"
+                        disabled={isAdding}
+                        onClick={() => handleAddToCart(item)}
+                      >
+                        {isAdding ? (
+                          <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                        ) : (
+                          <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />
+                        )}
+                        Add to Bag
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
