@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@clerk/react";
-import { Store, Loader2, Upload, X, FileText, PalmtreeIcon, ShieldCheck, ShieldAlert, XCircle } from "lucide-react";
+import { Store, Loader2, Upload, X, FileText, PalmtreeIcon, ShieldCheck, ShieldAlert, XCircle, BadgeCheck, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,6 +10,7 @@ import {
   useGetMySeller,
   useUpdateMySellerProfile,
   useUpdateMySellerStatus,
+  useRequestSellerVerification,
   getGetMySellerQueryKey,
   type Seller,
 } from "@workspace/api-client-react";
@@ -52,6 +53,7 @@ export function BusinessProfileForm() {
   const { data: seller, isLoading } = useGetMySeller();
   const updateProfile = useUpdateMySellerProfile();
   const updateStatus = useUpdateMySellerStatus();
+  const requestVerification = useRequestSellerVerification();
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [uploadingDoc, setUploadingDoc] = useState(false);
@@ -158,6 +160,16 @@ export function BusinessProfileForm() {
     );
   }
 
+  function handleRequestVerification() {
+    requestVerification.mutate(undefined, {
+      onSuccess: () => {
+        toast.success("Verification requested — an admin will review it soon");
+        invalidate();
+      },
+      onError: (err: any) => toast.error(err?.message ?? "Failed to request verification"),
+    });
+  }
+
   if (isLoading || !draft || !seller) {
     return (
       <div className="space-y-3">
@@ -197,6 +209,65 @@ export function BusinessProfileForm() {
           <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
             <XCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             Vacation mode is only available for active seller accounts.
+          </p>
+        )}
+      </div>
+
+      {/* Verified Seller badge -- the public checkmark shown on buyer-facing
+          seller listing cards. Separate from the account-status card above:
+          this is an earned trust signal an active seller can request,
+          not an account on/off switch. */}
+      <div className="bg-card rounded-2xl border p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5">
+            <div className="h-10 w-10 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
+              <BadgeCheck className="h-5 w-5 text-accent" />
+            </div>
+            <div>
+              <p className="font-medium text-sm">Verified Seller Badge</p>
+              <p className="text-xs text-muted-foreground">
+                {seller.isVerified
+                  ? "Your listings show a verified checkmark to buyers."
+                  : "Earn a verified checkmark buyers see on your listings."}
+              </p>
+            </div>
+          </div>
+
+          {seller.isVerified ? (
+            <span className="flex items-center gap-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 rounded-full px-3 py-1.5 shrink-0">
+              <BadgeCheck className="h-4 w-4" />
+              Verified
+            </span>
+          ) : seller.verificationRequestStatus === "requested" ? (
+            <span className="flex items-center gap-1.5 text-sm font-medium text-amber-700 bg-amber-50 rounded-full px-3 py-1.5 shrink-0">
+              <Clock className="h-4 w-4" />
+              Pending review
+            </span>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-full shrink-0"
+              disabled={requestVerification.isPending || seller.status !== "active"}
+              onClick={handleRequestVerification}
+            >
+              {requestVerification.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+              Request Verification
+            </Button>
+          )}
+        </div>
+
+        {seller.status !== "active" && !seller.isVerified && (
+          <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
+            <XCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            Verification can only be requested from an active seller account.
+          </p>
+        )}
+
+        {seller.verificationRequestStatus === "rejected" && (
+          <p className="text-xs text-red-700 bg-red-50 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
+            <ShieldAlert className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            Your last request wasn't approved{seller.verificationRejectionReason ? `: ${seller.verificationRejectionReason}` : "."} You can request again once you've addressed this.
           </p>
         )}
       </div>

@@ -361,6 +361,7 @@ async function fetchSellerListingCardsFor(productId: number) {
           businessName: seller.businessName,
           nurseryName: seller.nurseryName,
           location: seller.location,
+          isVerified: seller.isVerified,
         },
         rating: stats.avg,
         reviewCount: stats.count,

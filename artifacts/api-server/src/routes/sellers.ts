@@ -33,6 +33,11 @@ function formatSeller(s: typeof sellersTable.$inferSelect) {
     description: s.description,
     nurseryImages: s.nurseryImages,
     status: s.status,
+    isVerified: s.isVerified,
+    verificationRequestStatus: s.verificationRequestStatus,
+    verificationRequestedAt: s.verificationRequestedAt?.toISOString() ?? null,
+    verificationDecidedAt: s.verificationDecidedAt?.toISOString() ?? null,
+    verificationRejectionReason: s.verificationRejectionReason,
     subscriptionStatus: s.subscriptionStatus,
     trialEndsAt: s.trialEndsAt?.toISOString() ?? null,
     subscriptionExpiresAt: s.subscriptionExpiresAt?.toISOString() ?? null,
@@ -318,6 +323,52 @@ router.put("/sellers/me/status", requireSellerAccount, async (req: any, res) => 
   } catch (err) {
     console.error("Update seller status error:", err);
     res.status(500).json({ error: "Failed to update status" });
+  }
+});
+
+/**
+ * Seller: request the public "verified seller" badge (separate from
+ * account status -- see sellers.ts schema doc comment). Only a seller with
+ * status = "active" can request this; a seller still pending initial
+ * account approval, suspended, or on vacation has nothing to "verify" yet.
+ * Only allowed when verificationRequestStatus is "none" or "rejected" --
+ * once "requested", re-submitting is a no-op (admin needs to decide first),
+ * and once "approved" there's nothing left to request. A rejected seller
+ * CAN re-request (e.g. after fixing whatever the rejection reason called
+ * out), which clears the old rejection reason.
+ */
+router.post("/sellers/me/request-verification", requireSellerAccount, async (req: any, res) => {
+  try {
+    const seller = req.dbSeller!;
+    if (seller.status !== "active") {
+      res.status(400).json({ error: "Only active sellers can request verification" });
+      return;
+    }
+    if (seller.verificationRequestStatus === "requested") {
+      res.status(400).json({ error: "Verification request already pending" });
+      return;
+    }
+    if (seller.verificationRequestStatus === "approved") {
+      res.status(400).json({ error: "Seller is already verified" });
+      return;
+    }
+
+    const [updated] = await db
+      .update(sellersTable)
+      .set({
+        verificationRequestStatus: "requested",
+        verificationRequestedAt: new Date(),
+        verificationDecidedAt: null,
+        verificationRejectionReason: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(sellersTable.id, seller.id))
+      .returning();
+
+    res.json(formatSeller(updated));
+  } catch (err) {
+    console.error("Request seller verification error:", err);
+    res.status(500).json({ error: "Failed to submit verification request" });
   }
 });
 

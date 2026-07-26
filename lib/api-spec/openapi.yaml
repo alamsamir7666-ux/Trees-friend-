@@ -857,6 +857,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/Seller"
 
+  /sellers/me/request-verification:
+    post:
+      operationId: requestSellerVerification
+      tags: [sellers]
+      summary: Seller — request the public "verified seller" badge (only from status=active, verificationRequestStatus none/rejected)
+      responses:
+        "200":
+          description: Updated seller record with verificationRequestStatus="requested"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Seller"
+
   /sellers:
     post:
       operationId: becomeSeller
@@ -1602,6 +1615,84 @@ paths:
       responses:
         "200":
           description: Suspended seller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Seller"
+
+  /admin/seller-verification-requests:
+    get:
+      operationId: listSellerVerificationRequests
+      tags: [admin]
+      summary: >-
+        List sellers by verification badge request status (admin only).
+        Defaults to "requested" (the review queue); pass status to see
+        none/approved/rejected instead.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [none, requested, approved, rejected]
+      responses:
+        "200":
+          description: Sellers matching the given verification request status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Seller"
+
+  /admin/sellers/{id}/verify:
+    put:
+      operationId: verifySeller
+      tags: [admin]
+      summary: >-
+        Approve a seller's pending "verified seller" badge request (admin
+        only, manual review). Only valid from verificationRequestStatus =
+        "requested".
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Seller with isVerified=true, verificationRequestStatus="approved"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Seller"
+
+  /admin/sellers/{id}/reject-verification:
+    put:
+      operationId: rejectSellerVerification
+      tags: [admin]
+      summary: >-
+        Reject a seller's pending "verified seller" badge request (admin
+        only). Does not suspend or delete the seller -- only the badge
+        request is declined.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Seller with verificationRequestStatus="rejected"
           content:
             application/json:
               schema:
@@ -3133,6 +3224,17 @@ components:
         status:
           type: string
           enum: [pending_verification, active, suspended, vacation]
+        isVerified:
+          type: boolean
+        verificationRequestStatus:
+          type: string
+          enum: [none, requested, approved, rejected]
+        verificationRequestedAt:
+          type: ["string", "null"]
+        verificationDecidedAt:
+          type: ["string", "null"]
+        verificationRejectionReason:
+          type: ["string", "null"]
         subscriptionStatus:
           type: string
           enum: [trial, active, expired]
@@ -3157,6 +3259,11 @@ components:
         - description
         - nurseryImages
         - status
+        - isVerified
+        - verificationRequestStatus
+        - verificationRequestedAt
+        - verificationDecidedAt
+        - verificationRejectionReason
         - subscriptionStatus
         - trialEndsAt
         - subscriptionExpiresAt
@@ -3553,11 +3660,14 @@ components:
           type: string
         location:
           type: string
+        isVerified:
+          type: boolean
       required:
         - id
         - businessName
         - nurseryName
         - location
+        - isVerified
 
     SellerListingCard:
       type: object

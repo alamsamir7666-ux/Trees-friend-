@@ -756,6 +756,16 @@ export const SellerStatus = {
   vacation: 'vacation',
 } as const;
 
+export type SellerVerificationRequestStatus = typeof SellerVerificationRequestStatus[keyof typeof SellerVerificationRequestStatus];
+
+
+export const SellerVerificationRequestStatus = {
+  none: 'none',
+  requested: 'requested',
+  approved: 'approved',
+  rejected: 'rejected',
+} as const;
+
 export type SellerSubscriptionStatus = typeof SellerSubscriptionStatus[keyof typeof SellerSubscriptionStatus];
 
 
@@ -780,6 +790,14 @@ export interface Seller {
   description: string | null;
   nurseryImages: string[];
   status: SellerStatus;
+  isVerified: boolean;
+  verificationRequestStatus: SellerVerificationRequestStatus;
+  /** @nullable */
+  verificationRequestedAt: string | null;
+  /** @nullable */
+  verificationDecidedAt: string | null;
+  /** @nullable */
+  verificationRejectionReason: string | null;
   subscriptionStatus: SellerSubscriptionStatus;
   /** @nullable */
   trialEndsAt: string | null;
@@ -1090,6 +1108,7 @@ export interface SellerListingCardSellerInfo {
   businessName: string;
   nurseryName: string;
   location: string;
+  isVerified: boolean;
 }
 
 export interface SellerListingCard {
@@ -1200,6 +1219,24 @@ export const ListSellersStatus = {
   suspended: 'suspended',
   vacation: 'vacation',
 } as const;
+
+export type ListSellerVerificationRequestsParams = {
+status?: ListSellerVerificationRequestsStatus;
+};
+
+export type ListSellerVerificationRequestsStatus = typeof ListSellerVerificationRequestsStatus[keyof typeof ListSellerVerificationRequestsStatus];
+
+
+export const ListSellerVerificationRequestsStatus = {
+  none: 'none',
+  requested: 'requested',
+  approved: 'approved',
+  rejected: 'rejected',
+} as const;
+
+export type RejectSellerVerificationBody = {
+  reason?: string;
+};
 
 export type ListAdminSellerPaymentConfigsParams = {
 verified?: boolean;

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Star, Truck, MapPin, ShieldCheck, ArrowUpDown, Sprout, ShoppingBag, LogIn, Info } from "lucide-react";
+import { Star, Truck, MapPin, ArrowUpDown, ShoppingBag, LogIn, Eye, BadgeCheck, ImageOff, Package } from "lucide-react";
 import {
   useListProductSellerListings, ListProductSellerListingsSort,
   useAddToCart, getGetCartQueryKey,
@@ -145,71 +145,100 @@ export function SellerListingsSection({ productId }: { productId: number }) {
           const outOfStock = qualifying.length === 0;
           const totalStock = card.listing.variants.reduce((sum, v) => sum + v.stock, 0);
           const isAdding = addingId === card.listing.id && addToCart.isPending;
+          const img = card.listing.images?.[0] || null;
+          const discountPct = pricedVariant?.discountPrice != null
+            ? Math.round((1 - pricedVariant.discountPrice / pricedVariant.price) * 100)
+            : null;
           return (
-            <div key={card.listing.id} className="border rounded-2xl p-4 bg-card flex flex-col">
-              <div className="flex items-start justify-between gap-2 mb-2">
-                <div className="min-w-0">
-                  <p className="font-medium text-sm truncate flex items-center gap-1.5">
-                    <Sprout className="h-3.5 w-3.5 text-accent shrink-0" />
-                    {card.seller.nurseryName}
-                  </p>
-                  <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                    <MapPin className="h-3 w-3" /> {card.seller.location}
-                  </p>
+            <div key={card.listing.id} className="border rounded-2xl p-4 bg-card flex flex-col gap-4">
+              <div className="flex gap-3">
+                <div className="h-24 w-20 sm:h-28 sm:w-24 rounded-xl overflow-hidden bg-muted/30 shrink-0 flex items-center justify-center">
+                  {img ? (
+                    <img src={img} alt={card.seller.nurseryName} className="w-full h-full object-cover" loading="lazy" />
+                  ) : (
+                    <div className="flex flex-col items-center gap-1 text-muted-foreground/60">
+                      <ImageOff className="h-5 w-5" />
+                      <span className="text-[10px]">No image</span>
+                    </div>
+                  )}
                 </div>
-                {card.reviewCount > 0 && (
-                  <div className="flex items-center gap-1 text-xs font-medium shrink-0 bg-amber-50 text-amber-700 px-2 py-1 rounded-full">
-                    <Star className="h-3 w-3 fill-amber-500 text-amber-500" /> {card.rating.toFixed(1)}
-                    <span className="text-amber-600/70">({card.reviewCount})</span>
-                  </div>
-                )}
-              </div>
 
-              <div className="flex items-baseline gap-2 mb-2">
-                {pricedVariant && (
-                  <>
-                    <span className="font-serif text-xl font-medium">Tk{pricedVariant.discountPrice ?? pricedVariant.price}</span>
-                    {pricedVariant.discountPrice != null && (
-                      <span className="text-sm text-muted-foreground line-through">Tk{pricedVariant.price}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-sm truncate flex items-center gap-1.5">
+                    {card.seller.nurseryName}
+                    {card.seller.isVerified && (
+                      <BadgeCheck className="h-4 w-4 text-emerald-600 shrink-0" aria-label="Verified seller" />
                     )}
-                  </>
-                )}
+                  </p>
+
+                  {card.reviewCount > 0 && (
+                    <div className="flex items-center gap-1 text-xs mt-1">
+                      <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                      <span className="font-semibold">{card.rating.toFixed(1)}</span>
+                      <span className="text-muted-foreground">({card.reviewCount})</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-0.5 text-xs text-muted-foreground mt-1.5">
+                    {card.listing.deliveryTimeDays != null && (
+                      <span className="flex items-center gap-1"><Truck className="h-3 w-3 shrink-0" /> {card.listing.deliveryTimeDays}-day delivery</span>
+                    )}
+                    <span className="flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0" /> {card.seller.location}</span>
+                  </div>
+                </div>
               </div>
 
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground mb-3">
-                {card.listing.deliveryTimeDays != null && (
-                  <span className="flex items-center gap-1"><Truck className="h-3 w-3" /> {card.listing.deliveryTimeDays}-day delivery</span>
-                )}
-                {card.listing.warrantyDays != null && (
-                  <span className="flex items-center gap-1"><ShieldCheck className="h-3 w-3" /> {card.listing.warrantyDays}-day warranty</span>
-                )}
-                <span>{totalStock > 0 ? `${totalStock} in stock` : "Out of stock"}</span>
+              <div>
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  {pricedVariant && (
+                    <>
+                      <span className="font-serif text-xl font-bold text-primary">Tk{pricedVariant.discountPrice ?? pricedVariant.price}</span>
+                      {pricedVariant.discountPrice != null && (
+                        <>
+                          <span className="text-sm text-muted-foreground line-through">Tk{pricedVariant.price}</span>
+                          {discountPct != null && discountPct > 0 && (
+                            <span className="text-xs font-semibold text-rose-600 bg-rose-50 rounded-md px-1.5 py-0.5">{discountPct}% OFF</span>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground mt-1.5">
+                  <Package className="h-3.5 w-3.5" />
+                  {totalStock > 0 ? `In Stock (${totalStock})` : "Out of stock"}
+                </p>
               </div>
 
               {card.listing.offerText && (
-                <p className="text-xs text-accent font-medium mb-3">{card.listing.offerText}</p>
+                <p className="text-xs text-accent font-medium -mt-2">{card.listing.offerText}</p>
               )}
 
-              <div className="mt-auto pt-1 space-y-2">
+              <div className="flex gap-2 mt-auto">
+                <Link href={`/products/${productId}/listings/${card.listing.id}`} className="flex-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full rounded-lg border-primary text-primary hover:bg-primary/5 hover:text-primary gap-1.5"
+                  >
+                    <Eye className="h-3.5 w-3.5" /> View Details
+                  </Button>
+                </Link>
                 <Button
-                  className="w-full rounded-full"
+                  variant="outline"
                   size="sm"
+                  className="flex-1 rounded-lg border-primary text-primary hover:bg-primary/5 hover:text-primary gap-1.5"
                   disabled={outOfStock || isAdding}
                   onClick={() => handleAddToBag(card.listing.id, card.seller.nurseryName, qualifying)}
                 >
                   {!user ? (
-                    <><LogIn className="mr-1.5 h-3.5 w-3.5" /> Sign in to buy</>
+                    <><LogIn className="h-3.5 w-3.5" /> Sign in</>
                   ) : outOfStock ? (
                     "Out of stock"
                   ) : (
-                    <><ShoppingBag className="mr-1.5 h-3.5 w-3.5" /> {isAdding ? "Adding…" : "Add to Bag"}</>
+                    <><ShoppingBag className="h-3.5 w-3.5" /> {isAdding ? "Adding…" : "Add to Bag"}</>
                   )}
                 </Button>
-                <Link href={`/products/${productId}/listings/${card.listing.id}`}>
-                  <Button variant="ghost" className="w-full rounded-full text-xs text-muted-foreground hover:text-foreground" size="sm">
-                    <Info className="mr-1.5 h-3.5 w-3.5" /> See details
-                  </Button>
-                </Link>
               </div>
             </div>
           );

@@ -24,6 +24,11 @@ function formatSeller(s: typeof sellersTable.$inferSelect) {
     description: s.description,
     nurseryImages: s.nurseryImages,
     status: s.status,
+    isVerified: s.isVerified,
+    verificationRequestStatus: s.verificationRequestStatus,
+    verificationRequestedAt: s.verificationRequestedAt?.toISOString() ?? null,
+    verificationDecidedAt: s.verificationDecidedAt?.toISOString() ?? null,
+    verificationRejectionReason: s.verificationRejectionReason,
     subscriptionStatus: s.subscriptionStatus,
     trialEndsAt: s.trialEndsAt?.toISOString() ?? null,
     subscriptionExpiresAt: s.subscriptionExpiresAt?.toISOString() ?? null,
@@ -520,6 +525,148 @@ router.put("/admin/seller-courier-configs/:id/unverify", requireAdmin, async (re
     res.json(formatCourierConfig(config));
   } catch (err) {
     res.status(500).json({ error: "Failed to unverify courier config" });
+  }
+});
+
+/* -------------------------------------------------------------------- */
+/* Verified-seller badge (public trust checkmark, separate from account */
+/* status above -- see sellers.ts schema doc comment). A seller requests */
+/* this via POST /sellers/me/request-verification; these two routes are */
+/* the admin decision on that request. Same manual-review, audit-logged */
+/* convention as the payment/courier config verify toggles above.       */
+/* -------------------------------------------------------------------- */
+
+/**
+ * Admin: list sellers with a pending verification badge request. Defaults
+ * to "requested" (the actual review queue) but accepts any of the four
+ * verificationRequestStatus values so the admin panel can also show
+ * approved/rejected history.
+ */
+router.get("/admin/seller-verification-requests", requireAdmin, async (req, res) => {
+  try {
+    const { status } = req.query as { status?: string };
+    const VALID = ["none", "requested", "approved", "rejected"];
+    const filterStatus = status && VALID.includes(status) ? status : "requested";
+
+    const sellers = await db
+      .select()
+      .from(sellersTable)
+      .where(eq(sellersTable.verificationRequestStatus, filterStatus))
+      .orderBy(desc(sellersTable.verificationRequestedAt));
+
+    res.json(sellers.map(formatSeller));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch verification requests" });
+  }
+});
+
+/**
+ * Admin: approve a seller's pending verification request -> isVerified =
+ * true. Only valid from verificationRequestStatus = "requested" -- can't
+ * approve a request that was never made (or already decided) without first
+ * going back through the seller re-requesting.
+ */
+router.put("/admin/sellers/:id/verify", requireAdmin, async (req: any, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid seller id" });
+      return;
+    }
+
+    const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
+    if (!existing) {
+      res.status(404).json({ error: "Seller not found" });
+      return;
+    }
+    if (existing.verificationRequestStatus !== "requested") {
+      res.status(400).json({
+        error: `Cannot approve verification from status "${existing.verificationRequestStatus}"`,
+      });
+      return;
+    }
+
+    const [seller] = await db
+      .update(sellersTable)
+      .set({
+        isVerified: true,
+        verificationRequestStatus: "approved",
+        verificationDecidedAt: new Date(),
+        verificationRejectionReason: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(sellersTable.id, id))
+      .returning();
+
+    await logAudit({
+      adminId: req.userId,
+      adminEmail: req.dbUser?.email,
+      action: "seller.verified",
+      targetType: "seller",
+      targetId: String(id),
+      before: { isVerified: false, verificationRequestStatus: existing.verificationRequestStatus },
+      after: { isVerified: true, verificationRequestStatus: "approved" },
+    });
+
+    res.json(formatSeller(seller));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to verify seller" });
+  }
+});
+
+/**
+ * Admin: reject a seller's pending verification request. Unlike the
+ * initial-application reject above, this does NOT delete the seller row --
+ * the seller is a normal active seller either way, just not (yet) badge-
+ * verified -- it only records the decision + an optional reason the seller
+ * can see on their dashboard before deciding whether to re-request.
+ */
+router.put("/admin/sellers/:id/reject-verification", requireAdmin, async (req: any, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid seller id" });
+      return;
+    }
+    const { reason } = (req.body ?? {}) as { reason?: string };
+
+    const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
+    if (!existing) {
+      res.status(404).json({ error: "Seller not found" });
+      return;
+    }
+    if (existing.verificationRequestStatus !== "requested") {
+      res.status(400).json({
+        error: `Cannot reject verification from status "${existing.verificationRequestStatus}"`,
+      });
+      return;
+    }
+
+    const [seller] = await db
+      .update(sellersTable)
+      .set({
+        isVerified: false,
+        verificationRequestStatus: "rejected",
+        verificationDecidedAt: new Date(),
+        verificationRejectionReason: reason?.trim() || null,
+        updatedAt: new Date(),
+      })
+      .where(eq(sellersTable.id, id))
+      .returning();
+
+    await logAudit({
+      adminId: req.userId,
+      adminEmail: req.dbUser?.email,
+      action: "seller.verificationRejected",
+      targetType: "seller",
+      targetId: String(id),
+      before: { verificationRequestStatus: existing.verificationRequestStatus },
+      after: { verificationRequestStatus: "rejected", reason: reason ?? null },
+    });
+
+    res.json(formatSeller(seller));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to reject verification" });
   }
 });
 

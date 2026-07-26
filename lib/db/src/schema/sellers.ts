@@ -3,6 +3,7 @@ import {
   serial,
   text,
   integer,
+  boolean,
   timestamp,
   jsonb,
 } from "drizzle-orm/pg-core";
@@ -45,6 +46,21 @@ export const sellersTable = pgTable("sellers", {
 
   // "pending_verification" | "active" | "suspended" | "vacation"
   status: text("status").notNull().default("pending_verification"),
+
+  // Public "verified seller" badge (Amazon/Daraz-style trust checkmark),
+  // shown on buyer-facing seller listing cards. Deliberately separate from
+  // `status` above: status is an account on/off switch (gates whether the
+  // seller's listings appear at all), verification is an earned trust
+  // signal an already-active seller can request and an admin can grant --
+  // the two are independent and a seller can be active but not verified.
+  // "none" | "requested" | "approved" | "rejected"
+  verificationRequestStatus: text("verification_request_status").notNull().default("none"),
+  isVerified: boolean("is_verified").notNull().default(false),
+  verificationRequestedAt: timestamp("verification_requested_at"),
+  verificationDecidedAt: timestamp("verification_decided_at"),
+  // Optional note from admin on rejection (shown to the seller so they know
+  // what to fix before re-requesting).
+  verificationRejectionReason: text("verification_rejection_reason"),
 
   // "trial" | "active" | "expired"
   subscriptionStatus: text("subscription_status").notNull().default("trial"),

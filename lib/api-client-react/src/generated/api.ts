@@ -48,6 +48,7 @@ import type {
   ListProductSellerListingsParams,
   ListProductsParams,
   ListSellerOrdersParams,
+  ListSellerVerificationRequestsParams,
   ListSellersParams,
   ListingAttributeOption,
   MessageResponse,
@@ -58,6 +59,7 @@ import type {
   ProductListResponse,
   RejectSellerBody,
   RejectSellerListingBody,
+  RejectSellerVerificationBody,
   Review,
   ReviewEligibility,
   Seller,
@@ -3250,6 +3252,76 @@ export const useUpdateMySellerStatus = <TError = ErrorType<unknown>,
       return useMutation(getUpdateMySellerStatusMutationOptions(options));
     }
 
+export const getRequestSellerVerificationUrl = () => {
+
+
+
+
+  return `/api/sellers/me/request-verification`
+}
+
+/**
+ * @summary Seller — request the public "verified seller" badge (only from status=active, verificationRequestStatus none/rejected)
+ */
+export const requestSellerVerification = async ( options?: RequestInit): Promise<Seller> => {
+
+  return customFetch<Seller>(getRequestSellerVerificationUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getRequestSellerVerificationMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof requestSellerVerification>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof requestSellerVerification>>, TError,void, TContext> => {
+
+const mutationKey = ['requestSellerVerification'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof requestSellerVerification>>, void> = () => {
+
+
+          return  requestSellerVerification(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RequestSellerVerificationMutationResult = NonNullable<Awaited<ReturnType<typeof requestSellerVerification>>>
+
+    export type RequestSellerVerificationMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Seller — request the public "verified seller" badge (only from status=active, verificationRequestStatus none/rejected)
+ */
+export const useRequestSellerVerification = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof requestSellerVerification>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof requestSellerVerification>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getRequestSellerVerificationMutationOptions(options));
+    }
+
 export const getBecomeSellerUrl = () => {
 
 
@@ -6004,6 +6076,231 @@ export const useSuspendSeller = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getSuspendSellerMutationOptions(options));
+    }
+
+export const getListSellerVerificationRequestsUrl = (params?: ListSellerVerificationRequestsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/admin/seller-verification-requests?${stringifiedParams}` : `/api/admin/seller-verification-requests`
+}
+
+/**
+ * @summary List sellers by verification badge request status (admin only). Defaults to "requested" (the review queue); pass status to see none/approved/rejected instead.
+ */
+export const listSellerVerificationRequests = async (params?: ListSellerVerificationRequestsParams, options?: RequestInit): Promise<Seller[]> => {
+
+  return customFetch<Seller[]>(getListSellerVerificationRequestsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListSellerVerificationRequestsQueryKey = (params?: ListSellerVerificationRequestsParams,) => {
+    return [
+    `/api/admin/seller-verification-requests`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListSellerVerificationRequestsQueryOptions = <TData = Awaited<ReturnType<typeof listSellerVerificationRequests>>, TError = ErrorType<unknown>>(params?: ListSellerVerificationRequestsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerVerificationRequests>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSellerVerificationRequestsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSellerVerificationRequests>>> = ({ signal }) => listSellerVerificationRequests(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSellerVerificationRequests>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSellerVerificationRequestsQueryResult = NonNullable<Awaited<ReturnType<typeof listSellerVerificationRequests>>>
+export type ListSellerVerificationRequestsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List sellers by verification badge request status (admin only). Defaults to "requested" (the review queue); pass status to see none/approved/rejected instead.
+ */
+
+export function useListSellerVerificationRequests<TData = Awaited<ReturnType<typeof listSellerVerificationRequests>>, TError = ErrorType<unknown>>(
+ params?: ListSellerVerificationRequestsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerVerificationRequests>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSellerVerificationRequestsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getVerifySellerUrl = (id: number,) => {
+
+
+
+
+  return `/api/admin/sellers/${id}/verify`
+}
+
+/**
+ * @summary Approve a seller's pending "verified seller" badge request (admin only, manual review). Only valid from verificationRequestStatus = "requested".
+ */
+export const verifySeller = async (id: number, options?: RequestInit): Promise<Seller> => {
+
+  return customFetch<Seller>(getVerifySellerUrl(id),
+  {
+    ...options,
+    method: 'PUT'
+
+
+  }
+);}
+
+
+
+
+export const getVerifySellerMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifySeller>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof verifySeller>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['verifySeller'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof verifySeller>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  verifySeller(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type VerifySellerMutationResult = NonNullable<Awaited<ReturnType<typeof verifySeller>>>
+
+    export type VerifySellerMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Approve a seller's pending "verified seller" badge request (admin only, manual review). Only valid from verificationRequestStatus = "requested".
+ */
+export const useVerifySeller = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifySeller>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof verifySeller>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getVerifySellerMutationOptions(options));
+    }
+
+export const getRejectSellerVerificationUrl = (id: number,) => {
+
+
+
+
+  return `/api/admin/sellers/${id}/reject-verification`
+}
+
+/**
+ * @summary Reject a seller's pending "verified seller" badge request (admin only). Does not suspend or delete the seller -- only the badge request is declined.
+ */
+export const rejectSellerVerification = async (id: number,
+    rejectSellerVerificationBody?: RejectSellerVerificationBody, options?: RequestInit): Promise<Seller> => {
+
+  return customFetch<Seller>(getRejectSellerVerificationUrl(id),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(rejectSellerVerificationBody)
+  }
+);}
+
+
+
+
+export const getRejectSellerVerificationMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rejectSellerVerification>>, TError,{id: number;data?: BodyType<RejectSellerVerificationBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof rejectSellerVerification>>, TError,{id: number;data?: BodyType<RejectSellerVerificationBody>}, TContext> => {
+
+const mutationKey = ['rejectSellerVerification'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof rejectSellerVerification>>, {id: number;data?: BodyType<RejectSellerVerificationBody>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  rejectSellerVerification(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RejectSellerVerificationMutationResult = NonNullable<Awaited<ReturnType<typeof rejectSellerVerification>>>
+    export type RejectSellerVerificationMutationBody = BodyType<RejectSellerVerificationBody> | undefined
+    export type RejectSellerVerificationMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Reject a seller's pending "verified seller" badge request (admin only). Does not suspend or delete the seller -- only the badge request is declined.
+ */
+export const useRejectSellerVerification = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rejectSellerVerification>>, TError,{id: number;data?: BodyType<RejectSellerVerificationBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof rejectSellerVerification>>,
+        TError,
+        {id: number;data?: BodyType<RejectSellerVerificationBody>},
+        TContext
+      > => {
+      return useMutation(getRejectSellerVerificationMutationOptions(options));
     }
 
 export const getListAdminSellerPaymentConfigsUrl = (params?: ListAdminSellerPaymentConfigsParams,) => {

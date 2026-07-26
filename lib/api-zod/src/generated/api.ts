@@ -1301,6 +1301,11 @@ export const GetMySellerResponse = zod.union([zod.object({
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
   "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
   "trialEndsAt": zod.string().nullable(),
   "subscriptionExpiresAt": zod.string().nullable(),
@@ -1337,6 +1342,11 @@ export const UpdateMySellerProfileResponse = zod.object({
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
   "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
   "trialEndsAt": zod.string().nullable(),
   "subscriptionExpiresAt": zod.string().nullable(),
@@ -1365,6 +1375,40 @@ export const UpdateMySellerStatusResponse = zod.object({
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
+  "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
+  "trialEndsAt": zod.string().nullable(),
+  "subscriptionExpiresAt": zod.string().nullable(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})
+
+
+/**
+ * @summary Seller — request the public "verified seller" badge (only from status=active, verificationRequestStatus none/rejected)
+ */
+export const RequestSellerVerificationResponse = zod.object({
+  "id": zod.number(),
+  "userId": zod.number(),
+  "businessName": zod.string(),
+  "nurseryName": zod.string(),
+  "ownerName": zod.string(),
+  "nidOrTradeLicenseUrl": zod.string().nullable(),
+  "contactPhone": zod.string(),
+  "contactEmail": zod.string(),
+  "location": zod.string(),
+  "description": zod.string().nullable(),
+  "nurseryImages": zod.array(zod.string()),
+  "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
   "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
   "trialEndsAt": zod.string().nullable(),
   "subscriptionExpiresAt": zod.string().nullable(),
@@ -1584,7 +1628,8 @@ export const GetSellerListingResponse = zod.object({
   "id": zod.number(),
   "businessName": zod.string(),
   "nurseryName": zod.string(),
-  "location": zod.string()
+  "location": zod.string(),
+  "isVerified": zod.boolean()
 }),
   "rating": zod.number(),
   "reviewCount": zod.number()
@@ -1735,7 +1780,8 @@ export const ListProductSellerListingsResponseItem = zod.object({
   "id": zod.number(),
   "businessName": zod.string(),
   "nurseryName": zod.string(),
-  "location": zod.string()
+  "location": zod.string(),
+  "isVerified": zod.boolean()
 }),
   "rating": zod.number(),
   "reviewCount": zod.number()
@@ -2463,6 +2509,11 @@ export const ListSellersResponseItem = zod.object({
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
   "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
   "trialEndsAt": zod.string().nullable(),
   "subscriptionExpiresAt": zod.string().nullable(),
@@ -2492,6 +2543,11 @@ export const ApproveSellerResponse = zod.object({
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
   "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
   "trialEndsAt": zod.string().nullable(),
   "subscriptionExpiresAt": zod.string().nullable(),
@@ -2524,6 +2580,11 @@ export const RejectSellerResponse = zod.object({
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
   "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
   "trialEndsAt": zod.string().nullable(),
   "subscriptionExpiresAt": zod.string().nullable(),
@@ -2552,6 +2613,115 @@ export const SuspendSellerResponse = zod.object({
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
+  "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
+  "trialEndsAt": zod.string().nullable(),
+  "subscriptionExpiresAt": zod.string().nullable(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})
+
+
+/**
+ * @summary List sellers by verification badge request status (admin only). Defaults to "requested" (the review queue); pass status to see none/approved/rejected instead.
+ */
+export const ListSellerVerificationRequestsQueryParams = zod.object({
+  "status": zod.enum(['none', 'requested', 'approved', 'rejected']).optional()
+})
+
+export const ListSellerVerificationRequestsResponseItem = zod.object({
+  "id": zod.number(),
+  "userId": zod.number(),
+  "businessName": zod.string(),
+  "nurseryName": zod.string(),
+  "ownerName": zod.string(),
+  "nidOrTradeLicenseUrl": zod.string().nullable(),
+  "contactPhone": zod.string(),
+  "contactEmail": zod.string(),
+  "location": zod.string(),
+  "description": zod.string().nullable(),
+  "nurseryImages": zod.array(zod.string()),
+  "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
+  "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
+  "trialEndsAt": zod.string().nullable(),
+  "subscriptionExpiresAt": zod.string().nullable(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})
+export const ListSellerVerificationRequestsResponse = zod.array(ListSellerVerificationRequestsResponseItem)
+
+
+/**
+ * @summary Approve a seller's pending "verified seller" badge request (admin only, manual review). Only valid from verificationRequestStatus = "requested".
+ */
+export const VerifySellerParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const VerifySellerResponse = zod.object({
+  "id": zod.number(),
+  "userId": zod.number(),
+  "businessName": zod.string(),
+  "nurseryName": zod.string(),
+  "ownerName": zod.string(),
+  "nidOrTradeLicenseUrl": zod.string().nullable(),
+  "contactPhone": zod.string(),
+  "contactEmail": zod.string(),
+  "location": zod.string(),
+  "description": zod.string().nullable(),
+  "nurseryImages": zod.array(zod.string()),
+  "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
+  "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
+  "trialEndsAt": zod.string().nullable(),
+  "subscriptionExpiresAt": zod.string().nullable(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})
+
+
+/**
+ * @summary Reject a seller's pending "verified seller" badge request (admin only). Does not suspend or delete the seller -- only the badge request is declined.
+ */
+export const RejectSellerVerificationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const RejectSellerVerificationBody = zod.object({
+  "reason": zod.string().optional()
+})
+
+export const RejectSellerVerificationResponse = zod.object({
+  "id": zod.number(),
+  "userId": zod.number(),
+  "businessName": zod.string(),
+  "nurseryName": zod.string(),
+  "ownerName": zod.string(),
+  "nidOrTradeLicenseUrl": zod.string().nullable(),
+  "contactPhone": zod.string(),
+  "contactEmail": zod.string(),
+  "location": zod.string(),
+  "description": zod.string().nullable(),
+  "nurseryImages": zod.array(zod.string()),
+  "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
+  "isVerified": zod.boolean(),
+  "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
+  "verificationRequestedAt": zod.string().nullable(),
+  "verificationDecidedAt": zod.string().nullable(),
+  "verificationRejectionReason": zod.string().nullable(),
   "subscriptionStatus": zod.enum(['trial', 'active', 'expired']),
   "trialEndsAt": zod.string().nullable(),
   "subscriptionExpiresAt": zod.string().nullable(),

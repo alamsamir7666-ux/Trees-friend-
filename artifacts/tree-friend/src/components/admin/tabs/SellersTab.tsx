@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, XCircle, Clock, Ban, Loader2, ExternalLink, Wallet, Truck, ShieldCheck } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, Ban, Loader2, ExternalLink, Wallet, Truck, ShieldCheck, BadgeCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -14,6 +14,10 @@ import {
   useListAdminSellerCourierConfigs,
   useVerifySellerCourierConfig,
   getListAdminSellerCourierConfigsQueryKey,
+  useListSellerVerificationRequests,
+  useVerifySeller,
+  useRejectSellerVerification,
+  getListSellerVerificationRequestsQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -189,7 +193,132 @@ export function SellersTab() {
         </div>
       )}
 
+      <PendingSellerVerification />
       <PendingConfigVerification />
+    </div>
+  );
+}
+
+/**
+ * Verified-seller badge review queue (public trust checkmark, separate
+ * from the account-status queue at the top of this file -- see
+ * sellers.ts schema doc comment / routes/adminSellers.ts's verify routes).
+ * Mirrors PendingConfigVerification's shape/pending-vs-approved tab
+ * pattern just below it, for a seller-level rather than config-level
+ * request.
+ */
+function PendingSellerVerification() {
+  const qc = useQueryClient();
+  const [filter, setFilter] = useState<"requested" | "approved" | "rejected">("requested");
+  const [actingOn, setActingOn] = useState<number | null>(null);
+  const [rejectingId, setRejectingId] = useState<number | null>(null);
+
+  const { data: sellers, isLoading } = useListSellerVerificationRequests(
+    { status: filter },
+    { query: { queryKey: getListSellerVerificationRequestsQueryKey({ status: filter }) } },
+  );
+  const verifySeller = useVerifySeller();
+  const rejectVerification = useRejectSellerVerification();
+
+  function invalidate() {
+    qc.invalidateQueries({ queryKey: getListSellerVerificationRequestsQueryKey() });
+  }
+
+  function handleApprove(id: number) {
+    if (!confirm("Grant this seller the verified badge? It will show on all their listings.")) return;
+    setActingOn(id);
+    verifySeller.mutate(
+      { id },
+      {
+        onSuccess: () => { toast.success("Seller verified"); invalidate(); setActingOn(null); },
+        onError: (err: any) => { toast.error(err?.message ?? "Failed to verify seller"); setActingOn(null); },
+      },
+    );
+  }
+
+  function handleReject(id: number) {
+    const reason = prompt("Optional reason (shown to the seller):") ?? undefined;
+    setActingOn(id);
+    rejectVerification.mutate(
+      { id, data: { reason } },
+      {
+        onSuccess: () => { toast.success("Verification request rejected"); invalidate(); setActingOn(null); },
+        onError: (err: any) => { toast.error(err?.message ?? "Failed to reject request"); setActingOn(null); },
+      },
+    );
+  }
+
+  return (
+    <div className="mt-10 pt-8 border-t">
+      <h2 className="font-medium text-gray-800 mb-1">Verified Seller Badge Requests</h2>
+      <p className="text-xs text-gray-400 mb-4">
+        Approving grants the public checkmark shown on this seller's listing cards.
+      </p>
+
+      <Tabs value={filter} onValueChange={(v) => setFilter(v as typeof filter)}>
+        <TabsList className="rounded-full mb-4">
+          <TabsTrigger value="requested" className="rounded-full text-xs">Pending</TabsTrigger>
+          <TabsTrigger value="approved" className="rounded-full text-xs">Verified</TabsTrigger>
+          <TabsTrigger value="rejected" className="rounded-full text-xs">Rejected</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2].map((i) => <div key={i} className="h-20 rounded-2xl bg-muted animate-pulse" />)}
+        </div>
+      ) : !sellers || sellers.length === 0 ? (
+        <div className="text-center py-10 text-muted-foreground bg-white rounded-2xl border">
+          <BadgeCheck className="h-6 w-6 mx-auto mb-2 opacity-30" />
+          <p className="text-sm">No {filter} verification requests</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {sellers.map((s: any) => (
+            <div key={s.id} className="bg-white rounded-2xl border p-4 flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-medium text-sm text-gray-800">{s.businessName}</p>
+                  <span className="text-xs text-gray-400">·</span>
+                  <p className="text-xs text-gray-500">{s.nurseryName}</p>
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">{s.location}</p>
+                {filter === "requested" && s.verificationRequestedAt && (
+                  <p className="text-xs text-gray-300 mt-1">
+                    Requested {new Date(s.verificationRequestedAt).toLocaleDateString()}
+                  </p>
+                )}
+                {filter === "rejected" && s.verificationRejectionReason && (
+                  <p className="text-xs text-red-500 mt-1">Reason: {s.verificationRejectionReason}</p>
+                )}
+              </div>
+              {filter === "requested" && (
+                <div className="flex gap-2 shrink-0">
+                  <Button
+                    size="sm"
+                    className="rounded-full gap-1.5"
+                    disabled={actingOn === s.id}
+                    onClick={() => handleApprove(s.id)}
+                  >
+                    {actingOn === s.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                    Approve
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="rounded-full gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
+                    disabled={actingOn === s.id}
+                    onClick={() => handleReject(s.id)}
+                  >
+                    <XCircle className="h-3.5 w-3.5" />
+                    Reject
+                  </Button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
