@@ -32,6 +32,7 @@ function formatSeller(s: typeof sellersTable.$inferSelect) {
     location: s.location,
     description: s.description,
     nurseryImages: s.nurseryImages,
+    logoUrl: s.logoUrl,
     status: s.status,
     isVerified: s.isVerified,
     verificationRequestStatus: s.verificationRequestStatus,
@@ -221,6 +222,7 @@ router.patch("/sellers/me", requireSellerAccount, async (req: any, res) => {
       description,
       nidOrTradeLicenseUrl,
       nurseryImages,
+      logoUrl,
     } = req.body;
 
     if (businessName !== undefined && (typeof businessName !== "string" || !businessName.trim())) {
@@ -262,6 +264,7 @@ router.patch("/sellers/me", requireSellerAccount, async (req: any, res) => {
     if (description !== undefined) updates.description = description?.trim() || null;
     if (nidOrTradeLicenseUrl !== undefined) updates.nidOrTradeLicenseUrl = nidOrTradeLicenseUrl || null;
     if (nurseryImages !== undefined) updates.nurseryImages = nurseryImages;
+    if (logoUrl !== undefined) updates.logoUrl = logoUrl || null;
 
     const [updated] = await db
       .update(sellersTable)

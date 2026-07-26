@@ -3221,6 +3221,8 @@ components:
           type: array
           items:
             type: string
+        logoUrl:
+          type: ["string", "null"]
         status:
           type: string
           enum: [pending_verification, active, suspended, vacation]
@@ -3258,6 +3260,7 @@ components:
         - location
         - description
         - nurseryImages
+        - logoUrl
         - status
         - isVerified
         - verificationRequestStatus
@@ -3329,6 +3332,8 @@ components:
           type: array
           items:
             type: string
+        logoUrl:
+          type: ["string", "null"]
 
     UpdateSellerStatusBody:
       type: object
@@ -3662,12 +3667,15 @@ components:
           type: string
         isVerified:
           type: boolean
+        logoUrl:
+          type: ["string", "null"]
       required:
         - id
         - businessName
         - nurseryName
         - location
         - isVerified
+        - logoUrl
 
     SellerListingCard:
       type: object

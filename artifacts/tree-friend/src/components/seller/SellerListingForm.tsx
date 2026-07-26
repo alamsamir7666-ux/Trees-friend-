@@ -624,7 +624,16 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
 
       <div>
         <Label className="text-xs text-muted-foreground">Return Policy</Label>
-        <Textarea value={draft.returnPolicyText} onChange={(e) => set("returnPolicyText", e.target.value)} rows={2} className="mt-1" placeholder="Optional" />
+        <select
+          value={draft.returnPolicyText}
+          onChange={(e) => set("returnPolicyText", e.target.value)}
+          className="w-full mt-1 h-9 rounded-lg border border-input px-3 text-sm bg-background"
+        >
+          <option value="">No return policy</option>
+          <option value="7 Days Easy Return">7 Days Easy Return</option>
+          <option value="15 Days Easy Return">15 Days Easy Return</option>
+          <option value="30 Days Easy Return">30 Days Easy Return</option>
+        </select>
       </div>
       <div>
         <Label className="text-xs text-muted-foreground">Description</Label>

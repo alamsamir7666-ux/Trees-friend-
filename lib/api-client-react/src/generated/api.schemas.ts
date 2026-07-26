@@ -789,6 +789,8 @@ export interface Seller {
   /** @nullable */
   description: string | null;
   nurseryImages: string[];
+  /** @nullable */
+  logoUrl: string | null;
   status: SellerStatus;
   isVerified: boolean;
   verificationRequestStatus: SellerVerificationRequestStatus;
@@ -836,6 +838,8 @@ export interface UpdateSellerProfileBody {
   /** @nullable */
   description?: string | null;
   nurseryImages?: string[];
+  /** @nullable */
+  logoUrl?: string | null;
 }
 
 export type UpdateSellerStatusBodyStatus = typeof UpdateSellerStatusBodyStatus[keyof typeof UpdateSellerStatusBodyStatus];
@@ -1109,6 +1113,8 @@ export interface SellerListingCardSellerInfo {
   nurseryName: string;
   location: string;
   isVerified: boolean;
+  /** @nullable */
+  logoUrl: string | null;
 }
 
 export interface SellerListingCard {

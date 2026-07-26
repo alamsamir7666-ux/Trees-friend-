@@ -43,6 +43,11 @@ export const sellersTable = pgTable("sellers", {
   location: text("location").notNull(),
   description: text("description"),
   nurseryImages: jsonb("nursery_images").$type<string[]>().notNull().default([]),
+  // Single square logo/avatar shown on buyer-facing seller cards (distinct
+  // from nurseryImages, which is a gallery of nursery photos, not a
+  // profile-picture-shaped image). Nullable -- most sellers won't have
+  // uploaded one, and the frontend falls back to a placeholder.
+  logoUrl: text("logo_url"),
 
   // "pending_verification" | "active" | "suspended" | "vacation"
   status: text("status").notNull().default("pending_verification"),

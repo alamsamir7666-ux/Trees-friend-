@@ -23,6 +23,7 @@ function formatSeller(s: typeof sellersTable.$inferSelect) {
     location: s.location,
     description: s.description,
     nurseryImages: s.nurseryImages,
+    logoUrl: s.logoUrl,
     status: s.status,
     isVerified: s.isVerified,
     verificationRequestStatus: s.verificationRequestStatus,

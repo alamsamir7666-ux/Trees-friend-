@@ -42,6 +42,7 @@ function draftFromSeller(s: Seller) {
     description: s.description ?? "",
     nurseryImages: s.nurseryImages,
     nidOrTradeLicenseUrl: s.nidOrTradeLicenseUrl,
+    logoUrl: s.logoUrl ?? null,
   };
 }
 
@@ -58,6 +59,7 @@ export function BusinessProfileForm() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [uploadingImages, setUploadingImages] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   useEffect(() => {
     if (seller) setDraft(draftFromSeller(seller));
@@ -112,6 +114,19 @@ export function BusinessProfileForm() {
     }
   }
 
+  async function handleLogoUpload(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploadingLogo(true);
+    try {
+      const url = await uploadFile(files[0]);
+      set("logoUrl", url);
+    } catch {
+      toast.error("Logo upload failed");
+    } finally {
+      setUploadingLogo(false);
+    }
+  }
+
   function removeImage(url: string) {
     if (!draft) return;
     set("nurseryImages", draft.nurseryImages.filter((i) => i !== url));
@@ -137,6 +152,7 @@ export function BusinessProfileForm() {
           description: draft.description.trim() || null,
           nurseryImages: draft.nurseryImages,
           nidOrTradeLicenseUrl: draft.nidOrTradeLicenseUrl,
+          logoUrl: draft.logoUrl,
         },
       },
       {
@@ -313,6 +329,26 @@ export function BusinessProfileForm() {
         <div>
           <Label className="text-xs text-muted-foreground">Description</Label>
           <Textarea value={draft.description} onChange={(e) => set("description", e.target.value)} placeholder="Optional" className="mt-1 rounded-lg text-sm" rows={3} />
+        </div>
+
+        <div>
+          <Label className="text-xs text-muted-foreground">Logo</Label>
+          <p className="text-xs text-muted-foreground/70 mt-0.5 mb-1.5">Shown as your square avatar on buyer-facing listing pages.</p>
+          <div className="flex items-center gap-3">
+            {draft.logoUrl ? (
+              <div className="relative">
+                <img src={draft.logoUrl} alt="" className="h-16 w-16 rounded-lg object-cover border" />
+                <button type="button" onClick={() => set("logoUrl", null)} className="absolute -top-1.5 -right-1.5 bg-black/60 hover:bg-black/80 text-white rounded-full p-0.5">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ) : (
+              <label className="h-16 w-16 rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer text-muted-foreground hover:bg-muted/30 transition-colors">
+                {uploadingLogo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                <input type="file" accept="image/*" className="hidden" disabled={uploadingLogo} onChange={(e) => handleLogoUpload(e.target.files)} />
+              </label>
+            )}
+          </div>
         </div>
 
         <div>

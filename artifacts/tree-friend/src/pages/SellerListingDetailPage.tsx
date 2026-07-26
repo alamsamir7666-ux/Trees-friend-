@@ -7,15 +7,16 @@ import {
   type SellerListingVariant,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Star, MapPin, Sprout, Truck, ShieldCheck, RotateCcw, Award, ShoppingBag,
-  LogIn, ChevronLeft, PackageX, Ship, AlertTriangle, RefreshCw,
+  Star, MapPin, Truck, ShoppingBag, Heart,
+  LogIn, ChevronLeft, ChevronDown, PackageX, Ship, AlertTriangle, RefreshCw,
+  Sprout, Ruler, FlaskConical, Sprout as PotIcon, Award, Tag, Eye, Minus, Plus, Store as StoreIcon,
 } from "lucide-react";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { useToast } from "@/hooks/use-toast";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
+import { useWishlist } from "@/contexts/WishlistContext";
 
 /**
  * Buyer-facing detail page for ONE seller's listing (Phase 3b Part 3).
@@ -46,22 +47,35 @@ export function SellerListingDetailPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const addToCart = useAddToCart();
+  const { isWishlisted: isWishlistedFn, toggle: toggleWishlist } = useWishlist();
   const [activeImg, setActiveImg] = useState(0);
-  const [addingVariantId, setAddingVariantId] = useState<number | null>(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [selectedVariantId, setSelectedVariantId] = useState<number | null>(null);
+  const [quantity, setQuantity] = useState(1);
+  const [descExpanded, setDescExpanded] = useState(false);
 
   const { data: card, isLoading, isError, refetch, isRefetching } = useGetSellerListing(listingId, {
     query: { enabled: !!listingId, queryKey: ["seller-listing", listingId] },
   });
   const images = card ? card.listing.images : [];
 
-  function handleAddToBag(variant: SellerListingVariant) {
+  // First variant is selected by default ("First Available Option" in the
+  // design); once the person picks a pill, that choice sticks even if it's
+  // technically out of stock -- the Add to Bag button itself reflects
+  // stock state, rather than silently reassigning their selection.
+  const selectedVariant = card
+    ? card.listing.variants.find((v) => v.id === selectedVariantId) ?? card.listing.variants[0]
+    : null;
+
+  function handleAddToBag() {
+    if (!card || !selectedVariant) return;
     if (!user) {
       toast({ title: "Sign in required", description: "Please sign in to buy from marketplace sellers.", variant: "destructive" });
       return;
     }
-    setAddingVariantId(variant.id);
+    setIsAdding(true);
     addToCart.mutate(
-      { data: { productId, sellerListingVariantId: variant.id, quantity: 1 } },
+      { data: { productId, sellerListingVariantId: selectedVariant.id, quantity } },
       {
         onSuccess: () => {
           qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
@@ -70,9 +84,24 @@ export function SellerListingDetailPage() {
         onError: (err: any) => {
           toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
         },
-        onSettled: () => setAddingVariantId(null),
+        onSettled: () => setIsAdding(false),
       }
     );
+  }
+
+  function handleWishlistToggle() {
+    if (!card) return;
+    const price = selectedVariant ? (selectedVariant.discountPrice ?? selectedVariant.price) : 0;
+    toggleWishlist({
+      productId,
+      name: card.seller.nurseryName,
+      slug: String(productId),
+      price,
+      discountPrice: null,
+      image: images[0] || "",
+      scientificName: null,
+      categoryId: null,
+    });
   }
 
   function preOrderHref(variant: SellerListingVariant) {
@@ -82,7 +111,7 @@ export function SellerListingDetailPage() {
   }
 
   function variantLabel(v: SellerListingVariant): string {
-    return [v.form, v.height, v.potSize, v.age].filter(Boolean).join(" · ") || `Option #${v.id}`;
+    return v.form || v.rootType || `Option #${v.id}`;
   }
 
   if (isLoading) {
@@ -137,10 +166,18 @@ export function SellerListingDetailPage() {
   }
 
   const { listing, seller, rating, reviewCount } = card;
+  const wishlisted = isWishlistedFn(productId);
+  const price = selectedVariant ? (selectedVariant.discountPrice ?? selectedVariant.price) : 0;
+  const originalPrice = selectedVariant?.price ?? 0;
+  const discountPct = selectedVariant?.discountPrice != null
+    ? Math.round((1 - selectedVariant.discountPrice / selectedVariant.price) * 100)
+    : null;
+  const inStock = (selectedVariant?.availableQuantity ?? 0) > 0;
+  const addDisabled = !inStock && !selectedVariant?.isPreOrder;
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto px-4 py-8">
+      <div className="container mx-auto px-4 py-8 max-w-2xl">
         <PageBreadcrumb
           crumbs={[
             { label: "Products", href: "/products", icon: <ShoppingBag className="h-3 w-3" /> },
@@ -149,15 +186,42 @@ export function SellerListingDetailPage() {
           className="mb-4"
         />
         <Link href={`/products/${productId}`}>
-          <Button variant="ghost" size="sm" className="mb-6 gap-1 text-muted-foreground">
+          <Button variant="ghost" size="sm" className="mb-4 gap-1 text-muted-foreground">
             <ChevronLeft className="h-4 w-4" /> Back to product
           </Button>
         </Link>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-12 mb-10">
-          {/* Images + video */}
-          <div className="space-y-4">
-            <div className="aspect-square rounded-2xl overflow-hidden bg-muted/20 border">
+        <div className="space-y-3">
+          {/* Store header */}
+          <div className="border rounded-2xl bg-card px-4 py-3.5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="h-10 w-10 rounded-xl border overflow-hidden shrink-0 bg-muted/30 flex items-center justify-center">
+                {seller.logoUrl ? (
+                  <img src={seller.logoUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <Sprout className="h-4 w-4 text-muted-foreground" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <p className="font-semibold text-sm flex items-center gap-1.5 truncate">
+                  {seller.nurseryName}
+                  {seller.isVerified && (
+                    <Award className="h-3.5 w-3.5 text-emerald-600 shrink-0" aria-label="Verified seller" />
+                  )}
+                </p>
+                <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                  <MapPin className="h-3 w-3 shrink-0" /> {seller.location}
+                </p>
+              </div>
+            </div>
+            <Button variant="outline" size="sm" className="shrink-0 text-xs h-7" disabled title="Coming soon">
+              <StoreIcon className="h-3 w-3 mr-1" /> View Store
+            </Button>
+          </div>
+
+          {/* Images */}
+          <div className="border rounded-2xl bg-card p-3">
+            <div className="aspect-square rounded-xl overflow-hidden bg-muted/20">
               {images.length > 0 ? (
                 <img src={images[activeImg]} alt={seller.nurseryName} className="w-full h-full object-cover" />
               ) : (
@@ -165,12 +229,12 @@ export function SellerListingDetailPage() {
               )}
             </div>
             {images.length > 1 && (
-              <div className="flex gap-3 flex-wrap">
+              <div className="flex gap-2 flex-wrap mt-3">
                 {images.map((img, i) => (
                   <button
                     key={i}
                     onClick={() => setActiveImg(i)}
-                    className={`w-16 h-16 rounded-xl overflow-hidden border-2 transition-colors ${activeImg === i ? "border-primary" : "border-transparent"}`}
+                    className={`w-14 h-14 rounded-lg overflow-hidden border-2 transition-colors ${activeImg === i ? "border-primary" : "border-transparent"}`}
                   >
                     <img src={img} alt="" className="w-full h-full object-cover" />
                   </button>
@@ -178,7 +242,7 @@ export function SellerListingDetailPage() {
               </div>
             )}
             {listing.videoUrl && (
-              <div className="relative w-full" style={{ paddingBottom: "56.25%" }}>
+              <div className="relative w-full mt-3" style={{ paddingBottom: "56.25%" }}>
                 <iframe
                   className="absolute top-0 left-0 w-full h-full rounded-xl"
                   src={listing.videoUrl.replace("watch?v=", "embed/")}
@@ -189,124 +253,187 @@ export function SellerListingDetailPage() {
             )}
           </div>
 
-          {/* Seller info + listing terms */}
-          <div className="flex flex-col">
-            <p className="font-medium text-lg flex items-center gap-1.5">
-              <Sprout className="h-4 w-4 text-accent shrink-0" /> {seller.nurseryName}
-            </p>
-            <p className="text-sm text-muted-foreground flex items-center gap-1 mt-1">
-              <MapPin className="h-3.5 w-3.5" /> {seller.location}
-            </p>
-            {reviewCount > 0 && (
-              <div className="flex items-center gap-1 text-sm font-medium mt-2 bg-amber-50 text-amber-700 px-2.5 py-1 rounded-full w-fit">
-                <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" /> {rating.toFixed(1)}
-                <span className="text-amber-600/70">({reviewCount} review{reviewCount !== 1 ? "s" : ""})</span>
-              </div>
-            )}
+          {/* Options + price + actions */}
+          <div className="border rounded-2xl bg-card p-4 space-y-3.5">
+            <h2 className="font-semibold text-sm">Available Option{listing.variants.length > 1 ? "s" : ""}</h2>
 
-            {listing.description && (
-              <p className="text-sm text-muted-foreground leading-relaxed mt-4">{listing.description}</p>
-            )}
+            <div className="flex gap-2 overflow-x-auto -mx-1 px-1 pb-1">
+              {listing.variants.map((v) => (
+                <button
+                  key={v.id}
+                  onClick={() => setSelectedVariantId(v.id)}
+                  className={`shrink-0 h-8 px-3 rounded-md text-xs font-semibold border transition-colors whitespace-nowrap ${
+                    selectedVariant?.id === v.id
+                      ? "border-primary text-primary bg-primary/10"
+                      : "border-border text-muted-foreground bg-background hover:bg-muted/30"
+                  }`}
+                >
+                  {variantLabel(v)}
+                </button>
+              ))}
+            </div>
 
-            {listing.offerText && (
-              <p className="text-sm text-accent font-medium mt-3">{listing.offerText}</p>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-5">
-              {listing.deliveryTimeDays != null && (
-                <div className="flex items-center gap-2 text-sm bg-muted/30 rounded-lg px-3 py-2">
-                  <Truck className="h-4 w-4 text-accent shrink-0" /> {listing.deliveryTimeDays}-day delivery
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              {reviewCount > 0 && (
+                <div className="flex items-center gap-1 text-sm">
+                  <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
+                  <span className="font-bold text-primary">{rating.toFixed(1)}</span>
+                  <span className="text-muted-foreground">({reviewCount} review{reviewCount !== 1 ? "s" : ""})</span>
                 </div>
               )}
-              {listing.warrantyDays != null && (
-                <div className="flex items-center gap-2 text-sm bg-muted/30 rounded-lg px-3 py-2">
-                  <ShieldCheck className="h-4 w-4 text-accent shrink-0" /> {listing.warrantyDays}-day warranty
-                </div>
-              )}
-              {listing.certification && (
-                <div className="flex items-center gap-2 text-sm bg-muted/30 rounded-lg px-3 py-2">
-                  <Award className="h-4 w-4 text-accent shrink-0" /> {listing.certification}
-                </div>
-              )}
-              <div className="flex items-center gap-2 text-sm bg-muted/30 rounded-lg px-3 py-2">
-                <Badge variant="secondary" className="text-xs capitalize">{listing.paymentMethod === "cod" ? "Cash on delivery" : listing.paymentMethod === "advance" ? "Advance payment" : "COD or advance"}</Badge>
+              <div className="flex items-center gap-2">
+                <span className="font-serif text-xl font-bold text-primary">Tk{price.toLocaleString()}</span>
+                {selectedVariant?.discountPrice != null && (
+                  <>
+                    <span className="text-sm text-muted-foreground line-through">Tk{originalPrice.toLocaleString()}</span>
+                    {discountPct != null && discountPct > 0 && (
+                      <span className="text-xs font-semibold text-primary bg-primary/10 rounded px-1.5 py-0.5">{discountPct}% OFF</span>
+                    )}
+                  </>
+                )}
               </div>
             </div>
 
-            {listing.returnPolicyText && (
-              <div className="flex items-start gap-2 text-sm text-muted-foreground bg-muted/30 rounded-xl px-4 py-3 mt-4">
-                <RotateCcw className="h-4 w-4 mt-0.5 shrink-0 text-accent" />
-                <div>
-                  <p className="font-medium text-foreground mb-0.5">Return Policy</p>
-                  <p>{listing.returnPolicyText}</p>
+            <div className="flex items-center gap-2">
+              {addDisabled ? (
+                selectedVariant?.isPreOrder ? (
+                  <Link href={selectedVariant ? preOrderHref(selectedVariant) : "#"} className="flex-1">
+                    <Button className="w-full rounded-lg bg-blue-500 text-white hover:bg-blue-600">
+                      <Ship className="mr-1.5 h-4 w-4" /> Pre-Order Now
+                    </Button>
+                  </Link>
+                ) : (
+                  <Button className="flex-1 rounded-lg" disabled>
+                    <PackageX className="mr-1.5 h-4 w-4" /> Out of Stock
+                  </Button>
+                )
+              ) : (
+                <Button className="flex-1 rounded-lg" disabled={isAdding} onClick={handleAddToBag}>
+                  {!user ? (
+                    <><LogIn className="mr-1.5 h-4 w-4" /> Sign in to buy</>
+                  ) : (
+                    <><ShoppingBag className="mr-1.5 h-4 w-4" /> {isAdding ? "Adding…" : "Add to Bag"}</>
+                  )}
+                </Button>
+              )}
+
+              <div className="flex items-center border rounded-lg h-10 px-1 shrink-0">
+                <button
+                  onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                  className="h-8 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  disabled={quantity <= 1}
+                  aria-label="Decrease quantity"
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </button>
+                <span className="w-6 text-center text-sm font-semibold">{quantity}</span>
+                <button
+                  onClick={() => setQuantity((q) => q + 1)}
+                  className="h-8 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground"
+                  aria-label="Increase quantity"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <button
+                onClick={handleWishlistToggle}
+                className="h-10 w-10 shrink-0 border rounded-lg flex items-center justify-center hover:bg-muted/30"
+                aria-label={wishlisted ? "Remove from wishlist" : "Add to wishlist"}
+              >
+                <Heart className={`h-4 w-4 ${wishlisted ? "fill-rose-500 stroke-rose-500" : "stroke-foreground"}`} />
+              </button>
+            </div>
+
+            {/* Specs grid */}
+            {selectedVariant && (
+              <div className="grid grid-cols-3 border rounded-lg overflow-hidden">
+                {[
+                  { icon: Sprout, title: "Age", value: selectedVariant.age },
+                  { icon: Ruler, title: "Height", value: selectedVariant.height },
+                  { icon: PotIcon, title: "Pot Size", value: selectedVariant.potSize },
+                  { icon: FlaskConical, title: "Root Type", value: selectedVariant.rootType },
+                  { icon: Truck, title: "Delivery Time", value: listing.deliveryTimeDays != null ? `${listing.deliveryTimeDays} Days` : null },
+                  { icon: RefreshCw, title: "Return Policy", value: listing.returnPolicyText || "No Return Policy" },
+                ].filter((s) => s.value).map((s, i) => (
+                  <div key={i} className="flex flex-col items-center justify-center gap-1.5 p-3 text-center border-border [&:not(:nth-child(3n))]:border-r [&:not(:nth-last-child(-n+3))]:border-b">
+                    <s.icon className="h-5 w-5 text-foreground/80" />
+                    <span className="text-xs font-semibold">{s.title}</span>
+                    <span className="text-[11px] text-muted-foreground leading-tight">{s.value}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Stock + delivery charge */}
+            {selectedVariant && (
+              <div className="flex border rounded-lg h-10 overflow-hidden text-sm font-semibold">
+                <div className="flex-1 flex items-center justify-center gap-1.5 border-r">
+                  <PackageX className="h-4 w-4 text-primary" style={{ display: inStock ? "none" : undefined }} />
+                  {inStock ? `${selectedVariant.availableQuantity} in stock` : "Out of stock"}
                 </div>
+                <div className="flex-1 flex items-center justify-center gap-1.5">
+                  <Truck className="h-4 w-4 text-primary" />
+                  {selectedVariant.deliveryCharge > 0 ? `Tk${selectedVariant.deliveryCharge} delivery` : "Free delivery"}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Description + info */}
+          <div className="border rounded-2xl bg-card overflow-hidden">
+            {listing.description && (
+              <div className="p-4">
+                <h4 className="font-semibold text-sm mb-1.5">Description</h4>
+                <p className={`text-sm text-muted-foreground leading-relaxed ${!descExpanded ? "line-clamp-3" : ""}`}>
+                  {listing.description}
+                </p>
+                {listing.description.length > 140 && (
+                  <button
+                    onClick={() => setDescExpanded((v) => !v)}
+                    className="text-sm font-semibold text-primary flex items-center gap-1 mt-1.5"
+                  >
+                    {descExpanded ? "Show Less" : "Read More"}
+                    <ChevronDown className={`h-3.5 w-3.5 transition-transform ${descExpanded ? "rotate-180" : ""}`} />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {listing.offerText && (
+              <p className="text-sm text-accent font-medium px-4 pb-3">{listing.offerText}</p>
+            )}
+
+            {listing.certification && (
+              <div className="flex items-center justify-between px-4 py-3.5 border-t">
+                <span className="flex items-center gap-2 text-sm font-semibold">
+                  <Award className="h-4 w-4 text-muted-foreground" /> Certification
+                </span>
+                <span className="flex items-center gap-1 text-sm font-semibold text-primary">
+                  {listing.certification} <Award className="h-3.5 w-3.5" />
+                </span>
               </div>
             )}
 
             {listing.tags.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-4">
-                {listing.tags.map((t, i) => (
-                  <span key={i} className="bg-accent/10 text-accent border border-accent/20 rounded-full px-3 py-1 text-xs font-medium">{t}</span>
-                ))}
+              <div className="flex items-center gap-2 px-4 py-3.5 border-t">
+                <Tag className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex gap-1.5 overflow-x-auto">
+                  {listing.tags.map((t, i) => (
+                    <span key={i} className="bg-primary/10 text-primary rounded px-2 py-0.5 text-xs font-medium whitespace-nowrap">{t}</span>
+                  ))}
+                </div>
               </div>
             )}
+
+            <div className="flex items-center justify-between px-4 py-3.5 border-t">
+              <span className="flex items-center gap-2 text-sm font-semibold">
+                <Eye className="h-4 w-4 text-muted-foreground" /> Visibility
+              </span>
+              <span className="text-sm text-muted-foreground capitalize">{listing.visibility}</span>
+            </div>
           </div>
         </div>
-
-        {/* Variants */}
-        <section className="border-t pt-10">
-          <h2 className="font-serif text-2xl font-medium mb-6">Available Options</h2>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {listing.variants.map((v) => {
-              const inStock = v.availableQuantity > 0;
-              const isAdding = addingVariantId === v.id && addToCart.isPending;
-              const price = v.discountPrice ?? v.price;
-              return (
-                <div key={v.id} className="border rounded-2xl p-4 bg-card flex flex-col">
-                  <p className="font-medium text-sm mb-1">{variantLabel(v)}</p>
-                  {v.condition && <p className="text-xs text-muted-foreground mb-2">{v.condition}</p>}
-                  <div className="flex items-baseline gap-2 mb-2">
-                    <span className="font-serif text-xl font-medium">Tk{price.toLocaleString()}</span>
-                    {v.discountPrice != null && (
-                      <span className="text-sm text-muted-foreground line-through">Tk{v.price.toLocaleString()}</span>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground mb-3">
-                    {inStock ? `${v.availableQuantity} in stock` : "Out of stock"}
-                    {v.deliveryCharge > 0 && ` · Tk${v.deliveryCharge} delivery`}
-                  </p>
-
-                  <div className="mt-auto">
-                    {inStock ? (
-                      <Button
-                        className="w-full rounded-full"
-                        size="sm"
-                        disabled={isAdding}
-                        onClick={() => handleAddToBag(v)}
-                      >
-                        {!user ? (
-                          <><LogIn className="mr-1.5 h-3.5 w-3.5" /> Sign in to buy</>
-                        ) : (
-                          <><ShoppingBag className="mr-1.5 h-3.5 w-3.5" /> {isAdding ? "Adding…" : "Add to Bag"}</>
-                        )}
-                      </Button>
-                    ) : v.isPreOrder ? (
-                      <Link href={preOrderHref(v)}>
-                        <Button className="w-full rounded-full bg-blue-500 text-white hover:bg-blue-600" size="sm">
-                          <Ship className="mr-1.5 h-3.5 w-3.5" /> Pre-Order Now
-                        </Button>
-                      </Link>
-                    ) : (
-                      <Button className="w-full rounded-full" size="sm" disabled>
-                        <PackageX className="mr-1.5 h-3.5 w-3.5" /> Out of Stock
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
       </div>
     </div>
   );

@@ -1300,6 +1300,7 @@ export const GetMySellerResponse = zod.union([zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
@@ -1326,7 +1327,8 @@ export const UpdateMySellerProfileBody = zod.object({
   "contactEmail": zod.string().optional(),
   "location": zod.string().optional(),
   "description": zod.string().nullish(),
-  "nurseryImages": zod.array(zod.string()).optional()
+  "nurseryImages": zod.array(zod.string()).optional(),
+  "logoUrl": zod.string().nullish()
 }).describe('Post-approval self-service profile edit. All fields optional (partial update) -- unlike SellerApplicationBody, status\/subscriptionStatus\/ trialEndsAt\/subscriptionExpiresAt are never accepted here, same server-derived-only rule as the initial application.')
 
 export const UpdateMySellerProfileResponse = zod.object({
@@ -1341,6 +1343,7 @@ export const UpdateMySellerProfileResponse = zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
@@ -1374,6 +1377,7 @@ export const UpdateMySellerStatusResponse = zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
@@ -1403,6 +1407,7 @@ export const RequestSellerVerificationResponse = zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
@@ -1629,7 +1634,8 @@ export const GetSellerListingResponse = zod.object({
   "businessName": zod.string(),
   "nurseryName": zod.string(),
   "location": zod.string(),
-  "isVerified": zod.boolean()
+  "isVerified": zod.boolean(),
+  "logoUrl": zod.string().nullable()
 }),
   "rating": zod.number(),
   "reviewCount": zod.number()
@@ -1781,7 +1787,8 @@ export const ListProductSellerListingsResponseItem = zod.object({
   "businessName": zod.string(),
   "nurseryName": zod.string(),
   "location": zod.string(),
-  "isVerified": zod.boolean()
+  "isVerified": zod.boolean(),
+  "logoUrl": zod.string().nullable()
 }),
   "rating": zod.number(),
   "reviewCount": zod.number()
@@ -2508,6 +2515,7 @@ export const ListSellersResponseItem = zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
@@ -2542,6 +2550,7 @@ export const ApproveSellerResponse = zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
@@ -2579,6 +2588,7 @@ export const RejectSellerResponse = zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
@@ -2612,6 +2622,7 @@ export const SuspendSellerResponse = zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
@@ -2645,6 +2656,7 @@ export const ListSellerVerificationRequestsResponseItem = zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
@@ -2679,6 +2691,7 @@ export const VerifySellerResponse = zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
@@ -2716,6 +2729,7 @@ export const RejectSellerVerificationResponse = zod.object({
   "location": zod.string(),
   "description": zod.string().nullable(),
   "nurseryImages": zod.array(zod.string()),
+  "logoUrl": zod.string().nullable(),
   "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']),
   "isVerified": zod.boolean(),
   "verificationRequestStatus": zod.enum(['none', 'requested', 'approved', 'rejected']),
