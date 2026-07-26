@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Heart, ShoppingBag, Trash2, Loader2, ChevronRight } from "lucide-react";
 import { useGuestWishlist } from "@/hooks/useGuestWishlist";
 import { useToast } from "@/hooks/use-toast";
-import { SellerListingVariantPickerDialog } from "@/components/ui/SellerListingVariantPickerDialog";
+import { SellerListingPickerDialog } from "@/components/ui/SellerListingPickerDialog";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 
 // Same category badge icon used on HomepageProductCard.tsx, for visual
@@ -49,17 +49,14 @@ export function WishlistPage() {
   const isGuest = isLoaded && !user;
   const guestWishlist = useGuestWishlist();
 
-  // Phase 4: the picker is scoped to ONE listing (mirrors
-  // SellerListingsSection.tsx's single-listing picker), chosen as the
-  // cheapest qualifying listing for the product just clicked -- see
-  // handleAddToCart for why "cheapest listing, then variant within it" is
-  // the right two-step reduction for a wishlist card, which (unlike
-  // SellerListingsSection.tsx) has no per-seller card UI of its own to
-  // let the buyer pick a seller first.
+  // Shows a seller-picker whenever a product has more than one qualifying
+  // seller listing (a real choice -- price/delivery/location all differ),
+  // rather than silently auto-picking the cheapest seller. Only reduces
+  // straight to the (single-seller) variant picker, or straight to the
+  // cart, when there's truly nothing left to choose. See handleAddToCart.
   const [pickerState, setPickerState] = useState<{
     item: WishlistLine;
-    sellerName: string;
-    variants: SellerListingVariant[];
+    cards: SellerListingCard[];
   } | null>(null);
   const [loadingItemId, setLoadingItemId] = useState<number | null>(null);
 
@@ -134,28 +131,14 @@ export function WishlistPage() {
     );
   }
 
-  // Phase 4: this used to read item.product.variants (the frozen admin
-  // ProductVariant[], permanently empty since Phase 2) and either silently
-  // no-op or open the old admin VariantPickerDialog -- both broken, and
-  // the picker was the wrong one besides (VariantPickerDialog/
-  // VariantSelector are shaped around admin ProductVariant, not
-  // SellerListingVariant, same reason Phase 3b built a fresh
-  // SellerListingVariantPickerDialog rather than reusing them -- see
-  // PHASE3B_HANDOFF.md Part 2). Rewired rather than removed: unlike
-  // ComparisonDrawer (this phase, see ProductComparison.tsx), buying
-  // directly from a saved item is core to what a wishlist page is for, and
-  // the data needed to do it for real (GET /products/:id/seller-listings)
-  // already exists and needs no backend change -- removing the button here
-  // would be a real feature regression, not just a display cleanup.
-  //
-  // "Cheapest listing, then variant within it" -- sort=price_asc and take
-  // the first card -- mirrors the same "cheapest qualifying option wins"
-  // rule used sitewide (PHASE2_HANDOFF.md §7, ProductCard.tsx's price,
-  // SellerListingsSection.tsx's per-card price). A wishlist card has no
-  // per-seller UI of its own to let the buyer choose a seller first the
-  // way SellerListingsSection.tsx's cards do, so defaulting to the
-  // cheapest seller and asking only if THAT seller has more than one
-  // qualifying variant is the closest one-click equivalent.
+  // Industry-standard marketplace pattern (Amazon/Daraz "choose a seller"):
+  // when a product has more than one seller with in-stock listings, that's
+  // a real choice for the buyer (price, delivery time, location all
+  // differ), not an implementation detail to auto-resolve. So this only
+  // skips straight to the cart when there is truly nothing left to pick --
+  // one qualifying seller AND that seller has exactly one qualifying
+  // variant. Otherwise it opens SellerListingPickerDialog, which itself
+  // skips its own seller-choice step if only one seller qualifies.
   async function handleAddToCart(item: WishlistLine) {
     if (!user) {
       toast({ title: "Sign in required", description: "Please sign in to buy from marketplace sellers.", variant: "destructive" });
@@ -167,21 +150,19 @@ export function WishlistPage() {
       const cards: SellerListingCard[] = await listProductSellerListings(item.productId, {
         sort: ListProductSellerListingsSort.price_asc,
       });
-      if (cards.length === 0) {
-        toast({ title: "No longer available", description: `${item.name} currently has no seller listings.`, variant: "destructive" });
+      const qualifyingCards = cards.filter((c) => c.listing.variants.some((v) => v.availableQuantity > 0));
+      if (qualifyingCards.length === 0) {
+        toast({ title: "No longer available", description: `${item.name} currently has no in-stock seller listings.`, variant: "destructive" });
         return;
       }
-      const cheapest = cards[0];
-      const qualifying = cheapest.listing.variants.filter((v) => v.availableQuantity > 0);
-      if (qualifying.length === 0) {
-        toast({ title: "Out of stock", description: `${item.name} is currently out of stock from all sellers.`, variant: "destructive" });
-        return;
+      if (qualifyingCards.length === 1) {
+        const onlyQualifying = qualifyingCards[0].listing.variants.filter((v) => v.availableQuantity > 0);
+        if (onlyQualifying.length === 1) {
+          addVariantToCart(item, onlyQualifying[0]);
+          return;
+        }
       }
-      if (qualifying.length === 1) {
-        addVariantToCart(item, qualifying[0]);
-        return;
-      }
-      setPickerState({ item, sellerName: cheapest.seller.businessName, variants: qualifying });
+      setPickerState({ item, cards: qualifyingCards });
     } catch {
       toast({ title: "Couldn't add to bag", description: "Please try again.", variant: "destructive" });
     } finally {
@@ -297,12 +278,12 @@ export function WishlistPage() {
       </div>
 
       {pickerState && (
-        <SellerListingVariantPickerDialog
+        <SellerListingPickerDialog
           open={!!pickerState}
           onOpenChange={(o) => { if (!o) setPickerState(null); }}
-          sellerName={pickerState.sellerName}
-          variants={pickerState.variants}
-          onConfirm={(variant) => addVariantToCart(pickerState.item, variant)}
+          productName={pickerState.item.name}
+          cards={pickerState.cards}
+          onConfirm={(_card, variant) => addVariantToCart(pickerState.item, variant)}
         />
       )}
     </div>
