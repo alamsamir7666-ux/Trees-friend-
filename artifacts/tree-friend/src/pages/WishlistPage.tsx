@@ -259,15 +259,15 @@ export function WishlistPage() {
                     </span>
                   )}
                   <hr className="border-border mt-3 mb-3" />
-                  <div className="flex items-center gap-2">
-                    <Link href={`/products/${item.productId}`} className="flex-1">
+                  <div className="flex flex-col gap-2">
+                    <Link href={`/products/${item.productId}`}>
                       <Button size="sm" variant="outline" className="w-full text-xs border-primary text-primary hover:bg-primary/5 hover:text-primary">
                         View Details
                         <ChevronRight className="h-3.5 w-3.5 ml-1" />
                       </Button>
                     </Link>
                     {isGuest ? (
-                      <Link href={`/products/${item.productId}`} className="flex-1">
+                      <Link href={`/products/${item.productId}`}>
                         <Button size="sm" className="w-full text-xs">
                           <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />
                           Add to Bag
@@ -276,7 +276,7 @@ export function WishlistPage() {
                     ) : (
                       <Button
                         size="sm"
-                        className="flex-1 text-xs"
+                        className="w-full text-xs"
                         disabled={isAdding}
                         onClick={() => handleAddToCart(item)}
                       >
