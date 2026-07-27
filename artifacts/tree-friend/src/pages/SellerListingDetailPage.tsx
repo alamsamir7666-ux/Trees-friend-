@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { useParams, Link } from "wouter";
 import { useUser } from "@clerk/react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -9,14 +9,41 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Star, MapPin, Truck, ShoppingBag, Heart,
-  LogIn, ChevronLeft, ChevronDown, PackageX, Ship, AlertTriangle, RefreshCw,
-  Sprout, Ruler, FlaskConical, Sprout as PotIcon, Award, Tag, Eye, Minus, Plus, Store as StoreIcon,
+  Star, MapPin, ShoppingBag, Heart,
+  LogIn, ChevronLeft, ChevronDown, PackageX, Ship,
+  Tag, Eye, Minus, Plus,
+  AlertTriangle, RefreshCw,
 } from "lucide-react";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { useToast } from "@/hooks/use-toast";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { useWishlist } from "@/contexts/WishlistContext";
+
+// Exact icon URLs from the approved design HTML -- used as-is rather than
+// substituted with Lucide equivalents, so the icons themselves match
+// pixel-for-pixel, not just the general idea of "an age icon".
+const ICON_AGE = "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1785064361/Screenshot_2026-07-26-17-07-39-05-removebg-preview_1_i6gaeo.svg";
+const ICON_HEIGHT = "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1785063950/gemini-svg_s3wmuj.svg";
+const ICON_POT_SIZE = "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784038665/3ea78cc9-20bd-4046-afa6-bc9a3727f8e5_fsj5gg.svg";
+const ICON_ROOT_TYPE = "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784964253/cropped-3202ecfd-40ba-4eab-8ecc-6407723adfe1_zu9mta.svg";
+const ICON_DELIVERY = "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784964252/cropped-2ff97d73-edfc-4404-b2ea-6682be7fab47_hmwjx9.svg";
+const ICON_STOCK = "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784964252/cropped-5f31b56a-2207-4587-9c06-d3fad4d6a781_yvdmdu.svg";
+const ICON_VERIFIED = "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1785076114/0731e6a0-0e45-481d-bfab-5d82aac4e9d7_1_jas2kb.svg";
+const ICON_CERTIFICATION = "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1785076114/714f4f94-8cc6-4a33-a9a5-d41a473420b3_1_qa2y34.svg";
+const ICON_CERT_CHECK = "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1785076114/ed56757c-1dbc-410f-8afd-6aa8a79b9837_1_lafxow.svg";
+const ICON_GRAFTED = "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784964252/cropped-8a860daf-2b7c-47df-bbb7-32935c65b173_f388pi.svg";
+
+// The design's Return Policy spec-tile icon is a plain inline SVG (not a
+// Cloudinary asset) -- reproduced verbatim from the HTML rather than
+// substituted with a different icon.
+function ReturnPolicyIcon({ className, style }: { className?: string; style?: CSSProperties }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={className} style={style}>
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+    </svg>
+  );
+}
 
 /**
  * Buyer-facing detail page for ONE seller's listing (Phase 3b Part 3).
@@ -191,251 +218,288 @@ export function SellerListingDetailPage() {
           </Button>
         </Link>
 
-        <div className="space-y-4">
-          {/* Seller byline */}
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="h-9 w-9 rounded-full border border-border overflow-hidden shrink-0 bg-muted/30 flex items-center justify-center">
+        <div className="space-y-3">
+          {/* Store header -- Tailwind arbitrary-value classes carrying the
+              exact px values from the approved design HTML (.store-card /
+              .store-logo / .store-details h3 / etc.), so this stays
+              consistent with the rest of the codebase instead of raw
+              inline styles, while still matching pixel-for-pixel. */}
+          <div className="border rounded-2xl bg-card flex items-center justify-between gap-3 p-[14px_16px]">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="shrink-0 overflow-hidden border bg-muted/30 flex items-center justify-center w-[42px] h-[42px] rounded-[10px]">
                 {seller.logoUrl ? (
                   <img src={seller.logoUrl} alt="" className="w-full h-full object-cover" />
                 ) : (
-                  <Sprout className="h-4 w-4 text-muted-foreground" />
+                  <img src={ICON_GRAFTED} alt="" className="w-5 h-5 opacity-40" />
                 )}
               </div>
-              <div className="min-w-0">
-                <p className="font-semibold text-sm flex items-center gap-1.5 truncate">
+              <div className="min-w-0 flex flex-col gap-0.5">
+                <h3 className="flex items-center gap-1.5 truncate text-[13px] font-bold text-[#111827]">
                   {seller.nurseryName}
                   {seller.isVerified && (
-                    <Award className="h-3.5 w-3.5 text-primary shrink-0" aria-label="Verified seller" />
+                    <img src={ICON_VERIFIED} alt="Verified" className="w-4 h-4 shrink-0" />
                   )}
-                </p>
-                <p className="text-xs text-muted-foreground flex items-center gap-1">
-                  <MapPin className="h-3 w-3 shrink-0" /> {seller.location}
-                </p>
+                </h3>
+                <div className="flex items-center gap-1">
+                  <MapPin className="w-3 h-3 text-[#9CA3AF] shrink-0" strokeWidth={1.5} />
+                  <span className="text-[10px] font-medium text-[#6B7280] leading-[1.2]">{seller.location}</span>
+                </div>
               </div>
             </div>
-            <Button variant="outline" size="sm" className="shrink-0 text-xs h-8 rounded-full" disabled title="Coming soon">
-              <StoreIcon className="h-3 w-3 mr-1" /> View Store
-            </Button>
+            <button
+              disabled
+              title="Coming soon"
+              className="border bg-white shrink-0 h-7 px-[10px] rounded-md text-[11px] font-semibold text-[#111827] opacity-60"
+            >
+              View Store
+            </button>
           </div>
 
-          {/* Hero image, full-bleed with floating price badge */}
-          <div className="relative -mx-4 sm:mx-0 mb-3">
-            <div className="aspect-[4/3] sm:rounded-2xl overflow-hidden bg-muted/20">
+          {/* Images */}
+          <div className="border rounded-2xl bg-card p-3">
+            <div className="aspect-square rounded-xl overflow-hidden bg-muted/20">
               {images.length > 0 ? (
                 <img src={images[activeImg]} alt={seller.nurseryName} className="w-full h-full object-cover" />
               ) : (
                 <NoImagePlaceholder />
               )}
             </div>
-
-            {reviewCount > 0 && (
-              <div className="absolute top-3 left-3 flex items-center gap-1 bg-background/90 backdrop-blur-sm rounded-full pl-2 pr-2.5 py-1 shadow-sm">
-                <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-                <span className="text-xs font-bold">{rating.toFixed(1)}</span>
-                <span className="text-xs text-muted-foreground">({reviewCount})</span>
+            {images.length > 1 && (
+              <div className="flex gap-2 flex-wrap mt-3">
+                {images.map((img, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setActiveImg(i)}
+                    className={`w-14 h-14 rounded-lg overflow-hidden border-2 transition-colors ${activeImg === i ? "border-primary" : "border-transparent"}`}
+                  >
+                    <img src={img} alt="" className="w-full h-full object-cover" />
+                  </button>
+                ))}
               </div>
             )}
-
-            <button
-              onClick={handleWishlistToggle}
-              className="absolute top-3 right-3 h-9 w-9 rounded-full bg-background/90 backdrop-blur-sm shadow-sm flex items-center justify-center"
-              aria-label={wishlisted ? "Remove from wishlist" : "Add to wishlist"}
-            >
-              <Heart className={`h-4 w-4 ${wishlisted ? "fill-rose-500 stroke-rose-500" : "stroke-foreground"}`} />
-            </button>
-
-            {/* Price tag, overlapping the bottom edge of the photo */}
-            <div className="absolute -bottom-5 left-4 sm:left-5 bg-primary text-primary-foreground rounded-2xl px-4 py-2.5 shadow-lg flex items-baseline gap-2">
-              <span className="font-serif text-2xl font-bold">Tk{price.toLocaleString()}</span>
-              {selectedVariant?.discountPrice != null && (
-                <span className="text-xs text-primary-foreground/70 line-through">Tk{originalPrice.toLocaleString()}</span>
-              )}
-              {discountPct != null && discountPct > 0 && (
-                <span className="text-[11px] font-semibold bg-primary-foreground/15 rounded-full px-2 py-0.5">{discountPct}% OFF</span>
-              )}
-            </div>
+            {listing.videoUrl && (
+              <div className="relative w-full mt-3" style={{ paddingBottom: "56.25%" }}>
+                <iframe
+                  className="absolute top-0 left-0 w-full h-full rounded-xl"
+                  src={listing.videoUrl.replace("watch?v=", "embed/")}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                />
+              </div>
+            )}
           </div>
 
-          {/* Thumbnails */}
-          {images.length > 1 && (
-            <div className="flex gap-2">
-              {images.map((img, i) => (
-                <button
-                  key={i}
-                  onClick={() => setActiveImg(i)}
-                  className={`w-14 h-14 rounded-xl overflow-hidden border-2 transition-colors shrink-0 ${activeImg === i ? "border-primary" : "border-transparent opacity-60 hover:opacity-100"}`}
-                >
-                  <img src={img} alt="" className="w-full h-full object-cover" />
-                </button>
-              ))}
-            </div>
-          )}
+          {/* Options + price + actions */}
+          <div className="border rounded-2xl bg-card flex flex-col gap-[14px] p-[14px]">
+            <h2 className="text-[14px] font-bold text-[#111827]">
+              Available Option{listing.variants.length > 1 ? "s" : ""}
+            </h2>
 
-          {listing.videoUrl && (
-            <div className="relative w-full rounded-2xl overflow-hidden" style={{ paddingBottom: "56.25%" }}>
-              <iframe
-                className="absolute top-0 left-0 w-full h-full"
-                src={listing.videoUrl.replace("watch?v=", "embed/")}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-              />
+            <div className="flex gap-[10px] overflow-x-auto [scrollbar-width:none]">
+              {listing.variants.map((v) => {
+                const active = selectedVariant?.id === v.id;
+                return (
+                  <button
+                    key={v.id}
+                    onClick={() => setSelectedVariantId(v.id)}
+                    className={`shrink-0 flex items-center justify-center gap-1 whitespace-nowrap min-w-[80px] h-8 rounded-md text-xs font-semibold border ${
+                      active ? "border-[#15803D] text-[#15803D] bg-[#DCFCE7]" : "border-[#E5E7EB] text-[#6B7280] bg-white"
+                    }`}
+                  >
+                    {v.form === "grafted" && <img src={ICON_GRAFTED} alt="" className="w-3.5 h-3.5" />}
+                    {variantLabel(v)}
+                  </button>
+                );
+              })}
             </div>
-          )}
 
-          {/* Purchase panel */}
-          <div className="border rounded-2xl bg-card p-4 space-y-4">
-            {listing.variants.length > 1 && (
-              <div>
-                <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Choose an option</h2>
-                <div className="flex gap-2 overflow-x-auto -mx-1 px-1 pb-1">
-                  {listing.variants.map((v) => (
-                    <button
-                      key={v.id}
-                      onClick={() => setSelectedVariantId(v.id)}
-                      className={`shrink-0 h-9 px-3.5 rounded-full text-xs font-semibold border transition-colors whitespace-nowrap ${
-                        selectedVariant?.id === v.id
-                          ? "border-primary text-primary-foreground bg-primary"
-                          : "border-border text-muted-foreground bg-background hover:bg-muted/30"
-                      }`}
-                    >
-                      {variantLabel(v)}
-                    </button>
-                  ))}
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              {reviewCount > 0 && (
+                <div className="flex items-center gap-1">
+                  <Star className="w-4 h-4 fill-[#15803D] text-[#15803D]" />
+                  <span className="text-[15px] font-bold text-[#15803D]">{rating.toFixed(1)}</span>
+                  <span className="text-[13px] font-medium text-[#6B7280]">({reviewCount} review{reviewCount !== 1 ? "s" : ""})</span>
                 </div>
+              )}
+              <div className="flex items-center gap-2">
+                <span className="text-[19px] font-bold text-[#15803D]">৳{price.toLocaleString()}</span>
+                {selectedVariant?.discountPrice != null && (
+                  <>
+                    <span className="text-[13px] font-medium text-[#9CA3AF] line-through">৳{originalPrice.toLocaleString()}</span>
+                    {discountPct != null && discountPct > 0 && (
+                      <span className="bg-[#DCFCE7] text-[#15803D] text-[11px] font-semibold px-[6px] py-[3px] rounded">{discountPct}% OFF</span>
+                    )}
+                  </>
+                )}
               </div>
-            )}
+            </div>
 
-            {/* Specs, inline and unboxed */}
+            <div className="flex items-center gap-2.5">
+              {addDisabled ? (
+                selectedVariant?.isPreOrder ? (
+                  <Link href={selectedVariant ? preOrderHref(selectedVariant) : "#"} className="flex-1">
+                    <Button className="w-full rounded-lg bg-blue-500 text-white hover:bg-blue-600">
+                      <Ship className="mr-1.5 h-4 w-4" /> Pre-Order Now
+                    </Button>
+                  </Link>
+                ) : (
+                  <Button className="flex-1 rounded-lg" disabled>
+                    <PackageX className="mr-1.5 h-4 w-4" /> Out of Stock
+                  </Button>
+                )
+              ) : (
+                <button
+                  onClick={handleAddToBag}
+                  disabled={isAdding}
+                  className="flex-1 flex items-center justify-center gap-1.5 h-10 bg-[#15803D] text-white border-none rounded-lg text-sm font-semibold"
+                >
+                  {!user ? (
+                    <><LogIn className="w-4 h-4" /> Sign in to buy</>
+                  ) : (
+                    <>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+                        <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <path d="M16 10a4 4 0 0 1-8 0"></path>
+                      </svg>
+                      {isAdding ? "Adding…" : "Add to Bag"}
+                    </>
+                  )}
+                </button>
+              )}
+
+              <div className="flex items-center justify-between shrink-0 w-24 h-10 border border-[#E5E7EB] rounded-lg px-3">
+                <button
+                  onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                  disabled={quantity <= 1}
+                  className="flex items-center bg-transparent border-none text-[#6B7280] disabled:opacity-30"
+                  aria-label="Decrease quantity"
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+                <span className="text-sm font-semibold text-[#111827]">{quantity}</span>
+                <button
+                  onClick={() => setQuantity((q) => q + 1)}
+                  className="flex items-center bg-transparent border-none text-[#6B7280]"
+                  aria-label="Increase quantity"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <button
+                onClick={handleWishlistToggle}
+                className="shrink-0 flex items-center justify-center w-10 h-10 border border-[#E5E7EB] rounded-lg bg-white"
+                aria-label={wishlisted ? "Remove from wishlist" : "Add to wishlist"}
+              >
+                <Heart className={`w-5 h-5 ${wishlisted ? "fill-rose-500 stroke-rose-500" : "stroke-[#111827] fill-none"}`} />
+              </button>
+            </div>
+
+            {/* Specs grid -- Tailwind arbitrary values from the design
+                HTML's .specs-box / .spec-item rules */}
             {selectedVariant && (
-              <div className="flex flex-wrap gap-x-5 gap-y-2.5 text-xs">
+              <div className="border border-[#E5E7EB] rounded-lg grid grid-cols-3 overflow-hidden">
                 {[
-                  { icon: Sprout, title: "Age", value: selectedVariant.age },
-                  { icon: Ruler, title: "Height", value: selectedVariant.height },
-                  { icon: PotIcon, title: "Pot size", value: selectedVariant.potSize },
-                  { icon: FlaskConical, title: "Root type", value: selectedVariant.rootType },
-                  { icon: RefreshCw, title: "Returns", value: listing.returnPolicyText || "No return policy" },
-                ].filter((s) => s.value).map((s, i) => (
-                  <div key={i} className="flex items-center gap-1.5 text-muted-foreground">
-                    <s.icon className="h-3.5 w-3.5 text-accent shrink-0" />
-                    <span>{s.title}: <span className="font-medium text-foreground">{s.value}</span></span>
+                  { icon: ICON_AGE, title: "Age", value: selectedVariant.age },
+                  { icon: ICON_HEIGHT, title: "Height", value: selectedVariant.height },
+                  { icon: ICON_POT_SIZE, title: "Pot Size", value: selectedVariant.potSize },
+                  { icon: ICON_ROOT_TYPE, title: "Root Type", value: selectedVariant.rootType },
+                  { icon: ICON_DELIVERY, title: "Delivery Time", value: listing.deliveryTimeDays != null ? `${listing.deliveryTimeDays} Days` : null },
+                  { icon: null, title: "Return Policy", value: listing.returnPolicyText || "No Return Policy" },
+                ].filter((s) => s.value).map((s, i, arr) => (
+                  <div
+                    key={i}
+                    className="flex flex-col items-center justify-center text-center gap-1.5 p-[12px_4px] min-h-[62px]"
+                    style={{
+                      borderRight: (i + 1) % 3 !== 0 ? "1px solid #E5E7EB" : "none",
+                      borderBottom: i < arr.length - 3 ? "1px solid #E5E7EB" : "none",
+                    }}
+                  >
+                    {s.icon ? (
+                      <img src={s.icon} alt={s.title} className="w-7 h-7 object-contain" />
+                    ) : (
+                      <ReturnPolicyIcon className="w-7 h-7 text-[#111827]" />
+                    )}
+                    <span className="text-xs font-semibold text-[#111827]">{s.title}</span>
+                    <span className="text-[11px] font-medium text-[#6B7280] leading-[1.3]">{s.value}</span>
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="h-px bg-border" />
-
-            {/* Stock + delivery, plain text row */}
+            {/* Stock + delivery -- Tailwind arbitrary values from
+                .stock-delivery-box */}
             {selectedVariant && (
-              <div className="flex items-center justify-between text-sm">
-                <span className={`font-medium ${inStock ? "text-primary" : "text-destructive"}`}>
+              <div className="flex h-[38px] border border-[#E5E7EB] rounded-lg overflow-hidden">
+                <div className="flex items-center justify-center flex-1 gap-1.5 text-[13px] font-semibold text-[#111827] border-r border-[#E5E7EB]">
+                  <img src={ICON_STOCK} alt="" className="w-5 h-5" />
                   {inStock ? `${selectedVariant.availableQuantity} in stock` : "Out of stock"}
-                </span>
-                <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <Truck className="h-3.5 w-3.5" />
-                  {selectedVariant.deliveryCharge > 0 ? `Tk${selectedVariant.deliveryCharge} delivery` : "Free delivery"}
-                  {listing.deliveryTimeDays != null && ` · ${listing.deliveryTimeDays} days`}
-                </span>
+                </div>
+                <div className="flex items-center justify-center flex-1 gap-1.5 text-[13px] font-semibold text-[#111827]">
+                  <img src={ICON_DELIVERY} alt="" className="w-5 h-5" />
+                  {selectedVariant.deliveryCharge > 0 ? `৳${selectedVariant.deliveryCharge} delivery` : "Free delivery"}
+                </div>
               </div>
             )}
-
-            {/* Actions */}
-            <div className="flex items-center gap-2 pt-1">
-              {addDisabled ? (
-                selectedVariant?.isPreOrder ? (
-                  <Link href={selectedVariant ? preOrderHref(selectedVariant) : "#"} className="flex-1">
-                    <Button className="w-full rounded-xl h-11 bg-blue-500 text-white hover:bg-blue-600">
-                      <Ship className="mr-1.5 h-4 w-4" /> Pre-Order Now
-                    </Button>
-                  </Link>
-                ) : (
-                  <Button className="flex-1 rounded-xl h-11" disabled>
-                    <PackageX className="mr-1.5 h-4 w-4" /> Out of Stock
-                  </Button>
-                )
-              ) : (
-                <Button className="flex-1 rounded-xl h-11" disabled={isAdding} onClick={handleAddToBag}>
-                  {!user ? (
-                    <><LogIn className="mr-1.5 h-4 w-4" /> Sign in to buy</>
-                  ) : (
-                    <><ShoppingBag className="mr-1.5 h-4 w-4" /> {isAdding ? "Adding…" : "Add to Bag"}</>
-                  )}
-                </Button>
-              )}
-
-              <div className="flex items-center border rounded-xl h-11 px-1 shrink-0">
-                <button
-                  onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                  className="h-9 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-30"
-                  disabled={quantity <= 1}
-                  aria-label="Decrease quantity"
-                >
-                  <Minus className="h-3.5 w-3.5" />
-                </button>
-                <span className="w-6 text-center text-sm font-semibold">{quantity}</span>
-                <button
-                  onClick={() => setQuantity((q) => q + 1)}
-                  className="h-9 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground"
-                  aria-label="Increase quantity"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
           </div>
 
-          {/* Description + info */}
+          {/* Description + info -- exact px values from .description-box / .list-item */}
           <div className="border rounded-2xl bg-card overflow-hidden">
             {listing.description && (
               <div className="p-4">
-                <h4 className="font-semibold text-sm mb-1.5">Description</h4>
-                <p className={`text-sm text-muted-foreground leading-relaxed ${!descExpanded ? "line-clamp-3" : ""}`}>
+                <h4 className="text-sm font-bold text-[#111827] mb-2">Description</h4>
+                <p
+                  className={`text-[13px] font-normal leading-[1.5] text-[#6B7280] mb-2 ${!descExpanded ? "line-clamp-3" : ""}`}
+                >
                   {listing.description}
                 </p>
                 {listing.description.length > 140 && (
                   <button
                     onClick={() => setDescExpanded((v) => !v)}
-                    className="text-sm font-semibold text-primary flex items-center gap-1 mt-1.5"
+                    className="flex items-center gap-1 text-[13px] font-semibold text-[#15803D] bg-transparent border-none"
                   >
                     {descExpanded ? "Show Less" : "Read More"}
-                    <ChevronDown className={`h-3.5 w-3.5 transition-transform ${descExpanded ? "rotate-180" : ""}`} />
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform ${descExpanded ? "rotate-180" : ""}`} />
                   </button>
                 )}
               </div>
             )}
 
             {listing.offerText && (
-              <p className="text-sm text-accent font-medium px-4 pb-3">{listing.offerText}</p>
+              <p className="text-[13px] text-[#15803D] font-medium px-4 pb-3">{listing.offerText}</p>
             )}
 
             {listing.certification && (
-              <div className="flex items-center justify-between px-4 py-3.5 border-t">
-                <span className="flex items-center gap-2 text-sm font-semibold">
-                  <Award className="h-4 w-4 text-muted-foreground" /> Certification
+              <div className="flex items-center justify-between p-[14px_12px] border-t border-[#E5E7EB]">
+                <span className="flex items-center gap-[5px] text-xs font-semibold text-[#111827]">
+                  <img src={ICON_CERTIFICATION} alt="" className="w-7 h-7 object-contain" />
+                  Certification
                 </span>
-                <span className="flex items-center gap-1 text-sm font-semibold text-primary">
-                  {listing.certification} <Award className="h-3.5 w-3.5" />
+                <span className="flex items-center gap-1 text-xs font-semibold text-[#111827]">
+                  {listing.certification}
+                  <img src={ICON_CERT_CHECK} alt="" className="w-3 h-3 object-contain" />
                 </span>
               </div>
             )}
 
             {listing.tags.length > 0 && (
-              <div className="flex items-center gap-2 px-4 py-3.5 border-t">
-                <Tag className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div className="flex gap-1.5 overflow-x-auto">
+              <div className="flex items-center gap-[5px] p-[14px_12px] border-t border-[#E5E7EB]">
+                <Tag className="w-4 h-4 text-[#111827] shrink-0" strokeWidth={1.5} />
+                <span className="text-xs font-semibold text-[#111827]">Tags</span>
+                <div className="flex gap-1 overflow-x-auto [scrollbar-width:none]">
                   {listing.tags.map((t, i) => (
-                    <span key={i} className="bg-primary/10 text-primary rounded px-2 py-0.5 text-xs font-medium whitespace-nowrap">{t}</span>
+                    <span key={i} className="bg-[#DCFCE7] text-[#15803D] px-2 py-0.5 rounded text-[10px] font-medium whitespace-nowrap">{t}</span>
                   ))}
                 </div>
               </div>
             )}
 
-            <div className="flex items-center justify-between px-4 py-3.5 border-t">
-              <span className="flex items-center gap-2 text-sm font-semibold">
-                <Eye className="h-4 w-4 text-muted-foreground" /> Visibility
+            <div className="flex items-center justify-between p-[14px_12px] border-t border-[#E5E7EB]">
+              <span className="flex items-center gap-[5px] text-xs font-semibold text-[#111827]">
+                <Eye className="w-4 h-4 text-[#111827]" strokeWidth={1.5} /> Visibility
               </span>
-              <span className="text-sm text-muted-foreground capitalize">{listing.visibility}</span>
+              <span className="text-xs font-medium text-[#6B7280] capitalize">{listing.visibility}</span>
             </div>
           </div>
         </div>
