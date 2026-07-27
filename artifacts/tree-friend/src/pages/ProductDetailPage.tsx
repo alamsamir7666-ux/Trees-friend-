@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { Star, Heart, ShoppingBag, ChevronLeft, Check, ShieldCheck, Package, Truck, Bike, Pencil, Trash2, Lock,
+import { Star, Heart, ShoppingBag, ChevronLeft, Check, ShieldCheck, Package, Pencil, Trash2, Lock,
   ArrowRight, Info, Sun, Droplets, Layers, Ruler, Thermometer, Gauge, Calendar, Sprout, Award, Target, Leaf,
 } from "lucide-react";
 import { ProductCard } from "@/components/ui/ProductCard";
@@ -506,36 +506,6 @@ export function ProductDetailPage() {
               <div>
                 <p className="font-semibold text-sm text-foreground mb-1">Careful Plant Packaging</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">Saplings and potted plants are packed to survive transit, but minor leaf drop or soil settling can happen in shipping — this doesn't affect the plant's health.</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Delivery Options */}
-        <section className="mb-16 border rounded-2xl overflow-hidden">
-          <div className="px-6 py-4 border-b bg-muted/30"><h3 className="font-serif text-lg font-medium">Delivery Options</h3></div>
-          <div className="divide-y">
-            <div className="flex items-start gap-4 px-6 py-5">
-              <div className="relative flex flex-col items-center">
-                <div className="h-9 w-9 rounded-full bg-accent/10 flex items-center justify-center shrink-0"><Truck className="h-4 w-4 text-accent" /></div>
-                <div className="w-px flex-1 bg-border mt-2 min-h-[2rem]" />
-              </div>
-              <div className="flex-1 pb-2">
-                <p className="font-semibold text-sm">Standard Delivery</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Delivery Time: 2-5 business days</p>
-                <div className="mt-3 inline-flex items-center gap-1.5 bg-accent/8 border border-accent/20 text-accent text-xs font-medium px-3 py-1.5 rounded-full">
-                  <span>Tk60 within Dhaka City</span><span className="text-accent/40">·</span><span>Tk120 outside Dhaka</span>
-                </div>
-              </div>
-            </div>
-            <div className="flex items-start gap-4 px-6 py-5">
-              <div className="h-9 w-9 rounded-full bg-green-100 flex items-center justify-center shrink-0"><Bike className="h-4 w-4 text-green-600" /></div>
-              <div className="flex-1">
-                <p className="font-semibold text-sm">Dhaka City Same Day Delivery</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Delivery Time: Within 24h</p>
-                <div className="mt-3 inline-flex items-center gap-1.5 bg-green-50 border border-green-200 text-green-700 text-xs font-medium px-3 py-1.5 rounded-full">
-                  <span>3pm - 9pm</span><span className="text-green-400">·</span><span>Except Friday</span>
-                </div>
               </div>
             </div>
           </div>
