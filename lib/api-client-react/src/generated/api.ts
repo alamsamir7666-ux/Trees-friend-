@@ -83,7 +83,8 @@ import type {
   UpdateShipmentStatusBody,
   UserProfile,
   ValidateCouponBody,
-  WishlistItem
+  WishlistItem,
+  GetWishlistResponse
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -2105,11 +2106,11 @@ export const getGetWishlistUrl = () => {
 }
 
 /**
- * @summary Get user's wishlist
+ * @summary Get user's wishlist, split into product-variety rows and seller-listing rows
  */
-export const getWishlist = async ( options?: RequestInit): Promise<WishlistItem[]> => {
+export const getWishlist = async ( options?: RequestInit): Promise<GetWishlistResponse> => {
 
-  return customFetch<WishlistItem[]>(getGetWishlistUrl(),
+  return customFetch<GetWishlistResponse>(getGetWishlistUrl(),
   {
     ...options,
     method: 'GET'
@@ -2300,7 +2301,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type RemoveFromWishlistMutationError = ErrorType<unknown>
 
     /**
- * @summary Remove product from wishlist
+ * @summary Remove product (variety) from wishlist
  */
 export const useRemoveFromWishlist = <TError = ErrorType<unknown>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof removeFromWishlist>>, TError,{productId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -2311,6 +2312,116 @@ export const useRemoveFromWishlist = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getRemoveFromWishlistMutationOptions(options));
+    }
+
+export const getAddSellerListingVariantToWishlistUrl = (variantId: number,) => {
+
+  return `/api/wishlist/seller-listing-variant/${variantId}`
+}
+
+/**
+ * @summary Add a specific seller's listing variant to wishlist
+ */
+export const addSellerListingVariantToWishlist = async (variantId: number, options?: RequestInit): Promise<MessageResponse> => {
+
+  return customFetch<MessageResponse>(getAddSellerListingVariantToWishlistUrl(variantId),
+  {
+    ...options,
+    method: 'POST'
+
+  }
+);}
+
+export const getAddSellerListingVariantToWishlistMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof addSellerListingVariantToWishlist>>, TError,{variantId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof addSellerListingVariantToWishlist>>, TError,{variantId: number}, TContext> => {
+
+const mutationKey = ['addSellerListingVariantToWishlist'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof addSellerListingVariantToWishlist>>, {variantId: number}> = (props) => {
+          const {variantId} = props ?? {};
+
+          return  addSellerListingVariantToWishlist(variantId,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AddSellerListingVariantToWishlistMutationResult = NonNullable<Awaited<ReturnType<typeof addSellerListingVariantToWishlist>>>
+
+    export type AddSellerListingVariantToWishlistMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Add a specific seller's listing variant to wishlist
+ */
+export const useAddSellerListingVariantToWishlist = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof addSellerListingVariantToWishlist>>, TError,{variantId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof addSellerListingVariantToWishlist>>,
+        TError,
+        {variantId: number},
+        TContext
+      > => {
+      return useMutation(getAddSellerListingVariantToWishlistMutationOptions(options));
+    }
+
+export const getRemoveSellerListingVariantFromWishlistUrl = (variantId: number,) => {
+
+  return `/api/wishlist/seller-listing-variant/${variantId}`
+}
+
+/**
+ * @summary Remove a specific seller's listing variant from wishlist
+ */
+export const removeSellerListingVariantFromWishlist = async (variantId: number, options?: RequestInit): Promise<MessageResponse> => {
+
+  return customFetch<MessageResponse>(getRemoveSellerListingVariantFromWishlistUrl(variantId),
+  {
+    ...options,
+    method: 'DELETE'
+
+  }
+);}
+
+export const getRemoveSellerListingVariantFromWishlistMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof removeSellerListingVariantFromWishlist>>, TError,{variantId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof removeSellerListingVariantFromWishlist>>, TError,{variantId: number}, TContext> => {
+
+const mutationKey = ['removeSellerListingVariantFromWishlist'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof removeSellerListingVariantFromWishlist>>, {variantId: number}> = (props) => {
+          const {variantId} = props ?? {};
+
+          return  removeSellerListingVariantFromWishlist(variantId,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RemoveSellerListingVariantFromWishlistMutationResult = NonNullable<Awaited<ReturnType<typeof removeSellerListingVariantFromWishlist>>>
+
+    export type RemoveSellerListingVariantFromWishlistMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Remove a specific seller's listing variant from wishlist
+ */
+export const useRemoveSellerListingVariantFromWishlist = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof removeSellerListingVariantFromWishlist>>, TError,{variantId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof removeSellerListingVariantFromWishlist>>,
+        TError,
+        {variantId: number},
+        TContext
+      > => {
+      return useMutation(getRemoveSellerListingVariantFromWishlistMutationOptions(options));
     }
 
 export const getValidateCouponUrl = () => {

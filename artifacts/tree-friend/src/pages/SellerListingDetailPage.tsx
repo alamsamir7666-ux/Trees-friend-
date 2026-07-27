@@ -3,7 +3,7 @@ import { useParams, Link } from "wouter";
 import { useUser } from "@clerk/react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  useGetSellerListing, useAddToCart, getGetCartQueryKey,
+  useGetSellerListing, useAddToCart, getGetCartQueryKey, useGetProduct,
   type SellerListingVariant,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
@@ -74,7 +74,7 @@ export function SellerListingDetailPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const addToCart = useAddToCart();
-  const { isWishlisted: isWishlistedFn, toggle: toggleWishlist } = useWishlist();
+  const { isSellerListingWishlisted, toggleSellerListing } = useWishlist();
   const [activeImg, setActiveImg] = useState(0);
   const [isAdding, setIsAdding] = useState(false);
   const [selectedVariantId, setSelectedVariantId] = useState<number | null>(null);
@@ -84,6 +84,12 @@ export function SellerListingDetailPage() {
   const { data: card, isLoading, isError, refetch, isRefetching } = useGetSellerListing(listingId, {
     query: { enabled: !!listingId, queryKey: ["seller-listing", listingId] },
   });
+  // Only needed for the guest-side wishlist item's productName field (see
+  // handleWishlistToggle) -- logged-in users get the real product name
+  // from the server's GET /wishlist response instead, so this fetch is
+  // wasted for them but harmless (cached under the same key ProductDetailPage
+  // uses, so it's likely already warm from browsing).
+  const { data: product } = useGetProduct(productId, { query: { enabled: !!productId, queryKey: ["product", productId] } });
   const images = card ? card.listing.images : [];
 
   // First variant is selected by default ("First Available Option" in the
@@ -117,17 +123,16 @@ export function SellerListingDetailPage() {
   }
 
   function handleWishlistToggle() {
-    if (!card) return;
-    const price = selectedVariant ? (selectedVariant.discountPrice ?? selectedVariant.price) : 0;
-    toggleWishlist({
+    if (!card || !selectedVariant) return;
+    toggleSellerListing({
+      sellerListingVariantId: selectedVariant.id,
       productId,
-      name: card.seller.nurseryName,
-      slug: String(productId),
-      price,
-      discountPrice: null,
+      productName: product?.name ?? "Listing",
       image: images[0] || "",
-      scientificName: null,
-      categoryId: null,
+      sellerName: card.seller.nurseryName,
+      price: selectedVariant.discountPrice ?? selectedVariant.price,
+      discountPrice: null,
+      variantLabel: variantLabel(selectedVariant),
     });
   }
 
@@ -193,7 +198,7 @@ export function SellerListingDetailPage() {
   }
 
   const { listing, seller, rating, reviewCount } = card;
-  const wishlisted = isWishlistedFn(productId);
+  const wishlisted = selectedVariant ? isSellerListingWishlisted(selectedVariant.id) : false;
   const price = selectedVariant ? (selectedVariant.discountPrice ?? selectedVariant.price) : 0;
   const originalPrice = selectedVariant?.price ?? 0;
   const discountPct = selectedVariant?.discountPrice != null

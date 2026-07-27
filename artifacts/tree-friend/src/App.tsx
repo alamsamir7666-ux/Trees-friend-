@@ -9,7 +9,7 @@ import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { GuestCartProvider } from "@/contexts/GuestCartContext";
 import { useGuestWishlist } from "@/hooks/useGuestWishlist";
-import { useAddToWishlist } from "@workspace/api-client-react";
+import { useAddToWishlist, useAddSellerListingVariantToWishlist } from "@workspace/api-client-react";
 import { GuestWishlistProvider } from "@/contexts/GuestWishlistContext";
 import { WishlistProvider } from "@/contexts/WishlistContext";
 import { PageProvider, usePageContext } from "@/contexts/PageContext";
@@ -454,18 +454,23 @@ function WishlistMergeSync() {
   const { user, isLoaded } = useUser();
   const guestWishlist = useGuestWishlist();
   const addToWishlist = useAddToWishlist();
+  const addSellerListingVariantToWishlist = useAddSellerListingVariantToWishlist();
   const merged = useRef(false);
 
   useEffect(() => {
     if (!isLoaded || !user || merged.current) return;
-    if (guestWishlist.items.length === 0) return;
+    if (guestWishlist.items.length === 0 && guestWishlist.sellerListingItems.length === 0) return;
     merged.current = true;
-    Promise.all(
-      guestWishlist.items.map((item) =>
+    Promise.all([
+      ...guestWishlist.items.map((item) =>
         addToWishlist.mutateAsync({ productId: item.productId }).catch(() => {})
-      )
-    ).then(() => {
+      ),
+      ...guestWishlist.sellerListingItems.map((item) =>
+        addSellerListingVariantToWishlist.mutateAsync({ variantId: item.sellerListingVariantId }).catch(() => {})
+      ),
+    ]).then(() => {
       guestWishlist.clearWishlist();
+      guestWishlist.clearSellerListingWishlist();
     });
   }, [isLoaded, user]);
 

@@ -659,6 +659,39 @@ export interface WishlistItem {
   addedAt: string;
 }
 
+/**
+ * A wishlist row for a specific seller's listing variant (distinct from
+ * WishlistItem, which is a plain product-variety wishlist row with no
+ * seller chosen).
+ */
+export interface SellerListingWishlistItem {
+  id: number;
+  productId: number;
+  sellerListingVariantId: number;
+  addedAt: string;
+  product: {
+    id: number;
+    name: string;
+    slug: string;
+    images: string[];
+  };
+  listing: {
+    id: number;
+    images: string[];
+  };
+  seller: {
+    id: number;
+    businessName: string;
+    nurseryName: string;
+  };
+  variant: SellerListingVariant;
+}
+
+export interface GetWishlistResponse {
+  products: WishlistItem[];
+  sellerListings: SellerListingWishlistItem[];
+}
+
 export interface Coupon {
   id: number;
   code: string;

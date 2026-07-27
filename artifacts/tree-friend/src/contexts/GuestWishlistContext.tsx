@@ -1,6 +1,10 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 
 const STORAGE_KEY = "treefriend_guest_wishlist";
+// Separate key (not merged into STORAGE_KEY's array) so existing guests'
+// stored product wishlists are read back unchanged by readStorage() below,
+// and so the two kinds can be cleared/managed independently.
+const SELLER_LISTING_STORAGE_KEY = "treefriend_guest_wishlist_seller_listings";
 
 export type GuestWishlistItem = {
   productId: number;
@@ -17,10 +21,34 @@ export type GuestWishlistItem = {
   categoryId?: number | null;
 };
 
+// Guest-side equivalent of SellerListingWishlistItem (api.schemas.ts) --
+// holds everything the Wishlist page's seller-listing card needs to render
+// and to add-to-cart, since guests have no server-side row to re-fetch this
+// from the way logged-in users do via GET /wishlist's sellerListings[].
+export type GuestSellerListingWishlistItem = {
+  sellerListingVariantId: number;
+  productId: number;
+  productName: string;
+  image: string;
+  sellerName: string;
+  price: number;
+  discountPrice: number | null;
+  variantLabel: string;
+};
+
 function readStorage(): GuestWishlistItem[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? (JSON.parse(raw) as GuestWishlistItem[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readSellerListingStorage(): GuestSellerListingWishlistItem[] {
+  try {
+    const raw = localStorage.getItem(SELLER_LISTING_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as GuestSellerListingWishlistItem[]) : [];
   } catch {
     return [];
   }
@@ -33,16 +61,32 @@ type GuestWishlistContextType = {
   isInWishlist: (productId: number) => boolean;
   toggle: (item: GuestWishlistItem) => void;
   clearWishlist: () => void;
+  // Seller-listing-variant equivalents of the above, kept as a fully
+  // separate list/API rather than overloading the product-shaped methods,
+  // since a seller-listing row keys on sellerListingVariantId (several can
+  // share the same productId) while the product list is unique per
+  // productId -- see WishlistContext.tsx for how these are surfaced.
+  sellerListingItems: GuestSellerListingWishlistItem[];
+  addSellerListingItem: (item: GuestSellerListingWishlistItem) => void;
+  removeSellerListingItem: (sellerListingVariantId: number) => void;
+  isSellerListingInWishlist: (sellerListingVariantId: number) => boolean;
+  toggleSellerListing: (item: GuestSellerListingWishlistItem) => void;
+  clearSellerListingWishlist: () => void;
 };
 
 const GuestWishlistContext = createContext<GuestWishlistContextType | null>(null);
 
 export function GuestWishlistProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<GuestWishlistItem[]>(() => readStorage());
+  const [sellerListingItems, setSellerListingItems] = useState<GuestSellerListingWishlistItem[]>(() => readSellerListingStorage());
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(items)); } catch {}
   }, [items]);
+
+  useEffect(() => {
+    try { localStorage.setItem(SELLER_LISTING_STORAGE_KEY, JSON.stringify(sellerListingItems)); } catch {}
+  }, [sellerListingItems]);
 
   const addItem = useCallback((item: GuestWishlistItem) => {
     setItems((prev) => prev.find((i) => i.productId === item.productId) ? prev : [...prev, item]);
@@ -67,8 +111,40 @@ export function GuestWishlistProvider({ children }: { children: ReactNode }) {
     try { localStorage.removeItem(STORAGE_KEY); } catch {}
   }, []);
 
+  const addSellerListingItem = useCallback((item: GuestSellerListingWishlistItem) => {
+    setSellerListingItems((prev) =>
+      prev.find((i) => i.sellerListingVariantId === item.sellerListingVariantId) ? prev : [...prev, item]
+    );
+  }, []);
+
+  const removeSellerListingItem = useCallback((sellerListingVariantId: number) => {
+    setSellerListingItems((prev) => prev.filter((i) => i.sellerListingVariantId !== sellerListingVariantId));
+  }, []);
+
+  const isSellerListingInWishlist = useCallback(
+    (sellerListingVariantId: number) => sellerListingItems.some((i) => i.sellerListingVariantId === sellerListingVariantId),
+    [sellerListingItems]
+  );
+
+  const toggleSellerListing = useCallback((item: GuestSellerListingWishlistItem) => {
+    setSellerListingItems((prev) =>
+      prev.some((i) => i.sellerListingVariantId === item.sellerListingVariantId)
+        ? prev.filter((i) => i.sellerListingVariantId !== item.sellerListingVariantId)
+        : [...prev, item]
+    );
+  }, []);
+
+  const clearSellerListingWishlist = useCallback(() => {
+    setSellerListingItems([]);
+    try { localStorage.removeItem(SELLER_LISTING_STORAGE_KEY); } catch {}
+  }, []);
+
   return (
-    <GuestWishlistContext.Provider value={{ items, addItem, removeItem, isInWishlist, toggle, clearWishlist }}>
+    <GuestWishlistContext.Provider value={{
+      items, addItem, removeItem, isInWishlist, toggle, clearWishlist,
+      sellerListingItems, addSellerListingItem, removeSellerListingItem,
+      isSellerListingInWishlist, toggleSellerListing, clearSellerListingWishlist,
+    }}>
       {children}
     </GuestWishlistContext.Provider>
   );

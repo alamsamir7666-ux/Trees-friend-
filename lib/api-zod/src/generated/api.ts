@@ -1039,9 +1039,9 @@ export const ListAllReviewsResponse = zod.array(ListAllReviewsResponseItem)
 
 
 /**
- * @summary Get user's wishlist
+ * @summary Get user's wishlist, split into product-variety rows and seller-listing rows
  */
-export const GetWishlistResponseItem = zod.object({
+export const GetWishlistResponseProductsItem = zod.object({
   "id": zod.number(),
   "productId": zod.number(),
   "product": zod.object({
@@ -1089,11 +1089,58 @@ export const GetWishlistResponseItem = zod.object({
 }),
   "addedAt": zod.string()
 })
-export const GetWishlistResponse = zod.array(GetWishlistResponseItem)
+
+// A wishlist row for a specific seller's listing variant (distinct from
+// the products[] rows above, which are plain product-variety wishlist
+// rows with no seller chosen).
+export const GetWishlistResponseSellerListingsItem = zod.object({
+  "id": zod.number(),
+  "productId": zod.number(),
+  "sellerListingVariantId": zod.number(),
+  "addedAt": zod.string(),
+  "product": zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "slug": zod.string(),
+  "images": zod.array(zod.string())
+}),
+  "listing": zod.object({
+  "id": zod.number(),
+  "images": zod.array(zod.string())
+}),
+  "seller": zod.object({
+  "id": zod.number(),
+  "businessName": zod.string(),
+  "nurseryName": zod.string()
+}),
+  "variant": zod.object({
+  "id": zod.number(),
+  "sellerListingId": zod.number(),
+  "form": zod.string().nullish(),
+  "rootType": zod.string().nullish(),
+  "potSize": zod.string().nullish(),
+  "age": zod.string().nullish(),
+  "height": zod.string().nullish(),
+  "condition": zod.string().nullish(),
+  "price": zod.number(),
+  "discountPrice": zod.number().nullish(),
+  "stock": zod.number(),
+  "availableQuantity": zod.number(),
+  "deliveryCharge": zod.number(),
+  "isPreOrder": zod.boolean(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})
+})
+
+export const GetWishlistResponse = zod.object({
+  "products": zod.array(GetWishlistResponseProductsItem),
+  "sellerListings": zod.array(GetWishlistResponseSellerListingsItem)
+})
 
 
 /**
- * @summary Add product to wishlist
+ * @summary Add product (variety) to wishlist
  */
 export const AddToWishlistParams = zod.object({
   "productId": zod.coerce.number()
@@ -1105,13 +1152,37 @@ export const AddToWishlistResponse = zod.object({
 
 
 /**
- * @summary Remove product from wishlist
+ * @summary Remove product (variety) from wishlist
  */
 export const RemoveFromWishlistParams = zod.object({
   "productId": zod.coerce.number()
 })
 
 export const RemoveFromWishlistResponse = zod.object({
+  "message": zod.string()
+})
+
+
+/**
+ * @summary Add a specific seller's listing variant to wishlist
+ */
+export const AddSellerListingVariantToWishlistParams = zod.object({
+  "variantId": zod.coerce.number()
+})
+
+export const AddSellerListingVariantToWishlistResponse = zod.object({
+  "message": zod.string()
+})
+
+
+/**
+ * @summary Remove a specific seller's listing variant from wishlist
+ */
+export const RemoveSellerListingVariantFromWishlistParams = zod.object({
+  "variantId": zod.coerce.number()
+})
+
+export const RemoveSellerListingVariantFromWishlistResponse = zod.object({
   "message": zod.string()
 })
 

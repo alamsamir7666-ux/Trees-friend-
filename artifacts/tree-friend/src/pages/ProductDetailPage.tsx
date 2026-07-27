@@ -84,7 +84,7 @@ export function ProductDetailPage() {
   const [editRating, setEditRating] = useState(5);
   const [editComment, setEditComment] = useState("");
 
-  const isWishlisted = wishlist?.some((w) => w.productId === id) ?? false;
+  const isWishlisted = wishlist?.products.some((w) => w.productId === id) ?? false;
 
   const relatedProducts = (relatedData?.products ?? [])
     .filter((p) => p.id !== id && p.categoryId === product?.categoryId)

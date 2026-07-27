@@ -202,3 +202,35 @@ ALTER TABLE reviews
 ALTER TABLE pre_orders
   ADD COLUMN IF NOT EXISTS seller_listing_variant_id INTEGER;
 
+-- ─── Wishlist: split "product variety" vs "seller listing" wishlist rows ──
+-- Previously wishlist only ever had product_id -- SellerListingDetailPage's
+-- heart button wishlisted the PRODUCT (wrong: it saved the seller's
+-- nurseryName as the display name but there was no way to actually save
+-- "this seller's listing" as a distinct thing). This adds an optional
+-- seller_listing_variant_id so a row is either:
+--   - a product-variety wishlist row (seller_listing_variant_id IS NULL)
+--   - a seller-listing wishlist row (seller_listing_variant_id set,
+--     product_id also still set since a listing always belongs to a
+--     product -- kept for read/grouping convenience, same denormalization
+--     pattern cart_items/reviews/pre_orders already use on this column)
+
+ALTER TABLE wishlist
+  ADD COLUMN IF NOT EXISTS seller_listing_variant_id INTEGER
+    REFERENCES seller_listing_variants(id) ON DELETE CASCADE;
+
+-- The old table-wide unique(user_id, product_id) constraint would also
+-- cover seller-listing rows (they carry product_id too) and wrongly block
+-- wishlisting a product AND a seller listing of that same product, or two
+-- different sellers' listings of that same product, as separate rows.
+-- Replaced with two PARTIAL unique indexes, one per row-kind.
+ALTER TABLE wishlist
+  DROP CONSTRAINT IF EXISTS wishlist_user_product_unique;
+
+CREATE UNIQUE INDEX IF NOT EXISTS wishlist_user_product_variety_unique
+  ON wishlist (user_id, product_id)
+  WHERE seller_listing_variant_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS wishlist_user_seller_listing_variant_unique
+  ON wishlist (user_id, seller_listing_variant_id)
+  WHERE seller_listing_variant_id IS NOT NULL;
+

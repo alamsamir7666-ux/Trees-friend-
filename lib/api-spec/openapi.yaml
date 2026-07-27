@@ -585,22 +585,20 @@ paths:
     get:
       operationId: getWishlist
       tags: [wishlist]
-      summary: Get user's wishlist
+      summary: Get user's wishlist, split into product-variety rows and seller-listing rows
       responses:
         "200":
           description: Wishlist
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/WishlistItem"
+                $ref: "#/components/schemas/GetWishlistResponse"
 
   /wishlist/{productId}:
     post:
       operationId: addToWishlist
       tags: [wishlist]
-      summary: Add product to wishlist
+      summary: Add product (variety) to wishlist
       parameters:
         - name: productId
           in: path
@@ -617,9 +615,45 @@ paths:
     delete:
       operationId: removeFromWishlist
       tags: [wishlist]
-      summary: Remove product from wishlist
+      summary: Remove product (variety) from wishlist
       parameters:
         - name: productId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /wishlist/seller-listing-variant/{variantId}:
+    post:
+      operationId: addSellerListingVariantToWishlist
+      tags: [wishlist]
+      summary: Add a specific seller's listing variant to wishlist
+      parameters:
+        - name: variantId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+    delete:
+      operationId: removeSellerListingVariantFromWishlist
+      tags: [wishlist]
+      summary: Remove a specific seller's listing variant from wishlist
+      parameters:
+        - name: variantId
           in: path
           required: true
           schema:
@@ -2972,6 +3006,78 @@ components:
         - productId
         - product
         - addedAt
+
+    SellerListingWishlistItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        productId:
+          type: integer
+        sellerListingVariantId:
+          type: integer
+        addedAt:
+          type: string
+        product:
+          type: object
+          properties:
+            id:
+              type: integer
+            name:
+              type: string
+            slug:
+              type: string
+            images:
+              type: array
+              items:
+                type: string
+          required: [id, name, slug, images]
+        listing:
+          type: object
+          properties:
+            id:
+              type: integer
+            images:
+              type: array
+              items:
+                type: string
+          required: [id, images]
+        seller:
+          type: object
+          properties:
+            id:
+              type: integer
+            businessName:
+              type: string
+            nurseryName:
+              type: string
+          required: [id, businessName, nurseryName]
+        variant:
+          $ref: "#/components/schemas/SellerListingVariant"
+      required:
+        - id
+        - productId
+        - sellerListingVariantId
+        - addedAt
+        - product
+        - listing
+        - seller
+        - variant
+
+    GetWishlistResponse:
+      type: object
+      properties:
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/WishlistItem"
+        sellerListings:
+          type: array
+          items:
+            $ref: "#/components/schemas/SellerListingWishlistItem"
+      required:
+        - products
+        - sellerListings
 
     Coupon:
       type: object

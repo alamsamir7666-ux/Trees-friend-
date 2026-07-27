@@ -9,17 +9,22 @@ import {
   sellerListingVariantsTable,
   sellersTable,
 } from "@workspace/db";
-import { eq, and, sql, inArray } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, sql, inArray } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 
 const router = Router();
 
 router.get("/wishlist", requireAuth, async (req: any, res) => {
+  // Product-variety rows only (seller_listing_variant_id IS NULL) --
+  // seller-listing rows are fetched and shaped separately below, since
+  // they need a different join (seller_listings/seller_listing_variants,
+  // not the admin-variant/marketplace-price-fallback logic below, which
+  // only makes sense for "no seller chosen yet" product rows).
   const items = await db
     .select({ wishlist: wishlistTable, product: productsTable })
     .from(wishlistTable)
     .innerJoin(productsTable, eq(wishlistTable.productId, productsTable.id))
-    .where(eq(wishlistTable.userId, req.userId));
+    .where(and(eq(wishlistTable.userId, req.userId), isNull(wishlistTable.sellerListingVariantId)));
 
   const productIds = items.map(i => i.product.id);
 
@@ -116,7 +121,40 @@ router.get("/wishlist", requireAuth, async (req: any, res) => {
       },
     };
   });
-  res.json(result);
+
+  // Seller-listing rows (seller_listing_variant_id IS NOT NULL) -- kept as
+  // a second, differently-shaped array rather than merged into `result`
+  // above, since these need listing/variant/seller data, not the admin-
+  // variant/marketplace-fallback product pricing that only applies when no
+  // seller has been chosen yet. A row here means "this exact seller's
+  // variant", not "this product from any seller".
+  const listingItems = await db
+    .select({
+      wishlist: wishlistTable,
+      variant: sellerListingVariantsTable,
+      listing: sellerListingsTable,
+      product: productsTable,
+      seller: sellersTable,
+    })
+    .from(wishlistTable)
+    .innerJoin(sellerListingVariantsTable, eq(wishlistTable.sellerListingVariantId, sellerListingVariantsTable.id))
+    .innerJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
+    .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
+    .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+    .where(and(eq(wishlistTable.userId, req.userId), isNotNull(wishlistTable.sellerListingVariantId)));
+
+  const sellerListingResult = listingItems.map(({ wishlist, variant, listing, product, seller }) => ({
+    id: wishlist.id,
+    productId: wishlist.productId,
+    sellerListingVariantId: variant.id,
+    addedAt: wishlist.addedAt.toISOString(),
+    product: { id: product.id, name: product.name, slug: product.slug, images: product.images as string[] },
+    listing: { id: listing.id, images: listing.images as string[] },
+    seller: { id: seller.id, businessName: seller.businessName, nurseryName: seller.nurseryName },
+    variant,
+  }));
+
+  res.json({ products: result, sellerListings: sellerListingResult });
 });
 
 router.post("/wishlist/:productId", requireAuth, async (req: any, res) => {
@@ -129,9 +167,50 @@ router.post("/wishlist/:productId", requireAuth, async (req: any, res) => {
 
 router.delete("/wishlist/:productId", requireAuth, async (req: any, res) => {
   const productId = parseInt(req.params.productId);
+  // Scoped to seller_listing_variant_id IS NULL -- this route removes only
+  // the plain product-variety wishlist row. Kept explicit (rather than
+  // relying on there simply being no other row to match) so this route can
+  // never be repurposed to accidentally also remove a user's seller-listing
+  // wishlist rows for the same product.
   await db
     .delete(wishlistTable)
-    .where(and(eq(wishlistTable.userId, req.userId), eq(wishlistTable.productId, productId)));
+    .where(and(
+      eq(wishlistTable.userId, req.userId),
+      eq(wishlistTable.productId, productId),
+      isNull(wishlistTable.sellerListingVariantId),
+    ));
+  res.json({ message: "Removed from wishlist" });
+});
+
+router.post("/wishlist/seller-listing-variant/:variantId", requireAuth, async (req: any, res) => {
+  const sellerListingVariantId = parseInt(req.params.variantId);
+  const [variant] = await db.select().from(sellerListingVariantsTable)
+    .where(eq(sellerListingVariantsTable.id, sellerListingVariantId));
+  if (!variant) {
+    res.status(404).json({ message: "Listing variant not found" });
+    return;
+  }
+  const [listing] = await db.select().from(sellerListingsTable)
+    .where(eq(sellerListingsTable.id, variant.sellerListingId));
+  if (!listing) {
+    res.status(404).json({ message: "Listing not found" });
+    return;
+  }
+  try {
+    await db.insert(wishlistTable).values({
+      userId: req.userId,
+      productId: listing.productId,
+      sellerListingVariantId,
+    });
+  } catch {}
+  res.json({ message: "Added to wishlist" });
+});
+
+router.delete("/wishlist/seller-listing-variant/:variantId", requireAuth, async (req: any, res) => {
+  const sellerListingVariantId = parseInt(req.params.variantId);
+  await db
+    .delete(wishlistTable)
+    .where(and(eq(wishlistTable.userId, req.userId), eq(wishlistTable.sellerListingVariantId, sellerListingVariantId)));
   res.json({ message: "Removed from wishlist" });
 });
 
