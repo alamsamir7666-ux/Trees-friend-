@@ -191,11 +191,11 @@ export function SellerListingDetailPage() {
           </Button>
         </Link>
 
-        <div className="space-y-3">
-          {/* Store header */}
-          <div className="border rounded-2xl bg-card px-4 py-3.5 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="h-10 w-10 rounded-xl border overflow-hidden shrink-0 bg-muted/30 flex items-center justify-center">
+        <div className="space-y-4">
+          {/* Seller byline */}
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-9 w-9 rounded-full border border-border overflow-hidden shrink-0 bg-muted/30 flex items-center justify-center">
                 {seller.logoUrl ? (
                   <img src={seller.logoUrl} alt="" className="w-full h-full object-cover" />
                 ) : (
@@ -206,109 +206,156 @@ export function SellerListingDetailPage() {
                 <p className="font-semibold text-sm flex items-center gap-1.5 truncate">
                   {seller.nurseryName}
                   {seller.isVerified && (
-                    <Award className="h-3.5 w-3.5 text-emerald-600 shrink-0" aria-label="Verified seller" />
+                    <Award className="h-3.5 w-3.5 text-primary shrink-0" aria-label="Verified seller" />
                   )}
                 </p>
-                <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
                   <MapPin className="h-3 w-3 shrink-0" /> {seller.location}
                 </p>
               </div>
             </div>
-            <Button variant="outline" size="sm" className="shrink-0 text-xs h-7" disabled title="Coming soon">
+            <Button variant="outline" size="sm" className="shrink-0 text-xs h-8 rounded-full" disabled title="Coming soon">
               <StoreIcon className="h-3 w-3 mr-1" /> View Store
             </Button>
           </div>
 
-          {/* Images */}
-          <div className="border rounded-2xl bg-card p-3">
-            <div className="aspect-square rounded-xl overflow-hidden bg-muted/20">
+          {/* Hero image, full-bleed with floating price badge */}
+          <div className="relative -mx-4 sm:mx-0 mb-3">
+            <div className="aspect-[4/3] sm:rounded-2xl overflow-hidden bg-muted/20">
               {images.length > 0 ? (
                 <img src={images[activeImg]} alt={seller.nurseryName} className="w-full h-full object-cover" />
               ) : (
                 <NoImagePlaceholder />
               )}
             </div>
-            {images.length > 1 && (
-              <div className="flex gap-2 flex-wrap mt-3">
-                {images.map((img, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setActiveImg(i)}
-                    className={`w-14 h-14 rounded-lg overflow-hidden border-2 transition-colors ${activeImg === i ? "border-primary" : "border-transparent"}`}
-                  >
-                    <img src={img} alt="" className="w-full h-full object-cover" />
-                  </button>
-                ))}
+
+            {reviewCount > 0 && (
+              <div className="absolute top-3 left-3 flex items-center gap-1 bg-background/90 backdrop-blur-sm rounded-full pl-2 pr-2.5 py-1 shadow-sm">
+                <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                <span className="text-xs font-bold">{rating.toFixed(1)}</span>
+                <span className="text-xs text-muted-foreground">({reviewCount})</span>
               </div>
             )}
-            {listing.videoUrl && (
-              <div className="relative w-full mt-3" style={{ paddingBottom: "56.25%" }}>
-                <iframe
-                  className="absolute top-0 left-0 w-full h-full rounded-xl"
-                  src={listing.videoUrl.replace("watch?v=", "embed/")}
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                />
-              </div>
-            )}
+
+            <button
+              onClick={handleWishlistToggle}
+              className="absolute top-3 right-3 h-9 w-9 rounded-full bg-background/90 backdrop-blur-sm shadow-sm flex items-center justify-center"
+              aria-label={wishlisted ? "Remove from wishlist" : "Add to wishlist"}
+            >
+              <Heart className={`h-4 w-4 ${wishlisted ? "fill-rose-500 stroke-rose-500" : "stroke-foreground"}`} />
+            </button>
+
+            {/* Price tag, overlapping the bottom edge of the photo */}
+            <div className="absolute -bottom-5 left-4 sm:left-5 bg-primary text-primary-foreground rounded-2xl px-4 py-2.5 shadow-lg flex items-baseline gap-2">
+              <span className="font-serif text-2xl font-bold">Tk{price.toLocaleString()}</span>
+              {selectedVariant?.discountPrice != null && (
+                <span className="text-xs text-primary-foreground/70 line-through">Tk{originalPrice.toLocaleString()}</span>
+              )}
+              {discountPct != null && discountPct > 0 && (
+                <span className="text-[11px] font-semibold bg-primary-foreground/15 rounded-full px-2 py-0.5">{discountPct}% OFF</span>
+              )}
+            </div>
           </div>
 
-          {/* Options + price + actions */}
-          <div className="border rounded-2xl bg-card p-4 space-y-3.5">
-            <h2 className="font-semibold text-sm">Available Option{listing.variants.length > 1 ? "s" : ""}</h2>
-
-            <div className="flex gap-2 overflow-x-auto -mx-1 px-1 pb-1">
-              {listing.variants.map((v) => (
+          {/* Thumbnails */}
+          {images.length > 1 && (
+            <div className="flex gap-2">
+              {images.map((img, i) => (
                 <button
-                  key={v.id}
-                  onClick={() => setSelectedVariantId(v.id)}
-                  className={`shrink-0 h-8 px-3 rounded-md text-xs font-semibold border transition-colors whitespace-nowrap ${
-                    selectedVariant?.id === v.id
-                      ? "border-primary text-primary bg-primary/10"
-                      : "border-border text-muted-foreground bg-background hover:bg-muted/30"
-                  }`}
+                  key={i}
+                  onClick={() => setActiveImg(i)}
+                  className={`w-14 h-14 rounded-xl overflow-hidden border-2 transition-colors shrink-0 ${activeImg === i ? "border-primary" : "border-transparent opacity-60 hover:opacity-100"}`}
                 >
-                  {variantLabel(v)}
+                  <img src={img} alt="" className="w-full h-full object-cover" />
                 </button>
               ))}
             </div>
+          )}
 
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              {reviewCount > 0 && (
-                <div className="flex items-center gap-1 text-sm">
-                  <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                  <span className="font-bold text-primary">{rating.toFixed(1)}</span>
-                  <span className="text-muted-foreground">({reviewCount} review{reviewCount !== 1 ? "s" : ""})</span>
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <span className="font-serif text-xl font-bold text-primary">Tk{price.toLocaleString()}</span>
-                {selectedVariant?.discountPrice != null && (
-                  <>
-                    <span className="text-sm text-muted-foreground line-through">Tk{originalPrice.toLocaleString()}</span>
-                    {discountPct != null && discountPct > 0 && (
-                      <span className="text-xs font-semibold text-primary bg-primary/10 rounded px-1.5 py-0.5">{discountPct}% OFF</span>
-                    )}
-                  </>
-                )}
-              </div>
+          {listing.videoUrl && (
+            <div className="relative w-full rounded-2xl overflow-hidden" style={{ paddingBottom: "56.25%" }}>
+              <iframe
+                className="absolute top-0 left-0 w-full h-full"
+                src={listing.videoUrl.replace("watch?v=", "embed/")}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
             </div>
+          )}
 
-            <div className="flex items-center gap-2">
+          {/* Purchase panel */}
+          <div className="border rounded-2xl bg-card p-4 space-y-4">
+            {listing.variants.length > 1 && (
+              <div>
+                <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Choose an option</h2>
+                <div className="flex gap-2 overflow-x-auto -mx-1 px-1 pb-1">
+                  {listing.variants.map((v) => (
+                    <button
+                      key={v.id}
+                      onClick={() => setSelectedVariantId(v.id)}
+                      className={`shrink-0 h-9 px-3.5 rounded-full text-xs font-semibold border transition-colors whitespace-nowrap ${
+                        selectedVariant?.id === v.id
+                          ? "border-primary text-primary-foreground bg-primary"
+                          : "border-border text-muted-foreground bg-background hover:bg-muted/30"
+                      }`}
+                    >
+                      {variantLabel(v)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Specs, inline and unboxed */}
+            {selectedVariant && (
+              <div className="flex flex-wrap gap-x-5 gap-y-2.5 text-xs">
+                {[
+                  { icon: Sprout, title: "Age", value: selectedVariant.age },
+                  { icon: Ruler, title: "Height", value: selectedVariant.height },
+                  { icon: PotIcon, title: "Pot size", value: selectedVariant.potSize },
+                  { icon: FlaskConical, title: "Root type", value: selectedVariant.rootType },
+                  { icon: RefreshCw, title: "Returns", value: listing.returnPolicyText || "No return policy" },
+                ].filter((s) => s.value).map((s, i) => (
+                  <div key={i} className="flex items-center gap-1.5 text-muted-foreground">
+                    <s.icon className="h-3.5 w-3.5 text-accent shrink-0" />
+                    <span>{s.title}: <span className="font-medium text-foreground">{s.value}</span></span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="h-px bg-border" />
+
+            {/* Stock + delivery, plain text row */}
+            {selectedVariant && (
+              <div className="flex items-center justify-between text-sm">
+                <span className={`font-medium ${inStock ? "text-primary" : "text-destructive"}`}>
+                  {inStock ? `${selectedVariant.availableQuantity} in stock` : "Out of stock"}
+                </span>
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <Truck className="h-3.5 w-3.5" />
+                  {selectedVariant.deliveryCharge > 0 ? `Tk${selectedVariant.deliveryCharge} delivery` : "Free delivery"}
+                  {listing.deliveryTimeDays != null && ` · ${listing.deliveryTimeDays} days`}
+                </span>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex items-center gap-2 pt-1">
               {addDisabled ? (
                 selectedVariant?.isPreOrder ? (
                   <Link href={selectedVariant ? preOrderHref(selectedVariant) : "#"} className="flex-1">
-                    <Button className="w-full rounded-lg bg-blue-500 text-white hover:bg-blue-600">
+                    <Button className="w-full rounded-xl h-11 bg-blue-500 text-white hover:bg-blue-600">
                       <Ship className="mr-1.5 h-4 w-4" /> Pre-Order Now
                     </Button>
                   </Link>
                 ) : (
-                  <Button className="flex-1 rounded-lg" disabled>
+                  <Button className="flex-1 rounded-xl h-11" disabled>
                     <PackageX className="mr-1.5 h-4 w-4" /> Out of Stock
                   </Button>
                 )
               ) : (
-                <Button className="flex-1 rounded-lg" disabled={isAdding} onClick={handleAddToBag}>
+                <Button className="flex-1 rounded-xl h-11" disabled={isAdding} onClick={handleAddToBag}>
                   {!user ? (
                     <><LogIn className="mr-1.5 h-4 w-4" /> Sign in to buy</>
                   ) : (
@@ -317,10 +364,10 @@ export function SellerListingDetailPage() {
                 </Button>
               )}
 
-              <div className="flex items-center border rounded-lg h-10 px-1 shrink-0">
+              <div className="flex items-center border rounded-xl h-11 px-1 shrink-0">
                 <button
                   onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                  className="h-8 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  className="h-9 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-30"
                   disabled={quantity <= 1}
                   aria-label="Decrease quantity"
                 >
@@ -329,55 +376,13 @@ export function SellerListingDetailPage() {
                 <span className="w-6 text-center text-sm font-semibold">{quantity}</span>
                 <button
                   onClick={() => setQuantity((q) => q + 1)}
-                  className="h-8 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground"
+                  className="h-9 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground"
                   aria-label="Increase quantity"
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </button>
               </div>
-
-              <button
-                onClick={handleWishlistToggle}
-                className="h-10 w-10 shrink-0 border rounded-lg flex items-center justify-center hover:bg-muted/30"
-                aria-label={wishlisted ? "Remove from wishlist" : "Add to wishlist"}
-              >
-                <Heart className={`h-4 w-4 ${wishlisted ? "fill-rose-500 stroke-rose-500" : "stroke-foreground"}`} />
-              </button>
             </div>
-
-            {/* Specs grid */}
-            {selectedVariant && (
-              <div className="grid grid-cols-3 border rounded-lg overflow-hidden">
-                {[
-                  { icon: Sprout, title: "Age", value: selectedVariant.age },
-                  { icon: Ruler, title: "Height", value: selectedVariant.height },
-                  { icon: PotIcon, title: "Pot Size", value: selectedVariant.potSize },
-                  { icon: FlaskConical, title: "Root Type", value: selectedVariant.rootType },
-                  { icon: Truck, title: "Delivery Time", value: listing.deliveryTimeDays != null ? `${listing.deliveryTimeDays} Days` : null },
-                  { icon: RefreshCw, title: "Return Policy", value: listing.returnPolicyText || "No Return Policy" },
-                ].filter((s) => s.value).map((s, i) => (
-                  <div key={i} className="flex flex-col items-center justify-center gap-1.5 p-3 text-center border-border [&:not(:nth-child(3n))]:border-r [&:not(:nth-last-child(-n+3))]:border-b">
-                    <s.icon className="h-5 w-5 text-foreground/80" />
-                    <span className="text-xs font-semibold">{s.title}</span>
-                    <span className="text-[11px] text-muted-foreground leading-tight">{s.value}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Stock + delivery charge */}
-            {selectedVariant && (
-              <div className="flex border rounded-lg h-10 overflow-hidden text-sm font-semibold">
-                <div className="flex-1 flex items-center justify-center gap-1.5 border-r">
-                  <PackageX className="h-4 w-4 text-primary" style={{ display: inStock ? "none" : undefined }} />
-                  {inStock ? `${selectedVariant.availableQuantity} in stock` : "Out of stock"}
-                </div>
-                <div className="flex-1 flex items-center justify-center gap-1.5">
-                  <Truck className="h-4 w-4 text-primary" />
-                  {selectedVariant.deliveryCharge > 0 ? `Tk${selectedVariant.deliveryCharge} delivery` : "Free delivery"}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Description + info */}
