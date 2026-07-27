@@ -27,6 +27,13 @@ export type GuestWishlistItem = {
 // from the way logged-in users do via GET /wishlist's sellerListings[].
 export type GuestSellerListingWishlistItem = {
   sellerListingVariantId: number;
+  // The PARENT seller listing's id (sellerListingsTable.id) -- distinct
+  // from sellerListingVariantId above. Needed because the detail route is
+  // /products/:productId/listings/:listingId, where :listingId is this
+  // parent listing id, not the variant id (see App.tsx's route
+  // registration and SellerListingsSection.tsx's link construction).
+  // Without this, WishlistPage has no correct id to link to.
+  sellerListingId: number;
   productId: number;
   productName: string;
   image: string;

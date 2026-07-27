@@ -126,6 +126,7 @@ export function SellerListingDetailPage() {
     if (!card || !selectedVariant) return;
     toggleSellerListing({
       sellerListingVariantId: selectedVariant.id,
+      sellerListingId: card.listing.id,
       productId,
       productName: product?.name ?? "Listing",
       image: images[0] || "",

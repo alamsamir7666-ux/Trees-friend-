@@ -49,9 +49,10 @@ type WishlistLine = {
 // product), and each has its own Add to Bag action since the seller/
 // variant is already resolved -- no picker needed.
 type SellerListingWishlistLine = {
-  id: number;
+  id: number; // wishlist row id -- used only as the React key
   productId: number;
-  sellerListingVariantId: number;
+  sellerListingId: number; // parent listing id -- used for the detail link
+  sellerListingVariantId: number; // used for remove/add-to-cart
   productName: string;
   image: string;
   sellerName: string;
@@ -141,6 +142,7 @@ export function WishlistPage() {
     ? guestWishlist.sellerListingItems.map((g) => ({
         id: g.sellerListingVariantId,
         productId: g.productId,
+        sellerListingId: g.sellerListingId,
         sellerListingVariantId: g.sellerListingVariantId,
         productName: g.productName,
         image: g.image,
@@ -153,6 +155,7 @@ export function WishlistPage() {
     : (wishlistData?.sellerListings ?? []).map((w) => ({
         id: w.id,
         productId: w.productId,
+        sellerListingId: w.listing.id,
         sellerListingVariantId: w.sellerListingVariantId,
         productName: w.product.name,
         image: w.listing.images?.[0] ?? w.product.images?.[0] ?? "",
@@ -367,7 +370,7 @@ export function WishlistPage() {
                 const img = line.image || null;
                 const isAdding = loadingListingLineId === line.sellerListingVariantId;
                 const outOfStock = line.availableQuantity != null && line.availableQuantity <= 0;
-                const detailHref = `/products/${line.productId}/listings/${line.id}`;
+                const detailHref = `/products/${line.productId}/listings/${line.sellerListingId}`;
                 return (
                   <div key={line.id} className="group bg-card border rounded-xl overflow-hidden">
                     <Link href={detailHref}>
