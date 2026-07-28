@@ -13,27 +13,50 @@ import { Star, Check, Lock, Pencil, Trash2 } from "lucide-react";
 
 /**
  * Reviews for a specific seller's listing -- fully separate from the
- * product-level reviews on ProductDetailPage.tsx (per product decision):
- * this list is keyed by sellerListingId and only shows here, not on the
- * product page. "Verified purchaser" here means the buyer bought THIS
- * seller's listing specifically, not just the product from any seller
- * (see the eligibility route's doc comment in reviews.ts for why this is
- * listing-scoped rather than variant-scoped).
+ * product-level reviews on ProductDetailPage.tsx (per product decision).
+ *
+ * Reviews attach to the exact VARIANT a buyer purchased, not just the
+ * listing (reviewsTable's own schema doc comment, Phase 2, and product
+ * decision: a Sapling and a Grafted tree from the same seller are
+ * different purchase experiences). So eligibility and creation are keyed
+ * on sellerListingVariantId (the CURRENTLY SELECTED variant on the page,
+ * passed in as a prop) -- a buyer who bought Sapling can't review under
+ * Grafted just because they're both this listing.
+ *
+ * The DISPLAY list below still shows every review for the whole listing
+ * together (matches sellerListingId-grouped rating aggregation elsewhere,
+ * e.g. the star rating on the listing card) rather than filtering to only
+ * the selected variant's reviews -- each review is labeled with which
+ * variant it's for when that's known, so a reader can judge relevance.
  *
  * Edit/delete reuse the same PUT /reviews/:reviewId and
  * DELETE /reviews/:productId/:reviewId endpoints product reviews use --
  * those operate on the review row by id/ownership and don't care which
  * kind of review it is, so no separate edit/delete endpoints were needed.
  */
-export function SellerListingReviews({ sellerListingId, productId }: { sellerListingId: number; productId: number }) {
+export function SellerListingReviews({
+  sellerListingId,
+  sellerListingVariantId,
+  variantLabel,
+  productId,
+}: {
+  sellerListingId: number;
+  sellerListingVariantId: number;
+  variantLabel: string;
+  productId: number;
+}) {
   const { user } = useUser();
   const qc = useQueryClient();
 
   const { data: reviews } = useListSellerListingReviews(sellerListingId, {
     query: { enabled: !!sellerListingId, queryKey: getListSellerListingReviewsQueryKey(sellerListingId) },
   });
-  const { data: eligibility } = useGetSellerListingReviewEligibility(sellerListingId, {
-    query: { enabled: !!user && !!sellerListingId, retry: false, queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId) },
+  const { data: eligibility } = useGetSellerListingReviewEligibility(sellerListingId, sellerListingVariantId, {
+    query: {
+      enabled: !!user && !!sellerListingId && !!sellerListingVariantId,
+      retry: false,
+      queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId, sellerListingVariantId),
+    },
   });
 
   const createReview = useCreateSellerListingReview();
@@ -53,10 +76,10 @@ export function SellerListingReviews({ sellerListingId, productId }: { sellerLis
 
   function handleReview() {
     if (!user) return;
-    createReview.mutate({ sellerListingId, data: { rating, comment } }, {
+    createReview.mutate({ sellerListingId, data: { sellerListingVariantId, rating, comment } }, {
       onSuccess: () => {
         qc.invalidateQueries({ queryKey: getListSellerListingReviewsQueryKey(sellerListingId) });
-        qc.invalidateQueries({ queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId) });
+        qc.invalidateQueries({ queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId, sellerListingVariantId) });
         setComment(""); setRating(5); setShowReviewForm(false);
       },
     });
@@ -83,7 +106,7 @@ export function SellerListingReviews({ sellerListingId, productId }: { sellerLis
     deleteReview.mutate({ productId, reviewId }, {
       onSuccess: () => {
         qc.invalidateQueries({ queryKey: getListSellerListingReviewsQueryKey(sellerListingId) });
-        qc.invalidateQueries({ queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId) });
+        qc.invalidateQueries({ queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId, sellerListingVariantId) });
       },
     });
   }
@@ -94,19 +117,20 @@ export function SellerListingReviews({ sellerListingId, productId }: { sellerLis
         <h2 className="font-serif text-2xl font-medium">Customer Reviews</h2>
         {user && canReview && (
           <Button variant="outline" onClick={() => setShowReviewForm(!showReviewForm)}>
-            {showReviewForm ? "Cancel" : "Write a Review"}
+            {showReviewForm ? "Cancel" : `Review "${variantLabel}"`}
           </Button>
         )}
         {user && alreadyReviewed && (
           <span className="flex items-center gap-1.5 text-sm text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full">
-            <Check className="h-3.5 w-3.5 text-green-600" /> You've reviewed this listing
+            <Check className="h-3.5 w-3.5 text-green-600" /> You've reviewed this variant
           </span>
         )}
       </div>
 
       {showReviewForm && canReview && (
         <div className="bg-muted/30 rounded-2xl p-6 mb-8">
-          <h3 className="font-medium mb-4">Your Review</h3>
+          <h3 className="font-medium mb-1">Your Review</h3>
+          <p className="text-xs text-muted-foreground mb-4">For the "{variantLabel}" option you purchased</p>
           <div className="flex gap-2 mb-4">
             {Array.from({ length: 5 }).map((_, i) => (
               <button key={i} onClick={() => setRating(i + 1)}>
@@ -124,7 +148,7 @@ export function SellerListingReviews({ sellerListingId, productId }: { sellerLis
           <Lock className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground/60" />
           <div>
             <p className="font-medium text-foreground mb-0.5">Reviews are for verified purchasers</p>
-            <p>You need to buy this listing from this seller before you can leave a review.</p>
+            <p>You need to buy the "{variantLabel}" option from this seller before you can review it.</p>
             <Link href="/orders"><span className="text-accent underline underline-offset-2 hover:text-accent/80 mt-1 inline-block">View your orders ?</span></Link>
           </div>
         </div>
@@ -148,11 +172,19 @@ export function SellerListingReviews({ sellerListingId, productId }: { sellerLis
           {(reviews ?? []).map((r) => {
             const isOwner = user?.id === r.userId;
             const isEditing = editingReviewId === r.id;
+            const isThisVariant = r.sellerListingVariantId === sellerListingVariantId;
             return (
               <div key={r.id} className="border-b pb-6 last:border-0">
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <p className="font-medium text-sm">{r.userName}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-sm">{r.userName}</p>
+                      {r.sellerListingVariantId != null && (
+                        <span className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${isThisVariant ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground"}`}>
+                          {isThisVariant ? variantLabel : "other option"}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex gap-1 mt-1">
                       {Array.from({ length: 5 }).map((_, i) => (
                         <Star key={i} className={`h-3.5 w-3.5 ${i < r.rating ? "fill-accent text-accent" : "text-muted"}`} />

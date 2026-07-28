@@ -589,7 +589,7 @@ paths:
     post:
       operationId: createSellerListingReview
       tags: [reviews]
-      summary: Create a review for a specific seller's listing (auth required, must have purchased that listing)
+      summary: Create a review for a specific seller listing VARIANT (auth required, must have purchased that exact variant)
       parameters:
         - name: sellerListingId
           in: path
@@ -601,7 +601,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateReviewBody"
+              $ref: "#/components/schemas/CreateSellerListingReviewBody"
       responses:
         "201":
           description: Created review
@@ -614,10 +614,15 @@ paths:
     get:
       operationId: getSellerListingReviewEligibility
       tags: [reviews]
-      summary: Check if current user can review this seller's listing
+      summary: Check if current user can review this exact seller-listing variant
       parameters:
         - name: sellerListingId
           in: path
+          required: true
+          schema:
+            type: integer
+        - name: variantId
+          in: query
           required: true
           schema:
             type: integer
@@ -3131,6 +3136,9 @@ components:
         sellerListingId:
           type: integer
           nullable: true
+        sellerListingVariantId:
+          type: integer
+          nullable: true
         productId:
           type: integer
         userId:
@@ -3146,12 +3154,27 @@ components:
       required:
         - id
         - sellerListingId
+        - sellerListingVariantId
         - productId
         - userId
         - userName
         - rating
         - comment
         - createdAt
+
+    CreateSellerListingReviewBody:
+      type: object
+      properties:
+        sellerListingVariantId:
+          type: integer
+        rating:
+          type: integer
+        comment:
+          type: string
+      required:
+        - sellerListingVariantId
+        - rating
+        - comment
 
     QAItem:
       type: object

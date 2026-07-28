@@ -1115,6 +1115,7 @@ export const ListSellerListingReviewsParams = zod.object({
 export const SellerListingReview = zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number().nullable(),
+  "sellerListingVariantId": zod.number().nullable(),
   "productId": zod.number(),
   "userId": zod.string(),
   "userName": zod.string(),
@@ -1126,20 +1127,27 @@ export const ListSellerListingReviewsResponse = zod.array(SellerListingReview)
 
 
 /**
- * @summary Create a review for a specific seller's listing (auth required, must have purchased that listing)
+ * @summary Create a review for a specific seller listing VARIANT (auth required, must have purchased that exact variant)
  */
 export const CreateSellerListingReviewParams = zod.object({
   "sellerListingId": zod.coerce.number()
+})
+
+export const CreateSellerListingReviewBody = zod.object({
+  "sellerListingVariantId": zod.number(),
+  "rating": zod.number(),
+  "comment": zod.string()
 })
 
 export const CreateSellerListingReviewResponse = SellerListingReview
 
 
 /**
- * @summary Check if current user can review this seller's listing
+ * @summary Check if current user can review this exact seller-listing variant
  */
 export const GetSellerListingReviewEligibilityParams = zod.object({
-  "sellerListingId": zod.coerce.number()
+  "sellerListingId": zod.coerce.number(),
+  "variantId": zod.coerce.number()
 })
 
 export const GetSellerListingReviewEligibilityResponse = zod.object({

@@ -50,6 +50,16 @@ export type OrderItem = {
       // Marketplace line: a specific seller's listing of a variety.
       sellerListingId: number;
       sellerId: number;
+      // Which VARIANT of that listing was bought (e.g. "grafted" vs
+      // "sapling") -- distinct from sellerListingId, which only identifies
+      // the listing as a whole. Added so review eligibility (reviews.ts)
+      // can be checked exactly against the variant a buyer purchased,
+      // instead of only against the listing (which could span variants
+      // that differ meaningfully, e.g. different pot sizes or forms).
+      // Optional (not required) so existing historical orders written
+      // before this field existed still satisfy the type -- eligibility
+      // checks fall back to listing-level matching for those.
+      sellerListingVariantId?: number;
       variantId?: undefined;
       variantName?: undefined;
       deliveryCharge: number;

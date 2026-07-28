@@ -4,7 +4,7 @@
 
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { reviewsTable, ordersTable, productsTable, sellerListingsTable } from "@workspace/db";
+import { reviewsTable, ordersTable, productsTable, sellerListingsTable, sellerListingVariantsTable } from "@workspace/db";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import multer from "multer";
@@ -198,6 +198,7 @@ function formatSellerListingReview(r: typeof reviewsTable.$inferSelect) {
   return {
     id: r.id,
     sellerListingId: r.sellerListingId,
+    sellerListingVariantId: r.sellerListingVariantId,
     productId: r.productId,
     userId: r.userId,
     userName: r.userName,
@@ -226,14 +227,25 @@ router.get("/seller-listings/:sellerListingId/reviews", async (req, res) => {
 router.get("/seller-listings/:sellerListingId/reviews/eligibility", requireAuth, async (req: any, res) => {
   try {
     const sellerListingId = parseInt(req.params.sellerListingId);
+    const sellerListingVariantId = parseInt(req.query.variantId as string);
     if (isNaN(sellerListingId) || sellerListingId <= 0) {
       res.status(400).json({ error: "Invalid seller listing ID" }); return;
     }
+    if (isNaN(sellerListingVariantId) || sellerListingVariantId <= 0) {
+      res.status(400).json({ error: "variantId query param is required" }); return;
+    }
     const userId = req.userId as string;
+    // Reviews attach to the exact VARIANT a buyer purchased (schema doc
+    // comment on reviewsTable, Phase 2) -- a buyer can separately review
+    // each variant of a seller's listing they've bought (e.g. Sapling AND
+    // Grafted from the same seller are different purchase experiences), so
+    // both the duplicate check and the purchase check below are keyed on
+    // sellerListingVariantId, matching reviewsTable's own unique constraint
+    // (sellerListingVariantId, userId), not sellerListingId.
     const [existing] = await db
       .select({ id: reviewsTable.id })
       .from(reviewsTable)
-      .where(and(eq(reviewsTable.sellerListingId, sellerListingId), eq(reviewsTable.userId, userId)))
+      .where(and(eq(reviewsTable.sellerListingVariantId, sellerListingVariantId), eq(reviewsTable.userId, userId)))
       .limit(1);
     if (existing) { res.json({ canReview: false, reason: "already_reviewed" }); return; }
 
@@ -243,7 +255,7 @@ router.get("/seller-listings/:sellerListingId/reviews/eligibility", requireAuth,
       .where(and(eq(ordersTable.userId, userId), sql`order_status NOT IN ('cancelled')`));
 
     const hasPurchased = orders.some((o) =>
-      (o.items as any[]).some((item: any) => item.sellerListingId === sellerListingId),
+      (o.items as any[]).some((item: any) => item.sellerListingVariantId === sellerListingVariantId),
     );
     if (!hasPurchased) { res.json({ canReview: false, reason: "not_purchased" }); return; }
     res.json({ canReview: true, reason: null });
@@ -264,7 +276,16 @@ router.post(
       const [listing] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, sellerListingId));
       if (!listing) { res.status(404).json({ error: "Listing not found" }); return; }
 
-      const { rating, comment } = req.body;
+      const { rating, comment, sellerListingVariantId: rawVariantId } = req.body;
+      const sellerListingVariantId = parseInt(rawVariantId);
+      if (isNaN(sellerListingVariantId) || sellerListingVariantId <= 0) {
+        res.status(400).json({ error: "sellerListingVariantId is required" }); return;
+      }
+      const [variant] = await db.select().from(sellerListingVariantsTable).where(eq(sellerListingVariantsTable.id, sellerListingVariantId));
+      if (!variant || variant.sellerListingId !== sellerListingId) {
+        res.status(400).json({ error: "Variant does not belong to this listing" }); return;
+      }
+
       const userId = req.userId as string;
 
       const ratingNum = Number(rating);
@@ -278,22 +299,25 @@ router.post(
         res.status(400).json({ error: "Comment cannot exceed 1000 characters" }); return;
       }
 
+      // Same variant-exact scoping as the eligibility route above -- see
+      // its comment for why this is keyed on sellerListingVariantId rather
+      // than sellerListingId.
       const [existing] = await db
         .select({ id: reviewsTable.id })
         .from(reviewsTable)
-        .where(and(eq(reviewsTable.sellerListingId, sellerListingId), eq(reviewsTable.userId, userId)))
+        .where(and(eq(reviewsTable.sellerListingVariantId, sellerListingVariantId), eq(reviewsTable.userId, userId)))
         .limit(1);
-      if (existing) { res.status(409).json({ error: "You have already reviewed this listing" }); return; }
+      if (existing) { res.status(409).json({ error: "You have already reviewed this variant" }); return; }
 
       const orders = await db
         .select({ id: ordersTable.id, items: ordersTable.items })
         .from(ordersTable)
         .where(and(eq(ordersTable.userId, userId), sql`order_status NOT IN ('cancelled')`));
       const hasPurchased = orders.some((o) =>
-        (o.items as any[]).some((item: any) => item.sellerListingId === sellerListingId),
+        (o.items as any[]).some((item: any) => item.sellerListingVariantId === sellerListingVariantId),
       );
       if (!hasPurchased) {
-        res.status(403).json({ error: "You must purchase this listing before writing a review" }); return;
+        res.status(403).json({ error: "You must purchase this exact variant before writing a review" }); return;
       }
 
       const files = (req.files ?? []) as Express.Multer.File[];
@@ -314,6 +338,7 @@ router.post(
           productId: listing.productId,
           sellerId: listing.sellerId,
           sellerListingId,
+          sellerListingVariantId,
           userId,
           userName,
           rating: Math.round(ratingNum),

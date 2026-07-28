@@ -364,6 +364,7 @@ router.post("/orders", requireAuth, async (req: any, res) => {
           productName: product.name,
           productImage: ((product.images as string[])[0]) ?? "",
           sellerListingId: listing.id,
+          sellerListingVariantId: variant.id,
           sellerId: listing.sellerId,
           quantity: cart.quantity,
           price,

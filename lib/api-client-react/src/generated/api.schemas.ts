@@ -661,12 +661,19 @@ export interface AdminReview {
 export interface SellerListingReview {
   id: number;
   sellerListingId: number | null;
+  sellerListingVariantId: number | null;
   productId: number;
   userId: string;
   userName: string;
   rating: number;
   comment: string;
   createdAt: string;
+}
+
+export interface CreateSellerListingReviewBody {
+  sellerListingVariantId: number;
+  rating: number;
+  comment: string;
 }
 
 export interface QAItem {

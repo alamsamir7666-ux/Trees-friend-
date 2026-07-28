@@ -512,7 +512,14 @@ export function SellerListingDetailPage() {
           </div>
         </div>
 
-        <SellerListingReviews sellerListingId={listing.id} productId={productId} />
+        {selectedVariant && (
+          <SellerListingReviews
+            sellerListingId={listing.id}
+            sellerListingVariantId={selectedVariant.id}
+            variantLabel={variantLabel(selectedVariant)}
+            productId={productId}
+          />
+        )}
         <SellerListingQA sellerListingId={listing.id} ownerSellerId={seller.id} />
       </div>
     </div>
