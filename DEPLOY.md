@@ -65,6 +65,7 @@ git push -u origin main
    | `CLERK_SECRET_KEY` | *(paste from Step 3)* |
    | `CLERK_PUBLISHABLE_KEY` | *(paste from Step 3)* |
    | `ALLOWED_ORIGINS` | `https://treefriend.vercel.app` *(update after Step 5)* |
+   | `ADMIN_EMAILS` | `your-admin@email.com` *(comma-separated list of admin emails)* |
 
 6. Click **Create Web Service**
 7. Wait for the build to finish (2–4 minutes)

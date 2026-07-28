@@ -4,6 +4,40 @@ import { db } from "@workspace/db";
 import { usersTable, sellersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { verifyMobileJwt } from "./mobileJwt";
+import { logger } from "../lib/logger";
+
+/**
+ * Admin email addresses — loaded from the ADMIN_EMAILS environment variable
+ * (comma-separated, e.g. "admin@example.com,ops@example.com").
+ *
+ * Industry-standard rationale:
+ *  - Never hardcode secrets or role-granting identifiers in source code.
+ *  - ENV vars are easy to change per deployment (staging vs production)
+ *    without a code change, and are the standard way 12-factor apps
+ *    manage configuration.
+ *  - Comma-separated lists are the most common convention for multi-value
+ *    ENV vars (used by CORS origins, allowed hosts, etc.).
+ *
+ * Fallback: in development an empty array is used so that no one
+ * accidentally gets admin rights; in production a missing variable logs
+ * a prominent warning.
+ */
+const ADMIN_EMAILS: string[] = (() => {
+  const raw = process.env.ADMIN_EMAILS ?? "";
+  if (!raw) {
+    if (process.env.NODE_ENV === "production") {
+      logger.warn(
+        "ADMIN_EMAILS env var is empty — no user will be auto-promoted to admin. " +
+          "Set ADMIN_EMAILS to a comma-separated list of admin email addresses.",
+      );
+    }
+    return []; // Safe default: nobody gets admin by accident
+  }
+  return raw
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e.length > 0);
+})();
 
 declare global {
   namespace Express {
@@ -97,13 +131,12 @@ export const requireAuth = async (
     (auth as any)?.sessionClaims?.public_metadata?.role ??
     null;
 
-  const ADMIN_EMAILS = ["alammahatab717@gmail.com"];
   const effectiveRole =
-    clerkRole ?? (claimedEmail && ADMIN_EMAILS.includes(claimedEmail) ? "admin" : null);
+    clerkRole ?? (claimedEmail && ADMIN_EMAILS.includes(claimedEmail.toLowerCase()) ? "admin" : null);
 
   if (!user) {
     const email = claimedEmail ?? `${clerkId}@clerk.user`;
-    const isAdminEmail = ADMIN_EMAILS.includes(email);
+    const isAdminEmail = ADMIN_EMAILS.includes(email.toLowerCase());
     const [inserted] = await db
       .insert(usersTable)
       .values({
@@ -116,7 +149,7 @@ export const requireAuth = async (
       .returning();
     user = inserted;
   } else {
-    const isAdminEmail = claimedEmail ? ADMIN_EMAILS.includes(claimedEmail) : ADMIN_EMAILS.includes(user.email);
+    const isAdminEmail = claimedEmail ? ADMIN_EMAILS.includes(claimedEmail.toLowerCase()) : ADMIN_EMAILS.includes(user.email.toLowerCase());
     const resolvedRole = effectiveRole ?? (isAdminEmail ? "admin" : null);
     const needsUpdate =
       (claimedFirst && user.firstName !== claimedFirst) ||

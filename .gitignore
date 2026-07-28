@@ -41,11 +41,13 @@ testem.log
 .DS_Store
 Thumbs.db
 
-# Environment variables — NEVER commit these
+# Environment variables — NEVER commit real env files
 .env
 .env.local
 .env.production
 .env.*.local
+# .env.example is intentionally kept — it documents required env vars
+# without containing any secrets. This is the industry-standard practice.
 
 # Replit — not needed outside Replit
 .replit
@@ -55,6 +57,4 @@ replit.md
 attached_assets/
 .cache/
 .local/
-*.env.example
-.env.example
 *.keystore
