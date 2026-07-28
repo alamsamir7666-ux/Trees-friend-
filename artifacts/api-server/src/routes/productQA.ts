@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { productQATable, ordersTable } from "@workspace/db";
-import { eq, and, sql, desc, gt } from "drizzle-orm";
-import { requireAuth, requireAdmin } from "../middlewares/auth";
+import { productQATable, ordersTable, sellerListingsTable } from "@workspace/db";
+import { eq, and, sql, desc, gt, isNull } from "drizzle-orm";
+import { requireAuth, requireAdmin, requireSeller } from "../middlewares/auth";
 
 const router = Router();
 
@@ -20,6 +20,11 @@ router.get("/products/:productId/qa", async (req, res) => {
         and(
           eq(productQATable.productId, productId),
           eq(productQATable.isPublished, true),
+          // Product-level Q&A only -- excludes seller-listing questions,
+          // which are fully separate (fetched via
+          // GET /seller-listings/:sellerListingId/qa below) even though
+          // they share this same table and carry the same productId.
+          isNull(productQATable.sellerListingId),
         ),
       )
       .orderBy(productQATable.createdAt);
@@ -85,12 +90,173 @@ router.post("/products/:productId/qa", requireAuth, async (req: any, res) => {
 
     res.status(201).json({
       id: qa.id,
+      userId: qa.userId,
+      userName: qa.userName,
       question: qa.question,
       answer: null,
+      answeredAt: null,
       createdAt: qa.createdAt.toISOString(),
     });
   } catch {
     res.status(500).json({ error: "Failed to post question" });
+  }
+});
+
+// ─── Seller-listing Q&A ─────────────────────────────────────────────────────
+// Fully separate question list from product-level Q&A above (per product
+// decision), scoped to one seller's listing and answered by that listing's
+// OWNING seller (or an admin) rather than admin-only. Shares the same
+// productQATable and the same 1-hour ask-cooldown as product Q&A (a single
+// per-user cooldown across both kinds is intentional -- it's an anti-spam
+// measure, not a per-surface quota).
+
+router.get("/seller-listings/:sellerListingId/qa", async (req, res) => {
+  try {
+    const sellerListingId = parseInt(req.params.sellerListingId);
+    if (isNaN(sellerListingId) || sellerListingId <= 0) {
+      res.status(400).json({ error: "Invalid seller listing ID" });
+      return;
+    }
+    const questions = await db
+      .select()
+      .from(productQATable)
+      .where(
+        and(
+          eq(productQATable.sellerListingId, sellerListingId),
+          eq(productQATable.isPublished, true),
+        ),
+      )
+      .orderBy(productQATable.createdAt);
+
+    res.json(
+      questions.map((q) => ({
+        id: q.id,
+        userId: q.userId,
+        userName: q.userName,
+        question: q.question,
+        answer: q.answer ?? null,
+        answeredAt: q.answeredAt?.toISOString() ?? null,
+        createdAt: q.createdAt.toISOString(),
+      })),
+    );
+  } catch {
+    res.status(500).json({ error: "Failed to fetch Q&A" });
+  }
+});
+
+router.post("/seller-listings/:sellerListingId/qa", requireAuth, async (req: any, res) => {
+  try {
+    const sellerListingId = parseInt(req.params.sellerListingId);
+    if (isNaN(sellerListingId) || sellerListingId <= 0) {
+      res.status(400).json({ error: "Invalid seller listing ID" });
+      return;
+    }
+    const [listing] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, sellerListingId));
+    if (!listing) {
+      res.status(404).json({ error: "Listing not found" });
+      return;
+    }
+    const { question } = req.body;
+    if (!question || question.trim().length < 5) {
+      res.status(400).json({ error: "Question must be at least 5 characters" });
+      return;
+    }
+    if (question.trim().length > 500) {
+      res.status(400).json({ error: "Question cannot exceed 500 characters" });
+      return;
+    }
+
+    // Same 1-hour cooldown as product Q&A, checked across ALL of this
+    // user's questions (product- and listing-scoped alike) -- see comment
+    // above the "Seller-listing Q&A" section header.
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const [recentQ] = await db.select().from(productQATable)
+      .where(and(eq(productQATable.userId, req.userId), gt(productQATable.createdAt, oneHourAgo)))
+      .orderBy(desc(productQATable.createdAt)).limit(1);
+    if (recentQ) {
+      const waitMin = Math.ceil((recentQ.createdAt.getTime() + 3600000 - Date.now()) / 60000);
+      res.status(429).json({ error: `You can ask another question in ${waitMin} minute${waitMin !== 1 ? "s" : ""}.` });
+      return;
+    }
+    const dbUser = req.dbUser;
+    const userName =
+      `${dbUser?.firstName ?? ""} ${dbUser?.lastName ?? ""}`.trim() ||
+      "Customer";
+
+    const [qa] = await db
+      .insert(productQATable)
+      .values({
+        productId: listing.productId,
+        sellerListingId,
+        sellerId: listing.sellerId,
+        userId: req.userId,
+        userName,
+        question: question.trim(),
+      })
+      .returning();
+
+    res.status(201).json({
+      id: qa.id,
+      userId: qa.userId,
+      userName: qa.userName,
+      question: qa.question,
+      answer: null,
+      answeredAt: null,
+      createdAt: qa.createdAt.toISOString(),
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to post question" });
+  }
+});
+
+// Seller answers a question on their OWN listing. requireSeller attaches
+// req.dbSeller (an active seller row); the ownership check below is what
+// actually stops a seller answering on someone else's listing -- being
+// merely "a seller" isn't enough.
+router.put("/seller/qa/:id/answer", requireSeller, async (req: any, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid Q&A ID" });
+      return;
+    }
+    const { answer } = req.body;
+    if (!answer || answer.trim().length < 2) {
+      res.status(400).json({ error: "Answer is required" });
+      return;
+    }
+    if (answer.trim().length > 1000) {
+      res.status(400).json({ error: "Answer cannot exceed 1000 characters" });
+      return;
+    }
+
+    const [existing] = await db.select().from(productQATable).where(eq(productQATable.id, id));
+    if (!existing) {
+      res.status(404).json({ error: "Question not found" });
+      return;
+    }
+    if (existing.sellerId !== req.dbSeller.id) {
+      res.status(403).json({ error: "You can only answer questions on your own listings" });
+      return;
+    }
+
+    const [qa] = await db
+      .update(productQATable)
+      .set({ answer: answer.trim(), answeredAt: new Date() })
+      .where(eq(productQATable.id, id))
+      .returning();
+
+    res.json({
+      id: qa.id,
+      userId: qa.userId,
+      userName: qa.userName,
+      question: qa.question,
+      answer: qa.answer,
+      answeredAt: qa.answeredAt?.toISOString() ?? null,
+      createdAt: qa.createdAt.toISOString(),
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to post answer" });
   }
 });
 

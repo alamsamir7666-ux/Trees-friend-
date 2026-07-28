@@ -4,7 +4,7 @@
 
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { reviewsTable, ordersTable, productsTable } from "@workspace/db";
+import { reviewsTable, ordersTable, productsTable, sellerListingsTable } from "@workspace/db";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import multer from "multer";
@@ -183,6 +183,157 @@ router.post(
     }
   },
 );
+
+// ─── Seller-listing reviews ────────────────────────────────────────────────
+// Fully separate from the product-level reviews above (per product decision):
+// a listing review only shows on that seller's listing page, keyed by
+// sellerListingId, not productId. "Verified purchaser" here means the buyer
+// bought THIS seller's listing specifically (order items[].sellerListingId
+// match), not just the product from any seller -- see orders.ts's OrderItem
+// type, which records sellerListingId per line but not the variant, so
+// eligibility is listing-scoped rather than variant-scoped (the data can't
+// distinguish which variant of a listing was purchased).
+
+function formatSellerListingReview(r: typeof reviewsTable.$inferSelect) {
+  return {
+    id: r.id,
+    sellerListingId: r.sellerListingId,
+    productId: r.productId,
+    userId: r.userId,
+    userName: r.userName,
+    rating: r.rating,
+    comment: r.comment,
+    photos: (r as any).photos ?? [],
+    createdAt: r.createdAt.toISOString(),
+  };
+}
+
+router.get("/seller-listings/:sellerListingId/reviews", async (req, res) => {
+  try {
+    const sellerListingId = parseInt(req.params.sellerListingId);
+    if (isNaN(sellerListingId) || sellerListingId <= 0) {
+      res.status(400).json({ error: "Invalid seller listing ID" }); return;
+    }
+    const reviews = await db
+      .select()
+      .from(reviewsTable)
+      .where(eq(reviewsTable.sellerListingId, sellerListingId))
+      .orderBy(desc(reviewsTable.createdAt));
+    res.json(reviews.map(formatSellerListingReview));
+  } catch { res.status(500).json({ error: "Failed to fetch reviews" }); }
+});
+
+router.get("/seller-listings/:sellerListingId/reviews/eligibility", requireAuth, async (req: any, res) => {
+  try {
+    const sellerListingId = parseInt(req.params.sellerListingId);
+    if (isNaN(sellerListingId) || sellerListingId <= 0) {
+      res.status(400).json({ error: "Invalid seller listing ID" }); return;
+    }
+    const userId = req.userId as string;
+    const [existing] = await db
+      .select({ id: reviewsTable.id })
+      .from(reviewsTable)
+      .where(and(eq(reviewsTable.sellerListingId, sellerListingId), eq(reviewsTable.userId, userId)))
+      .limit(1);
+    if (existing) { res.json({ canReview: false, reason: "already_reviewed" }); return; }
+
+    const orders = await db
+      .select({ id: ordersTable.id, items: ordersTable.items, orderStatus: ordersTable.orderStatus })
+      .from(ordersTable)
+      .where(and(eq(ordersTable.userId, userId), sql`order_status NOT IN ('cancelled')`));
+
+    const hasPurchased = orders.some((o) =>
+      (o.items as any[]).some((item: any) => item.sellerListingId === sellerListingId),
+    );
+    if (!hasPurchased) { res.json({ canReview: false, reason: "not_purchased" }); return; }
+    res.json({ canReview: true, reason: null });
+  } catch { res.status(500).json({ error: "Failed to check eligibility" }); }
+});
+
+router.post(
+  "/seller-listings/:sellerListingId/reviews",
+  requireAuth,
+  upload.array("photos", 4),
+  async (req: any, res) => {
+    try {
+      const sellerListingId = parseInt(req.params.sellerListingId);
+      if (isNaN(sellerListingId) || sellerListingId <= 0) {
+        res.status(400).json({ error: "Invalid seller listing ID" }); return;
+      }
+
+      const [listing] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, sellerListingId));
+      if (!listing) { res.status(404).json({ error: "Listing not found" }); return; }
+
+      const { rating, comment } = req.body;
+      const userId = req.userId as string;
+
+      const ratingNum = Number(rating);
+      if (isNaN(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+        res.status(400).json({ error: "Rating must be between 1 and 5" }); return;
+      }
+      if (!comment || typeof comment !== "string" || comment.trim().length < 5) {
+        res.status(400).json({ error: "Comment must be at least 5 characters" }); return;
+      }
+      if (comment.trim().length > 1000) {
+        res.status(400).json({ error: "Comment cannot exceed 1000 characters" }); return;
+      }
+
+      const [existing] = await db
+        .select({ id: reviewsTable.id })
+        .from(reviewsTable)
+        .where(and(eq(reviewsTable.sellerListingId, sellerListingId), eq(reviewsTable.userId, userId)))
+        .limit(1);
+      if (existing) { res.status(409).json({ error: "You have already reviewed this listing" }); return; }
+
+      const orders = await db
+        .select({ id: ordersTable.id, items: ordersTable.items })
+        .from(ordersTable)
+        .where(and(eq(ordersTable.userId, userId), sql`order_status NOT IN ('cancelled')`));
+      const hasPurchased = orders.some((o) =>
+        (o.items as any[]).some((item: any) => item.sellerListingId === sellerListingId),
+      );
+      if (!hasPurchased) {
+        res.status(403).json({ error: "You must purchase this listing before writing a review" }); return;
+      }
+
+      const files = (req.files ?? []) as Express.Multer.File[];
+      let photoUrls: string[] = [];
+      if (files.length > 0) {
+        photoUrls = await Promise.all(
+          files.map((f) => uploadToCloudinary(f.buffer, `envy-reviews/listing-${sellerListingId}`)),
+        );
+      }
+
+      const dbUser = req.dbUser;
+      const fullName = `${dbUser?.firstName ?? ""} ${dbUser?.lastName ?? ""}`.trim();
+      const userName = fullName || (dbUser?.email ? dbUser.email.split("@")[0] : "Customer");
+
+      const [review] = await db
+        .insert(reviewsTable)
+        .values({
+          productId: listing.productId,
+          sellerId: listing.sellerId,
+          sellerListingId,
+          userId,
+          userName,
+          rating: Math.round(ratingNum),
+          comment: comment.trim(),
+          ...(photoUrls.length > 0 ? { photos: photoUrls } : {}),
+        } as any)
+        .returning();
+
+      res.status(201).json(formatSellerListingReview(review));
+    } catch (err) {
+      console.error("Seller listing review submit error:", err);
+      res.status(500).json({ error: "Failed to submit review" });
+    }
+  },
+);
+
+// PUT /reviews/:reviewId and DELETE /reviews/:productId/:reviewId (below)
+// are shared -- they operate on the review row by id/ownership and don't
+// care whether it's a product-level or seller-listing-level review, so no
+// separate edit/delete endpoints are needed here.
 
 router.put("/reviews/:reviewId", requireAuth, async (req: any, res) => {
   try {

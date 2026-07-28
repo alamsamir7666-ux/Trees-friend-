@@ -652,6 +652,41 @@ export interface AdminReview {
   productImage?: string | null;
 }
 
+/**
+ * A review of a specific seller's listing -- fully separate from Review
+ * (product-level), which is keyed by productId and shows on the product
+ * page. This is keyed by sellerListingId and shows only on that seller's
+ * listing page.
+ */
+export interface SellerListingReview {
+  id: number;
+  sellerListingId: number | null;
+  productId: number;
+  userId: string;
+  userName: string;
+  rating: number;
+  comment: string;
+  createdAt: string;
+}
+
+export interface QAItem {
+  id: number;
+  userId: string;
+  userName: string;
+  question: string;
+  answer: string | null;
+  answeredAt: string | null;
+  createdAt: string;
+}
+
+export interface CreateQuestionBody {
+  question: string;
+}
+
+export interface AnswerQuestionBody {
+  answer: string;
+}
+
 export interface WishlistItem {
   id: number;
   productId: number;

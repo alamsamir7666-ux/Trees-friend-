@@ -84,7 +84,11 @@ import type {
   UserProfile,
   ValidateCouponBody,
   WishlistItem,
-  GetWishlistResponse
+  GetWishlistResponse,
+  QAItem,
+  CreateQuestionBody,
+  AnswerQuestionBody,
+  SellerListingReview
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -2096,6 +2100,446 @@ export function useListAllReviews<TData = Awaited<ReturnType<typeof listAllRevie
 
 
 
+
+export const getListProductQAUrl = (productId: number,) => {
+
+  return `/api/products/${productId}/qa`
+}
+
+/**
+ * @summary Get published Q&A for a product
+ */
+export const listProductQA = async (productId: number, options?: RequestInit): Promise<QAItem[]> => {
+
+  return customFetch<QAItem[]>(getListProductQAUrl(productId),
+  {
+    ...options,
+    method: 'GET'
+
+  }
+);}
+
+export const getListProductQAQueryKey = (productId: number,) => {
+    return [
+    `/api/products/${productId}/qa`
+    ] as const;
+    }
+
+export const getListProductQAQueryOptions = <TData = Awaited<ReturnType<typeof listProductQA>>, TError = ErrorType<unknown>>(productId: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listProductQA>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListProductQAQueryKey(productId);
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listProductQA>>> = ({ signal }) => listProductQA(productId, { signal, ...requestOptions });
+
+   return  { queryKey, queryFn, enabled: productId !== null && productId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listProductQA>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListProductQAQueryResult = NonNullable<Awaited<ReturnType<typeof listProductQA>>>
+export type ListProductQAQueryError = ErrorType<unknown>
+
+/**
+ * @summary Get published Q&A for a product
+ */
+export function useListProductQA<TData = Awaited<ReturnType<typeof listProductQA>>, TError = ErrorType<unknown>>(
+ productId: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listProductQA>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListProductQAQueryOptions(productId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getCreateProductQuestionUrl = (productId: number,) => {
+
+  return `/api/products/${productId}/qa`
+}
+
+/**
+ * @summary Ask a question about a product (auth required)
+ */
+export const createProductQuestion = async (productId: number,
+    createQuestionBody: CreateQuestionBody, options?: RequestInit): Promise<QAItem> => {
+
+  return customFetch<QAItem>(getCreateProductQuestionUrl(productId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(createQuestionBody)
+  }
+);}
+
+export const getCreateProductQuestionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createProductQuestion>>, TError,{productId: number;data: BodyType<CreateQuestionBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createProductQuestion>>, TError,{productId: number;data: BodyType<CreateQuestionBody>}, TContext> => {
+
+const mutationKey = ['createProductQuestion'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createProductQuestion>>, {productId: number;data: BodyType<CreateQuestionBody>}> = (props) => {
+          const {productId,data} = props ?? {};
+
+          return  createProductQuestion(productId,data,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateProductQuestionMutationResult = NonNullable<Awaited<ReturnType<typeof createProductQuestion>>>
+    export type CreateProductQuestionMutationBody = BodyType<CreateQuestionBody>
+    export type CreateProductQuestionMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Ask a question about a product (auth required)
+ */
+export const useCreateProductQuestion = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createProductQuestion>>, TError,{productId: number;data: BodyType<CreateQuestionBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createProductQuestion>>,
+        TError,
+        {productId: number;data: BodyType<CreateQuestionBody>},
+        TContext
+      > => {
+      return useMutation(getCreateProductQuestionMutationOptions(options));
+    }
+
+export const getListSellerListingQAUrl = (sellerListingId: number,) => {
+
+  return `/api/seller-listings/${sellerListingId}/qa`
+}
+
+/**
+ * @summary Get published Q&A for a specific seller's listing
+ */
+export const listSellerListingQA = async (sellerListingId: number, options?: RequestInit): Promise<QAItem[]> => {
+
+  return customFetch<QAItem[]>(getListSellerListingQAUrl(sellerListingId),
+  {
+    ...options,
+    method: 'GET'
+
+  }
+);}
+
+export const getListSellerListingQAQueryKey = (sellerListingId: number,) => {
+    return [
+    `/api/seller-listings/${sellerListingId}/qa`
+    ] as const;
+    }
+
+export const getListSellerListingQAQueryOptions = <TData = Awaited<ReturnType<typeof listSellerListingQA>>, TError = ErrorType<unknown>>(sellerListingId: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerListingQA>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSellerListingQAQueryKey(sellerListingId);
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSellerListingQA>>> = ({ signal }) => listSellerListingQA(sellerListingId, { signal, ...requestOptions });
+
+   return  { queryKey, queryFn, enabled: sellerListingId !== null && sellerListingId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSellerListingQA>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSellerListingQAQueryResult = NonNullable<Awaited<ReturnType<typeof listSellerListingQA>>>
+export type ListSellerListingQAQueryError = ErrorType<unknown>
+
+/**
+ * @summary Get published Q&A for a specific seller's listing
+ */
+export function useListSellerListingQA<TData = Awaited<ReturnType<typeof listSellerListingQA>>, TError = ErrorType<unknown>>(
+ sellerListingId: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerListingQA>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSellerListingQAQueryOptions(sellerListingId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getCreateSellerListingQuestionUrl = (sellerListingId: number,) => {
+
+  return `/api/seller-listings/${sellerListingId}/qa`
+}
+
+/**
+ * @summary Ask a question about a specific seller's listing (auth required)
+ */
+export const createSellerListingQuestion = async (sellerListingId: number,
+    createQuestionBody: CreateQuestionBody, options?: RequestInit): Promise<QAItem> => {
+
+  return customFetch<QAItem>(getCreateSellerListingQuestionUrl(sellerListingId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(createQuestionBody)
+  }
+);}
+
+export const getCreateSellerListingQuestionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSellerListingQuestion>>, TError,{sellerListingId: number;data: BodyType<CreateQuestionBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createSellerListingQuestion>>, TError,{sellerListingId: number;data: BodyType<CreateQuestionBody>}, TContext> => {
+
+const mutationKey = ['createSellerListingQuestion'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createSellerListingQuestion>>, {sellerListingId: number;data: BodyType<CreateQuestionBody>}> = (props) => {
+          const {sellerListingId,data} = props ?? {};
+
+          return  createSellerListingQuestion(sellerListingId,data,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateSellerListingQuestionMutationResult = NonNullable<Awaited<ReturnType<typeof createSellerListingQuestion>>>
+    export type CreateSellerListingQuestionMutationBody = BodyType<CreateQuestionBody>
+    export type CreateSellerListingQuestionMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Ask a question about a specific seller's listing (auth required)
+ */
+export const useCreateSellerListingQuestion = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSellerListingQuestion>>, TError,{sellerListingId: number;data: BodyType<CreateQuestionBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createSellerListingQuestion>>,
+        TError,
+        {sellerListingId: number;data: BodyType<CreateQuestionBody>},
+        TContext
+      > => {
+      return useMutation(getCreateSellerListingQuestionMutationOptions(options));
+    }
+
+export const getAnswerSellerListingQuestionUrl = (id: number,) => {
+
+  return `/api/seller/qa/${id}/answer`
+}
+
+/**
+ * @summary Seller answers a question on their own listing
+ */
+export const answerSellerListingQuestion = async (id: number,
+    answerQuestionBody: AnswerQuestionBody, options?: RequestInit): Promise<QAItem> => {
+
+  return customFetch<QAItem>(getAnswerSellerListingQuestionUrl(id),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(answerQuestionBody)
+  }
+);}
+
+export const getAnswerSellerListingQuestionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof answerSellerListingQuestion>>, TError,{id: number;data: BodyType<AnswerQuestionBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof answerSellerListingQuestion>>, TError,{id: number;data: BodyType<AnswerQuestionBody>}, TContext> => {
+
+const mutationKey = ['answerSellerListingQuestion'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof answerSellerListingQuestion>>, {id: number;data: BodyType<AnswerQuestionBody>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  answerSellerListingQuestion(id,data,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AnswerSellerListingQuestionMutationResult = NonNullable<Awaited<ReturnType<typeof answerSellerListingQuestion>>>
+    export type AnswerSellerListingQuestionMutationBody = BodyType<AnswerQuestionBody>
+    export type AnswerSellerListingQuestionMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Seller answers a question on their own listing
+ */
+export const useAnswerSellerListingQuestion = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof answerSellerListingQuestion>>, TError,{id: number;data: BodyType<AnswerQuestionBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof answerSellerListingQuestion>>,
+        TError,
+        {id: number;data: BodyType<AnswerQuestionBody>},
+        TContext
+      > => {
+      return useMutation(getAnswerSellerListingQuestionMutationOptions(options));
+    }
+
+export const getListSellerListingReviewsUrl = (sellerListingId: number,) => {
+
+  return `/api/seller-listings/${sellerListingId}/reviews`
+}
+
+/**
+ * @summary Get reviews for a specific seller's listing
+ */
+export const listSellerListingReviews = async (sellerListingId: number, options?: RequestInit): Promise<SellerListingReview[]> => {
+
+  return customFetch<SellerListingReview[]>(getListSellerListingReviewsUrl(sellerListingId),
+  {
+    ...options,
+    method: 'GET'
+
+  }
+);}
+
+export const getListSellerListingReviewsQueryKey = (sellerListingId: number,) => {
+    return [
+    `/api/seller-listings/${sellerListingId}/reviews`
+    ] as const;
+    }
+
+export const getListSellerListingReviewsQueryOptions = <TData = Awaited<ReturnType<typeof listSellerListingReviews>>, TError = ErrorType<unknown>>(sellerListingId: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerListingReviews>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSellerListingReviewsQueryKey(sellerListingId);
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSellerListingReviews>>> = ({ signal }) => listSellerListingReviews(sellerListingId, { signal, ...requestOptions });
+
+   return  { queryKey, queryFn, enabled: sellerListingId !== null && sellerListingId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSellerListingReviews>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSellerListingReviewsQueryResult = NonNullable<Awaited<ReturnType<typeof listSellerListingReviews>>>
+export type ListSellerListingReviewsQueryError = ErrorType<unknown>
+
+/**
+ * @summary Get reviews for a specific seller's listing
+ */
+export function useListSellerListingReviews<TData = Awaited<ReturnType<typeof listSellerListingReviews>>, TError = ErrorType<unknown>>(
+ sellerListingId: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerListingReviews>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSellerListingReviewsQueryOptions(sellerListingId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getCreateSellerListingReviewUrl = (sellerListingId: number,) => {
+
+  return `/api/seller-listings/${sellerListingId}/reviews`
+}
+
+/**
+ * @summary Create a review for a specific seller's listing (auth required, must have purchased that listing)
+ */
+export const createSellerListingReview = async (sellerListingId: number,
+    createReviewBody: CreateReviewBody, options?: RequestInit): Promise<SellerListingReview> => {
+
+  return customFetch<SellerListingReview>(getCreateSellerListingReviewUrl(sellerListingId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(createReviewBody)
+  }
+);}
+
+export const getCreateSellerListingReviewMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSellerListingReview>>, TError,{sellerListingId: number;data: BodyType<CreateReviewBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createSellerListingReview>>, TError,{sellerListingId: number;data: BodyType<CreateReviewBody>}, TContext> => {
+
+const mutationKey = ['createSellerListingReview'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createSellerListingReview>>, {sellerListingId: number;data: BodyType<CreateReviewBody>}> = (props) => {
+          const {sellerListingId,data} = props ?? {};
+
+          return  createSellerListingReview(sellerListingId,data,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateSellerListingReviewMutationResult = NonNullable<Awaited<ReturnType<typeof createSellerListingReview>>>
+    export type CreateSellerListingReviewMutationBody = BodyType<CreateReviewBody>
+    export type CreateSellerListingReviewMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Create a review for a specific seller's listing (auth required, must have purchased that listing)
+ */
+export const useCreateSellerListingReview = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSellerListingReview>>, TError,{sellerListingId: number;data: BodyType<CreateReviewBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createSellerListingReview>>,
+        TError,
+        {sellerListingId: number;data: BodyType<CreateReviewBody>},
+        TContext
+      > => {
+      return useMutation(getCreateSellerListingReviewMutationOptions(options));
+    }
+
+export const getGetSellerListingReviewEligibilityUrl = (sellerListingId: number,) => {
+
+  return `/api/seller-listings/${sellerListingId}/reviews/eligibility`
+}
+
+/**
+ * @summary Check if current user can review this seller's listing
+ */
+export const getSellerListingReviewEligibility = async (sellerListingId: number, options?: RequestInit): Promise<ReviewEligibility> => {
+
+  return customFetch<ReviewEligibility>(getGetSellerListingReviewEligibilityUrl(sellerListingId),
+  {
+    ...options,
+    method: 'GET'
+
+  }
+);}
+
+export const getGetSellerListingReviewEligibilityQueryKey = (sellerListingId: number,) => {
+    return [
+    `/api/seller-listings/${sellerListingId}/reviews/eligibility`
+    ] as const;
+    }
+
+export const getGetSellerListingReviewEligibilityQueryOptions = <TData = Awaited<ReturnType<typeof getSellerListingReviewEligibility>>, TError = ErrorType<unknown>>(sellerListingId: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSellerListingReviewEligibility>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSellerListingReviewEligibilityQueryKey(sellerListingId);
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSellerListingReviewEligibility>>> = ({ signal }) => getSellerListingReviewEligibility(sellerListingId, { signal, ...requestOptions });
+
+   return  { queryKey, queryFn, enabled: sellerListingId !== null && sellerListingId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSellerListingReviewEligibility>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetSellerListingReviewEligibilityQueryResult = NonNullable<Awaited<ReturnType<typeof getSellerListingReviewEligibility>>>
+export type GetSellerListingReviewEligibilityQueryError = ErrorType<unknown>
+
+/**
+ * @summary Check if current user can review this seller's listing
+ */
+export function useGetSellerListingReviewEligibility<TData = Awaited<ReturnType<typeof getSellerListingReviewEligibility>>, TError = ErrorType<unknown>>(
+ sellerListingId: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSellerListingReviewEligibility>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetSellerListingReviewEligibilityQueryOptions(sellerListingId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 export const getGetWishlistUrl = () => {
 

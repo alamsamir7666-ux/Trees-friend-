@@ -18,6 +18,8 @@ import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { useToast } from "@/hooks/use-toast";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { useWishlist } from "@/contexts/WishlistContext";
+import { SellerListingReviews } from "@/components/ui/SellerListingReviews";
+import { SellerListingQA } from "@/components/ui/SellerListingQA";
 
 // Exact icon URLs from the approved design HTML -- used as-is rather than
 // substituted with Lucide equivalents, so the icons themselves match
@@ -509,6 +511,9 @@ export function SellerListingDetailPage() {
             </div>
           </div>
         </div>
+
+        <SellerListingReviews sellerListingId={listing.id} productId={productId} />
+        <SellerListingQA sellerListingId={listing.id} ownerSellerId={seller.id} />
       </div>
     </div>
   );

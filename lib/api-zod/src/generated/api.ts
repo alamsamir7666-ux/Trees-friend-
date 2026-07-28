@@ -1039,6 +1039,116 @@ export const ListAllReviewsResponse = zod.array(ListAllReviewsResponseItem)
 
 
 /**
+ * @summary Get published Q&A for a product
+ */
+export const ListProductQAParams = zod.object({
+  "productId": zod.coerce.number()
+})
+
+export const QAItem = zod.object({
+  "id": zod.number(),
+  "userId": zod.string(),
+  "userName": zod.string(),
+  "question": zod.string(),
+  "answer": zod.string().nullable(),
+  "answeredAt": zod.string().nullable(),
+  "createdAt": zod.string()
+})
+export const ListProductQAResponse = zod.array(QAItem)
+
+
+/**
+ * @summary Ask a question about a product (auth required)
+ */
+export const CreateProductQuestionParams = zod.object({
+  "productId": zod.coerce.number()
+})
+
+export const CreateQuestionBody = zod.object({
+  "question": zod.string()
+})
+
+export const CreateProductQuestionResponse = QAItem
+
+
+/**
+ * @summary Get published Q&A for a specific seller's listing
+ */
+export const ListSellerListingQAParams = zod.object({
+  "sellerListingId": zod.coerce.number()
+})
+
+export const ListSellerListingQAResponse = zod.array(QAItem)
+
+
+/**
+ * @summary Ask a question about a specific seller's listing (auth required)
+ */
+export const CreateSellerListingQuestionParams = zod.object({
+  "sellerListingId": zod.coerce.number()
+})
+
+export const CreateSellerListingQuestionResponse = QAItem
+
+
+/**
+ * @summary Seller answers a question on their own listing
+ */
+export const AnswerSellerListingQuestionParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const AnswerQuestionBody = zod.object({
+  "answer": zod.string()
+})
+
+export const AnswerSellerListingQuestionResponse = QAItem
+
+
+/**
+ * @summary Get reviews for a specific seller's listing
+ */
+export const ListSellerListingReviewsParams = zod.object({
+  "sellerListingId": zod.coerce.number()
+})
+
+export const SellerListingReview = zod.object({
+  "id": zod.number(),
+  "sellerListingId": zod.number().nullable(),
+  "productId": zod.number(),
+  "userId": zod.string(),
+  "userName": zod.string(),
+  "rating": zod.number(),
+  "comment": zod.string(),
+  "createdAt": zod.string()
+})
+export const ListSellerListingReviewsResponse = zod.array(SellerListingReview)
+
+
+/**
+ * @summary Create a review for a specific seller's listing (auth required, must have purchased that listing)
+ */
+export const CreateSellerListingReviewParams = zod.object({
+  "sellerListingId": zod.coerce.number()
+})
+
+export const CreateSellerListingReviewResponse = SellerListingReview
+
+
+/**
+ * @summary Check if current user can review this seller's listing
+ */
+export const GetSellerListingReviewEligibilityParams = zod.object({
+  "sellerListingId": zod.coerce.number()
+})
+
+export const GetSellerListingReviewEligibilityResponse = zod.object({
+  "canReview": zod.boolean(),
+  "reason": zod.union([zod.literal('already_reviewed'),zod.literal('not_purchased'),zod.literal(null)]).nullish()
+})
+
+
+/**
  * @summary Get user's wishlist, split into product-variety rows and seller-listing rows
  */
 export const GetWishlistResponseProductsItem = zod.object({

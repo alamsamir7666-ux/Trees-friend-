@@ -566,6 +566,69 @@ paths:
               schema:
                 $ref: "#/components/schemas/MessageResponse"
 
+  /seller-listings/{sellerListingId}/reviews:
+    get:
+      operationId: listSellerListingReviews
+      tags: [reviews]
+      summary: Get reviews for a specific seller's listing
+      parameters:
+        - name: sellerListingId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reviews
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SellerListingReview"
+    post:
+      operationId: createSellerListingReview
+      tags: [reviews]
+      summary: Create a review for a specific seller's listing (auth required, must have purchased that listing)
+      parameters:
+        - name: sellerListingId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReviewBody"
+      responses:
+        "201":
+          description: Created review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerListingReview"
+
+  /seller-listings/{sellerListingId}/reviews/eligibility:
+    get:
+      operationId: getSellerListingReviewEligibility
+      tags: [reviews]
+      summary: Check if current user can review this seller's listing
+      parameters:
+        - name: sellerListingId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Eligibility result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewEligibility"
+
   /admin/reviews:
     get:
       operationId: listAllReviews
@@ -580,6 +643,119 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/AdminReview"
+
+  /products/{productId}/qa:
+    get:
+      operationId: listProductQA
+      tags: [qa]
+      summary: Get published Q&A for a product
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Q&A list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QAItem"
+    post:
+      operationId: createProductQuestion
+      tags: [qa]
+      summary: Ask a question about a product (auth required)
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateQuestionBody"
+      responses:
+        "201":
+          description: Created question
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QAItem"
+
+  /seller-listings/{sellerListingId}/qa:
+    get:
+      operationId: listSellerListingQA
+      tags: [qa]
+      summary: Get published Q&A for a specific seller's listing
+      parameters:
+        - name: sellerListingId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Q&A list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QAItem"
+    post:
+      operationId: createSellerListingQuestion
+      tags: [qa]
+      summary: Ask a question about a specific seller's listing (auth required)
+      parameters:
+        - name: sellerListingId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateQuestionBody"
+      responses:
+        "201":
+          description: Created question
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QAItem"
+
+  /seller/qa/{id}/answer:
+    put:
+      operationId: answerSellerListingQuestion
+      tags: [qa]
+      summary: Seller answers a question on their own listing
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnswerQuestionBody"
+      responses:
+        "200":
+          description: Answered question
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QAItem"
 
   /wishlist:
     get:
@@ -2946,6 +3122,80 @@ components:
         - rating
         - comment
         - createdAt
+
+    SellerListingReview:
+      type: object
+      properties:
+        id:
+          type: integer
+        sellerListingId:
+          type: integer
+          nullable: true
+        productId:
+          type: integer
+        userId:
+          type: string
+        userName:
+          type: string
+        rating:
+          type: integer
+        comment:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - sellerListingId
+        - productId
+        - userId
+        - userName
+        - rating
+        - comment
+        - createdAt
+
+    QAItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: string
+        userName:
+          type: string
+        question:
+          type: string
+        answer:
+          type: string
+          nullable: true
+        answeredAt:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required:
+        - id
+        - userId
+        - userName
+        - question
+        - answer
+        - answeredAt
+        - createdAt
+
+    CreateQuestionBody:
+      type: object
+      properties:
+        question:
+          type: string
+      required:
+        - question
+
+    AnswerQuestionBody:
+      type: object
+      properties:
+        answer:
+          type: string
+      required:
+        - answer
 
     CreateReviewBody:
       type: object

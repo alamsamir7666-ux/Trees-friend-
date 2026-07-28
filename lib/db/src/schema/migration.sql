@@ -234,3 +234,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS wishlist_user_seller_listing_variant_unique
   ON wishlist (user_id, seller_listing_variant_id)
   WHERE seller_listing_variant_id IS NOT NULL;
 
+-- ─── Seller-listing Reviews & Q&A ──────────────────────────────────────────
+-- reviews table already had seller_listing_id/seller_listing_variant_id
+-- columns from an earlier phase (see reviews.ts doc comment) but no route
+-- ever read/wrote them -- product_qa never had listing-scoped columns at
+-- all. This adds those to product_qa so a buyer can ask a seller a
+-- question about that seller's specific listing, answered by the seller
+-- who owns it (or an admin), separately from product-level Q&A.
+
+ALTER TABLE product_qa
+  ADD COLUMN IF NOT EXISTS seller_listing_id INTEGER
+    REFERENCES seller_listings(id) ON DELETE CASCADE;
+
+ALTER TABLE product_qa
+  ADD COLUMN IF NOT EXISTS seller_id INTEGER
+    REFERENCES sellers(id) ON DELETE CASCADE;
