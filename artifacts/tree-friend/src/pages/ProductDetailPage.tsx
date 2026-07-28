@@ -19,7 +19,6 @@ import { Star, Heart, ShoppingBag, ChevronLeft, Check, ShieldCheck, Package, Pen
 import { ProductCard } from "@/components/ui/ProductCard";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { saveRecentlyViewed, useRecentlyViewed } from "@/hooks/useRecentlyViewed";
-import { ImageZoom } from "@/components/ui/ImageZoom";
 import { ProductQA } from "@/components/ui/ProductQA";
 import { SellerListingsSection } from "@/components/ui/SellerListingsSection";
 import { updateSEO } from "@/lib/seo";

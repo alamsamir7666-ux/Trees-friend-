@@ -5,7 +5,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { reviewsTable, ordersTable, productsTable, sellerListingsTable, sellerListingVariantsTable } from "@workspace/db";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, isNull } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
@@ -67,10 +67,14 @@ router.get("/reviews/:productId", async (req, res) => {
     if (isNaN(productId) || productId <= 0) {
       res.status(400).json({ error: "Invalid product ID" }); return;
     }
+    // Only show product-level reviews (sellerListingId IS NULL).
+    // Seller-listing-variant reviews (sellerListingId set) belong on the
+    // seller listing detail page, not here — same isNull filter pattern
+    // used in productQA.ts for the same reason.
     const reviews = await db
       .select()
       .from(reviewsTable)
-      .where(eq(reviewsTable.productId, productId))
+      .where(and(eq(reviewsTable.productId, productId), isNull(reviewsTable.sellerListingId)))
       .orderBy(desc(reviewsTable.createdAt));
     res.json(reviews.map(formatReview));
   } catch { res.status(500).json({ error: "Failed to fetch reviews" }); }
@@ -83,10 +87,13 @@ router.get("/reviews/:productId/eligibility", requireAuth, async (req: any, res)
       res.status(400).json({ error: "Invalid product ID" }); return;
     }
     const userId = req.userId as string;
+    // Only check product-level reviews (sellerListingId IS NULL) so that a
+    // seller-listing-variant review doesn't block the user from writing a
+    // separate product-level review — same isNull filter as GET /reviews/:productId.
     const [existing] = await db
       .select({ id: reviewsTable.id })
       .from(reviewsTable)
-      .where(and(eq(reviewsTable.productId, productId), eq(reviewsTable.userId, userId)))
+      .where(and(eq(reviewsTable.productId, productId), eq(reviewsTable.userId, userId), isNull(reviewsTable.sellerListingId)))
       .limit(1);
     if (existing) { res.json({ canReview: false, reason: "already_reviewed" }); return; }
 
@@ -130,11 +137,14 @@ router.post(
         res.status(400).json({ error: "Comment cannot exceed 1000 characters" }); return;
       }
 
-      // Duplicate check
+      // Duplicate check — only product-level reviews (sellerListingId IS NULL).
+      // A seller-listing-variant review should not block writing a product-level
+      // review, since they are different scopes (same isNull pattern as the
+      // GET eligibility and list routes above).
       const [existing] = await db
         .select({ id: reviewsTable.id })
         .from(reviewsTable)
-        .where(and(eq(reviewsTable.productId, productId), eq(reviewsTable.userId, userId)))
+        .where(and(eq(reviewsTable.productId, productId), eq(reviewsTable.userId, userId), isNull(reviewsTable.sellerListingId)))
         .limit(1);
       if (existing) { res.status(409).json({ error: "You have already reviewed this product" }); return; }
 

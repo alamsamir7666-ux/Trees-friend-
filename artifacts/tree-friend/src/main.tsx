@@ -1,6 +1,8 @@
 import { createRoot } from "react-dom/client";
-// Eruda mobile console - remove after debugging
-if (typeof window !== "undefined") {
+// Eruda mobile console — DEV ONLY. Never load in production.
+// Loads from CDN only when VITE_API_BASE_URL is set to a local/localhost
+// address, which guarantees this is a development session.
+if (typeof window !== "undefined" && import.meta.env.DEV) {
   const script = document.createElement("script");
   script.src = "https://cdn.jsdelivr.net/npm/eruda";
   script.onload = () => (window as any).eruda.init();
