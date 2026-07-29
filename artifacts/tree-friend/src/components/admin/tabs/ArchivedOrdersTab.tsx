@@ -91,15 +91,20 @@ return (
                         <p className="text-xs text-gray-400">-</p>
                       )}
                     </td>
-                    {/* Seller column — for archived regular orders, shows
-                        business name + status pill + email link (so admin
-                        can still contact a seller about a past order).
-                        Pre-orders show "—" because the archived-preOrders
-                        response doesn't include seller context. */}
+                    {/* Seller column — for archived regular orders AND
+                        archived pre-orders, shows business name + status
+                        pill + email link. Both /admin/orders/archived and
+                        /admin/orders/archived's archivedPreOrders query now
+                        join sellers (through sellerListingVariantId ->
+                        variant -> listing -> seller for pre-orders, directly
+                        via orders.sellerId for regular orders). "Unknown
+                        seller" only appears for legacy rows where the join
+                        hits null (deleted seller, or pre-Phase-6 pre-order
+                        with no sellerListingVariantId). */}
                     <td className="px-4 py-3.5">
-                      {isPreOrder || !sellerName ? (
-                        <span className="text-xs text-gray-400 italic" title={isPreOrder ? "Pre-order — seller info not available in archived view" : "Legacy order from before the marketplace migration, or seller record deleted"}>
-                          {isPreOrder ? "—" : "Unknown seller"}
+                      {!sellerName ? (
+                        <span className="text-xs text-gray-400 italic" title="Legacy order from before the marketplace migration, pre-Phase-6 pre-order with no sellerListingVariantId, or seller record deleted">
+                          Unknown seller
                         </span>
                       ) : (
                         <div className="flex flex-col gap-1 min-w-0">

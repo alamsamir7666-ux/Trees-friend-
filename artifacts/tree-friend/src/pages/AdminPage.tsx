@@ -124,7 +124,15 @@ export function AdminPage() {
   const fetchAdminPreOrders = async () => {
     try {
       const token = await getToken();
-      const res = await fetch(`${API}/api/pre-orders`, { headers: { Authorization: `Bearer ${token}` } });
+      // Now calls the admin-only /admin/pre-orders endpoint (added in
+      // admin.ts), which (a) requires admin auth and (b) joins through
+      // preOrders.sellerListingVariantId -> variant -> listing -> seller
+      // so each pre-order carries the seller fields the redesigned
+      // OrdersTab and ArchivedOrdersTab render in their Seller column.
+      // Previously called the public GET /pre-orders endpoint which had
+      // no auth and returned no seller context -- a leftover from
+      // before the marketplace migration.
+      const res = await fetch(`${API}/api/admin/pre-orders`, { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
       if (Array.isArray(data)) setAdminPreOrders(data);
     } catch {}

@@ -1,6 +1,15 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { ordersTable, usersTable, productsTable, affiliatesTable, preOrdersTable, sellersTable } from "@workspace/db";
+import {
+  ordersTable,
+  usersTable,
+  productsTable,
+  affiliatesTable,
+  preOrdersTable,
+  sellersTable,
+  sellerListingsTable,
+  sellerListingVariantsTable,
+} from "@workspace/db";
 import { eq, desc, sql, and, lt, or, not, inArray } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { sendOrderStatusUpdate } from "../lib/email";
@@ -290,8 +299,50 @@ router.get("/admin/orders/archived", requireAdmin, async (req: any, res) => {
     ]);
 
     const TWO_DAYS_AGO2 = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-    const archivedPreOrders = await db.select()
+    // Archived pre-orders: join through sellerListingVariantId -> variant ->
+    // listing -> seller so the admin can see which seller fulfilled each
+    // archived pre-order, same as the new /admin/pre-orders endpoint below.
+    // All joins are LEFT because (a) sellerListingVariantId is NULL on
+    // legacy rows created before the Phase 6 migration, (b) the variant
+    // or listing row may have been deleted (pre_orders is a denormalized
+    // historical record, no FK), and (c) the seller row may have been
+    // deleted (sellersTable.user_id cascades, but a seller could be gone
+    // for other reasons). The frontend handles null seller fields.
+    const archivedPreOrders = await db
+      .select({
+        id: preOrdersTable.id,
+        trackingId: preOrdersTable.trackingId,
+        userId: preOrdersTable.userId,
+        productId: preOrdersTable.productId,
+        productName: preOrdersTable.productName,
+        productImage: preOrdersTable.productImage,
+        sellerListingVariantId: preOrdersTable.sellerListingVariantId,
+        quantity: preOrdersTable.quantity,
+        productPrice: preOrdersTable.productPrice,
+        discountedPrice: preOrdersTable.discountedPrice,
+        deliveryCharge: preOrdersTable.deliveryCharge,
+        whatsappPhone: preOrdersTable.whatsappPhone,
+        shippingAddress: preOrdersTable.shippingAddress,
+        paymentMethod: preOrdersTable.paymentMethod,
+        senderNumber: preOrdersTable.senderNumber,
+        transactionId: preOrdersTable.transactionId,
+        paymentStatus: preOrdersTable.paymentStatus,
+        status: preOrdersTable.status,
+        notifiedAt: preOrdersTable.notifiedAt,
+        cancellationReason: preOrdersTable.cancellationReason,
+        createdAt: preOrdersTable.createdAt,
+        updatedAt: preOrdersTable.updatedAt,
+        sellerBusinessName: sellersTable.businessName,
+        sellerOwnerName: sellersTable.ownerName,
+        sellerContactEmail: sellersTable.contactEmail,
+        sellerContactPhone: sellersTable.contactPhone,
+        sellerStatus: sellersTable.status,
+        sellerLogoUrl: sellersTable.logoUrl,
+      })
       .from(preOrdersTable)
+      .leftJoin(sellerListingVariantsTable, eq(preOrdersTable.sellerListingVariantId, sellerListingVariantsTable.id))
+      .leftJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
+      .leftJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
       .where(and(
         or(
           eq(preOrdersTable.status, "delivered"),
@@ -543,6 +594,67 @@ router.put("/admin/orders/:id/payment", requireAdmin, async (req: any, res) => {
     res.json(formatOrder(order));
   } catch (err) {
     res.status(500).json({ error: "Failed to update payment status" });
+  }
+});
+
+/**
+ * Admin: list all pre-orders with the seller that fulfilled (or is going to
+ * fulfill) each one, joined through
+ *   preOrders.sellerListingVariantId -> sellerListingVariants.sellerListingId
+ *   -> sellerListings.sellerId -> sellers.id
+ *
+ * Replaces the admin frontend's previous use of the public GET /pre-orders
+ * endpoint, which (a) had no auth and (b) returned no seller context. The
+ * frontend's fetchAdminPreOrders now calls this route instead.
+ *
+ * The seller fields are nullable on every step of the join (see
+ * /admin/orders/archived's archivedPreOrders query for the full rationale),
+ * so the frontend must handle null seller fields the same way it does for
+ * regular orders.
+ */
+router.get("/admin/pre-orders", requireAdmin, async (_req, res) => {
+  try {
+    const preOrders = await db
+      .select({
+        id: preOrdersTable.id,
+        trackingId: preOrdersTable.trackingId,
+        userId: preOrdersTable.userId,
+        productId: preOrdersTable.productId,
+        productName: preOrdersTable.productName,
+        productImage: preOrdersTable.productImage,
+        sellerListingVariantId: preOrdersTable.sellerListingVariantId,
+        quantity: preOrdersTable.quantity,
+        productPrice: preOrdersTable.productPrice,
+        discountedPrice: preOrdersTable.discountedPrice,
+        deliveryCharge: preOrdersTable.deliveryCharge,
+        whatsappPhone: preOrdersTable.whatsappPhone,
+        shippingAddress: preOrdersTable.shippingAddress,
+        paymentMethod: preOrdersTable.paymentMethod,
+        senderNumber: preOrdersTable.senderNumber,
+        transactionId: preOrdersTable.transactionId,
+        paymentStatus: preOrdersTable.paymentStatus,
+        status: preOrdersTable.status,
+        notifiedAt: preOrdersTable.notifiedAt,
+        cancellationReason: preOrdersTable.cancellationReason,
+        createdAt: preOrdersTable.createdAt,
+        updatedAt: preOrdersTable.updatedAt,
+        sellerBusinessName: sellersTable.businessName,
+        sellerOwnerName: sellersTable.ownerName,
+        sellerContactEmail: sellersTable.contactEmail,
+        sellerContactPhone: sellersTable.contactPhone,
+        sellerStatus: sellersTable.status,
+        sellerLogoUrl: sellersTable.logoUrl,
+      })
+      .from(preOrdersTable)
+      .leftJoin(sellerListingVariantsTable, eq(preOrdersTable.sellerListingVariantId, sellerListingVariantsTable.id))
+      .leftJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
+      .leftJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+      .orderBy(desc(preOrdersTable.createdAt));
+
+    res.json(preOrders);
+  } catch (err: any) {
+    console.error("admin pre-orders endpoint error:", err?.message, err?.stack);
+    res.status(500).json({ error: err?.message ?? "Failed to fetch admin pre-orders" });
   }
 });
 

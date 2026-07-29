@@ -243,10 +243,16 @@ export function OrdersTab() {
                 {visibleOrders.map((o) => {
                   if ((o as any)._type === "preorder") {
                     const isPreExpanded = expandedOrderId === `pre-${o.id}`;
-                    // Pre-orders don't carry seller fields today (the
-                    // preOrdersTable doesn't join sellers in the
-                    // admin-preOrders endpoint). Display "—" in the
-                    // Seller column rather than fake a name.
+                    // Pre-orders now carry seller fields via the new
+                    // /admin/pre-orders endpoint (joined through
+                    // sellerListingVariantId -> variant -> listing ->
+                    // seller). Render the Seller column the same way the
+                    // regular-orders branch does, falling back to
+                    // "Unknown seller" only for legacy pre-Phase-6 rows
+                    // (null sellerListingVariantId) or deleted sellers.
+                    const preSellerName = (o as any).sellerBusinessName ?? null;
+                    const preSellerStatus = (o as any).sellerStatus ?? null;
+                    const preSellerEmail = (o as any).sellerContactEmail ?? null;
                     return (
                       <Fragment key={`pre-${o.id}`}>
                         <tr className="hover:bg-blue-50/30 transition-colors cursor-pointer" onClick={() => setExpandedOrderId(isPreExpanded ? null : `pre-${o.id}`)}>
@@ -263,7 +269,38 @@ export function OrdersTab() {
                             <p className="font-medium text-gray-800 text-xs">{o.shippingAddress?.fullName ?? "Guest"}</p>
                             <p className="text-xs text-gray-400">{o.whatsappPhone ?? o.shippingAddress?.phone}</p>
                           </td>
-                          <td className="px-4 py-3.5 text-xs text-gray-400">—</td>
+                          {/* Seller column for pre-orders — same shape as the
+                              regular-orders branch below. Pre-orders without
+                              a sellerListingVariantId (legacy pre-Phase-6 rows)
+                              will have null seller fields and show "Unknown seller". */}
+                          <td className="px-4 py-3.5">
+                            {preSellerName ? (
+                              <div className="flex flex-col gap-1 min-w-0">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <Store className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                                  <span className="text-xs font-medium text-gray-800 truncate" title={preSellerName}>{preSellerName}</span>
+                                </div>
+                                {preSellerStatus && (
+                                  <span className={`w-fit px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${SELLER_STATUS_STYLE[preSellerStatus] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                                    {SELLER_STATUS_LABEL[preSellerStatus] ?? preSellerStatus}
+                                  </span>
+                                )}
+                                {preSellerEmail && (
+                                  <a
+                                    href={`mailto:${preSellerEmail}?subject=${encodeURIComponent(`Pre-order #${o.id} — Tree Friend admin follow-up`)}&body=${encodeURIComponent(`Hi ${preSellerName},\n\nThis is the Tree friend admin team. We're reaching out about pre-order #${o.id} (tracking: ${o.trackingId}).\n\nPlease advise on the current status.\n\nThanks,\nTree Friend Admin`)}`}
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-gray-700 bg-gray-50 hover:bg-blue-50 hover:text-blue-700 border border-gray-200 transition-colors"
+                                    title={`Email ${preSellerEmail}`}
+                                    onClick={(e) => e.stopPropagation()}
+                  >
+                                    <Mail className="h-3 w-3" />
+                                    <span className="hidden sm:inline">Contact</span>
+                                  </a>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-gray-400 italic" title="Legacy pre-order from before Phase 6, or seller record deleted">Unknown seller</span>
+                            )}
+                          </td>
                           <td className="px-4 py-3.5 text-xs text-gray-500">{new Date(o.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</td>
                           <td className="px-4 py-3.5">
                             <span className="text-xs bg-gray-100 px-2 py-1 rounded-lg font-medium text-gray-600 capitalize">{o.paymentMethod}</span>
