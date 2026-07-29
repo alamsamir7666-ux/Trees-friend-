@@ -27,7 +27,15 @@ const {
 return (
   <div>
     <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <p className="text-sm text-gray-500">Create and manage discount coupons for your customers.</p>
+      <div>
+        <p className="text-sm text-gray-500">Create and manage discount coupons for your customers.</p>
+        {/* Marketplace-awareness note: coupons are platform-wide (no
+            sellerId on couponsTable), so they apply to every seller's
+            listings at checkout. Per-seller coupons would need a schema
+            migration -- flagged here so admins don't ask "which seller
+            does this coupon apply to?" and find no answer. */}
+        <p className="text-xs text-gray-400 mt-0.5">Coupons apply platform-wide across all sellers.</p>
+      </div>
       <Button onClick={() => { setEditingCoupon(null); setShowCouponModal(true); }} className="rounded-xl bg-pink-500 hover:bg-pink-600 text-white shrink-0">
         <Plus className="h-4 w-4 mr-1.5" /> New Coupon
       </Button>
@@ -38,7 +46,7 @@ return (
     <div className="relative mb-4 max-w-sm">
       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
       <Input
-        placeholder="Search coupons by codeu2026"
+        placeholder="Search coupons by code..."
         className="pl-10"
         value={couponSearch}
         onChange={e => setCouponSearch(e.target.value)}
@@ -89,7 +97,7 @@ return (
                     <td className="px-5 py-3.5">
                       {c.expiryDate ? (
                         <span className={`text-xs ${isExpired ? "text-red-500 font-medium" : "text-gray-500"}`}>
-                          {isExpired ? "Expired ? " : ""}{new Date(c.expiryDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
+                          {isExpired ? "Expired · " : ""}{new Date(c.expiryDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
                         </span>
                       ) : (
                         <span className="text-xs text-gray-400">No expiry</span>

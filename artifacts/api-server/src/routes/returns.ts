@@ -1,7 +1,7 @@
 import { logAudit } from "../lib/audit";
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { returnsTable, ordersTable } from "@workspace/db";
+import { returnsTable, ordersTable, sellersTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 
@@ -97,7 +97,10 @@ router.get("/returns/me", requireAuth, async (req: any, res) => {
   }
 });
 
-// Admin: Get all returns (with order details)
+// Admin: Get all returns (with order details + seller context)
+// Joins sellersTable via ordersTable.sellerId so the admin knows which
+// seller is responsible for fulfilling each return. LEFT JOIN because
+// legacy (pre-Phase-2) orders may have sellerId=NULL.
 router.get("/admin/returns", requireAdmin, async (_req, res) => {
   try {
     const rows = await db
@@ -108,18 +111,32 @@ router.get("/admin/returns", requireAdmin, async (_req, res) => {
         orderUpdatedAt: ordersTable.updatedAt,
         orderStatus: ordersTable.orderStatus,
         shippingAddress: ordersTable.shippingAddress,
+        sellerBusinessName: sellersTable.businessName,
+        sellerOwnerName: sellersTable.ownerName,
+        sellerContactEmail: sellersTable.contactEmail,
+        sellerContactPhone: sellersTable.contactPhone,
+        sellerStatus: sellersTable.status,
       })
       .from(returnsTable)
       .leftJoin(ordersTable, eq(ordersTable.id, returnsTable.orderId))
+      .leftJoin(sellersTable, eq(ordersTable.sellerId, sellersTable.id))
       .orderBy(desc(returnsTable.createdAt));
 
-    const result = rows.map(({ ret, orderItems, orderTotal, orderUpdatedAt, orderStatus, shippingAddress }) => ({
+    const result = rows.map(({
+      ret, orderItems, orderTotal, orderUpdatedAt, orderStatus, shippingAddress,
+      sellerBusinessName, sellerOwnerName, sellerContactEmail, sellerContactPhone, sellerStatus,
+    }) => ({
       ...fmt(ret),
       orderItems: orderItems ?? [],
       orderTotal: orderTotal ? Number(orderTotal) : null,
       orderDeliveredAt: orderUpdatedAt ? orderUpdatedAt.toISOString() : null,
       orderStatus,
       customerName: (shippingAddress as any)?.fullName ?? null,
+      sellerBusinessName: sellerBusinessName ?? null,
+      sellerOwnerName: sellerOwnerName ?? null,
+      sellerContactEmail: sellerContactEmail ?? null,
+      sellerContactPhone: sellerContactPhone ?? null,
+      sellerStatus: sellerStatus ?? null,
     }));
 
     res.json(result);
