@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { ordersTable, usersTable, productsTable, affiliatesTable, preOrdersTable } from "@workspace/db";
+import { ordersTable, usersTable, productsTable, affiliatesTable, preOrdersTable, sellersTable } from "@workspace/db";
 import { eq, desc, sql, and, lt, or, not, inArray } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { sendOrderStatusUpdate } from "../lib/email";
@@ -13,6 +13,7 @@ function formatOrder(o: typeof ordersTable.$inferSelect) {
     id: o.id,
     trackingId: o.trackingId,
     userId: o.userId,
+    sellerId: o.sellerId,
     items: o.items as any[],
     totalAmount: Number(o.totalAmount),
     paymentMethod: o.paymentMethod,
@@ -32,11 +33,23 @@ function formatOrder(o: typeof ordersTable.$inferSelect) {
   };
 }
 
+// Extends formatOrder's output with the user (customer) fields and the
+// seller fields. Both joins are LEFT -- `userId` may not match a row in
+// `usersTable` if the user record was deleted, and `sellerId` is NULL
+// for any legacy admin-direct order created before the Phase 2
+// marketplace migration. The frontend must handle null seller fields
+// (e.g. show "Unknown seller" for a legacy row).
 type OrderWithUser = typeof ordersTable.$inferSelect & {
   userEmail: string | null;
   userFirstName: string | null;
   userLastName: string | null;
   userPhone: string | null;
+  sellerBusinessName: string | null;
+  sellerOwnerName: string | null;
+  sellerContactEmail: string | null;
+  sellerContactPhone: string | null;
+  sellerStatus: string | null;
+  sellerLogoUrl: string | null;
 };
 
 function formatOrderWithUser(o: OrderWithUser) {
@@ -46,6 +59,12 @@ function formatOrderWithUser(o: OrderWithUser) {
     userName:
       [o.userFirstName, o.userLastName].filter(Boolean).join(" ") || null,
     userPhone: o.userPhone ?? null,
+    sellerBusinessName: o.sellerBusinessName ?? null,
+    sellerOwnerName: o.sellerOwnerName ?? null,
+    sellerContactEmail: o.sellerContactEmail ?? null,
+    sellerContactPhone: o.sellerContactPhone ?? null,
+    sellerStatus: o.sellerStatus ?? null,
+    sellerLogoUrl: o.sellerLogoUrl ?? null,
   };
 }
 
@@ -230,6 +249,14 @@ router.get("/admin/orders/archived", requireAdmin, async (req: any, res) => {
       userFirstName: usersTable.firstName,
       userLastName: usersTable.lastName,
       userPhone: usersTable.phone,
+      // Seller join — same as /admin/orders above. Archived orders also
+      // need seller context so the admin can audit who fulfilled what.
+      sellerBusinessName: sellersTable.businessName,
+      sellerOwnerName: sellersTable.ownerName,
+      sellerContactEmail: sellersTable.contactEmail,
+      sellerContactPhone: sellersTable.contactPhone,
+      sellerStatus: sellersTable.status,
+      sellerLogoUrl: sellersTable.logoUrl,
       giftWrap: ordersTable.giftWrap,
       giftMessage: ordersTable.giftMessage,
       senderNumber: ordersTable.senderNumber,
@@ -240,6 +267,7 @@ router.get("/admin/orders/archived", requireAdmin, async (req: any, res) => {
       db.select(baseSelect)
         .from(ordersTable)
         .leftJoin(usersTable, eq(ordersTable.userId, usersTable.clerkId))
+        .leftJoin(sellersTable, eq(ordersTable.sellerId, sellersTable.id))
         .where(and(
           or(
             eq(ordersTable.orderStatus, "delivered"),
@@ -318,6 +346,15 @@ router.get("/admin/orders", requireAdmin, async (req: any, res) => {
       userFirstName: usersTable.firstName,
       userLastName: usersTable.lastName,
       userPhone: usersTable.phone,
+      // Seller join — added Phase 6+ so the admin Orders tab can show which
+      // seller is responsible for each order without a second round-trip.
+      // LEFT JOIN because legacy (pre-Phase-2) orders may have sellerId=NULL.
+      sellerBusinessName: sellersTable.businessName,
+      sellerOwnerName: sellersTable.ownerName,
+      sellerContactEmail: sellersTable.contactEmail,
+      sellerContactPhone: sellersTable.contactPhone,
+      sellerStatus: sellersTable.status,
+      sellerLogoUrl: sellersTable.logoUrl,
       giftWrap: ordersTable.giftWrap,
       giftMessage: ordersTable.giftMessage,
       senderNumber: ordersTable.senderNumber,
@@ -338,6 +375,7 @@ router.get("/admin/orders", requireAdmin, async (req: any, res) => {
       db.select(baseSelect)
         .from(ordersTable)
         .leftJoin(usersTable, eq(ordersTable.userId, usersTable.clerkId))
+        .leftJoin(sellersTable, eq(ordersTable.sellerId, sellersTable.id))
         .where(whereClause)
         .orderBy(desc(ordersTable.createdAt))
         .limit(limitNum)
