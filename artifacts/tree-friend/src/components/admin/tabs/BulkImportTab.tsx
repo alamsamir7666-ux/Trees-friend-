@@ -99,7 +99,7 @@ export function BulkImportTab() {
           rows={8}
           value={csvText}
           onChange={e => setCsvText(e.target.value)}
-          placeholder="Paste your CSV content here?"
+          placeholder="Paste your CSV content here..."
         />
       </div>
 
@@ -120,7 +120,7 @@ export function BulkImportTab() {
 
       <Button onClick={handleImport} disabled={loading || !csvText.trim()} className="rounded-full gap-2">
         <Upload className="h-4 w-4" />
-        {loading ? "Importing?" : "Import Products"}
+        {loading ? "Importing..." : "Import Products"}
       </Button>
     </div>
   );

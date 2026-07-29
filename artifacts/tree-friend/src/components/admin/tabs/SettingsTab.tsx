@@ -54,8 +54,20 @@ export function SettingsTab() {
         )}
       </div>
 
-      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-700">
-        Settings editing is managed via environment variables and seed scripts in this demo.
+      {/* Marketplace-aware note — the "demo mode" warning was misleading
+          post-Phase-2: most of these are real backend settings (Admin →
+          Sellers → payment configs, .env for Clerk/Cloudinary/Resend,
+          per-category metadata on Categories tab). Only the Next Shipment
+          Date control below is genuinely frontend-only because the
+          pre-order shipment-date feature has no backend field yet. */}
+      <div className="bg-sky-50 border border-sky-200 rounded-2xl p-4 text-sm text-sky-800 space-y-1">
+        <p className="font-medium">Where to change each setting</p>
+        <ul className="text-xs space-y-1 list-disc pl-5 text-sky-700/90">
+          <li><strong>Store name / support email / payment methods</strong> — backend env vars on Render.</li>
+          <li><strong>Seller payment configs (bKash credentials)</strong> — <em>Sellers</em> tab → expand seller → payment settings.</li>
+          <li><strong>Categories &amp; their icons</strong> — <em>Categories</em> tab.</li>
+          <li><strong>Homepage sections (Trending / New Arrivals tabs)</strong> — <em>Homepage Sections</em> tab.</li>
+        </ul>
       </div>
     </div>
   );

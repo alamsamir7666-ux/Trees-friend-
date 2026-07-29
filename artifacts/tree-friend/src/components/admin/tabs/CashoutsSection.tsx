@@ -52,7 +52,7 @@ export function CashoutsSection() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="font-semibold text-sm">{co.affiliateName} <span className="text-muted-foreground font-normal">({co.affiliateEmail})</span></p>
-                      <p className="text-xs text-muted-foreground">Code: {co.affiliateCode} ? {new Date(co.createdAt).toLocaleDateString()}</p>
+                      <p className="text-xs text-muted-foreground">Code: {co.affiliateCode} · {new Date(co.createdAt).toLocaleDateString()}</p>
                     </div>
                     <p className="font-bold text-lg">Tk{Number(co.amount).toLocaleString()}</p>
                   </div>

@@ -72,12 +72,21 @@ router.post("/pre-orders", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/pre-orders", async (req, res) => {
-  try {
-    const orders = await db.select().from(preOrdersTable).orderBy(preOrdersTable.createdAt);
-    res.json(orders);
-  } catch { res.status(500).json({ error: "Failed to fetch pre-orders" }); }
-});
+// NOTE: a public GET /pre-orders endpoint (no auth, listed every pre-order
+// in the system) used to live here. It was removed because:
+//   - The admin frontend now uses GET /admin/pre-orders (added in admin.ts),
+//     which is requireAdmin-gated AND joins sellers through
+//     preOrders.sellerListingVariantId -> variant -> listing -> seller.
+//   - The buyer-facing pages use /pre-orders/track/:trackingId (one specific
+//     pre-order by tracking id) and /pre-orders/my (the authenticated user's
+//     own pre-orders) -- never the all-pre-orders list endpoint.
+//   - Allowing anyone on the internet to fetch the full pre-orders table
+//     (no auth) was a customer-PII leak: shippingAddress + whatsappPhone +
+//     senderNumber + transactionId for every pre-order ever placed.
+// No frontend caller was using it (verified by grepping every .ts/.tsx file
+// in the repo before removal). If a future caller needs an
+// all-pre-orders list, add a requireAdmin-gated route in admin.ts, not
+// here.
 
 router.get("/pre-orders/track/:trackingId", async (req, res) => {
   try {

@@ -68,7 +68,7 @@ export function QATab() {
             <div key={q.id} className="bg-card border rounded-xl p-5 space-y-3">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">{q.userName} ? Product #{q.productId} ? {new Date(q.createdAt).toLocaleDateString()}</p>
+                  <p className="text-xs text-muted-foreground mb-1">{q.userName} · Product #{q.productId} · {new Date(q.createdAt).toLocaleDateString()}</p>
                   <p className="font-medium text-sm">{q.question}</p>
                 </div>
                 <button onClick={() => deleteQuestion(q.id)} className="text-muted-foreground hover:text-destructive transition-colors shrink-0">
@@ -78,7 +78,7 @@ export function QATab() {
               {answeringId === q.id ? (
                 <div className="space-y-2">
                   <Textarea
-                    placeholder="Write your answer?"
+                    placeholder="Write your answer..."
                     value={answerText}
                     onChange={e => setAnswerText(e.target.value)}
                     rows={3} maxLength={1000}
@@ -87,7 +87,7 @@ export function QATab() {
                   <div className="flex gap-2">
                     <button onClick={() => submitAnswer(q.id)} disabled={saving || answerText.trim().length < 2}
                       className="text-xs bg-accent text-white px-4 py-1.5 rounded-full hover:bg-accent/90 transition-colors disabled:opacity-50">
-                      {saving ? "Posting?" : "Post Answer"}
+                      {saving ? "Posting..." : "Post Answer"}
                     </button>
                     <button onClick={() => { setAnsweringId(null); setAnswerText(""); }}
                       className="text-xs text-muted-foreground hover:text-foreground">Cancel</button>
@@ -107,4 +107,4 @@ export function QATab() {
   );
 }
 
-// ??? Bulk Import Tab ??????????????????????????????????????????????????????????
+// ─── Bulk Import Tab ─────────────────────────────────────────────────────

@@ -99,7 +99,7 @@ export function AffiliatesTab() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Search by name, email, or code?"
+          placeholder="Search by name, email, or code..."
           className="pl-10"
           value={searchQ}
           onChange={e => setSearchQ(e.target.value)}
@@ -119,7 +119,7 @@ export function AffiliatesTab() {
           <div className="flex gap-2">
             <button onClick={handleCreate} disabled={saving}
               className="text-sm bg-accent text-white px-4 py-2 rounded-full hover:bg-accent/90 transition-colors">
-              {saving ? "Creating?" : "Create Affiliate"}
+              {saving ? "Creating..." : "Create Affiliate"}
             </button>
             <button onClick={() => setShowForm(false)} className="text-sm text-muted-foreground hover:text-foreground">Cancel</button>
           </div>
@@ -221,4 +221,4 @@ export function AffiliatesTab() {
   );
 }
 
-// ??? Cashouts Tab (inside Affiliates) ????????????????????????????????????????
+// ─── Cashouts Tab (inside Affiliates) ────────────────────────────────────

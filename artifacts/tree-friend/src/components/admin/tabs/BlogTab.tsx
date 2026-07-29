@@ -124,7 +124,7 @@ export function BlogTab() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Search posts by title, category, or excerpt?"
+          placeholder="Search posts by title, category, or excerpt..."
           className="pl-10"
           value={searchQ}
           onChange={e => setSearchQ(e.target.value)}
@@ -312,4 +312,4 @@ export function BlogTab() {
   );
 }
 
-// ??? Audit Logs Tab ???????????????????????????????????????????????????????????
+// ─── Audit Logs Tab ──────────────────────────────────────────────────────
