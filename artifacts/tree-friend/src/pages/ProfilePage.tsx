@@ -3,10 +3,13 @@ import { useUser, UserProfile, useAuth } from "@clerk/react";
 import { LoyaltyBanner } from "@/components/ui/LoyaltyBanner";
 import { ReferralSection } from "@/components/ui/ReferralSection";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Star, Users, Package2, ArrowRight, Sprout } from "lucide-react";
+import { Star, Users, Package2, ArrowRight, Sprout, ShieldCheck } from "lucide-react";
 import { StoreIcon } from "@/components/ui/StoreIcon";
 import { BecomeSellerContent } from "@/pages/BecomeSellerPage";
-import { useGetMe, useListOrders, useGetMySeller, getGetMySellerQueryKey } from "@workspace/api-client-react";
+import {
+  useGetMe, useListOrders, useGetMySeller, getGetMySellerQueryKey,
+  useListMyFollowedSellers, getListMyFollowedSellersQueryKey,
+} from "@workspace/api-client-react";
 import { useState, useEffect, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +30,9 @@ export function ProfilePage() {
   const { data: dbUser } = useGetMe({ query: { retry: false, queryKey: ["me"] } });
   const { data: orders, isLoading: ordersLoading } = useListOrders();
   const { data: seller } = useGetMySeller({ query: { retry: false, queryKey: getGetMySellerQueryKey() } });
+  const { data: followedSellers, isLoading: followedSellersLoading } = useListMyFollowedSellers({
+    query: { queryKey: getListMyFollowedSellersQueryKey() },
+  });
 
   const { getToken } = useAuth();
   const [preOrders, setPreOrders] = useState<any[]>([]);
@@ -151,6 +157,57 @@ export function ProfilePage() {
         )}
 
         {profileTab === "overview" && (
+        <div>
+          {/* Following */}
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-medium flex items-center gap-2">
+                Following
+                {!followedSellersLoading && (followedSellers?.length ?? 0) > 0 && (
+                  <span className="text-xs font-normal text-muted-foreground">
+                    ({followedSellers!.length} {followedSellers!.length === 1 ? "store" : "stores"})
+                  </span>
+                )}
+              </h2>
+            </div>
+            {followedSellersLoading ? (
+              <div className="flex gap-3 overflow-x-auto pb-1">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <Skeleton key={i} className="h-24 w-40 rounded-xl shrink-0" />
+                ))}
+              </div>
+            ) : (followedSellers?.length ?? 0) === 0 ? (
+              <div className="bg-card border rounded-xl p-6 text-center">
+                <Users className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+                <p className="text-sm text-muted-foreground">You're not following any stores yet.</p>
+                <p className="text-xs text-muted-foreground mt-1">Visit a seller's store page and tap Follow to see them here.</p>
+              </div>
+            ) : (
+              <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0">
+                {followedSellers!.map((s) => (
+                  <Link key={s.id} href={`/store/${s.id}`} className="shrink-0 w-40">
+                    <div className="bg-card border rounded-xl p-3 h-full hover:shadow-sm transition-shadow">
+                      <div className="w-10 h-10 rounded-full overflow-hidden border bg-muted/30 mb-2">
+                        {s.logoUrl ? (
+                          <img src={s.logoUrl} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-xs font-semibold text-muted-foreground">
+                            {s.nurseryName.slice(0, 1).toUpperCase()}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <p className="text-sm font-semibold truncate">{s.nurseryName}</p>
+                        {s.isVerified && <ShieldCheck className="h-3.5 w-3.5 text-accent shrink-0" />}
+                      </div>
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">{s.location}</p>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           {/* Recent orders */}
           <div>
@@ -217,6 +274,7 @@ export function ProfilePage() {
               />
             </div>
           </div>
+        </div>
         </div>
         )}
       </div>

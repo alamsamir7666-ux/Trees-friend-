@@ -8,7 +8,7 @@ import {
   reviewsTable,
   followsTable,
 } from "@workspace/db";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, desc } from "drizzle-orm";
 import { requireAuth, requireSellerAccount } from "../middlewares/auth";
 
 cloudinaryV2.config({
@@ -377,6 +377,44 @@ router.post("/sellers/me/request-verification", requireSellerAccount, async (req
   } catch (err) {
     console.error("Request seller verification error:", err);
     res.status(500).json({ error: "Failed to submit verification request" });
+  }
+});
+
+/**
+ * The current authenticated buyer's followed-sellers list, for the
+ * Profile page's "Following" section (count + store cards). Returns the
+ * same public-safe seller shape as GET /sellers/:id (minus the aggregate
+ * stats, which that page doesn't need per-card) so the frontend can render
+ * a logo/name/verified/location card and link straight to /store/:id.
+ *
+ * MUST be registered before GET /sellers/:id below -- Express matches
+ * :id against any path segment, so "/sellers/following/mine" would
+ * otherwise be swallowed by that handler with id="following" and 400 on
+ * the parseInt guard. This is the same static-before-dynamic ordering
+ * already used for /sellers/me elsewhere in this file.
+ */
+router.get("/sellers/following/mine", requireAuth, async (req: any, res) => {
+  try {
+    const rows = await db
+      .select({ seller: sellersTable })
+      .from(followsTable)
+      .innerJoin(sellersTable, eq(followsTable.sellerId, sellersTable.id))
+      .where(and(eq(followsTable.userId, req.userId), eq(sellersTable.status, "active")))
+      .orderBy(desc(followsTable.createdAt));
+
+    res.json(
+      rows.map(({ seller }) => ({
+        id: seller.id,
+        businessName: seller.businessName,
+        nurseryName: seller.nurseryName,
+        location: seller.location,
+        isVerified: seller.isVerified,
+        logoUrl: seller.logoUrl,
+      })),
+    );
+  } catch (err) {
+    console.error("List followed sellers error:", err);
+    res.status(500).json({ error: "Failed to fetch followed sellers" });
   }
 });
 

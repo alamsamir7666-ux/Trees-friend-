@@ -1330,6 +1330,19 @@ verified?: boolean;
 /**
  * Public-safe seller profile for the buyer-facing Seller Store Page. Omits internal-only fields (NID/trade license, contact phone/email, verification request internals) that Seller/formatSeller expose to the seller themselves.
  */
+/**
+ * One store card in the buyer's Profile "Following" list. A leaner subset of PublicSeller -- no aggregate stats, since the Following list only needs enough to render a card and link to /store/:id.
+ */
+export interface FollowedSellerCard {
+  id: number;
+  businessName: string;
+  nurseryName: string;
+  location: string;
+  isVerified: boolean;
+  /** @nullable */
+  logoUrl: string | null;
+}
+
 export interface PublicSeller {
   id: number;
   businessName: string;

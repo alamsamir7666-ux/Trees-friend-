@@ -61,6 +61,7 @@ import type {
   ProductListResponse,
   PublicSeller,
   FollowStatus,
+  FollowedSellerCard,
   SellerStoreProductCard,
   SellerReviewsPage,
   RejectSellerBody,
@@ -7766,6 +7767,75 @@ export function useListSellerReviews<TData = Awaited<ReturnType<typeof listSelle
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getListSellerReviewsQueryOptions(id,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+export const getListMyFollowedSellersUrl = () => {
+
+
+
+
+  return `/api/sellers/following/mine`
+}
+
+/**
+ * @summary Buyer-facing — the current user's followed sellers, for the Profile page's Following section
+ */
+export const listMyFollowedSellers = async ( options?: RequestInit): Promise<FollowedSellerCard[]> => {
+
+  return customFetch<FollowedSellerCard[]>(getListMyFollowedSellersUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+export const getListMyFollowedSellersQueryKey = () => {
+    return [
+    `/api/sellers/following/mine`
+    ] as const;
+    }
+
+
+export const getListMyFollowedSellersQueryOptions = <TData = Awaited<ReturnType<typeof listMyFollowedSellers>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMyFollowedSellers>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListMyFollowedSellersQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listMyFollowedSellers>>> = ({ signal }) => listMyFollowedSellers({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listMyFollowedSellers>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListMyFollowedSellersQueryResult = NonNullable<Awaited<ReturnType<typeof listMyFollowedSellers>>>
+export type ListMyFollowedSellersQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Buyer-facing — the current user's followed sellers, for the Profile page's Following section
+ */
+
+export function useListMyFollowedSellers<TData = Awaited<ReturnType<typeof listMyFollowedSellers>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMyFollowedSellers>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListMyFollowedSellersQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

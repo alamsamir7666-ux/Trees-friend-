@@ -1,8 +1,9 @@
-import { Package2, ShoppingCart, TrendingUp, ChevronRight, Clock } from "lucide-react";
+import { Package2, ShoppingCart, TrendingUp, ChevronRight, Clock, Users } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   useListMySellerListings,
   useListSellerOrders,
+  useGetPublicSeller,
   type Seller,
 } from "@workspace/api-client-react";
 
@@ -31,14 +32,22 @@ export function SellerOverviewTab({
 }) {
   const { data: listings, isLoading: listingsLoading } = useListMySellerListings();
   const { data: orders, isLoading: ordersLoading } = useListSellerOrders({});
+  // Reuses the same public-profile endpoint the buyer-facing Seller Store
+  // Page calls (GET /sellers/:id) rather than a new seller-only endpoint --
+  // followerCount is already public there (see PublicSeller docs), and
+  // this is the seller's own id so there's no privacy concern reading it
+  // through the public route.
+  const { data: publicProfile, isLoading: followersLoading } = useGetPublicSeller(seller.id, {
+    query: { enabled: !!seller.id, queryKey: ["public-seller", seller.id] },
+  });
 
   const loading = listingsLoading || ordersLoading;
 
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 3 }).map((_, i) => (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="bg-white rounded-2xl border p-5 flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <Skeleton className="h-3 w-24 rounded-full" />
@@ -86,7 +95,7 @@ export function SellerOverviewTab({
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white rounded-2xl border p-5 flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Active Listings</span>
@@ -118,6 +127,25 @@ export function SellerOverviewTab({
           </div>
           <p className="text-2xl font-bold text-gray-900">{thisMonthSales > 0 ? `Tk${thisMonthSales.toLocaleString()}` : "-"}</p>
           <p className="text-xs text-gray-500">{thisMonthSales > 0 ? "from non-cancelled orders" : "No sales yet this month"}</p>
+        </div>
+
+        <div className="bg-white rounded-2xl border p-5 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Followers</span>
+            <div className="h-9 w-9 rounded-xl bg-pink-50 text-pink-600 flex items-center justify-center">
+              <Users className="h-4 w-4" />
+            </div>
+          </div>
+          {followersLoading ? (
+            <Skeleton className="h-8 w-16" />
+          ) : (
+            <p className="text-2xl font-bold text-gray-900">
+              {publicProfile && publicProfile.followerCount > 0 ? publicProfile.followerCount.toLocaleString() : "-"}
+            </p>
+          )}
+          <p className="text-xs text-gray-500">
+            {publicProfile && publicProfile.followerCount > 0 ? "following your store" : "No followers yet"}
+          </p>
         </div>
       </div>
 

@@ -1104,6 +1104,21 @@ paths:
               schema:
                 $ref: "#/components/schemas/Seller"
 
+  /sellers/following/mine:
+    get:
+      operationId: listMyFollowedSellers
+      tags: [sellers]
+      summary: Buyer-facing — the current user's followed sellers, for the Profile page's Following section
+      responses:
+        "200":
+          description: List of followed sellers (store card shape)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FollowedSellerCard"
+
   /sellers/{id}:
     get:
       operationId: getPublicSeller
@@ -4206,6 +4221,30 @@ components:
         - seller
         - rating
         - reviewCount
+
+    FollowedSellerCard:
+      type: object
+      description: One store card in the buyer's Profile "Following" list. A leaner subset of PublicSeller -- no aggregate stats, since the Following list only needs enough to render a card and link to /store/:id.
+      properties:
+        id:
+          type: integer
+        businessName:
+          type: string
+        nurseryName:
+          type: string
+        location:
+          type: string
+        isVerified:
+          type: boolean
+        logoUrl:
+          type: ["string", "null"]
+      required:
+        - id
+        - businessName
+        - nurseryName
+        - location
+        - isVerified
+        - logoUrl
 
     PublicSeller:
       type: object

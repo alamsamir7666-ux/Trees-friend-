@@ -3212,3 +3212,17 @@ export const ListSellerReviewsResponse = zod.object({
   "5": zod.number()
 })
 })
+
+/**
+ * @summary Buyer-facing — the current user's followed sellers, for the Profile page's Following section
+ */
+export const ListMyFollowedSellersResponseItem = zod.object({
+  "id": zod.number(),
+  "businessName": zod.string(),
+  "nurseryName": zod.string(),
+  "location": zod.string(),
+  "isVerified": zod.boolean(),
+  "logoUrl": zod.string().nullable()
+})
+
+export const ListMyFollowedSellersResponse = zod.array(ListMyFollowedSellersResponseItem)
