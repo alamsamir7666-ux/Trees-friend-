@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import request from "supertest";
 import app from "../src/app";
 import { db } from "@workspace/db";
-import { ordersTable, sellerListingsTable, cartItemsTable } from "@workspace/db/schema";
+import { ordersTable, sellerListingsTable, sellerListingVariantsTable, cartItemsTable } from "@workspace/db/schema";
 import { eq } from "drizzle-orm";
 import { authHeader } from "./authHelper";
 import { cleanupAll, seedCategory, seedProduct, seedSeller, seedUser, seedListing } from "./testDb";
@@ -86,8 +86,16 @@ describe("orders routes (HTTP)", () => {
     expect(orderRow).toBeDefined();
     expect(orderRow.userId).toBe(buyerClerkId);
 
-    const [listingRow] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, listingId));
-    expect(listingRow.availableQuantity).toBe(7); // 10 - 3
+    // Post-Phase-2: stock lives on the variant, not the listing. The checkout
+    // flow decrements sellerListingVariantsTable.availableQuantity, not
+    // sellerListingsTable.stock (which no longer exists). Pull the variant
+    // via the order's first item to verify the decrement landed correctly.
+    const [variantRow] = await db
+      .select()
+      .from(sellerListingVariantsTable)
+      .where(eq(sellerListingVariantsTable.id, (created.items[0] as any).sellerListingVariantId));
+    expect(variantRow).toBeDefined();
+    expect(variantRow.availableQuantity).toBe(7); // 10 - 3
 
     const cartRows = await db.select().from(cartItemsTable).where(eq(cartItemsTable.userId, buyerClerkId));
     expect(cartRows).toHaveLength(0);

@@ -5,6 +5,7 @@ import {
   categoriesTable,
   productsTable,
   sellerListingsTable,
+  sellerListingVariantsTable,
   sellerPaymentConfigsTable,
   sellerCourierConfigsTable,
   cartItemsTable,
@@ -216,6 +217,13 @@ export async function seedVerifiedCourierConfig(sellerId: number, provider: "pat
 interface SeedListingOptions {
   productId: number;
   sellerId: number;
+  // Variant-level fields (post-Phase-2 marketplace migration):
+  // price / stock / availableQuantity moved from sellerListingsTable to
+  // sellersListingVariantsTable. The seed helper now creates the listing
+  // and its first variant as a single unit so existing tests that just
+  // want "a listing with stock N at price P" can keep calling this with
+  // the same options. If you need a listing with multiple variants, build
+  // the rows manually instead of using this helper.
   price?: string;
   stock?: number;
   availableQuantity?: number;
@@ -224,21 +232,47 @@ interface SeedListingOptions {
   paymentMethod?: "cod" | "advance" | "both";
 }
 
+/**
+ * Creates a seller_listing row + its first seller_listing_variant row.
+ * Pre-Phase-2 this helper inserted a single row with price/stock on the
+ * listing itself; post-Phase-2 those fields moved to the variant table
+ * (see lib/db/src/schema/sellerListingVariants.ts). Tests that just need
+ * "a listing with stock N at price P" can keep calling this with the
+ * same options -- the helper splits the row correctly behind the
+ * scenes.
+ *
+ * Returns the LISTING row (not the variant) for backward compat with
+ * callers that destructure `{ id: listingId }`. The variant id is
+ * available as `_firstVariant.id` on the returned object if you need
+ * it (e.g. to add to cart against a specific variant).
+ */
 export async function seedListing(opts: SeedListingOptions) {
   const [listing] = await db
     .insert(sellerListingsTable)
     .values({
       productId: opts.productId,
       sellerId: opts.sellerId,
-      price: opts.price ?? "500.00",
-      stock: opts.stock ?? 10,
-      availableQuantity: opts.availableQuantity ?? 10,
       approvalStatus: opts.approvalStatus ?? "approved",
       visibility: opts.visibility ?? "public",
       paymentMethod: opts.paymentMethod ?? "cod",
     })
     .returning();
-  return listing;
+
+  const availableQuantity = opts.availableQuantity ?? opts.stock ?? 0;
+  const [variant] = await db
+    .insert(sellerListingVariantsTable)
+    .values({
+      sellerListingId: listing.id,
+      form: "potted",
+      price: opts.price ?? "500.00",
+      stock: availableQuantity,
+      availableQuantity,
+      deliveryCharge: "0",
+      isPreOrder: false,
+    })
+    .returning();
+
+  return { ...listing, _firstVariant: variant };
 }
 
 interface SeedOrderOptions {

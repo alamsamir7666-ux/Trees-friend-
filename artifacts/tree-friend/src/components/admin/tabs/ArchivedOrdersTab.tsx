@@ -1,6 +1,22 @@
 import { useAdminContext } from "@/contexts/AdminContext";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Archive } from "lucide-react";
+import { Archive, Store, Mail } from "lucide-react";
+
+// Mirror of SELLER_STATUS_STYLE / SELLER_STATUS_LABEL in OrdersTab.tsx --
+// kept local to avoid a shared module just for these two tabs. If a third
+// consumer appears, lift to a shared file.
+const SELLER_STATUS_STYLE: Record<string, string> = {
+  active: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  pending_verification: "bg-amber-50 text-amber-700 border-amber-200",
+  suspended: "bg-rose-50 text-rose-700 border-rose-200",
+  vacation: "bg-sky-50 text-sky-700 border-sky-200",
+};
+const SELLER_STATUS_LABEL: Record<string, string> = {
+  active: "Active",
+  pending_verification: "Pending",
+  suspended: "Suspended",
+  vacation: "On vacation",
+};
 
 export function ArchivedOrdersTab() {
 const {
@@ -37,6 +53,11 @@ return (
               <tr>
                 <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Order</th>
                 <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Customer</th>
+                {/* Seller column — added to match the redesigned Orders tab
+                    and the new seller fields the /admin/orders/archived
+                    endpoint now returns. Shows "—" for pre-orders (the
+                    archived-preOrders response doesn't carry seller fields). */}
+                <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Seller</th>
                 <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Products</th>
                 <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status / Date</th>
                 <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Payment</th>
@@ -46,6 +67,10 @@ return (
             <tbody className="divide-y divide-gray-50">
               {[...archivedOrders, ...archivedPreOrders.map((o: any) => ({ ...o, _type: "preorder", orderStatus: o.status }))].sort((a,b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).map((o) => {
                 const sAddr = (o as any).shippingAddress as { fullName?: string } | null;
+                const sellerName = (o as any).sellerBusinessName ?? null;
+                const sellerStatus = (o as any).sellerStatus ?? null;
+                const sellerEmail = (o as any).sellerContactEmail ?? null;
+                const isPreOrder = (o as any)._type === "preorder";
                 return (
                   <tr key={o.id} className="hover:bg-gray-50/60 transition-colors">
                     <td className="px-4 py-3.5">
@@ -66,9 +91,44 @@ return (
                         <p className="text-xs text-gray-400">-</p>
                       )}
                     </td>
+                    {/* Seller column — for archived regular orders, shows
+                        business name + status pill + email link (so admin
+                        can still contact a seller about a past order).
+                        Pre-orders show "—" because the archived-preOrders
+                        response doesn't include seller context. */}
+                    <td className="px-4 py-3.5">
+                      {isPreOrder || !sellerName ? (
+                        <span className="text-xs text-gray-400 italic" title={isPreOrder ? "Pre-order — seller info not available in archived view" : "Legacy order from before the marketplace migration, or seller record deleted"}>
+                          {isPreOrder ? "—" : "Unknown seller"}
+                        </span>
+                      ) : (
+                        <div className="flex flex-col gap-1 min-w-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <Store className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                            <span className="text-xs font-medium text-gray-800 truncate" title={sellerName}>{sellerName}</span>
+                          </div>
+                          {sellerStatus && (
+                            <span className={`w-fit px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${SELLER_STATUS_STYLE[sellerStatus] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                              {SELLER_STATUS_LABEL[sellerStatus] ?? sellerStatus}
+                            </span>
+                          )}
+                          {sellerEmail && (
+                            <a
+                              href={`mailto:${sellerEmail}`}
+                              className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-800 transition-colors truncate"
+                              title={sellerEmail}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Mail className="h-3 w-3 shrink-0" />
+                              <span className="truncate">{sellerEmail}</span>
+                            </a>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3.5">
                       <div className="space-y-0.5 max-w-[180px]">
-                        {(o as any)._type === "preorder" ? (
+                        {isPreOrder ? (
                           <p className="text-xs text-gray-600 truncate">{(o as any).productName} ×{(o as any).quantity ?? 1}</p>
                         ) : (
                           <>

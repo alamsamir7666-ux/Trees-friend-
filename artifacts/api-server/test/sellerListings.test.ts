@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import request from "supertest";
 import app from "../src/app";
 import { db } from "@workspace/db";
-import { sellerListingsTable } from "@workspace/db/schema";
+import { sellerListingsTable, sellerListingVariantsTable } from "@workspace/db/schema";
 import { eq } from "drizzle-orm";
 import { authHeader } from "./authHelper";
 import {
@@ -165,11 +165,23 @@ describe("seller-listings routes (HTTP)", () => {
       expect(res.body.error).toMatch(/verified bKash payment config/i);
 
       // Confirm no listing row was actually written for this rejected attempt.
+      // Post-Phase-2: the price field lives on the variant, not the listing,
+      // so check that the rejection produced NO variant priced at 700 (the
+      // rejected body) by joining listings to variants and filtering on the
+      // variant's price. If you instead queried `sellerListingsTable.price`,
+      // you'd hit a TS2339 because that column no longer exists.
       const rows = await db
-        .select()
+        .select({
+          listingId: sellerListingsTable.id,
+          price: sellerListingVariantsTable.price,
+        })
         .from(sellerListingsTable)
+        .leftJoin(
+          sellerListingVariantsTable,
+          eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id),
+        )
         .where(eq(sellerListingsTable.sellerId, unverifiedSellerId));
-      expect(rows.every((r) => Number(r.price) !== 700)).toBe(true);
+      expect(rows.every((r) => r.price !== "700.00")).toBe(true);
     });
 
     it("POST /api/seller-listings rejects paymentMethod='both' the same way", async () => {
