@@ -1104,6 +1104,82 @@ paths:
               schema:
                 $ref: "#/components/schemas/Seller"
 
+  /sellers/{id}:
+    get:
+      operationId: getPublicSeller
+      tags: [sellers]
+      summary: Buyer-facing — public seller profile for the Seller Store Page (name, logo, location, about, aggregate stats). 404s unless the seller is active.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Public seller profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicSeller"
+        "404":
+          description: Seller not found or not active
+
+  /sellers/{id}/follow:
+    get:
+      operationId: getSellerFollowStatus
+      tags: [sellers]
+      summary: Whether the current authenticated user follows this seller
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Follow status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FollowStatus"
+    post:
+      operationId: followSeller
+      tags: [sellers]
+      summary: Follow a seller (idempotent)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Follow status after following
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FollowStatus"
+        "404":
+          description: Seller not found or not active
+    delete:
+      operationId: unfollowSeller
+      tags: [sellers]
+      summary: Unfollow a seller (idempotent)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Follow status after unfollowing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FollowStatus"
+
   /categories/{categoryId}/listing-attribute-options:
     get:
       operationId: listListingAttributeOptions
@@ -1318,6 +1394,64 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/SellerListingCard"
+
+  /sellers/{id}/listings:
+    get:
+      operationId: listSellerListings
+      tags: [sellerListings]
+      summary: Buyer-facing — product cards for one seller's Store Page "All Products" grid (approved, visible, in-stock listings only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [price_asc, price_desc, rating]
+      responses:
+        "200":
+          description: This seller's product cards
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SellerStoreProductCard"
+
+  /sellers/{id}/reviews:
+    get:
+      operationId: listSellerReviews
+      tags: [sellerListings]
+      summary: Buyer-facing — paginated reviews across all of a seller's listings, plus the 1-5 star breakdown, for the Store Page "Customer Reviews" section
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 10
+      responses:
+        "200":
+          description: Paginated reviews and rating breakdown for this seller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerReviewsPage"
 
   /admin/seller-listings:
     get:
@@ -4072,6 +4206,148 @@ components:
         - seller
         - rating
         - reviewCount
+
+    PublicSeller:
+      type: object
+      description: Public-safe seller profile for the buyer-facing Seller Store Page. Omits internal-only fields (NID/trade license, contact phone/email, verification request internals) that Seller/formatSeller expose to the seller themselves.
+      properties:
+        id:
+          type: integer
+        businessName:
+          type: string
+        nurseryName:
+          type: string
+        location:
+          type: string
+        description:
+          type: ["string", "null"]
+        isVerified:
+          type: boolean
+        logoUrl:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        productCount:
+          type: integer
+        rating:
+          type: number
+        reviewCount:
+          type: integer
+        followerCount:
+          type: integer
+      required:
+        - id
+        - businessName
+        - nurseryName
+        - location
+        - description
+        - isVerified
+        - logoUrl
+        - createdAt
+        - productCount
+        - rating
+        - reviewCount
+        - followerCount
+
+    FollowStatus:
+      type: object
+      properties:
+        isFollowing:
+          type: boolean
+      required:
+        - isFollowing
+
+    SellerStoreProductCard:
+      type: object
+      description: One product card in a seller's Store Page "All Products" grid.
+      properties:
+        listing:
+          $ref: "#/components/schemas/SellerListing"
+        product:
+          type: object
+          properties:
+            id:
+              type: integer
+            name:
+              type: string
+            slug:
+              type: string
+          required:
+            - id
+            - name
+            - slug
+        rating:
+          type: number
+        reviewCount:
+          type: integer
+      required:
+        - listing
+        - product
+        - rating
+        - reviewCount
+
+    SellerStoreReview:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: string
+        userName:
+          type: string
+        rating:
+          type: integer
+        comment:
+          type: string
+        sellerListingId:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - userId
+        - userName
+        - rating
+        - comment
+        - sellerListingId
+        - createdAt
+
+    SellerReviewsPage:
+      type: object
+      properties:
+        reviews:
+          type: array
+          items:
+            $ref: "#/components/schemas/SellerStoreReview"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        averageRating:
+          type: number
+        ratingBreakdown:
+          type: object
+          properties:
+            "1":
+              type: integer
+            "2":
+              type: integer
+            "3":
+              type: integer
+            "4":
+              type: integer
+            "5":
+              type: integer
+          required: ["1", "2", "3", "4", "5"]
+      required:
+        - reviews
+        - total
+        - page
+        - limit
+        - averageRating
+        - ratingBreakdown
 
     AdminSellerListing:
       allOf:

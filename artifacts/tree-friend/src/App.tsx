@@ -24,6 +24,7 @@ const SignInPage = lazy(() => import("@/pages/SignInPage").then(m => ({ default:
 const SignUpPage = lazy(() => import("@/pages/SignUpPage").then(m => ({ default: m.SignUpPage })));
 const BlogPage = lazy(() => import("@/pages/BlogPage").then(m => ({ default: m.BlogPage })));
 const BlogArticlePage = lazy(() => import("@/pages/BlogArticlePage").then(m => ({ default: m.BlogArticlePage })));
+const SellerStorePage = lazy(() => import("@/pages/SellerStorePage").then(m => ({ default: m.SellerStorePage })));
 import { I18nProvider } from "@/lib/i18n";
 import { ThemeProvider } from "next-themes";
 import { CurrencyProvider } from "@/lib/currency";
@@ -366,6 +367,7 @@ function ClerkProviderWithRoutes() {
                 <Route path="/" component={HomePage} />
                 <Route path="/products" component={ProductsPage} />
                 <Route path="/products/:productId/listings/:listingId" component={SellerListingDetailPage} />
+                <Route path="/store/:sellerId" component={SellerStorePage} />
                 <Route path="/products/:id" component={ProductDetailPage} />
                 <Route path="/cart" component={CartPage} />
                 <Route path="/checkout" component={CheckoutPage} />

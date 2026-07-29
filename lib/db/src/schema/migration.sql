@@ -249,3 +249,19 @@ ALTER TABLE product_qa
 ALTER TABLE product_qa
   ADD COLUMN IF NOT EXISTS seller_id INTEGER
     REFERENCES sellers(id) ON DELETE CASCADE;
+
+-- ─── Seller Store Page: Follows ────────────────────────────────────────────
+-- New table backing the "Follow" button on the buyer-facing Seller Store
+-- Page (GET /sellers/:id). Stores userId as the Clerk id (text), same
+-- convention as wishlist.user_id, rather than users.id -- every route
+-- already has req.userId/req.dbUser.clerkId on hand, so this matches how
+-- wishlist/reviews/cart already key rows to a buyer.
+CREATE TABLE IF NOT EXISTS follows (
+  id SERIAL PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  seller_id INTEGER NOT NULL REFERENCES sellers(id) ON DELETE CASCADE,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS follows_user_seller_unique
+  ON follows (user_id, seller_id);

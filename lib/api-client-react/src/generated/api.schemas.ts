@@ -1327,3 +1327,87 @@ export type ListAdminSellerCourierConfigsParams = {
 verified?: boolean;
 };
 
+/**
+ * Public-safe seller profile for the buyer-facing Seller Store Page. Omits internal-only fields (NID/trade license, contact phone/email, verification request internals) that Seller/formatSeller expose to the seller themselves.
+ */
+export interface PublicSeller {
+  id: number;
+  businessName: string;
+  nurseryName: string;
+  location: string;
+  /** @nullable */
+  description: string | null;
+  isVerified: boolean;
+  /** @nullable */
+  logoUrl: string | null;
+  createdAt: string;
+  productCount: number;
+  rating: number;
+  reviewCount: number;
+  followerCount: number;
+}
+
+export interface FollowStatus {
+  isFollowing: boolean;
+}
+
+export interface SellerStoreProductCardProduct {
+  id: number;
+  name: string;
+  slug: string;
+}
+
+/**
+ * One product card in a seller's Store Page "All Products" grid.
+ */
+export interface SellerStoreProductCard {
+  listing: SellerListing;
+  product: SellerStoreProductCardProduct;
+  rating: number;
+  reviewCount: number;
+}
+
+export interface SellerStoreReview {
+  id: number;
+  userId: string;
+  userName: string;
+  rating: number;
+  comment: string;
+  /** @nullable */
+  sellerListingId: number | null;
+  createdAt: string;
+}
+
+export interface SellerReviewsPageRatingBreakdown {
+  '1': number;
+  '2': number;
+  '3': number;
+  '4': number;
+  '5': number;
+}
+
+export interface SellerReviewsPage {
+  reviews: SellerStoreReview[];
+  total: number;
+  page: number;
+  limit: number;
+  averageRating: number;
+  ratingBreakdown: SellerReviewsPageRatingBreakdown;
+}
+
+export type ListSellerListingsParams = {
+sort?: ListSellerListingsSort;
+};
+
+export const ListSellerListingsSort = {
+  price_asc: 'price_asc',
+  price_desc: 'price_desc',
+  rating: 'rating',
+} as const;
+
+export type ListSellerListingsSort = typeof ListSellerListingsSort[keyof typeof ListSellerListingsSort];
+
+export type ListSellerReviewsParams = {
+page?: number;
+limit?: number;
+};

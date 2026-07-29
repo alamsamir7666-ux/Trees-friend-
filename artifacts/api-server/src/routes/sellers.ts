@@ -2,8 +2,13 @@ import { Router } from "express";
 import multerPkg from "multer";
 import { v2 as cloudinaryV2 } from "cloudinary";
 import { db } from "@workspace/db";
-import { sellersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import {
+  sellersTable,
+  sellerListingsTable,
+  reviewsTable,
+  followsTable,
+} from "@workspace/db";
+import { eq, and, sql } from "drizzle-orm";
 import { requireAuth, requireSellerAccount } from "../middlewares/auth";
 
 cloudinaryV2.config({
@@ -372,6 +377,181 @@ router.post("/sellers/me/request-verification", requireSellerAccount, async (req
   } catch (err) {
     console.error("Request seller verification error:", err);
     res.status(500).json({ error: "Failed to submit verification request" });
+  }
+});
+
+/**
+ * Public, unauthenticated seller profile for the buyer-facing Seller Store
+ * Page (reached from "View Store" on SellerListingDetailPage). Deliberately
+ * NOT gated behind requireAuth -- unlike /sellers/me (the seller's own
+ * dashboard view with NID/phone/verification internals), this returns only
+ * the subset already considered public elsewhere (matches
+ * SellerListingCardSellerInfo's fields: id/businessName/nurseryName/
+ * location/isVerified/logoUrl), plus description and createdAt for the
+ * "About Store" / "Member since" sections, and the aggregate stats the
+ * design's stats row needs.
+ *
+ * 404s for any seller that isn't status="active" -- same gate the
+ * listings/reviews routes below use, so a suspended/pending seller's store
+ * page isn't independently reachable by guessing its id, matching how a
+ * de-listed seller's cards already don't appear buyer-side.
+ *
+ * followerCount is always included (public count, like a social profile's
+ * follower count); isFollowing is intentionally NOT included here since
+ * this route has no auth context -- see GET /sellers/:id/follow below for
+ * the logged-in viewer's own follow state, kept as a separate authed call
+ * the same way review eligibility is split from the public review list.
+ */
+router.get("/sellers/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid seller id" });
+      return;
+    }
+
+    const [seller] = await db
+      .select()
+      .from(sellersTable)
+      .where(and(eq(sellersTable.id, id), eq(sellersTable.status, "active")))
+      .limit(1);
+
+    if (!seller) {
+      res.status(404).json({ error: "Seller not found" });
+      return;
+    }
+
+    const [productCountRow, reviewStatsRow, followerCountRow] = await Promise.all([
+      db
+        .select({ count: sql<string>`COUNT(*)` })
+        .from(sellerListingsTable)
+        .where(
+          and(
+            eq(sellerListingsTable.sellerId, id),
+            eq(sellerListingsTable.visibility, "public"),
+            eq(sellerListingsTable.approvalStatus, "approved"),
+          ),
+        ),
+      db
+        .select({ avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`, count: sql<string>`COUNT(*)` })
+        .from(reviewsTable)
+        .where(eq(reviewsTable.sellerId, id)),
+      db
+        .select({ count: sql<string>`COUNT(*)` })
+        .from(followsTable)
+        .where(eq(followsTable.sellerId, id)),
+    ]);
+
+    res.json({
+      id: seller.id,
+      businessName: seller.businessName,
+      nurseryName: seller.nurseryName,
+      location: seller.location,
+      description: seller.description,
+      isVerified: seller.isVerified,
+      logoUrl: seller.logoUrl,
+      createdAt: seller.createdAt.toISOString(),
+      productCount: Number(productCountRow[0]?.count ?? 0),
+      rating: Number(Number(reviewStatsRow[0]?.avg ?? 0).toFixed(1)),
+      reviewCount: Number(reviewStatsRow[0]?.count ?? 0),
+      followerCount: Number(followerCountRow[0]?.count ?? 0),
+    });
+  } catch (err) {
+    console.error("Get public seller error:", err);
+    res.status(500).json({ error: "Failed to fetch seller" });
+  }
+});
+
+/**
+ * The logged-in viewer's own follow state for this seller -- split out
+ * from the public GET /sellers/:id above the same way review eligibility
+ * is split from the public review list (see reviews.ts), since "am I
+ * following this?" is per-viewer and the profile route above has no auth
+ * context. Returns false (not a 401) when logged out, since the Store Page
+ * shows the Follow button to guests too (it just prompts sign-in on tap,
+ * same pattern as the wishlist heart button elsewhere).
+ */
+router.get("/sellers/:id/follow", requireAuth, async (req: any, res) => {
+  try {
+    const sellerId = parseInt(req.params.id);
+    if (isNaN(sellerId) || sellerId <= 0) {
+      res.status(400).json({ error: "Invalid seller id" });
+      return;
+    }
+
+    const [existing] = await db
+      .select({ id: followsTable.id })
+      .from(followsTable)
+      .where(and(eq(followsTable.userId, req.userId), eq(followsTable.sellerId, sellerId)))
+      .limit(1);
+
+    res.json({ isFollowing: !!existing });
+  } catch (err) {
+    console.error("Get follow status error:", err);
+    res.status(500).json({ error: "Failed to fetch follow status" });
+  }
+});
+
+/**
+ * Follow a seller. Idempotent -- following an already-followed seller
+ * just returns the existing row rather than erroring, since the frontend
+ * button toggles optimistically and a duplicate click (e.g. a fast
+ * double-tap before the mutation settles) shouldn't surface an error to
+ * the buyer. Relies on follows_user_seller_unique (see follows.ts) rather
+ * than a SELECT-then-INSERT check to avoid a race between concurrent
+ * requests from the same user.
+ */
+router.post("/sellers/:id/follow", requireAuth, async (req: any, res) => {
+  try {
+    const sellerId = parseInt(req.params.id);
+    if (isNaN(sellerId) || sellerId <= 0) {
+      res.status(400).json({ error: "Invalid seller id" });
+      return;
+    }
+
+    const [seller] = await db
+      .select({ id: sellersTable.id })
+      .from(sellersTable)
+      .where(and(eq(sellersTable.id, sellerId), eq(sellersTable.status, "active")))
+      .limit(1);
+    if (!seller) {
+      res.status(404).json({ error: "Seller not found" });
+      return;
+    }
+
+    await db
+      .insert(followsTable)
+      .values({ userId: req.userId, sellerId })
+      .onConflictDoNothing({ target: [followsTable.userId, followsTable.sellerId] });
+
+    res.json({ isFollowing: true });
+  } catch (err) {
+    console.error("Follow seller error:", err);
+    res.status(500).json({ error: "Failed to follow seller" });
+  }
+});
+
+/**
+ * Unfollow a seller. Also idempotent (unfollowing a seller you don't
+ * follow is a no-op success, not a 404) -- same double-tap/optimistic-UI
+ * reasoning as the follow route above.
+ */
+router.delete("/sellers/:id/follow", requireAuth, async (req: any, res) => {
+  try {
+    const sellerId = parseInt(req.params.id);
+    if (isNaN(sellerId) || sellerId <= 0) {
+      res.status(400).json({ error: "Invalid seller id" });
+      return;
+    }
+
+    await db
+      .delete(followsTable)
+      .where(and(eq(followsTable.userId, req.userId), eq(followsTable.sellerId, sellerId)));
+
+    res.json({ isFollowing: false });
+  } catch (err) {
+    console.error("Unfollow seller error:", err);
+    res.status(500).json({ error: "Failed to unfollow seller" });
   }
 });
 

@@ -254,13 +254,12 @@ export function SellerListingDetailPage() {
                 </div>
               </div>
             </div>
-            <button
-              disabled
-              title="Coming soon"
-              className="border bg-white shrink-0 h-7 px-[10px] rounded-md text-[11px] font-semibold text-[#111827] opacity-60"
+            <Link
+              href={`/store/${seller.id}`}
+              className="border bg-white shrink-0 h-7 px-[10px] rounded-md text-[11px] font-semibold text-[#111827] flex items-center hover:bg-[#F9FAFB] transition-colors"
             >
               View Store
-            </button>
+            </Link>
           </div>
 
           {/* Images */}

@@ -3055,3 +3055,160 @@ export const UnverifySellerCourierConfigResponse = zod.object({
 }).describe('Masked seller courier credentials (plan doc §4, §8). Never contains decrypted apiKey\/apiSecret -- only a last-4-style mask, per the schema\'s security note.')
 
 
+
+/**
+ * @summary Buyer-facing — public seller profile for the Seller Store Page (name, logo, location, about, aggregate stats). 404s unless the seller is active.
+ */
+export const GetPublicSellerParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetPublicSellerResponse = zod.object({
+  "id": zod.number(),
+  "businessName": zod.string(),
+  "nurseryName": zod.string(),
+  "location": zod.string(),
+  "description": zod.string().nullable(),
+  "isVerified": zod.boolean(),
+  "logoUrl": zod.string().nullable(),
+  "createdAt": zod.string(),
+  "productCount": zod.number(),
+  "rating": zod.number(),
+  "reviewCount": zod.number(),
+  "followerCount": zod.number()
+})
+
+
+/**
+ * @summary Whether the current authenticated user follows this seller
+ */
+export const GetSellerFollowStatusParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetSellerFollowStatusResponse = zod.object({
+  "isFollowing": zod.boolean()
+})
+
+
+/**
+ * @summary Follow a seller (idempotent)
+ */
+export const FollowSellerParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const FollowSellerResponse = zod.object({
+  "isFollowing": zod.boolean()
+})
+
+
+/**
+ * @summary Unfollow a seller (idempotent)
+ */
+export const UnfollowSellerParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UnfollowSellerResponse = zod.object({
+  "isFollowing": zod.boolean()
+})
+
+
+/**
+ * @summary Buyer-facing — product cards for one seller's Store Page "All Products" grid (approved, visible, in-stock listings only)
+ */
+export const ListSellerListingsParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ListSellerListingsQueryParams = zod.object({
+  "sort": zod.enum(['price_asc', 'price_desc', 'rating']).optional()
+})
+
+export const ListSellerListingsResponseItem = zod.object({
+  "listing": zod.object({
+  "id": zod.number(),
+  "productId": zod.number(),
+  "sellerId": zod.number(),
+  "deliveryTimeDays": zod.number().nullish(),
+  "warrantyDays": zod.number().nullish(),
+  "returnPolicyText": zod.string().nullish(),
+  "paymentMethod": zod.enum(['cod', 'advance', 'both']),
+  "images": zod.array(zod.string()),
+  "videoUrl": zod.string().nullish(),
+  "description": zod.string().nullish(),
+  "offerText": zod.string().nullish(),
+  "certification": zod.string().nullish(),
+  "tags": zod.array(zod.string()),
+  "visibility": zod.enum(['public', 'hidden']),
+  "hiddenReason": zod.string().nullish(),
+  "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
+  "rejectionReason": zod.string().nullish(),
+  "variants": zod.array(zod.object({
+  "id": zod.number(),
+  "sellerListingId": zod.number(),
+  "form": zod.string().nullish(),
+  "rootType": zod.string().nullish(),
+  "potSize": zod.string().nullish(),
+  "age": zod.string().nullish(),
+  "height": zod.string().nullish(),
+  "condition": zod.string().nullish(),
+  "price": zod.number(),
+  "discountPrice": zod.number().nullish(),
+  "stock": zod.number(),
+  "availableQuantity": zod.number(),
+  "deliveryCharge": zod.number(),
+  "isPreOrder": zod.boolean(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+}),
+  "product": zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "slug": zod.string()
+}),
+  "rating": zod.number(),
+  "reviewCount": zod.number()
+})
+
+export const ListSellerListingsResponse = zod.array(ListSellerListingsResponseItem)
+
+
+/**
+ * @summary Buyer-facing — paginated reviews across all of a seller's listings, plus the 1-5 star breakdown, for the Store Page "Customer Reviews" section
+ */
+export const ListSellerReviewsParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ListSellerReviewsQueryParams = zod.object({
+  "page": zod.coerce.number().optional(),
+  "limit": zod.coerce.number().optional()
+})
+
+export const ListSellerReviewsResponse = zod.object({
+  "reviews": zod.array(zod.object({
+  "id": zod.number(),
+  "userId": zod.string(),
+  "userName": zod.string(),
+  "rating": zod.number(),
+  "comment": zod.string(),
+  "sellerListingId": zod.number().nullable(),
+  "createdAt": zod.string()
+})),
+  "total": zod.number(),
+  "page": zod.number(),
+  "limit": zod.number(),
+  "averageRating": zod.number(),
+  "ratingBreakdown": zod.object({
+  "1": zod.number(),
+  "2": zod.number(),
+  "3": zod.number(),
+  "4": zod.number(),
+  "5": zod.number()
+})
+})

@@ -50,6 +50,8 @@ import type {
   ListSellerOrdersParams,
   ListSellerVerificationRequestsParams,
   ListSellersParams,
+  ListSellerListingsParams,
+  ListSellerReviewsParams,
   ListingAttributeOption,
   MessageResponse,
   Order,
@@ -57,6 +59,10 @@ import type {
   OrderTracking,
   Product,
   ProductListResponse,
+  PublicSeller,
+  FollowStatus,
+  SellerStoreProductCard,
+  SellerReviewsPage,
   RejectSellerBody,
   RejectSellerListingBody,
   RejectSellerVerificationBody,
@@ -7315,3 +7321,453 @@ export const useUnverifySellerCourierConfig = <TError = ErrorType<unknown>,
       return useMutation(getUnverifySellerCourierConfigMutationOptions(options));
     }
 
+export const getGetPublicSellerUrl = (id: number,) => {
+
+
+
+
+  return `/api/sellers/${id}`
+}
+
+/**
+ * @summary Buyer-facing — public seller profile for the Seller Store Page (name, logo, location, about, aggregate stats). 404s unless the seller is active.
+ */
+export const getPublicSeller = async (id: number, options?: RequestInit): Promise<PublicSeller> => {
+
+  return customFetch<PublicSeller>(getGetPublicSellerUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+export const getGetPublicSellerQueryKey = (id: number,) => {
+    return [
+    `/api/sellers/${id}`
+    ] as const;
+    }
+
+
+export const getGetPublicSellerQueryOptions = <TData = Awaited<ReturnType<typeof getPublicSeller>>, TError = ErrorType<void>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPublicSeller>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPublicSellerQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPublicSeller>>> = ({ signal }) => getPublicSeller(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPublicSeller>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetPublicSellerQueryResult = NonNullable<Awaited<ReturnType<typeof getPublicSeller>>>
+export type GetPublicSellerQueryError = ErrorType<void>
+
+
+/**
+ * @summary Buyer-facing — public seller profile for the Seller Store Page (name, logo, location, about, aggregate stats). 404s unless the seller is active.
+ */
+
+export function useGetPublicSeller<TData = Awaited<ReturnType<typeof getPublicSeller>>, TError = ErrorType<void>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPublicSeller>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetPublicSellerQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+export const getGetSellerFollowStatusUrl = (id: number,) => {
+
+
+
+
+  return `/api/sellers/${id}/follow`
+}
+
+/**
+ * @summary Whether the current authenticated user follows this seller
+ */
+export const getSellerFollowStatus = async (id: number, options?: RequestInit): Promise<FollowStatus> => {
+
+  return customFetch<FollowStatus>(getGetSellerFollowStatusUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+export const getGetSellerFollowStatusQueryKey = (id: number,) => {
+    return [
+    `/api/sellers/${id}/follow`
+    ] as const;
+    }
+
+
+export const getGetSellerFollowStatusQueryOptions = <TData = Awaited<ReturnType<typeof getSellerFollowStatus>>, TError = ErrorType<unknown>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSellerFollowStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSellerFollowStatusQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSellerFollowStatus>>> = ({ signal }) => getSellerFollowStatus(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSellerFollowStatus>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetSellerFollowStatusQueryResult = NonNullable<Awaited<ReturnType<typeof getSellerFollowStatus>>>
+export type GetSellerFollowStatusQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Whether the current authenticated user follows this seller
+ */
+
+export function useGetSellerFollowStatus<TData = Awaited<ReturnType<typeof getSellerFollowStatus>>, TError = ErrorType<unknown>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSellerFollowStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetSellerFollowStatusQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+export const getFollowSellerUrl = (id: number,) => {
+
+
+
+
+  return `/api/sellers/${id}/follow`
+}
+
+/**
+ * @summary Follow a seller (idempotent)
+ */
+export const followSeller = async (id: number, options?: RequestInit): Promise<FollowStatus> => {
+
+  return customFetch<FollowStatus>(getFollowSellerUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getFollowSellerMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof followSeller>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof followSeller>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['followSeller'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof followSeller>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  followSeller(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type FollowSellerMutationResult = NonNullable<Awaited<ReturnType<typeof followSeller>>>
+
+    export type FollowSellerMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Follow a seller (idempotent)
+ */
+export const useFollowSeller = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof followSeller>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof followSeller>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getFollowSellerMutationOptions(options));
+    }
+
+export const getUnfollowSellerUrl = (id: number,) => {
+
+
+
+
+  return `/api/sellers/${id}/follow`
+}
+
+/**
+ * @summary Unfollow a seller (idempotent)
+ */
+export const unfollowSeller = async (id: number, options?: RequestInit): Promise<FollowStatus> => {
+
+  return customFetch<FollowStatus>(getUnfollowSellerUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getUnfollowSellerMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof unfollowSeller>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof unfollowSeller>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['unfollowSeller'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof unfollowSeller>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  unfollowSeller(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UnfollowSellerMutationResult = NonNullable<Awaited<ReturnType<typeof unfollowSeller>>>
+
+    export type UnfollowSellerMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Unfollow a seller (idempotent)
+ */
+export const useUnfollowSeller = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof unfollowSeller>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof unfollowSeller>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getUnfollowSellerMutationOptions(options));
+    }
+
+export const getListSellerListingsUrl = (id: number,
+    params?: ListSellerListingsParams,) => {
+    const normalizedParams = new URLSearchParams();
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+      if (value !== undefined) {
+        normalizedParams.append(key, value === null ? 'null' : String(value))
+      }
+    });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/sellers/${id}/listings?${stringifiedParams}` : `/api/sellers/${id}/listings`
+}
+
+/**
+ * @summary Buyer-facing — product cards for one seller's Store Page "All Products" grid (approved, visible, in-stock listings only)
+ */
+export const listSellerListings = async (id: number,
+    params?: ListSellerListingsParams, options?: RequestInit): Promise<SellerStoreProductCard[]> => {
+
+  return customFetch<SellerStoreProductCard[]>(getListSellerListingsUrl(id,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+export const getListSellerListingsQueryKey = (id: number,
+    params?: ListSellerListingsParams,) => {
+    return [
+    `/api/sellers/${id}/listings`, ...(params ? [params]: [])
+    ] as const;
+    }
+
+
+export const getListSellerListingsQueryOptions = <TData = Awaited<ReturnType<typeof listSellerListings>>, TError = ErrorType<void>>(id: number,
+    params?: ListSellerListingsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerListings>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSellerListingsQueryKey(id,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSellerListings>>> = ({ signal }) => listSellerListings(id,params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSellerListings>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSellerListingsQueryResult = NonNullable<Awaited<ReturnType<typeof listSellerListings>>>
+export type ListSellerListingsQueryError = ErrorType<void>
+
+
+/**
+ * @summary Buyer-facing — product cards for one seller's Store Page "All Products" grid (approved, visible, in-stock listings only)
+ */
+
+export function useListSellerListings<TData = Awaited<ReturnType<typeof listSellerListings>>, TError = ErrorType<void>>(
+ id: number,
+    params?: ListSellerListingsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerListings>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSellerListingsQueryOptions(id,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+export const getListSellerReviewsUrl = (id: number,
+    params?: ListSellerReviewsParams,) => {
+    const normalizedParams = new URLSearchParams();
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+      if (value !== undefined) {
+        normalizedParams.append(key, value === null ? 'null' : String(value))
+      }
+    });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/sellers/${id}/reviews?${stringifiedParams}` : `/api/sellers/${id}/reviews`
+}
+
+/**
+ * @summary Buyer-facing — paginated reviews across all of a seller's listings, plus the 1-5 star breakdown, for the Store Page "Customer Reviews" section
+ */
+export const listSellerReviews = async (id: number,
+    params?: ListSellerReviewsParams, options?: RequestInit): Promise<SellerReviewsPage> => {
+
+  return customFetch<SellerReviewsPage>(getListSellerReviewsUrl(id,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+export const getListSellerReviewsQueryKey = (id: number,
+    params?: ListSellerReviewsParams,) => {
+    return [
+    `/api/sellers/${id}/reviews`, ...(params ? [params]: [])
+    ] as const;
+    }
+
+
+export const getListSellerReviewsQueryOptions = <TData = Awaited<ReturnType<typeof listSellerReviews>>, TError = ErrorType<void>>(id: number,
+    params?: ListSellerReviewsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerReviews>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSellerReviewsQueryKey(id,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSellerReviews>>> = ({ signal }) => listSellerReviews(id,params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSellerReviews>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSellerReviewsQueryResult = NonNullable<Awaited<ReturnType<typeof listSellerReviews>>>
+export type ListSellerReviewsQueryError = ErrorType<void>
+
+
+/**
+ * @summary Buyer-facing — paginated reviews across all of a seller's listings, plus the 1-5 star breakdown, for the Store Page "Customer Reviews" section
+ */
+
+export function useListSellerReviews<TData = Awaited<ReturnType<typeof listSellerReviews>>, TError = ErrorType<void>>(
+ id: number,
+    params?: ListSellerReviewsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerReviews>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSellerReviewsQueryOptions(id,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

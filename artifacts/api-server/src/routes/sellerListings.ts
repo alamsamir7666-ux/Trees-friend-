@@ -956,6 +956,196 @@ router.get("/seller-listings/:id", async (req, res) => {
 });
 
 /**
+ * Buyer-facing: cheapest-variant product cards for ONE seller, across all
+ * of that seller's approved/public listings. Powers the "All Products" grid
+ * on the Seller Store Page (GET /sellers/:id) -- mirrors
+ * listProductSellerListings above (same qualifying-variant/cheapest-price
+ * logic, same visibility/approval/active-seller gate), just grouped by
+ * seller instead of by product, and joins productsTable in for each card's
+ * displayed name/image since a seller's grid spans many different
+ * products (unlike the per-product route, which already knows the name).
+ *
+ * Cards with zero qualifying (in-stock) variants are dropped, same
+ * reasoning as listProductSellerListings: a sold-out listing shouldn't
+ * clutter a seller's product grid, though its detail page is still
+ * independently reachable.
+ */
+router.get("/sellers/:id/listings", async (req: any, res) => {
+  try {
+    const sellerId = parseInt(req.params.id);
+    if (isNaN(sellerId) || sellerId <= 0) {
+      res.status(400).json({ error: "Invalid seller id" });
+      return;
+    }
+    const { sort } = req.query as { sort?: string };
+
+    const rows = await db
+      .select({ listing: sellerListingsTable, product: productsTable })
+      .from(sellerListingsTable)
+      .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
+      .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+      .where(
+        and(
+          eq(sellerListingsTable.sellerId, sellerId),
+          eq(sellerListingsTable.visibility, "public"),
+          eq(sellerListingsTable.approvalStatus, "approved"),
+          eq(sellersTable.status, "active"),
+        ),
+      );
+
+    const listingIds = rows.map((r) => r.listing.id);
+
+    const [variantRows, statsRows] = await Promise.all([
+      listingIds.length > 0
+        ? db
+            .select()
+            .from(sellerListingVariantsTable)
+            .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
+        : Promise.resolve([] as SellerListingVariantRow[]),
+      listingIds.length > 0
+        ? db
+            .select({
+              sellerListingId: reviewsTable.sellerListingId,
+              avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
+              count: sql<string>`COUNT(*)`,
+            })
+            .from(reviewsTable)
+            .where(inArray(reviewsTable.sellerListingId, listingIds))
+            .groupBy(reviewsTable.sellerListingId)
+        : Promise.resolve([]),
+    ]);
+
+    const variantsByListing = new Map<number, SellerListingVariantRow[]>();
+    for (const v of variantRows) {
+      const list = variantsByListing.get(v.sellerListingId) ?? [];
+      list.push(v);
+      variantsByListing.set(v.sellerListingId, list);
+    }
+
+    const statsMap = new Map<number, { avg: number; count: number }>();
+    for (const s of statsRows) {
+      if (s.sellerListingId != null) {
+        statsMap.set(s.sellerListingId, { avg: Number(Number(s.avg).toFixed(1)), count: Number(s.count) });
+      }
+    }
+
+    let cards = rows
+      .map(({ listing, product }) => {
+        const variants = variantsByListing.get(listing.id) ?? [];
+        const qualifyingVariants = variants.filter((v) => v.availableQuantity > 0);
+        const stats = statsMap.get(listing.id) ?? { avg: 0, count: 0 };
+        return {
+          listing: toListingWithVariants(listing, variants),
+          qualifyingVariants,
+          product: { id: product.id, name: product.name, slug: product.slug },
+          rating: stats.avg,
+          reviewCount: stats.count,
+        };
+      })
+      .filter((card) => card.qualifyingVariants.length > 0);
+
+    function cheapestQualifyingPrice(card: (typeof cards)[number]): number {
+      const prices = card.qualifyingVariants.map((v) =>
+        v.discountPrice != null ? Number(v.discountPrice) : Number(v.price),
+      );
+      return Math.min(...prices);
+    }
+
+    if (sort === "price_asc") {
+      cards = cards.sort((a, b) => cheapestQualifyingPrice(a) - cheapestQualifyingPrice(b));
+    } else if (sort === "price_desc") {
+      cards = cards.sort((a, b) => cheapestQualifyingPrice(b) - cheapestQualifyingPrice(a));
+    } else if (sort === "rating") {
+      cards = cards.sort((a, b) => b.rating - a.rating);
+    } else {
+      // Default: newest listing first -- matches "All Products" reasonably
+      // without requiring the caller to pick a sort.
+      cards = cards.sort((a, b) => b.listing.id - a.listing.id);
+    }
+
+    res.json(cards.map(({ qualifyingVariants, ...card }) => card));
+  } catch (err) {
+    console.error("List seller listings error:", err);
+    res.status(500).json({ error: "Failed to fetch seller's listings" });
+  }
+});
+
+/**
+ * Buyer-facing: paginated reviews across ALL of a seller's listings, plus
+ * the 1-5 star breakdown counts, for the Seller Store Page's "Customer
+ * Reviews" section. Aggregates at the seller level (unlike
+ * SellerListingReviews, which is scoped to one listing) using
+ * reviewsTable.sellerId directly -- that column is already denormalized
+ * onto every review row (see reviews.ts doc comment), so no join through
+ * sellerListingsTable is needed here.
+ *
+ * Does NOT additionally gate on the owning listing's visibility/approval
+ * or the seller's active status -- a review a buyer already left stays
+ * visible/counted even if the seller later edits that one listing to
+ * unlisted, or lists a new pending one; the seller-level reputation this
+ * page shows is a record of past transactions, not a live filter on
+ * today's catalog. (If the seller itself is suspended/deleted, the page
+ * calling this is unreachable in the first place -- see GET /sellers/:id.)
+ */
+router.get("/sellers/:id/reviews", async (req: any, res) => {
+  try {
+    const sellerId = parseInt(req.params.id);
+    if (isNaN(sellerId) || sellerId <= 0) {
+      res.status(400).json({ error: "Invalid seller id" });
+      return;
+    }
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 10));
+    const offset = (page - 1) * limit;
+
+    const [reviews, totalRow, breakdownRows] = await Promise.all([
+      db
+        .select()
+        .from(reviewsTable)
+        .where(eq(reviewsTable.sellerId, sellerId))
+        .orderBy(desc(reviewsTable.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db
+        .select({ count: sql<string>`COUNT(*)`, avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)` })
+        .from(reviewsTable)
+        .where(eq(reviewsTable.sellerId, sellerId)),
+      db
+        .select({ rating: reviewsTable.rating, count: sql<string>`COUNT(*)` })
+        .from(reviewsTable)
+        .where(eq(reviewsTable.sellerId, sellerId))
+        .groupBy(reviewsTable.rating),
+    ]);
+
+    const ratingBreakdown: Record<1 | 2 | 3 | 4 | 5, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    for (const row of breakdownRows) {
+      const r = row.rating as 1 | 2 | 3 | 4 | 5;
+      if (r >= 1 && r <= 5) ratingBreakdown[r] = Number(row.count);
+    }
+
+    res.json({
+      reviews: reviews.map((r) => ({
+        id: r.id,
+        userId: r.userId,
+        userName: r.userName,
+        rating: r.rating,
+        comment: r.comment,
+        sellerListingId: r.sellerListingId,
+        createdAt: r.createdAt.toISOString(),
+      })),
+      total: Number(totalRow[0]?.count ?? 0),
+      page,
+      limit,
+      averageRating: Number(Number(totalRow[0]?.avg ?? 0).toFixed(1)),
+      ratingBreakdown,
+    });
+  } catch (err) {
+    console.error("List seller reviews error:", err);
+    res.status(500).json({ error: "Failed to fetch seller's reviews" });
+  }
+});
+
+/**
  * Admin: list listings pending approval, and approve/reject them. Whether
  * approval is actually required before a listing goes live (vs. the
  * pending default just being informational) is not specified in the plan

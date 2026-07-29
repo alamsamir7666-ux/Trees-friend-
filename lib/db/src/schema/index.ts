@@ -36,3 +36,4 @@ export * from "./sellerPaymentConfigs";
 export * from "./sellerCourierConfigs";
 export * from "./listingAttributeOptions";
 export * from "./orderShipments";
+export * from "./follows";
