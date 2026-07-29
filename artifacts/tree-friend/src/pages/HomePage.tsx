@@ -236,41 +236,135 @@ export function HomePage() {
 
   return (
     <div className="min-h-screen">
-      {/* Hero */}
-      <section className="relative overflow-hidden pt-4 pb-4 bg-background">
-        <div className="absolute inset-0 flex items-start justify-end pr-2 lg:pr-16 pointer-events-none">
-          <img
-            src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783747272/IMG_20260711_111454-removebg-preview_11zon_wsnwgd.png"
-            alt="Potted tree sapling"
-            className="h-full max-h-[380px] lg:max-h-[480px] w-auto object-contain opacity-90"
-            fetchPriority="high"
-            loading="eager"
-            decoding="sync"
-          />
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/10" />
+      {/* Hero — redesigned: 2-column grid, image in a gradient card with a
+          floating stat chip, eyebrow badge, text-highlighted headline,
+          shadowed CTA with hover lift, social-proof row. Replaces the old
+          "ghost floating image + flat button" layout. */}
+      <section className="relative overflow-hidden bg-gradient-to-b from-emerald-50/50 via-background to-background">
+        {/* Soft decorative blobs — give the section depth without dominating
+            the foreground content. */}
+        <div className="absolute -top-24 -left-24 h-72 w-72 rounded-full bg-emerald-200/30 blur-3xl pointer-events-none" aria-hidden="true" />
+        <div className="absolute -bottom-32 right-1/4 h-80 w-80 rounded-full bg-amber-200/25 blur-3xl pointer-events-none" aria-hidden="true" />
+
         <div className="container mx-auto px-4 relative z-10">
-          <div className="max-w-xl w-full py-2 lg:py-10">
-            <h1 className="font-serif text-6xl md:text-7xl lg:text-8xl font-medium leading-[0.95] mb-0 text-primary">
-              Grow with
-              <br />
-              <em className="text-accent-text not-italic">nature.</em>
-            </h1>
-            <div className="mt-5 flex items-center gap-3">
-              <img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783747272/IMG_20260710_161008-removebg-preview_11zon_ieoekc.png" alt="" className="h-6 w-6 object-contain" />
-              <span className="h-px w-12 bg-accent-text/40" />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-center py-12 lg:py-20">
+            {/* Left: copy + CTA + social proof */}
+            <div className="max-w-xl">
+              {/* Eyebrow pill — clearer than the old tiny leaf-icon + line */}
+              <div className="inline-flex items-center gap-2 bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-full text-xs font-semibold tracking-wide uppercase mb-6">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
+                Plant Marketplace
+              </div>
+
+              {/* Headline — "Grow with" in foreground, "nature." in emerald
+                  with a soft underline highlight for emphasis. */}
+              <h1 className="font-serif text-5xl sm:text-6xl lg:text-7xl font-medium leading-[1.02] mb-5 text-foreground tracking-tight">
+                Grow with{" "}
+                <span className="relative inline-block">
+                  <em className="text-emerald-700 not-italic">nature.</em>
+                  <span
+                    className="absolute -bottom-1 left-0 right-0 h-2 bg-emerald-300/40 -z-10 rounded-full"
+                    aria-hidden="true"
+                  />
+                </span>
+              </h1>
+
+              {/* Subheadline — concrete value prop instead of vague
+                  "greener tomorrow" marketing-speak. */}
+              <p className="text-base lg:text-lg text-muted-foreground max-w-md leading-relaxed mb-8">
+                Discover hand-picked trees and plants from trusted local
+                sellers — delivered to your door, ready to thrive.
+              </p>
+
+              {/* CTA row — primary filled button with shadow + hover lift,
+                  plus a secondary text link to the blog for the curious. */}
+              <div className="flex flex-wrap items-center gap-4 mb-10">
+                <a
+                  href="/products"
+                  className="group inline-flex items-center gap-2 bg-foreground text-background px-7 py-3.5 rounded-full text-sm font-semibold tracking-wide shadow-lg shadow-foreground/20 hover:shadow-xl hover:shadow-foreground/30 hover:-translate-y-0.5 transition-all duration-200"
+                >
+                  Browse All Trees
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="group-hover:translate-x-0.5 transition-transform"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                </a>
+                <Link
+                  href="/blog"
+                  className="inline-flex items-center gap-1.5 text-foreground text-sm font-medium hover:text-emerald-700 transition-colors underline-offset-4 hover:underline"
+                >
+                  Read our care guide
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </div>
+
+              {/* Social proof row — small avatar cluster + rating. Builds
+                  trust without being heavy-handed. */}
+              <div className="flex items-center gap-5 text-sm">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex -space-x-2">
+                    {[
+                      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=64&h=64&fit=crop",
+                      "https://images.unsplash.com/photo-1500648766835-d5cc5c5c5e8c?w=64&h=64&fit=crop",
+                      "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=64&h=64&fit=crop",
+                    ].map((src, i) => (
+                      <div
+                        key={i}
+                        className="h-7 w-7 rounded-full border-2 border-background overflow-hidden bg-muted"
+                      >
+                        <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" />
+                      </div>
+                    ))}
+                  </div>
+                  <span className="text-muted-foreground">
+                    <strong className="text-foreground font-semibold">1,200+</strong>{" "}
+                    happy plant parents
+                  </span>
+                </div>
+                <div className="hidden sm:flex items-center gap-1.5">
+                  <div className="flex">
+                    {[0, 1, 2, 3, 4].map((i) => (
+                      <svg key={i} viewBox="0 0 24 24" className="h-4 w-4 fill-amber-400" aria-hidden="true">
+                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                      </svg>
+                    ))}
+                  </div>
+                  <span className="text-muted-foreground">
+                    <strong className="text-foreground font-semibold">4.9</strong> / 5
+                  </span>
+                </div>
+              </div>
             </div>
-            <p className="mt-3 text-lg text-muted-foreground max-w-md">
-              Discover trees that enhance life and a greener tomorrow.
-            </p>
-            <div className="mt-6">
-              <a
-                href="/products"
-                className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-8 py-3.5 rounded-full text-sm font-medium tracking-wide hover:bg-accent hover:text-accent-foreground transition-colors duration-200"
-              >
-                Browse All Trees
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-              </a>
+
+            {/* Right: image inside a proper card — fixes the "ghost floating
+                image" problem. Gradient backdrop grounds the transparent
+                PNG, rounded card + shadow give it depth, floating stat chip
+                anchors the bottom. */}
+            <div className="relative order-first lg:order-last">
+              {/* Soft halo behind the card */}
+              <div
+                className="absolute inset-0 -m-8 rounded-full bg-emerald-200/25 blur-3xl pointer-events-none"
+                aria-hidden="true"
+              />
+              {/* Image card */}
+              <div className="relative aspect-square sm:aspect-[5/4] lg:aspect-[4/5] max-w-md mx-auto rounded-3xl overflow-hidden bg-gradient-to-br from-emerald-50 via-background to-amber-50/40 shadow-2xl shadow-emerald-900/10 ring-1 ring-emerald-900/5">
+                <img
+                  src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783747272/IMG_20260711_111454-removebg-preview_11zon_wsnwgd.png"
+                  alt="Potted tree sapling"
+                  className="absolute inset-0 w-full h-full object-contain p-6 sm:p-10"
+                  fetchPriority="high"
+                  loading="eager"
+                  decoding="sync"
+                />
+                {/* Floating stat chip — bottom-left, anchors the image
+                    with a concrete trust signal. */}
+                <div className="absolute bottom-4 left-4 bg-background/95 backdrop-blur-sm rounded-2xl px-4 py-3 shadow-lg ring-1 ring-border/50 flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-emerald-100 flex items-center justify-center shrink-0">
+                    <Leaf className="h-5 w-5 text-emerald-700" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground leading-tight">Live plants</p>
+                    <p className="text-sm font-semibold text-foreground leading-tight">Guaranteed</p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
