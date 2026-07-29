@@ -1751,6 +1751,99 @@ paths:
               schema:
                 $ref: "#/components/schemas/OrderShipment"
 
+  /seller/returns:
+    get:
+      operationId: listSellerReturns
+      tags: [sellerReturns]
+      summary: Seller — list return requests for their own orders, paginated
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [requested, approved, rejected, completed]
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Paginated list of the seller's return requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerReturnListResponse"
+
+  /seller/returns/{id}:
+    get:
+      operationId: getSellerReturn
+      tags: [sellerReturns]
+      summary: Seller — get one return belonging to one of their own orders
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Return request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerReturn"
+
+    put:
+      operationId: updateSellerReturn
+      tags: [sellerReturns]
+      summary: Seller — approve, reject, or complete a return on one of their own orders
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSellerReturnBody"
+      responses:
+        "200":
+          description: Updated return request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerReturn"
+
+  /seller/monthly-history:
+    get:
+      operationId: getSellerMonthlyHistory
+      tags: [sellerReturns]
+      summary: Seller — monthly order count / delivered revenue history, computed live from their own orders
+      parameters:
+        - name: months
+          in: query
+          required: false
+          description: How many most-recent months to return (default 12, max 60)
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Monthly history records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerMonthlyHistoryResponse"
+
   /orders/{orderId}/shipment:
     get:
       operationId: getOrderShipment
@@ -3080,6 +3173,128 @@ components:
           description: Required when orderStatus is "cancelled"
       required:
         - orderStatus
+
+    SellerReturn:
+      type: object
+      description: >-
+        Seller-facing return request view -- a return on one of the
+        seller's own orders (ordersTable.sellerId ownership enforced
+        server-side), with order + buyer context folded in so the seller
+        doesn't need a second call.
+      properties:
+        id:
+          type: integer
+        orderId:
+          type: integer
+        userId:
+          type: string
+        reason:
+          type: string
+        status:
+          type: string
+          enum: [requested, approved, rejected, completed]
+        adminNote:
+          type: ["string", "null"]
+        refundAmount:
+          type: ["number", "null"]
+        orderItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderLineItem"
+        orderTotal:
+          type: ["number", "null"]
+        orderDeliveredAt:
+          type: ["string", "null"]
+        orderStatus:
+          type: ["string", "null"]
+        customerName:
+          type: ["string", "null"]
+        customerEmail:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - orderId
+        - userId
+        - reason
+        - status
+        - createdAt
+        - updatedAt
+
+    SellerReturnListResponse:
+      type: object
+      properties:
+        returns:
+          type: array
+          items:
+            $ref: "#/components/schemas/SellerReturn"
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - returns
+        - page
+        - limit
+        - total
+        - totalPages
+
+    UpdateSellerReturnBody:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [approved, rejected, completed]
+        adminNote:
+          type: string
+          description: Required (min 3 chars) when status is "rejected"; optional otherwise
+        refundAmount:
+          type: number
+          description: Required when status is "completed"
+      required:
+        - status
+
+    SellerMonthlyHistoryRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+        year:
+          type: integer
+        month:
+          type: integer
+          description: 1-indexed (1 = January)
+        totalOrders:
+          type: integer
+        totalRevenue:
+          type: number
+          description: Sum of totalAmount across delivered orders only
+      required:
+        - id
+        - year
+        - month
+        - totalOrders
+        - totalRevenue
+
+    SellerMonthlyHistoryResponse:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/SellerMonthlyHistoryRecord"
+        months:
+          type: integer
+      required:
+        - records
+        - months
 
     OrderTracking:
       type: object

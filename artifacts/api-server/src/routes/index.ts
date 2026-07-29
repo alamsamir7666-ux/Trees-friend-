@@ -57,6 +57,8 @@ import sellerPaymentConfigsRouter from "./sellerPaymentConfigs";
 import orderShipmentsRouter from "./orderShipments";
 import sellerOrdersRouter from "./sellerOrders";
 import courierWebhooksRouter from "./courierWebhooks";
+import sellerReturnsRouter from "./sellerReturns";
+import sellerMonthlyHistoryRouter from "./sellerMonthlyHistory";
 
 const router: IRouter = Router();
 
@@ -105,5 +107,7 @@ router.use(sellerPaymentConfigsRouter);
 router.use(orderShipmentsRouter);
 router.use(sellerOrdersRouter);
 router.use(courierWebhooksRouter);
+router.use(sellerReturnsRouter);
+router.use(sellerMonthlyHistoryRouter);
 
 export default router;

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import {
   LayoutDashboard, Package2, ShoppingCart, Wallet, Truck, Store,
-  Sprout, Loader2, Menu,
+  Sprout, Loader2, Menu, PackageX, CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { updateSEO } from "@/lib/seo";
@@ -10,6 +10,8 @@ import { useGetMySeller, useListSellerOrders, useGetMe } from "@workspace/api-cl
 import { SellerOverviewTab } from "@/components/seller/SellerOverviewTab";
 import { SellerListingsTab } from "@/components/seller/SellerListingsTab";
 import { SellerOrdersTab } from "@/components/seller/SellerOrdersTab";
+import { SellerReturnsTab } from "@/components/seller/SellerReturnsTab";
+import { SellerMonthlyHistoryTab } from "@/components/seller/SellerMonthlyHistoryTab";
 import { CourierSettingsForm } from "@/components/seller/CourierSettingsForm";
 import { PaymentSettingsForm } from "@/components/seller/PaymentSettingsForm";
 import { BusinessProfileForm } from "@/components/seller/BusinessProfileForm";
@@ -36,6 +38,8 @@ const NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "listings", label: "Listings", icon: Package2 },
   { id: "orders", label: "Orders", icon: ShoppingCart },
+  { id: "returns", label: "Returns", icon: PackageX },
+  { id: "monthlyHistory", label: "Monthly History", icon: CalendarClock },
   { id: "payment", label: "Payment Settings", icon: Wallet },
   { id: "courier", label: "Courier Settings", icon: Truck },
   { id: "profile", label: "Business Profile", icon: Store },
@@ -128,6 +132,10 @@ export function SellerDashboardPage() {
         return <SellerListingsTab />;
       case "orders":
         return <SellerOrdersTab />;
+      case "returns":
+        return <SellerReturnsTab />;
+      case "monthlyHistory":
+        return <SellerMonthlyHistoryTab />;
       case "payment":
         return <PaymentSettingsForm />;
       case "courier":

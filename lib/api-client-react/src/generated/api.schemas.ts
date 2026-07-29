@@ -528,6 +528,84 @@ export interface UpdateSellerOrderStatusBody {
   cancellationReason?: string;
 }
 
+export type SellerReturnStatus = typeof SellerReturnStatus[keyof typeof SellerReturnStatus];
+
+
+export const SellerReturnStatus = {
+  requested: 'requested',
+  approved: 'approved',
+  rejected: 'rejected',
+  completed: 'completed',
+} as const;
+
+/**
+ * Seller-facing return request view -- a return on one of the seller's own orders (ordersTable.sellerId ownership enforced server-side), with order + buyer context folded in so the seller doesn't need a second call.
+ */
+export interface SellerReturn {
+  id: number;
+  orderId: number;
+  userId: string;
+  reason: string;
+  status: SellerReturnStatus;
+  /** @nullable */
+  adminNote?: string | null;
+  /** @nullable */
+  refundAmount?: number | null;
+  orderItems?: OrderLineItem[];
+  /** @nullable */
+  orderTotal?: number | null;
+  /** @nullable */
+  orderDeliveredAt?: string | null;
+  /** @nullable */
+  orderStatus?: string | null;
+  /** @nullable */
+  customerName?: string | null;
+  /** @nullable */
+  customerEmail?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SellerReturnListResponse {
+  returns: SellerReturn[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export type UpdateSellerReturnBodyStatus = typeof UpdateSellerReturnBodyStatus[keyof typeof UpdateSellerReturnBodyStatus];
+
+
+export const UpdateSellerReturnBodyStatus = {
+  approved: 'approved',
+  rejected: 'rejected',
+  completed: 'completed',
+} as const;
+
+export interface UpdateSellerReturnBody {
+  status: UpdateSellerReturnBodyStatus;
+  /** Required (min 3 chars) when status is "rejected"; optional otherwise */
+  adminNote?: string;
+  /** Required when status is "completed" */
+  refundAmount?: number;
+}
+
+export interface SellerMonthlyHistoryRecord {
+  id: number;
+  year: number;
+  /** 1-indexed (1 = January) */
+  month: number;
+  totalOrders: number;
+  /** Sum of totalAmount across delivered orders only */
+  totalRevenue: number;
+}
+
+export interface SellerMonthlyHistoryResponse {
+  records: SellerMonthlyHistoryRecord[];
+  months: number;
+}
+
 export interface TrackingEvent {
   status: string;
   label: string;
@@ -635,29 +713,6 @@ export interface Review {
   createdAt: string;
 }
 
-export interface CreateReviewBody {
-  rating: number;
-  comment: string;
-}
-
-export interface AdminReview {
-  id: number;
-  productId: number;
-  userId: string;
-  userName: string;
-  rating: number;
-  comment: string;
-  createdAt: string;
-  productName: string;
-  productImage?: string | null;
-}
-
-/**
- * A review of a specific seller's listing -- fully separate from Review
- * (product-level), which is keyed by productId and shows on the product
- * page. This is keyed by sellerListingId and shows only on that seller's
- * listing page.
- */
 export interface SellerListingReview {
   id: number;
   sellerListingId: number | null;
@@ -694,6 +749,23 @@ export interface AnswerQuestionBody {
   answer: string;
 }
 
+export interface CreateReviewBody {
+  rating: number;
+  comment: string;
+}
+
+export interface AdminReview {
+  id: number;
+  productId: number;
+  userId: string;
+  userName: string;
+  rating: number;
+  comment: string;
+  createdAt: string;
+  productName: string;
+  productImage?: string | null;
+}
+
 export interface WishlistItem {
   id: number;
   productId: number;
@@ -701,31 +773,58 @@ export interface WishlistItem {
   addedAt: string;
 }
 
-/**
- * A wishlist row for a specific seller's listing variant (distinct from
- * WishlistItem, which is a plain product-variety wishlist row with no
- * seller chosen).
- */
+export type SellerListingWishlistItemProduct = {
+  id: number;
+  name: string;
+  slug: string;
+  images: string[];
+};
+
+export type SellerListingWishlistItemListing = {
+  id: number;
+  images: string[];
+};
+
+export type SellerListingWishlistItemSeller = {
+  id: number;
+  businessName: string;
+  nurseryName: string;
+};
+
+export interface SellerListingVariant {
+  id: number;
+  sellerListingId: number;
+  /** @nullable */
+  form?: string | null;
+  /** @nullable */
+  rootType?: string | null;
+  /** @nullable */
+  potSize?: string | null;
+  /** @nullable */
+  age?: string | null;
+  /** @nullable */
+  height?: string | null;
+  /** @nullable */
+  condition?: string | null;
+  price: number;
+  /** @nullable */
+  discountPrice?: number | null;
+  stock: number;
+  availableQuantity: number;
+  deliveryCharge: number;
+  isPreOrder: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SellerListingWishlistItem {
   id: number;
   productId: number;
   sellerListingVariantId: number;
   addedAt: string;
-  product: {
-    id: number;
-    name: string;
-    slug: string;
-    images: string[];
-  };
-  listing: {
-    id: number;
-    images: string[];
-  };
-  seller: {
-    id: number;
-    businessName: string;
-    nurseryName: string;
-  };
+  product: SellerListingWishlistItemProduct;
+  listing: SellerListingWishlistItemListing;
+  seller: SellerListingWishlistItemSeller;
   variant: SellerListingVariant;
 }
 
@@ -1003,32 +1102,6 @@ export const SellerListingApprovalStatus = {
   rejected: 'rejected',
 } as const;
 
-export interface SellerListingVariant {
-  id: number;
-  sellerListingId: number;
-  /** @nullable */
-  form?: string | null;
-  /** @nullable */
-  rootType?: string | null;
-  /** @nullable */
-  potSize?: string | null;
-  /** @nullable */
-  age?: string | null;
-  /** @nullable */
-  height?: string | null;
-  /** @nullable */
-  condition?: string | null;
-  price: number;
-  /** @nullable */
-  discountPrice?: number | null;
-  stock: number;
-  availableQuantity: number;
-  deliveryCharge: number;
-  isPreOrder: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface SellerListing {
   id: number;
   productId: number;
@@ -1199,6 +1272,87 @@ export interface SellerListingCard {
   reviewCount: number;
 }
 
+/**
+ * One store card in the buyer's Profile "Following" list. A leaner subset of PublicSeller -- no aggregate stats, since the Following list only needs enough to render a card and link to /store/:id.
+ */
+export interface FollowedSellerCard {
+  id: number;
+  businessName: string;
+  nurseryName: string;
+  location: string;
+  isVerified: boolean;
+  /** @nullable */
+  logoUrl: string | null;
+}
+
+/**
+ * Public-safe seller profile for the buyer-facing Seller Store Page. Omits internal-only fields (NID/trade license, contact phone/email, verification request internals) that Seller/formatSeller expose to the seller themselves.
+ */
+export interface PublicSeller {
+  id: number;
+  businessName: string;
+  nurseryName: string;
+  location: string;
+  /** @nullable */
+  description: string | null;
+  isVerified: boolean;
+  /** @nullable */
+  logoUrl: string | null;
+  createdAt: string;
+  productCount: number;
+  rating: number;
+  reviewCount: number;
+  followerCount: number;
+}
+
+export interface FollowStatus {
+  isFollowing: boolean;
+}
+
+export type SellerStoreProductCardProduct = {
+  id: number;
+  name: string;
+  slug: string;
+};
+
+/**
+ * One product card in a seller's Store Page "All Products" grid.
+ */
+export interface SellerStoreProductCard {
+  listing: SellerListing;
+  product: SellerStoreProductCardProduct;
+  rating: number;
+  reviewCount: number;
+}
+
+export interface SellerStoreReview {
+  id: number;
+  userId: string;
+  userName: string;
+  rating: number;
+  comment: string;
+  /** @nullable */
+  sellerListingId: number | null;
+  createdAt: string;
+}
+
+export type SellerReviewsPageRatingBreakdown = {
+  '1': number;
+  '2': number;
+  '3': number;
+  '4': number;
+  '5': number;
+};
+
+export interface SellerReviewsPage {
+  reviews: SellerStoreReview[];
+  total: number;
+  page: number;
+  limit: number;
+  averageRating: number;
+  ratingBreakdown: SellerReviewsPageRatingBreakdown;
+}
+
 export type AdminSellerListing = SellerListing & {
   sellerBusinessName: string;
   productName: string;
@@ -1223,6 +1377,10 @@ limit?: number;
 export type GetHomepageProducts200 = {
   top: Product[];
   bottom: Product[];
+};
+
+export type GetSellerListingReviewEligibilityParams = {
+variantId: number;
 };
 
 export type ListListingAttributeOptionsParams = {
@@ -1253,6 +1411,24 @@ export const ListProductSellerListingsSort = {
   rating: 'rating',
 } as const;
 
+export type ListSellerListingsParams = {
+sort?: ListSellerListingsSort;
+};
+
+export type ListSellerListingsSort = typeof ListSellerListingsSort[keyof typeof ListSellerListingsSort];
+
+
+export const ListSellerListingsSort = {
+  price_asc: 'price_asc',
+  price_desc: 'price_desc',
+  rating: 'rating',
+} as const;
+
+export type ListSellerReviewsParams = {
+page?: number;
+limit?: number;
+};
+
 export type ListAdminSellerListingsParams = {
 approvalStatus?: ListAdminSellerListingsApprovalStatus;
 };
@@ -1281,6 +1457,29 @@ export const ListSellerOrdersOrderStatus = {
   delivered: 'delivered',
   cancelled: 'cancelled',
 } as const;
+
+export type ListSellerReturnsParams = {
+status?: ListSellerReturnsStatus;
+page?: number;
+limit?: number;
+};
+
+export type ListSellerReturnsStatus = typeof ListSellerReturnsStatus[keyof typeof ListSellerReturnsStatus];
+
+
+export const ListSellerReturnsStatus = {
+  requested: 'requested',
+  approved: 'approved',
+  rejected: 'rejected',
+  completed: 'completed',
+} as const;
+
+export type GetSellerMonthlyHistoryParams = {
+/**
+ * How many most-recent months to return (default 12, max 60)
+ */
+months?: number;
+};
 
 export type ListAllOrdersParams = {
 status?: string;
@@ -1327,100 +1526,3 @@ export type ListAdminSellerCourierConfigsParams = {
 verified?: boolean;
 };
 
-/**
- * Public-safe seller profile for the buyer-facing Seller Store Page. Omits internal-only fields (NID/trade license, contact phone/email, verification request internals) that Seller/formatSeller expose to the seller themselves.
- */
-/**
- * One store card in the buyer's Profile "Following" list. A leaner subset of PublicSeller -- no aggregate stats, since the Following list only needs enough to render a card and link to /store/:id.
- */
-export interface FollowedSellerCard {
-  id: number;
-  businessName: string;
-  nurseryName: string;
-  location: string;
-  isVerified: boolean;
-  /** @nullable */
-  logoUrl: string | null;
-}
-
-export interface PublicSeller {
-  id: number;
-  businessName: string;
-  nurseryName: string;
-  location: string;
-  /** @nullable */
-  description: string | null;
-  isVerified: boolean;
-  /** @nullable */
-  logoUrl: string | null;
-  createdAt: string;
-  productCount: number;
-  rating: number;
-  reviewCount: number;
-  followerCount: number;
-}
-
-export interface FollowStatus {
-  isFollowing: boolean;
-}
-
-export interface SellerStoreProductCardProduct {
-  id: number;
-  name: string;
-  slug: string;
-}
-
-/**
- * One product card in a seller's Store Page "All Products" grid.
- */
-export interface SellerStoreProductCard {
-  listing: SellerListing;
-  product: SellerStoreProductCardProduct;
-  rating: number;
-  reviewCount: number;
-}
-
-export interface SellerStoreReview {
-  id: number;
-  userId: string;
-  userName: string;
-  rating: number;
-  comment: string;
-  /** @nullable */
-  sellerListingId: number | null;
-  createdAt: string;
-}
-
-export interface SellerReviewsPageRatingBreakdown {
-  '1': number;
-  '2': number;
-  '3': number;
-  '4': number;
-  '5': number;
-}
-
-export interface SellerReviewsPage {
-  reviews: SellerStoreReview[];
-  total: number;
-  page: number;
-  limit: number;
-  averageRating: number;
-  ratingBreakdown: SellerReviewsPageRatingBreakdown;
-}
-
-export type ListSellerListingsParams = {
-sort?: ListSellerListingsSort;
-};
-
-export const ListSellerListingsSort = {
-  price_asc: 'price_asc',
-  price_desc: 'price_desc',
-  rating: 'rating',
-} as const;
-
-export type ListSellerListingsSort = typeof ListSellerListingsSort[keyof typeof ListSellerListingsSort];
-
-export type ListSellerReviewsParams = {
-page?: number;
-limit?: number;
-};
