@@ -1,7 +1,7 @@
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
-import { useListOrders } from "@workspace/api-client-react";
+import { useListOrders, getListOrdersQueryKey } from "@workspace/api-client-react";
 import { useAuth, useUser } from "@clerk/react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -61,7 +61,7 @@ function CopyTrackingButton({ trackingId }: { trackingId: string }) {
 export function OrdersPage() {
   const { user, isLoaded } = useUser();
   const isGuest = isLoaded && !user;
-  const { data: orders, isLoading: ordersLoading } = useListOrders({ query: { enabled: !isGuest } } as any);
+  const { data: orders, isLoading: ordersLoading } = useListOrders({ query: { enabled: !isGuest, queryKey: getListOrdersQueryKey() } });
   const isLoading = !isLoaded || (!isGuest && ordersLoading);
   const { getToken } = useAuth();
   const [guestTrackingIds, setGuestTrackingIds] = useState<any[]>([]);

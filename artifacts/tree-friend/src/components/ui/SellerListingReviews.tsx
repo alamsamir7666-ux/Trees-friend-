@@ -51,11 +51,11 @@ export function SellerListingReviews({
   const { data: reviews } = useListSellerListingReviews(sellerListingId, {
     query: { enabled: !!sellerListingId, queryKey: getListSellerListingReviewsQueryKey(sellerListingId) },
   });
-  const { data: eligibility } = useGetSellerListingReviewEligibility(sellerListingId, sellerListingVariantId, {
+  const { data: eligibility } = useGetSellerListingReviewEligibility(sellerListingId, { variantId: sellerListingVariantId }, {
     query: {
       enabled: !!user && !!sellerListingId && !!sellerListingVariantId,
       retry: false,
-      queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId, sellerListingVariantId),
+      queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId, { variantId: sellerListingVariantId }),
     },
   });
 
@@ -79,7 +79,7 @@ export function SellerListingReviews({
     createReview.mutate({ sellerListingId, data: { sellerListingVariantId, rating, comment } }, {
       onSuccess: () => {
         qc.invalidateQueries({ queryKey: getListSellerListingReviewsQueryKey(sellerListingId) });
-        qc.invalidateQueries({ queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId, sellerListingVariantId) });
+        qc.invalidateQueries({ queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId, { variantId: sellerListingVariantId }) });
         setComment(""); setRating(5); setShowReviewForm(false);
       },
     });
@@ -106,7 +106,7 @@ export function SellerListingReviews({
     deleteReview.mutate({ productId, reviewId }, {
       onSuccess: () => {
         qc.invalidateQueries({ queryKey: getListSellerListingReviewsQueryKey(sellerListingId) });
-        qc.invalidateQueries({ queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId, sellerListingVariantId) });
+        qc.invalidateQueries({ queryKey: getGetSellerListingReviewEligibilityQueryKey(sellerListingId, { variantId: sellerListingVariantId }) });
       },
     });
   }

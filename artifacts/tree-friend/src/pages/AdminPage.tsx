@@ -109,7 +109,7 @@ export function AdminPage() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
   const [productsPage, setProductsPage] = useState(1);
-  const { data: productsData, isLoading: productsLoading } = useListProducts({ limit: 25, page: productsPage, search: debouncedSearch || undefined } as any);
+  const { data: productsData, isLoading: productsLoading } = useListProducts({ limit: 25, page: productsPage, search: debouncedSearch || undefined });
   const [allProducts, setAllProducts] = useState<any[]>([]);
   const productsHasMore = productsData ? allProducts.length < (productsData.total ?? 0) : false;
   useEffect(() => { setProductsPage(1); setAllProducts([]); }, [debouncedSearch]);

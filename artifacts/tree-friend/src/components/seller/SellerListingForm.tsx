@@ -13,6 +13,7 @@ import {
   getListMySellerListingsQueryKey,
   type Product,
   type SellerListing,
+  type ListListingAttributeOptionsAttributeName,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -250,12 +251,12 @@ function ControlledAttributeSelect({
   onChange,
 }: {
   categoryId: number;
-  attributeName: string;
+  attributeName: ListListingAttributeOptionsAttributeName;
   label: string;
   value: string;
   onChange: (v: string) => void;
 }) {
-  const { data: options, isLoading } = useListListingAttributeOptions(categoryId, { attributeName: attributeName as any });
+  const { data: options, isLoading } = useListListingAttributeOptions(categoryId, { attributeName });
 
   return (
     <div>

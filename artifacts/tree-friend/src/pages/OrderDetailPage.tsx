@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "wouter";
 import { useAuth } from "@clerk/react";
-import { useGetOrder, useListOrders } from "@workspace/api-client-react";
+import { useGetOrder, useListOrders, getListOrdersQueryKey } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -36,7 +36,7 @@ export function OrderDetailPage() {
   const isGuest = !/^\d+$/.test(rawId);
   const id = isGuest ? 0 : parseInt(rawId);
   const { getToken } = useAuth();
-  const { data: orders } = useListOrders({ query: { enabled: !isGuest } } as any);
+  const { data: orders } = useListOrders({ query: { enabled: !isGuest, queryKey: getListOrdersQueryKey() } });
   const orderRank = orders ? orders.length - orders.findIndex(o => o.id === id) : null;
   const { data: authOrder, isLoading: authLoading } = useGetOrder(id, { query: { enabled: !!id && !isGuest, queryKey: ["order", id] } });
 

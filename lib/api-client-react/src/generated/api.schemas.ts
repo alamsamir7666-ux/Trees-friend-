@@ -1372,6 +1372,10 @@ minRating?: number;
 sortBy?: string;
 page?: number;
 limit?: number;
+/**
+ * Filters products by homepage placement tag (e.g. "trending", "new_arrivals").
+ */
+homepageTag?: string;
 };
 
 export type GetHomepageProducts200 = {

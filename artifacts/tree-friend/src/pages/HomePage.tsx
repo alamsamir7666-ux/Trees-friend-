@@ -174,8 +174,8 @@ export function HomePage() {
   const { setPageReady } = usePageContext();
   const [, navigate] = useLocation();
 
-  const { data: trendingData,   isLoading: trendingLoading }   = useListProducts({ homepageTag: "trending",     limit: 22 } as any);
-  const { data: newArrivalsData, isLoading: newArrivalsLoading } = useListProducts({ homepageTag: "new_arrivals", limit: 22 } as any);
+  const { data: trendingData,   isLoading: trendingLoading }   = useListProducts({ homepageTag: "trending",     limit: 22 });
+  const { data: newArrivalsData, isLoading: newArrivalsLoading } = useListProducts({ homepageTag: "new_arrivals", limit: 22 });
 
   // Product cards on the homepage show a category badge (e.g. "Fruit
   // Trees"), but Product only carries categoryId, not a name -- so we fetch

@@ -90,7 +90,8 @@ export const ListProductsQueryParams = zod.object({
   "minRating": zod.coerce.number().optional(),
   "sortBy": zod.coerce.string().optional(),
   "page": zod.coerce.number().optional(),
-  "limit": zod.coerce.number().optional()
+  "limit": zod.coerce.number().optional(),
+  "homepageTag": zod.coerce.string().optional()
 })
 
 export const ListProductsResponse = zod.object({

@@ -161,6 +161,11 @@ paths:
           in: query
           schema:
             type: integer
+        - name: homepageTag
+          in: query
+          description: Filters products by homepage placement tag (e.g. "trending", "new_arrivals").
+          schema:
+            type: string
       responses:
         "200":
           description: Products list
