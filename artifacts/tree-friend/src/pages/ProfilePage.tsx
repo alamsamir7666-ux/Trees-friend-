@@ -142,30 +142,36 @@ export function ProfilePage() {
       <div className="container mx-auto px-4 py-6 max-w-4xl">
         {/* ── Profile Tabs ────────────────────────────────────────────────── */}
         <Tabs value={profileTab} onValueChange={setProfileTab} className="mb-6">
-          <TabsList
-            ref={tabsListRef}
-            className="rounded-full h-auto p-1 flex w-full overflow-x-auto scrollbar-hide md:inline-flex md:w-auto gap-1 bg-white border"
-          >
-            <TabsTrigger value="overview" className="rounded-full text-xs gap-1.5 shrink-0 data-[state=active]:bg-gray-900 data-[state=active]:text-white">
-              <Package2 className="h-3.5 w-3.5 shrink-0" />Overview
-            </TabsTrigger>
-            <TabsTrigger
-              value="seller"
-              className="rounded-full text-xs gap-1.5 shrink-0 data-[state=active]:bg-gray-900 data-[state=active]:text-white"
-              onClick={(e) => {
-                if (seller?.status === "active") {
-                  e.preventDefault();
-                  navigate("/seller/dashboard");
-                }
-              }}
+          <div className="relative">
+            {/* Fade edges to indicate scrollability on mobile */}
+            <div className="pointer-events-none absolute top-0 right-0 bottom-0 w-6 z-10 bg-gradient-to-l from-[#F9F9F7] to-transparent rounded-r-full md:hidden" />
+            <TabsList
+              ref={tabsListRef}
+              className="rounded-full h-auto p-1 flex max-w-full overflow-x-auto gap-1 bg-white border snap-x snap-mandatory"
+              style={{ scrollbarWidth: "none", msOverflowStyle: "none", WebkitOverflowScrolling: "touch" }}
             >
-              <StoreIcon className="h-3.5 w-3.5 shrink-0" />
-              {seller?.status === "active" ? "Seller Dashboard" : "Become a Seller"}
-            </TabsTrigger>
-            <TabsTrigger value="rewards" className="rounded-full text-xs gap-1.5 shrink-0 data-[state=active]:bg-gray-900 data-[state=active]:text-white">
-              <Star className="h-3.5 w-3.5 shrink-0" />Rewards & Referral
-            </TabsTrigger>
-          </TabsList>
+              <TabsTrigger value="overview" className="rounded-full text-xs gap-1.5 shrink-0 snap-start data-[state=active]:bg-gray-900 data-[state=active]:text-white">
+                <Package2 className="h-3.5 w-3.5 shrink-0" />Overview
+              </TabsTrigger>
+              <TabsTrigger
+                value="seller"
+                className="rounded-full text-xs gap-1.5 shrink-0 snap-start data-[state=active]:bg-gray-900 data-[state=active]:text-white"
+                onClick={(e) => {
+                  if (seller?.status === "active") {
+                    e.preventDefault();
+                    navigate("/seller/dashboard");
+                  }
+                }}
+              >
+                <StoreIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="whitespace-nowrap">{seller?.status === "active" ? "Seller Dashboard" : "Become a Seller"}</span>
+              </TabsTrigger>
+              <TabsTrigger value="rewards" className="rounded-full text-xs gap-1.5 shrink-0 snap-start data-[state=active]:bg-gray-900 data-[state=active]:text-white">
+                <Star className="h-3.5 w-3.5 shrink-0" />
+                <span className="whitespace-nowrap">Rewards & Referrals</span>
+              </TabsTrigger>
+            </TabsList>
+          </div>
         </Tabs>
 
         {profileTab === "seller" && seller?.status !== "active" && (
