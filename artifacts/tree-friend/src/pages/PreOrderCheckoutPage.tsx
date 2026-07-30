@@ -30,7 +30,11 @@ export function PreOrderCheckoutPage() {
   const originalPrice = Number(params.get("price") ?? "0");
   const discountedPrice = Math.round(originalPrice * 0.95 * 100) / 100;
   const savings = Math.round((originalPrice - discountedPrice) * 100) / 100;
-  const shipmentDate = localStorage.getItem("nextShipmentDate") ?? "";
+  // Pre-order delivery estimate: trees are living products and need careful
+  // handling — we use a fixed 5-7 business day window rather than a
+  // configurable shipment date, which was removed as irrelevant for a tree
+  // marketplace (trees aren't batch-shipped from a single supplier).
+  const PRE_ORDER_DELIVERY = "5-7 business days";
 
   const { data: savedAddresses = [] } = useListAddresses({ query: { retry: false, queryKey: getListAddressesQueryKey() } });
 
@@ -47,13 +51,8 @@ export function PreOrderCheckoutPage() {
   const isDhaka = ["dhaka", "????"].some(k => city.includes(k));
   const deliveryCharge = address.city ? (isDhaka ? 80 : 120) : 80;
 
-  function getDaysUntilShipment() {
-    if (!shipmentDate) return "20-23 days";
-    const today = new Date();
-    const shipment = new Date(shipmentDate);
-    const diff = Math.ceil((shipment.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    if (diff <= 0) return "2-5 days";
-    return `${diff + 2}-${diff + 5} days`;
+  function getEstimatedDelivery() {
+    return PRE_ORDER_DELIVERY;
   }
 
   function applyAddress(addr: any) {
@@ -194,7 +193,7 @@ export function PreOrderCheckoutPage() {
                 {/* Delivery estimate */}
                 <div className="flex items-center gap-2 text-sm bg-accent/10 rounded-lg px-3 py-2">
                   <Truck className="h-4 w-4 text-accent shrink-0" />
-                  <span>Estimated delivery: <strong>{getDaysUntilShipment()}</strong></span>
+                  <span>Estimated delivery: <strong>{getEstimatedDelivery()}</strong></span>
                 </div>
 
                 <div className="border-t pt-4 space-y-2 text-sm">
