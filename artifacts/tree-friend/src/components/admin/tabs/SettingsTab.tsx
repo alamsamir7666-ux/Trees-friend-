@@ -91,11 +91,11 @@ export function SettingsTab() {
               key={label}
               className="rounded-2xl border border-border bg-card p-5 transition-shadow hover:shadow-sm"
             >
-              <div className="flex items-start gap-4">
+              <div className="flex items-start gap-4 overflow-hidden">
                 <div className="h-10 w-10 rounded-xl bg-muted/60 flex items-center justify-center shrink-0 mt-0.5">
                   <Icon className="h-4.5 w-4.5 text-muted-foreground" />
                 </div>
-                <div className="flex-1 min-w-0">
+                <div className="flex-1 min-w-0 overflow-hidden">
                   <div className="flex items-center justify-between gap-3 mb-1">
                     <p className="text-sm font-semibold text-foreground">{label}</p>
                     {editable && saved === field && (
@@ -104,12 +104,12 @@ export function SettingsTab() {
                   </div>
                   <p className="text-xs text-muted-foreground mb-3">{desc}</p>
                   {editable ? (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 overflow-hidden">
                       <input
                         type={field === "supportEmail" ? "email" : "text"}
                         value={value}
                         onChange={(e) => onChange?.(e.target.value)}
-                        className="flex-1 h-9 rounded-lg border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                        className="flex-1 min-w-0 h-9 rounded-lg border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                       />
                       <button
                         onClick={() => handleSave(field!, value!)}
