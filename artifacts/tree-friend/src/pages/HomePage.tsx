@@ -286,8 +286,8 @@ export function HomePage() {
           <div className="mb-10">
             <div className="flex items-end justify-between mb-4">
               <div>
-                <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">Trending Now</p>
-                <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">Discover Your<br className="hidden sm:inline" /> Green Paradise</h2>
+                <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">{activeTab === "trending" ? "Trending Now" : "New Arrivals"}</p>
+                <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">{activeTab === "trending" ? "Discover Your Green Paradise" : "Fresh Off the Nursery"}</h2>
               </div>
               <Link href="/products">
                 <Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm gap-1 shrink-0">
@@ -296,7 +296,7 @@ export function HomePage() {
               </Link>
             </div>
             <p className="text-muted-foreground text-sm max-w-md mb-6">
-              Explore the most loved trees and plants for a healthier, greener tomorrow.
+              {activeTab === "trending" ? "Explore the most loved trees and plants for a healthier, greener tomorrow." : "Be the first to discover our newest arrivals — fresh from the nursery to your doorstep."}
             </p>
 
             {/* Tabs — pill group with border ring */}
@@ -313,10 +313,19 @@ export function HomePage() {
           </div>
 
           {activeProducts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3">
-              <span className="text-5xl">🌱</span>
-              <p className="text-foreground font-medium text-base">No products here yet.</p>
-              <p className="text-muted-foreground text-sm">Check back soon for exciting new arrivals.</p>
+            <div className="flex flex-col items-center justify-center py-12 gap-4">
+              <div className="h-20 w-20 rounded-full bg-muted/60 flex items-center justify-center">
+                <Leaf className="h-9 w-9 text-muted-foreground/60" />
+              </div>
+              <div className="text-center max-w-xs">
+                <p className="text-foreground font-semibold text-base mb-1">{activeTab === "trending" ? "No trending products yet" : "No new arrivals yet"}</p>
+                <p className="text-muted-foreground text-sm leading-relaxed">{activeTab === "trending" ? "We're picking the best for you. Check back soon or browse our full collection." : "We're adding fresh stock soon. In the meantime, explore what's trending!"}</p>
+              </div>
+              <Link href="/products">
+                <Button variant="outline" className="mt-1 rounded-full text-sm gap-1.5">
+                  Browse all products <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+              </Link>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -380,10 +389,19 @@ export function HomePage() {
               <p className="text-muted-foreground text-sm">Go to Admin → Homepage Sections to add tabs.</p>
             </div>
           ) : bestProducts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3">
-              <span className="text-5xl">🌿</span>
-              <p className="text-foreground font-medium text-base">No products here yet.</p>
-              <p className="text-muted-foreground text-sm">Check back soon for exciting new arrivals.</p>
+            <div className="flex flex-col items-center justify-center py-12 gap-4">
+              <div className="h-20 w-20 rounded-full bg-muted/60 flex items-center justify-center">
+                <Leaf className="h-9 w-9 text-muted-foreground/60" />
+              </div>
+              <div className="text-center max-w-xs">
+                <p className="text-foreground font-semibold text-base mb-1">No products in this category yet</p>
+                <p className="text-muted-foreground text-sm leading-relaxed">We're restocking this section. Try browsing a different category or check our full collection.</p>
+              </div>
+              <Link href="/products">
+                <Button variant="outline" className="mt-1 rounded-full text-sm gap-1.5">
+                  Browse all products <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+              </Link>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
