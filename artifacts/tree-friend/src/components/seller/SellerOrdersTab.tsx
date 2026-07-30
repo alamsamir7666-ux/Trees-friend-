@@ -136,65 +136,64 @@ function OrderRow({ order }: { order: SellerOrder }) {
     <div className="rounded-2xl border border-border bg-card overflow-hidden">
       {/* Header row */}
       <div className="px-5 py-4">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="flex items-start gap-3 min-w-0 flex-1">
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="p-1 rounded-md text-muted-foreground hover:bg-muted transition-colors mt-0.5"
-              aria-label={expanded ? "Collapse" : "Expand"}
-            >
-              {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-            </button>
-            <div className="h-9 w-9 rounded-xl bg-muted flex items-center justify-center shrink-0">
-              <StatusIcon className="h-4 w-4 text-muted-foreground" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={copyTrackingId}
-                  className="flex items-center gap-1.5 text-sm font-semibold text-foreground hover:text-accent-text transition-colors tabular-nums"
-                >
-                  {order.trackingId}
-                  {copied ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-600" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-                  )}
-                </button>
-                <span className={cn("inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 ring-1", meta.chip)}>
-                  <span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />
-                  {meta.label}
-                </span>
-                {paymentPending && (
-                  <span className="inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 ring-1 ring-amber-200/60 bg-amber-50 text-amber-700">
-                    <AlertCircle className="h-3 w-3" />
-                    Payment pending
-                  </span>
-                )}
-              </div>
-              <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
-                <span className="inline-flex items-center gap-1">
-                  <ShoppingCart className="h-3 w-3" />
-                  {order.items.length} item{order.items.length !== 1 ? "s" : ""}
-                </span>
-                <span className="font-medium text-foreground tabular-nums">{formatTk(order.totalAmount)}</span>
-                <span className="uppercase">{order.paymentMethod}</span>
-                <span>{new Date(order.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
-              </div>
-            </div>
+        <div className="flex items-start gap-3">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="p-1 rounded-md text-muted-foreground hover:bg-muted transition-colors mt-0.5"
+            aria-label={expanded ? "Collapse" : "Expand"}
+          >
+            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          </button>
+          <div className="h-9 w-9 rounded-xl bg-muted flex items-center justify-center shrink-0">
+            <StatusIcon className="h-4 w-4 text-muted-foreground" />
           </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <Select value={order.orderStatus} onValueChange={handleOrderStatusChange} disabled={updateStatus.isPending}>
-              <SelectTrigger className="h-8 w-[140px] rounded-lg text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ORDER_STATUS_OPTIONS.map((s) => (
-                  <SelectItem key={s} value={s} className="text-xs capitalize">{s}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={copyTrackingId}
+                className="flex items-center gap-1.5 text-sm font-semibold text-foreground hover:text-accent-text transition-colors tabular-nums truncate max-w-[200px]"
+              >
+                <span className="truncate">{order.trackingId}</span>
+                {copied ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                )}
+              </button>
+              <span className={cn("inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 ring-1 shrink-0", meta.chip)}>
+                <span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />
+                {meta.label}
+              </span>
+              {paymentPending && (
+                <span className="inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 ring-1 ring-amber-200/60 bg-amber-50 text-amber-700 shrink-0">
+                  <AlertCircle className="h-3 w-3" />
+                  Payment pending
+                </span>
+              )}
+            </div>
+            <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+              <span className="inline-flex items-center gap-1">
+                <ShoppingCart className="h-3 w-3" />
+                {order.items.length} item{order.items.length !== 1 ? "s" : ""}
+              </span>
+              <span className="font-medium text-foreground tabular-nums">{formatTk(order.totalAmount)}</span>
+              <span className="uppercase">{order.paymentMethod}</span>
+              <span>{new Date(order.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+            </div>
+            {/* Order status dropdown - on its own line to prevent overlap */}
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Status</span>
+              <Select value={order.orderStatus} onValueChange={handleOrderStatusChange} disabled={updateStatus.isPending}>
+                <SelectTrigger className="h-8 w-[140px] rounded-lg text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ORDER_STATUS_OPTIONS.map((s) => (
+                    <SelectItem key={s} value={s} className="text-xs capitalize">{s}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
 
@@ -218,12 +217,12 @@ function OrderRow({ order }: { order: SellerOrder }) {
         )}
 
         {/* Shipment row */}
-        <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-between gap-3 flex-wrap">
+        <div className="mt-3 pt-3 border-t border-border/60 space-y-2">
           <div className="flex items-center gap-2 min-w-0">
             <Truck className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             {hasBooking && order.shipment ? (
               <>
-                <span className={cn("inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 ring-1 capitalize", (SHIPMENT_STATUS_META[order.shipment.status] ?? SHIPMENT_STATUS_META.pending).chip)}>
+                <span className={cn("inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 ring-1 capitalize shrink-0", (SHIPMENT_STATUS_META[order.shipment.status] ?? SHIPMENT_STATUS_META.pending).chip)}>
                   {(SHIPMENT_STATUS_META[order.shipment.status] ?? SHIPMENT_STATUS_META.pending).label}
                 </span>
                 <span className="text-xs text-muted-foreground truncate">
@@ -235,7 +234,7 @@ function OrderRow({ order }: { order: SellerOrder }) {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {!hasBooking && hasCourierConfig && (
               <Button
                 size="sm"
