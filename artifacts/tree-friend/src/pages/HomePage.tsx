@@ -89,25 +89,25 @@ function CollectionSlider() {
   if (!categories.length) return null;
 
   return (
-    <section className="pt-16 pb-8 bg-muted/20">
+    <section className="pt-16 pb-10 bg-muted/20">
       <div className="container mx-auto px-4">
         <div className="flex items-end justify-between mb-8">
           <div>
-            <p className="text-xs uppercase tracking-[0.15em] text-accent-text mb-2 font-medium">Browse by Collection</p>
-            <h2 className="font-serif text-3xl font-medium">Our Collections</h2>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">Browse by Collection</p>
+            <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">Our Collections</h2>
           </div>
           <div className="flex gap-2">
             <button
               onClick={() => sliderRef.current?.scrollBy({ left: -280, behavior: "smooth" })}
               aria-label="Scroll collections left"
-              className="h-9 w-9 rounded-full border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
+              className="h-9 w-9 rounded-full border border-border bg-card flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
             <button
               onClick={() => sliderRef.current?.scrollBy({ left: 280, behavior: "smooth" })}
               aria-label="Scroll collections right"
-              className="h-9 w-9 rounded-full border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
+              className="h-9 w-9 rounded-full border border-border bg-card flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -125,7 +125,7 @@ function CollectionSlider() {
             return (
               <Link key={cat.slug} href={`/products?category=${cat.slug}`}>
                 <div
-                  className="group relative shrink-0 w-[220px] h-[300px] rounded-2xl overflow-hidden cursor-pointer snap-start"
+                  className="group relative shrink-0 w-[220px] h-[300px] rounded-2xl overflow-hidden cursor-pointer snap-start shadow-md hover:shadow-xl transition-shadow duration-300"
                   style={{ background: bg }}
                 >
                   <img
@@ -135,9 +135,9 @@ function CollectionSlider() {
                     fetchPriority={idx === 0 ? "high" : undefined}
                     loading={idx === 0 ? "eager" : "lazy"}
                   />
-                  <div className="absolute inset-0 bg-gradient-to-t from-foreground/60 via-transparent to-transparent" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-foreground/70 via-foreground/10 to-transparent" />
                   {((cat as { icon?: string; iconImage?: string }).icon || (cat as { icon?: string; iconImage?: string }).iconImage) && (
-                    <div className="absolute bottom-9 right-5 h-12 w-12 rounded-full flex items-center justify-center text-2xl bg-secondary shadow-md overflow-hidden">
+                    <div className="absolute bottom-16 right-4 h-10 w-10 rounded-full flex items-center justify-center text-lg bg-white/90 backdrop-blur-sm shadow-md overflow-hidden">
                       {(cat as { iconImage?: string }).iconImage ? (
                         <img src={(cat as { iconImage?: string }).iconImage} alt="" className="h-full w-full object-cover" />
                       ) : (
@@ -145,10 +145,10 @@ function CollectionSlider() {
                       )}
                     </div>
                   )}
-                  <div className="absolute bottom-5 left-5 text-white">
-                    <p className="text-xs uppercase tracking-[0.12em] mb-1 opacity-80">Collection</p>
-                    <h3 className="font-serif text-xl font-medium mb-2">{cat.name}</h3>
-                    <span className="text-xs opacity-90 flex items-center gap-1.5 group-hover:gap-3 transition-all">
+                  <div className="absolute bottom-4 left-4 right-4 text-white">
+                    <p className="text-[10px] uppercase tracking-[0.15em] mb-1 opacity-70">Collection</p>
+                    <h3 className="font-serif text-lg font-medium leading-snug mb-1.5">{cat.name}</h3>
+                    <span className="text-xs opacity-80 flex items-center gap-1 group-hover:gap-2.5 transition-all duration-300">
                       Shop now <ArrowRight className="h-3 w-3" />
                     </span>
                   </div>
@@ -280,34 +280,36 @@ export function HomePage() {
       <CollectionSlider />
 
       {/* Trending / New Arrivals Section */}
-      <section className="pt-10 pb-16 bg-background">
+      <section className="pt-14 pb-16 bg-background">
         <div className="container mx-auto px-4">
-          {/* Top label + View all */}
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-xs uppercase tracking-[0.18em] text-accent-text font-semibold">Trending Now</p>
-            <Link href="/products">
-              <Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm">
-                View all <ArrowRight className="ml-1 h-4 w-4" />
-              </Button>
-            </Link>
-          </div>
+          {/* Section header: label + title + subtitle + tabs in one composed block */}
+          <div className="mb-10">
+            <div className="flex items-end justify-between mb-4">
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">Trending Now</p>
+                <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">Discover Your<br className="hidden sm:inline" /> Green Paradise</h2>
+              </div>
+              <Link href="/products">
+                <Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm gap-1 shrink-0">
+                  View all <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+            </div>
+            <p className="text-muted-foreground text-sm max-w-md mb-6">
+              Explore the most loved trees and plants for a healthier, greener tomorrow.
+            </p>
 
-          {/* Title + subtitle */}
-          <h2 className="font-serif text-3xl md:text-4xl font-medium mb-2">Discover Your Green Paradise</h2>
-          <p className="text-muted-foreground text-sm mb-7 max-w-lg">
-            Explore the most loved trees and plants for a healthier, greener tomorrow.
-          </p>
-
-          {/* Tabs */}
-          <div className="flex gap-2 mb-8">
-            <button
-              onClick={() => setActiveTab("trending")}
-              className={`px-5 py-2 rounded-full text-sm font-medium transition-colors ${activeTab === "trending" ? "bg-foreground text-background" : "bg-muted text-muted-foreground hover:text-foreground"}`}
-            >Trending</button>
-            <button
-              onClick={() => setActiveTab("new_arrivals")}
-              className={`px-5 py-2 rounded-full text-sm font-medium transition-colors ${activeTab === "new_arrivals" ? "bg-foreground text-background" : "bg-muted text-muted-foreground hover:text-foreground"}`}
-            >New Arrivals</button>
+            {/* Tabs — pill group with border ring */}
+            <div className="inline-flex items-center rounded-full border border-border bg-muted/40 p-1 gap-1">
+              <button
+                onClick={() => setActiveTab("trending")}
+                className={`px-5 py-2 rounded-full text-sm font-medium transition-all duration-200 ${activeTab === "trending" ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/60"}`}
+              >Trending</button>
+              <button
+                onClick={() => setActiveTab("new_arrivals")}
+                className={`px-5 py-2 rounded-full text-sm font-medium transition-all duration-200 ${activeTab === "new_arrivals" ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/60"}`}
+              >New Arrivals</button>
+            </div>
           </div>
 
           {activeProducts.length === 0 ? (
@@ -334,36 +336,38 @@ export function HomePage() {
       {/* Best Plants & Trees by Category */}
       <section className="py-16 bg-muted/10 border-t">
         <div className="container mx-auto px-4">
-          <div className="flex items-end justify-between mb-2">
-            <div>
-              <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground font-medium mb-1">Based On Category</p>
-              <h2 className="font-serif text-3xl font-medium">Best Plants &amp; Trees</h2>
+          <div className="mb-10">
+            <div className="flex items-end justify-between mb-4">
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">Based On Category</p>
+                <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">Best Plants &amp; Trees</h2>
+              </div>
+              <Link href="/products">
+                <Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm gap-1 shrink-0">
+                  View all <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
             </div>
-            <Link href="/products">
-              <Button variant="ghost" className="text-muted-foreground hover:text-foreground">
-                View all <ArrowRight className="ml-1 h-4 w-4" />
-              </Button>
-            </Link>
-          </div>
 
-          {/* Category tabs — scrollable on mobile */}
-          {sectionsLoading ? (
-            <div className="flex gap-2 mt-6 mb-8">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="h-9 w-28 rounded-full bg-muted animate-pulse" />
-              ))}
-            </div>
-          ) : BEST_TABS.length === 0 ? null : (
-            <div className="flex gap-2 mt-6 mb-8 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
-              {BEST_TABS.map(tab => (
-                <button
-                  key={tab.key}
-                  onClick={() => setBestTab(tab.key)}
-                  className={`px-5 py-2 rounded-full text-sm font-semibold tracking-wide transition-colors whitespace-nowrap ${bestTab === tab.key ? "bg-foreground text-background" : "bg-muted text-muted-foreground hover:text-foreground"}`}
-                >{tab.label}</button>
-              ))}
-            </div>
-          )}
+            {/* Category tabs — scrollable on mobile, pill group style */}
+            {sectionsLoading ? (
+              <div className="flex gap-2 mt-2 mb-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="h-9 w-28 rounded-full bg-muted animate-pulse" />
+                ))}
+              </div>
+            ) : BEST_TABS.length === 0 ? null : (
+              <div className="inline-flex items-center rounded-full border border-border bg-muted/40 p-1 gap-1 mt-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+                {BEST_TABS.map(tab => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setBestTab(tab.key)}
+                    className={`px-5 py-2 rounded-full text-sm font-medium transition-all duration-200 whitespace-nowrap ${bestTab === tab.key ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/60"}`}
+                  >{tab.label}</button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {sectionsLoading || bestLoading ? (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
@@ -399,10 +403,10 @@ export function HomePage() {
       <section className="py-20 bg-background border-t">
         <div className="container mx-auto px-4">
           <div className="text-center mb-14">
-            <p className="text-xs uppercase tracking-[0.18em] text-accent-text mb-3 font-semibold">Why Choose Us</p>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-3">Why Choose Us</p>
             <h2 className="font-serif text-3xl md:text-4xl font-medium">Our Promise to You</h2>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
             {[
               {
                 icon: Leaf,
@@ -420,9 +424,9 @@ export function HomePage() {
                 desc: "We pack with care and deliver to your doorstep safely and on time. Your plant's safety is our promise.",
               },
             ].map(({ icon: Icon, title, desc }) => (
-              <div key={title} className="flex flex-col items-center text-center gap-4 px-4">
-                <div className="h-16 w-16 rounded-2xl bg-accent/10 flex items-center justify-center shrink-0">
-                  <Icon className="h-7 w-7 text-accent" />
+              <div key={title} className="flex flex-col items-center text-center gap-4 px-4 py-6 rounded-2xl bg-card border border-border/60 hover:shadow-md transition-shadow duration-300">
+                <div className="h-14 w-14 rounded-2xl bg-accent/10 flex items-center justify-center shrink-0">
+                  <Icon className="h-6 w-6 text-accent" />
                 </div>
                 <h3 className="font-serif text-xl font-medium">{title}</h3>
                 <p className="text-muted-foreground text-sm leading-relaxed">{desc}</p>
