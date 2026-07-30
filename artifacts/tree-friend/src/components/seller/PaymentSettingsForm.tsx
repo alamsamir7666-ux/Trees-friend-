@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { Wallet, Loader2, Trash2, ShieldCheck, ShieldAlert } from "lucide-react";
+import {
+  Wallet, Loader2, Trash2, ShieldCheck, ShieldAlert, CheckCircle2,
+  Info, ExternalLink,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,26 +15,25 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-/**
- * Payment Settings (plan doc §4, §7 — Part 6). Lets a seller connect their
- * own bKash Merchant API account so listings can offer "advance"/"both"
- * payment instead of COD-only.
- *
- * Mirrors CourierSettingsForm.tsx's shape and conventions exactly (same
- * loading/empty/connected states, same delete-confirm pattern, same
- * invalidate-on-success), adapted for bKash's 4-field credential shape
- * (merchantAppKey/merchantAppSecret/merchantUsername/merchantPassword --
- * routes/sellerPaymentConfigs.ts requires all four together, there's no
- * partial-credential state, unlike courier's provider-conditional fields).
- *
- * Saving credentials here does NOT immediately unlock advance payment --
- * isVerified starts false and only an admin can flip it (Part 6's
- * admin-review verification flow, routes/adminSellers.ts's
- * /admin/seller-payment-configs/:id/verify). The connected-state card
- * below makes that explicit with a "Saved, pending verification" notice
- * rather than letting a seller wonder why advance payment still isn't
- * available after saving.
- */
+function FieldRow({
+  label, children, hint, required,
+}: {
+  label: string;
+  children: React.ReactNode;
+  hint?: string;
+  required?: boolean;
+}) {
+  return (
+    <div>
+      <Label className="text-xs font-medium text-foreground">
+        {label}{required && <span className="text-destructive ml-0.5">*</span>}
+      </Label>
+      <div className="mt-1.5">{children}</div>
+      {hint && <p className="text-[11px] text-muted-foreground mt-1">{hint}</p>}
+    </div>
+  );
+}
+
 export function PaymentSettingsForm() {
   const qc = useQueryClient();
   const { data: config, isLoading } = useGetMySellerPaymentConfig();
@@ -83,89 +85,151 @@ export function PaymentSettingsForm() {
   }
 
   if (isLoading) {
-    return <div className="h-40 rounded-2xl bg-muted animate-pulse" />;
-  }
-
-  if (config) {
     return (
-      <div className="bg-card rounded-2xl border p-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="h-10 w-10 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
-              <Wallet className="h-5 w-5 text-accent" />
-            </div>
-            <div>
-              <p className="font-medium text-sm capitalize">{config.provider}</p>
-              <p className="text-xs text-muted-foreground">
-                App Key: {config.merchantAppKeyMasked} · Username: {config.merchantUsernameMasked}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={handleDelete}
-            disabled={deleteConfig.isPending}
-            className="p-2 rounded-lg text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors"
-            title="Disconnect"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
-        </div>
-        {config.isVerified ? (
-          <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
-            <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-            Verified — your listings can offer advance/bKash payment.
-          </p>
-        ) : (
-          <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
-            <ShieldAlert className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-            Saved, pending verification — an admin reviews new payment accounts before advance/bKash payment
-            unlocks. Your listings stay COD-only until then.
-          </p>
-        )}
+      <div className="space-y-4">
+        <div className="h-32 rounded-2xl bg-muted animate-pulse" />
+        <div className="h-64 rounded-2xl bg-muted animate-pulse" />
       </div>
     );
   }
 
+  // Connected state
+  if (config) {
+    return (
+      <div className="space-y-5 max-w-3xl">
+        <section className="rounded-2xl border border-border bg-card overflow-hidden">
+          <header className="px-5 py-4 border-b border-border/60">
+            <h3 className="text-sm font-semibold text-foreground">Payment Account</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Your connected bKash Merchant account</p>
+          </header>
+          <div className="p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-12 w-12 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0">
+                  <Wallet className="h-5 w-5 text-emerald-700" />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-medium text-foreground capitalize flex items-center gap-2">
+                    {config.provider}
+                    {config.isVerified ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 ring-1 ring-emerald-200/60 bg-emerald-50 text-emerald-700">
+                        <CheckCircle2 className="h-3 w-3" /> Verified
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 ring-1 ring-amber-200/60 bg-amber-50 text-amber-700">
+                        <ShieldAlert className="h-3 w-3" /> Pending
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    App Key: <span className="font-mono">{config.merchantAppKeyMasked}</span> · Username: <span className="font-mono">{config.merchantUsernameMasked}</span>
+                  </p>
+                </div>
+              </div>
+              <Button
+                onClick={handleDelete}
+                disabled={deleteConfig.isPending}
+                variant="outline"
+                size="sm"
+                className="text-destructive hover:bg-rose-50 hover:border-rose-300 shrink-0"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                Disconnect
+              </Button>
+            </div>
+
+            {config.isVerified ? (
+              <div className="mt-4 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
+                <ShieldCheck className="h-4 w-4 text-emerald-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-medium text-emerald-800">Verified — advance payment is live</p>
+                  <p className="text-xs text-emerald-700 mt-0.5">
+                    Your listings can offer advance / bKash payment options to buyers.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
+                <ShieldAlert className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-medium text-amber-800">Saved, pending verification</p>
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    An admin reviews new payment accounts before advance/bKash payment unlocks. Your listings stay COD-only until then.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  // Setup state
   return (
-    <div className="bg-card rounded-2xl border p-5">
-      <div className="flex items-center gap-2.5 mb-4">
-        <div className="h-10 w-10 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
-          <Wallet className="h-5 w-5 text-accent" />
-        </div>
-        <div>
-          <p className="font-medium text-sm">Connect your bKash Merchant account</p>
-          <p className="text-xs text-muted-foreground">Required to offer advance or bKash payment on your listings.</p>
-        </div>
-      </div>
-
-      <div className="space-y-3">
-        <div>
-          <Label className="text-xs text-muted-foreground">App Key</Label>
-          <Input value={merchantAppKey} onChange={(e) => setMerchantAppKey(e.target.value)} className="mt-1 h-9 rounded-lg text-sm" />
-        </div>
-        <div>
-          <Label className="text-xs text-muted-foreground">App Secret</Label>
-          <Input value={merchantAppSecret} onChange={(e) => setMerchantAppSecret(e.target.value)} type="password" className="mt-1 h-9 rounded-lg text-sm" />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label className="text-xs text-muted-foreground">Merchant Username</Label>
-            <Input value={merchantUsername} onChange={(e) => setMerchantUsername(e.target.value)} className="mt-1 h-9 rounded-lg text-sm" />
+    <div className="space-y-5 max-w-3xl">
+      <section className="rounded-2xl border border-border bg-card overflow-hidden">
+        <header className="px-5 py-4 border-b border-border/60">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0">
+              <Wallet className="h-5 w-5 text-emerald-700" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">Connect your bKash Merchant account</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Required to offer advance or bKash payment on your listings.</p>
+            </div>
           </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Merchant Password</Label>
-            <Input value={merchantPassword} onChange={(e) => setMerchantPassword(e.target.value)} type="password" className="mt-1 h-9 rounded-lg text-sm" />
+        </header>
+
+        <div className="p-5 space-y-4">
+          <div className="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
+            <Info className="h-4 w-4 text-sky-700 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-medium text-sky-800">Why connect bKash?</p>
+              <p className="text-xs text-sky-700 mt-0.5">
+                By default your listings only accept Cash on Delivery. Connecting bKash lets buyers pay online — once an admin verifies the account, advance/bKash payment becomes available.
+              </p>
+            </div>
+          </div>
+
+          <p className="text-xs font-medium text-muted-foreground">Find these in your bKash Merchant Panel under API Credentials.</p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <FieldRow label="App Key" required>
+              <Input value={merchantAppKey} onChange={(e) => setMerchantAppKey(e.target.value)} className="h-10 rounded-xl" />
+            </FieldRow>
+            <FieldRow label="App Secret" required>
+              <Input value={merchantAppSecret} onChange={(e) => setMerchantAppSecret(e.target.value)} type="password" className="h-10 rounded-xl" />
+            </FieldRow>
+            <FieldRow label="Merchant Username" required>
+              <Input value={merchantUsername} onChange={(e) => setMerchantUsername(e.target.value)} className="h-10 rounded-xl" />
+            </FieldRow>
+            <FieldRow label="Merchant Password" required>
+              <Input value={merchantPassword} onChange={(e) => setMerchantPassword(e.target.value)} type="password" className="h-10 rounded-xl" />
+            </FieldRow>
+          </div>
+
+          <div className="pt-2 flex items-center justify-between gap-3 flex-wrap">
+            <a
+              href="https://developer.bka.sh/"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline"
+            >
+              Open bKash developer docs
+              <ExternalLink className="h-3 w-3" />
+            </a>
+            <Button
+              onClick={handleSave}
+              disabled={createConfig.isPending}
+              className="rounded-xl"
+            >
+              {createConfig.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Wallet className="h-4 w-4 mr-1.5" />}
+              Connect account
+            </Button>
           </div>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Find these in your bKash Merchant Panel under API Credentials.
-        </p>
-
-        <Button onClick={handleSave} disabled={createConfig.isPending} className="w-full rounded-full gap-1.5 mt-2">
-          {createConfig.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
-          Connect
-        </Button>
-      </div>
+      </section>
     </div>
   );
 }

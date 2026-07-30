@@ -2,9 +2,11 @@ import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import {
   LayoutDashboard, Package2, ShoppingCart, Wallet, Truck, Store,
-  Sprout, Loader2, Menu, PackageX, CalendarClock,
+  Sprout, Loader2, Menu, PackageX, CalendarClock, X, ExternalLink,
+  Settings, ChevronRight, LogOut, BadgeCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { updateSEO } from "@/lib/seo";
 import { useGetMySeller, useListSellerOrders, useGetMe } from "@workspace/api-client-react";
 import { SellerOverviewTab } from "@/components/seller/SellerOverviewTab";
@@ -15,60 +17,54 @@ import { SellerMonthlyHistoryTab } from "@/components/seller/SellerMonthlyHistor
 import { CourierSettingsForm } from "@/components/seller/CourierSettingsForm";
 import { PaymentSettingsForm } from "@/components/seller/PaymentSettingsForm";
 import { BusinessProfileForm } from "@/components/seller/BusinessProfileForm";
+import { useAuth } from "@clerk/react";
 
 updateSEO({ title: "Seller Dashboard", noIndex: true });
 
-/**
- * Seller dashboard -- plan doc §4's "Upload Listing" + "Manage Inventory"
- * (phase 2), plus Manage Orders + Courier Settings (plan doc §8, Part 4),
- * plus Payment Settings (plan doc §7, seller_payment_configs, Part 6),
- * plus Business Profile / Vacation Mode / Business Verification doc
- * upload (plan doc §4 items 1/2/3/5, Part 7 -- Store Settings folded into
- * Business Profile since no sellers-table field was left uncovered).
- * Manage Discounts (plan §4 item 4) is NOT a separate section here --
- * satisfied by the existing per-listing discountPrice field above.
- *
- * Shell rebuilt for visual/navigational parity with AdminPage.tsx: a
- * persistent left sidebar (not shadcn Tabs) drives an activeSection state,
- * matching admin's activeTab pattern exactly. See handoff doc for the nav
- * grouping rationale and a note on the breadcrumb -> header-title swap.
- */
+type SectionId =
+  | "dashboard" | "listings" | "orders" | "returns"
+  | "monthlyHistory" | "payment" | "courier" | "profile";
 
-const NAV_ITEMS = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "listings", label: "Listings", icon: Package2 },
-  { id: "orders", label: "Orders", icon: ShoppingCart },
-  { id: "returns", label: "Returns", icon: PackageX },
-  { id: "monthlyHistory", label: "Monthly History", icon: CalendarClock },
-  { id: "payment", label: "Payment Settings", icon: Wallet },
-  { id: "courier", label: "Courier Settings", icon: Truck },
-  { id: "profile", label: "Business Profile", icon: Store },
-] as const;
+const NAV_GROUPS: {
+  label: string;
+  items: { id: SectionId; label: string; icon: React.ElementType }[];
+}[] = [
+  {
+    label: "Overview",
+    items: [
+      { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { id: "listings", label: "Listings", icon: Package2 },
+      { id: "orders", label: "Orders", icon: ShoppingCart },
+      { id: "returns", label: "Returns", icon: PackageX },
+      { id: "monthlyHistory", label: "Monthly History", icon: CalendarClock },
+    ],
+  },
+  {
+    label: "Settings",
+    items: [
+      { id: "payment", label: "Payment", icon: Wallet },
+      { id: "courier", label: "Courier", icon: Truck },
+      { id: "profile", label: "Business Profile", icon: Store },
+    ],
+  },
+];
 
-type SectionId = (typeof NAV_ITEMS)[number]["id"];
+const ALL_NAV_ITEMS = NAV_GROUPS.flatMap((g) => g.items);
 
 export function SellerDashboardPage() {
   const { data: seller, isLoading: sellerLoading } = useGetMySeller();
   const { data: me } = useGetMe();
+  const { signOut } = useAuth();
 
   const [activeSection, setActiveSection] = useState<SectionId>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // `seller` loads asynchronously, so we can't know onVacation at the
-  // useState() call above -- sync it in once the seller data arrives.
-  // Restores the pre-redesign behavior (defaultValue={onVacation ? "profile"
-  // : "listings"}), just adapted to this async-loaded, effect-driven shell.
-  // Only forces the jump on vacation entry, never fights the seller's own
-  // clicks around the (still-enabled) Business Profile section afterward.
   useEffect(() => {
     if (seller?.status === "vacation") {
       setActiveSection("profile");
     }
   }, [seller?.status]);
 
-  // Pending-order count for the Orders nav badge. Only fetched once the
-  // seller is active (same data source SellerOrdersTab itself uses --
-  // useListSellerOrders({}) -- no new endpoint).
   const { data: allOrders } = useListSellerOrders(
     {},
     { query: { enabled: seller?.status === "active" } } as any,
@@ -78,23 +74,25 @@ export function SellerDashboardPage() {
   if (sellerLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        <div className="flex flex-col items-center gap-3">
+          <div className="relative">
+            <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-primary to-[hsl(150_30%_22%)] flex items-center justify-center">
+              <Sprout className="h-6 w-6 text-primary-foreground" />
+            </div>
+            <Loader2 className="absolute -bottom-1 -right-1 h-5 w-5 animate-spin text-muted-foreground bg-card rounded-full" />
+          </div>
+          <p className="text-xs text-muted-foreground">Loading your seller dashboard…</p>
+        </div>
       </div>
     );
   }
 
-  // No seller account, or a status where nothing here applies yet
-  // (pending review / suspended) -- send them to the become-seller status
-  // page rather than showing an empty dashboard. "vacation" is NOT
-  // included here -- a vacationing seller still needs to reach Business
-  // Profile to turn vacation off, so they fall through to the dashboard
-  // below with only that section enabled instead of being locked out
-  // entirely. This early return happens before the sidebar shell renders,
-  // exactly as before the redesign.
   if (!seller || (seller.status !== "active" && seller.status !== "vacation")) {
     return (
       <div className="container mx-auto px-4 py-16 max-w-lg text-center">
-        <Sprout className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
+        <div className="h-16 w-16 mx-auto mb-4 rounded-2xl bg-muted flex items-center justify-center">
+          <Sprout className="h-8 w-8 text-muted-foreground" />
+        </div>
         <h1 className="font-serif text-xl font-medium mb-2">Seller dashboard unavailable</h1>
         <p className="text-sm text-muted-foreground mb-4">
           {!seller
@@ -112,13 +110,10 @@ export function SellerDashboardPage() {
 
   const activeSeller = seller;
   const onVacation = activeSeller.status === "vacation";
-  // Vacation mode gating: identical logic to the pre-redesign Tabs
-  // disabled-prop gating, now applied to nav items instead. Only Business
-  // Profile stays reachable so the seller can turn vacation off.
   const isNavDisabled = (id: SectionId) => onVacation && id !== "profile";
 
   function handleNavigate(id: string) {
-    const target = NAV_ITEMS.find((n) => n.id === id);
+    const target = ALL_NAV_ITEMS.find((n: { id: SectionId; label: string; icon: React.ElementType }) => n.id === id as SectionId);
     if (!target || isNavDisabled(target.id)) return;
     setActiveSection(target.id);
     setSidebarOpen(false);
@@ -147,112 +142,246 @@ export function SellerDashboardPage() {
     }
   }
 
-  const activeNav = NAV_ITEMS.find((n) => n.id === activeSection);
+  const activeNav = ALL_NAV_ITEMS.find((n: { id: SectionId; label: string; icon: React.ElementType }) => n.id === activeSection);
   const ownerInitial = seller.ownerName?.[0] ?? (me as any)?.firstName?.[0] ?? "S";
+  const storeInitial = (seller.businessName ?? seller.nurseryName ?? "S")[0];
 
-  const Sidebar = ({ mobile = false }: { mobile?: boolean }) => (
-    <aside className="w-64 bg-white border-r flex flex-col h-full">
-      <div className="px-6 py-5 border-b">
-        <div className="flex items-center gap-2.5">
-          <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-pink-400 to-rose-500 flex items-center justify-center">
-            <Sprout className="h-4 w-4 text-white" />
-          </div>
-          <div>
-            <p className="font-semibold text-sm text-gray-900">Tree Friend</p>
-            <p className="text-xs text-gray-400">Seller Panel</p>
-          </div>
-        </div>
-      </div>
-
-      {onVacation && (
-        <div className="mx-3 mt-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 text-xs text-amber-800">
-          On vacation mode — Listings, Orders, Payment, and Courier are paused. Turn it off in Business Profile.
-        </div>
-      )}
-
-      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-        {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
-          const disabled = isNavDisabled(id);
-          return (
-            <button
-              key={id}
-              onClick={() => handleNavigate(id)}
-              disabled={disabled}
-              aria-current={activeSection === id ? "page" : undefined}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 ${
-                disabled
-                  ? "text-gray-300 cursor-not-allowed"
-                  : activeSection === id
-                    ? "bg-pink-50 text-pink-600"
-                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"
-              }`}
-            >
-              <Icon className="h-[18px] w-[18px] shrink-0" />
-              {label}
-              {id === "orders" && !disabled && pendingOrdersCount > 0 && (
-                <span className="ml-auto bg-pink-100 text-pink-600 text-xs font-semibold px-2 py-0.5 rounded-full">
-                  {pendingOrdersCount}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      <div className="px-4 py-4 border-t">
-        <div className="flex items-center gap-3 px-2">
-          <div className="h-8 w-8 rounded-full bg-gradient-to-br from-pink-300 to-rose-400 flex items-center justify-center shrink-0">
-            <span className="text-white text-xs font-bold">{ownerInitial}</span>
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-gray-800 truncate">{seller.ownerName || seller.businessName}</p>
-            <p className="text-xs text-gray-400">Seller</p>
+  function Sidebar({ mobile = false }: { mobile?: boolean }) {
+    return (
+      <aside
+        className={[
+          "w-72 bg-sidebar text-sidebar-foreground flex flex-col h-full border-r border-sidebar-border",
+          mobile ? "shadow-2xl" : "",
+        ].join(" ")}
+      >
+        {/* Brand header */}
+        <div className="px-5 py-5 border-b border-sidebar-border">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-primary to-[hsl(150_30%_22%)] flex items-center justify-center shrink-0 shadow-sm">
+              <Sprout className="h-5 w-5 text-primary-foreground" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-sm text-sidebar-foreground truncate">Tree Friend</p>
+              <p className="text-[11px] text-sidebar-foreground/60">Seller Center</p>
+            </div>
+            {mobile && (
+              <button
+                onClick={() => setSidebarOpen(false)}
+                className="p-1.5 rounded-lg text-sidebar-foreground/60 hover:bg-sidebar-accent/40"
+                aria-label="Close menu"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
-      </div>
-    </aside>
-  );
+
+        {/* Vacation notice */}
+        {onVacation && (
+          <div className="mx-4 mt-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 text-[11px] text-amber-800 leading-relaxed">
+            <p className="font-semibold mb-0.5">Vacation mode active</p>
+            <p className="text-amber-700">Listings, Orders, Payment, and Courier are paused. Turn it off in Business Profile.</p>
+          </div>
+        )}
+
+        {/* Nav */}
+        <nav className="flex-1 px-3 py-4 overflow-y-auto">
+          {NAV_GROUPS.map((group) => (
+            <div key={group.label} className="mb-5">
+              <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
+                {group.label}
+              </p>
+              <div className="space-y-0.5">
+                {group.items.map(({ id, label, icon: Icon }) => {
+                  const disabled = isNavDisabled(id);
+                  const isActive = activeSection === id;
+                  return (
+                    <button
+                      key={id}
+                      onClick={() => handleNavigate(id)}
+                      disabled={disabled}
+                      aria-current={isActive ? "page" : undefined}
+                      className={[
+                        "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 group",
+                        disabled
+                          ? "text-sidebar-foreground/30 cursor-not-allowed"
+                          : isActive
+                            ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                            : "text-sidebar-foreground/70 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground",
+                      ].join(" ")}
+                    >
+                      <Icon
+                        className={[
+                          "h-[18px] w-[18px] shrink-0 transition-colors",
+                          isActive ? "text-sidebar-primary-foreground" : "",
+                        ].join(" ")}
+                      />
+                      <span className="flex-1 text-left truncate">{label}</span>
+                      {id === "orders" && !disabled && pendingOrdersCount > 0 && (
+                        <span
+                          className={[
+                            "text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center tabular-nums",
+                            isActive
+                              ? "bg-sidebar-primary-foreground/20 text-sidebar-primary-foreground"
+                              : "bg-sidebar-accent text-sidebar-accent-foreground",
+                          ].join(" ")}
+                        >
+                          {pendingOrdersCount}
+                        </span>
+                      )}
+                      {isActive && !disabled && (
+                        <ChevronRight className="h-3.5 w-3.5 text-sidebar-primary-foreground/70" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </nav>
+
+        {/* Store card */}
+        <div className="px-3 pb-3">
+          <div className="rounded-xl bg-sidebar-accent/30 border border-sidebar-border p-3">
+            <div className="flex items-center gap-2.5">
+              <Avatar className="h-9 w-9 border border-sidebar-border shrink-0">
+                {activeSeller.logoUrl ? (
+                  <img src={activeSeller.logoUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <AvatarFallback className="bg-gradient-to-br from-primary to-[hsl(150_30%_22%)] text-primary-foreground text-xs font-bold">
+                    {storeInitial}
+                  </AvatarFallback>
+                )}
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-sidebar-foreground truncate">
+                  {activeSeller.businessName}
+                </p>
+                <p className="text-[11px] text-sidebar-foreground/60 truncate flex items-center gap-1">
+                  {activeSeller.isVerified && <BadgeCheck className="h-3 w-3 text-emerald-500" />}
+                  {activeSeller.location || "No location"}
+                </p>
+              </div>
+            </div>
+            <div className="mt-2.5 flex items-center gap-1.5">
+              <Link href={`/seller/${activeSeller.id}`} className="flex-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="w-full h-7 text-[11px] text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                >
+                  <ExternalLink className="h-3 w-3 mr-1" />
+                  View store
+                </Button>
+              </Link>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-[11px] text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                onClick={() => signOut?.()}
+                title="Sign out"
+              >
+                <LogOut className="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {/* User row */}
+        <div className="px-4 py-3 border-t border-sidebar-border">
+          <div className="flex items-center gap-2.5">
+            <Avatar className="h-8 w-8 shrink-0">
+              <AvatarFallback className="bg-secondary text-secondary-foreground text-[11px] font-bold">
+                {ownerInitial}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-sidebar-foreground truncate">
+                {activeSeller.ownerName || (me as any)?.firstName || "Seller"}
+              </p>
+              <p className="text-[11px] text-sidebar-foreground/60 truncate">
+                {(me as any)?.email || "Signed in"}
+              </p>
+            </div>
+          </div>
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-background overflow-hidden font-sans">
+      {/* Desktop sidebar */}
       <div className="hidden md:flex shrink-0">
         <Sidebar />
       </div>
 
+      {/* Mobile sidebar */}
       {sidebarOpen && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm md:hidden" onClick={() => setSidebarOpen(false)} />
+          <div
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
           <div className="fixed inset-y-0 left-0 z-50 md:hidden">
             <Sidebar mobile />
           </div>
         </>
       )}
 
+      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className="h-16 bg-white border-b flex items-center justify-between px-5 shrink-0">
-          <div className="flex items-center gap-3">
+        {/* Top bar */}
+        <header className="h-16 bg-card border-b border-border flex items-center justify-between px-4 sm:px-6 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => setSidebarOpen(true)}
-              className="md:hidden p-2 rounded-lg hover:bg-gray-100 transition-colors"
+              className="md:hidden p-2 rounded-lg hover:bg-muted transition-colors shrink-0"
               aria-label="Open navigation menu"
             >
-              <Menu className="h-5 w-5 text-gray-500" />
+              <Menu className="h-5 w-5 text-muted-foreground" />
             </button>
-            <div>
-              <h1 className="font-semibold text-gray-900 text-sm sm:text-base">{activeNav?.label ?? "Dashboard"}</h1>
-              <p className="text-xs text-gray-400 hidden sm:block">{seller.businessName} · {seller.location}</p>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="font-semibold text-foreground text-sm sm:text-base truncate">
+                  {activeNav?.label ?? "Dashboard"}
+                </h1>
+                {onVacation && (
+                  <span className="hidden sm:inline-flex text-[10px] font-medium text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-full px-2 py-0.5">
+                    Vacation
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground hidden sm:block truncate">
+                {seller.businessName}
+                {seller.location ? ` · ${seller.location}` : ""}
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-pink-300 to-rose-400 flex items-center justify-center">
-              <span className="text-white text-xs font-bold">{ownerInitial}</span>
-            </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Link href="/">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="hidden sm:inline-flex h-9 text-muted-foreground hover:text-foreground"
+                title="Back to store"
+              >
+                <ExternalLink className="h-4 w-4 mr-1.5" />
+                Store
+              </Button>
+            </Link>
+            <Avatar className="h-9 w-9 border border-border">
+              <AvatarFallback className="bg-gradient-to-br from-primary to-[hsl(150_30%_22%)] text-primary-foreground text-xs font-bold">
+                {ownerInitial}
+              </AvatarFallback>
+            </Avatar>
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
-          <div className="max-w-7xl mx-auto">
+        {/* Content */}
+        <main className="flex-1 overflow-y-auto bg-background">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
             {onVacation && activeSection === "profile" && (
               <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 mb-6 text-sm text-amber-800">
                 You're on vacation mode — your listings are hidden from buyers and Listings/Orders/Payment/Courier are

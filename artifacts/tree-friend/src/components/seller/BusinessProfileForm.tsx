@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@clerk/react";
-import { Store, Loader2, Upload, X, FileText, PalmtreeIcon, ShieldCheck, ShieldAlert, XCircle, BadgeCheck, Clock } from "lucide-react";
+import {
+  Store, Loader2, Upload, X, FileText, PalmtreeIcon, ShieldCheck,
+  ShieldAlert, XCircle, BadgeCheck, Clock, Image as ImageIcon, Save,
+  CheckCircle2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import {
   useGetMySeller,
   useUpdateMySellerProfile,
@@ -17,20 +22,6 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-/**
- * Business Profile (plan §4 item 1, merged with item 2 "Store Settings" --
- * every sellers-table field not already covered by Payment/Courier
- * Settings lives here, and nothing was left over after this form was
- * built, so no separate Store Settings section was added; see handoff).
- * Also hosts Vacation Mode (item 3) since it's a status field on the same
- * table with no other natural home, and Business Verification's
- * seller-facing doc upload (item 5), which was previously entirely
- * unwired despite the upload endpoint working.
- *
- * Mirrors PaymentSettingsForm.tsx / CourierSettingsForm.tsx's card shape
- * and toast-on-success/error pattern, and SellerListingForm.tsx's
- * image-upload gallery UI for nurseryImages / the verification doc.
- */
 function draftFromSeller(s: Seller) {
   return {
     businessName: s.businessName,
@@ -47,6 +38,54 @@ function draftFromSeller(s: Seller) {
 }
 
 type Draft = ReturnType<typeof draftFromSeller>;
+
+function FieldRow({
+  label, children, hint, required,
+}: {
+  label: string;
+  children: React.ReactNode;
+  hint?: string;
+  required?: boolean;
+}) {
+  return (
+    <div>
+      <Label className="text-xs font-medium text-foreground">
+        {label}{required && <span className="text-destructive ml-0.5">*</span>}
+      </Label>
+      <div className="mt-1.5">{children}</div>
+      {hint && <p className="text-[11px] text-muted-foreground mt-1">{hint}</p>}
+    </div>
+  );
+}
+
+function SectionCard({
+  icon: Icon, iconClass, title, subtitle, children, footer,
+}: {
+  icon: React.ElementType;
+  iconClass: string;
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-border bg-card overflow-hidden">
+      <header className="px-5 py-4 border-b border-border/60">
+        <div className="flex items-center gap-3">
+          <div className={cn("h-10 w-10 rounded-xl flex items-center justify-center shrink-0", iconClass)}>
+            <Icon className="h-5 w-5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>
+          </div>
+        </div>
+      </header>
+      <div className="p-5">{children}</div>
+      {footer && <div className="px-5 py-4 border-t border-border/60 bg-muted/30">{footer}</div>}
+    </section>
+  );
+}
 
 export function BusinessProfileForm() {
   const qc = useQueryClient();
@@ -94,6 +133,7 @@ export function BusinessProfileForm() {
     try {
       const url = await uploadFile(files[0]);
       set("nidOrTradeLicenseUrl", url);
+      toast.success("Document uploaded");
     } catch {
       toast.error("Document upload failed");
     } finally {
@@ -107,6 +147,7 @@ export function BusinessProfileForm() {
     try {
       const urls = await Promise.all(Array.from(files).map(uploadFile));
       set("nurseryImages", [...draft.nurseryImages, ...urls]);
+      toast.success(`${urls.length} image${urls.length === 1 ? "" : "s"} uploaded`);
     } catch {
       toast.error("Image upload failed");
     } finally {
@@ -120,6 +161,7 @@ export function BusinessProfileForm() {
     try {
       const url = await uploadFile(files[0]);
       set("logoUrl", url);
+      toast.success("Logo uploaded");
     } catch {
       toast.error("Logo upload failed");
     } finally {
@@ -188,33 +230,29 @@ export function BusinessProfileForm() {
 
   if (isLoading || !draft || !seller) {
     return (
-      <div className="space-y-3">
-        <div className="h-40 rounded-2xl bg-muted animate-pulse" />
-        <div className="h-24 rounded-2xl bg-muted animate-pulse" />
+      <div className="space-y-4">
+        <div className="h-32 rounded-2xl bg-muted animate-pulse" />
+        <div className="h-32 rounded-2xl bg-muted animate-pulse" />
+        <div className="h-96 rounded-2xl bg-muted animate-pulse" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      {/* Vacation mode -- kept as its own card, above the edit form, since
-          it's a status toggle rather than a profile field and takes effect
-          immediately (no Save button). */}
-      <div className="bg-card rounded-2xl border p-5">
+    <form onSubmit={handleSave} className="space-y-5 max-w-4xl">
+      {/* Vacation mode */}
+      <SectionCard
+        icon={PalmtreeIcon}
+        iconClass="bg-amber-50 text-amber-700"
+        title="Vacation Mode"
+        subtitle="Temporarily hide your listings from buyers."
+      >
         <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <div className="h-10 w-10 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
-              <PalmtreeIcon className="h-5 w-5 text-accent" />
-            </div>
-            <div>
-              <p className="font-medium text-sm">Vacation Mode</p>
-              <p className="text-xs text-muted-foreground">
-                {seller.status === "vacation"
-                  ? "Your listings are hidden from buyers right now."
-                  : "Temporarily hide your listings from buyers."}
-              </p>
-            </div>
-          </div>
+          <p className="text-sm text-muted-foreground">
+            {seller.status === "vacation"
+              ? "Your listings are hidden from buyers right now. Toggle off to resume selling."
+              : "When on, your listings disappear from search and your store, and Orders/Listings tabs are locked."}
+          </p>
           <Switch
             checked={seller.status === "vacation"}
             onCheckedChange={toggleVacation}
@@ -222,192 +260,243 @@ export function BusinessProfileForm() {
           />
         </div>
         {seller.status !== "active" && seller.status !== "vacation" && (
-          <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
+          <p className="text-xs text-muted-foreground bg-muted/60 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
             <XCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             Vacation mode is only available for active seller accounts.
           </p>
         )}
-      </div>
+      </SectionCard>
 
-      {/* Verified Seller badge -- the public checkmark shown on buyer-facing
-          seller listing cards. Separate from the account-status card above:
-          this is an earned trust signal an active seller can request,
-          not an account on/off switch. */}
-      <div className="bg-card rounded-2xl border p-5">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <div className="h-10 w-10 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
-              <BadgeCheck className="h-5 w-5 text-accent" />
-            </div>
-            <div>
-              <p className="font-medium text-sm">Verified Seller Badge</p>
-              <p className="text-xs text-muted-foreground">
-                {seller.isVerified
-                  ? "Your listings show a verified checkmark to buyers."
-                  : "Earn a verified checkmark buyers see on your listings."}
-              </p>
-            </div>
+      {/* Verification */}
+      <SectionCard
+        icon={BadgeCheck}
+        iconClass="bg-emerald-50 text-emerald-700"
+        title="Verified Seller Badge"
+        subtitle="Earn a verified checkmark buyers see on your listings."
+      >
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="min-w-0">
+            <p className="text-sm text-foreground">
+              {seller.isVerified
+                ? "Your listings show a verified checkmark to buyers."
+                : "Verification builds buyer trust and improves listing visibility."}
+            </p>
           </div>
-
           {seller.isVerified ? (
-            <span className="flex items-center gap-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 rounded-full px-3 py-1.5 shrink-0">
-              <BadgeCheck className="h-4 w-4" />
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 rounded-full px-3 py-1.5 ring-1 ring-emerald-200/60 shrink-0">
+              <CheckCircle2 className="h-4 w-4" />
               Verified
             </span>
           ) : seller.verificationRequestStatus === "requested" ? (
-            <span className="flex items-center gap-1.5 text-sm font-medium text-amber-700 bg-amber-50 rounded-full px-3 py-1.5 shrink-0">
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-700 bg-amber-50 rounded-full px-3 py-1.5 ring-1 ring-amber-200/60 shrink-0">
               <Clock className="h-4 w-4" />
               Pending review
             </span>
           ) : (
             <Button
+              type="button"
               size="sm"
               variant="outline"
-              className="rounded-full shrink-0"
+              className="rounded-xl shrink-0"
               disabled={requestVerification.isPending || seller.status !== "active"}
               onClick={handleRequestVerification}
             >
-              {requestVerification.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+              {requestVerification.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
               Request Verification
             </Button>
           )}
         </div>
 
         {seller.status !== "active" && !seller.isVerified && (
-          <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
+          <p className="text-xs text-muted-foreground bg-muted/60 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
             <XCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             Verification can only be requested from an active seller account.
           </p>
         )}
 
         {seller.verificationRequestStatus === "rejected" && (
-          <p className="text-xs text-red-700 bg-red-50 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
+          <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
             <ShieldAlert className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             Your last request wasn't approved{seller.verificationRejectionReason ? `: ${seller.verificationRejectionReason}` : "."} You can request again once you've addressed this.
           </p>
         )}
-      </div>
+      </SectionCard>
 
-      <form onSubmit={handleSave} className="bg-card rounded-2xl border p-5 space-y-3">
-        <div className="flex items-center gap-2.5 mb-1">
-          <div className="h-10 w-10 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
-            <Store className="h-5 w-5 text-accent" />
+      {/* Business profile */}
+      <SectionCard
+        icon={Store}
+        iconClass="bg-violet-50 text-violet-700"
+        title="Business Profile"
+        subtitle="Your public business and nursery details shown to buyers."
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <FieldRow label="Business Name" required>
+              <Input value={draft.businessName} onChange={(e) => set("businessName", e.target.value)} className="h-10 rounded-xl" />
+            </FieldRow>
+            <FieldRow label="Nursery Name" required>
+              <Input value={draft.nurseryName} onChange={(e) => set("nurseryName", e.target.value)} className="h-10 rounded-xl" />
+            </FieldRow>
+            <FieldRow label="Owner Name" required>
+              <Input value={draft.ownerName} onChange={(e) => set("ownerName", e.target.value)} className="h-10 rounded-xl" />
+            </FieldRow>
+            <FieldRow label="Location" required>
+              <Input value={draft.location} onChange={(e) => set("location", e.target.value)} className="h-10 rounded-xl" />
+            </FieldRow>
+            <FieldRow label="Contact Phone" required>
+              <Input value={draft.contactPhone} onChange={(e) => set("contactPhone", e.target.value)} className="h-10 rounded-xl" />
+            </FieldRow>
+            <FieldRow label="Contact Email" required>
+              <Input type="email" value={draft.contactEmail} onChange={(e) => set("contactEmail", e.target.value)} className="h-10 rounded-xl" />
+            </FieldRow>
           </div>
-          <div>
-            <p className="font-medium text-sm">Business Profile</p>
-            <p className="text-xs text-muted-foreground">Your public business and nursery details.</p>
-          </div>
+
+          <FieldRow label="Description" hint="Optional. Tell buyers about your nursery and what makes it special.">
+            <Textarea
+              value={draft.description}
+              onChange={(e) => set("description", e.target.value)}
+              placeholder="e.g. Family-run nursery specializing in rare ficus varieties since 2018…"
+              className="rounded-xl text-sm"
+              rows={3}
+            />
+          </FieldRow>
         </div>
+      </SectionCard>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label className="text-xs text-muted-foreground">Business Name *</Label>
-            <Input value={draft.businessName} onChange={(e) => set("businessName", e.target.value)} className="mt-1 h-9 rounded-lg text-sm" />
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Nursery Name *</Label>
-            <Input value={draft.nurseryName} onChange={(e) => set("nurseryName", e.target.value)} className="mt-1 h-9 rounded-lg text-sm" />
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Owner Name *</Label>
-            <Input value={draft.ownerName} onChange={(e) => set("ownerName", e.target.value)} className="mt-1 h-9 rounded-lg text-sm" />
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Location *</Label>
-            <Input value={draft.location} onChange={(e) => set("location", e.target.value)} className="mt-1 h-9 rounded-lg text-sm" />
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Contact Phone *</Label>
-            <Input value={draft.contactPhone} onChange={(e) => set("contactPhone", e.target.value)} className="mt-1 h-9 rounded-lg text-sm" />
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Contact Email *</Label>
-            <Input type="email" value={draft.contactEmail} onChange={(e) => set("contactEmail", e.target.value)} className="mt-1 h-9 rounded-lg text-sm" />
-          </div>
-        </div>
-
-        <div>
-          <Label className="text-xs text-muted-foreground">Description</Label>
-          <Textarea value={draft.description} onChange={(e) => set("description", e.target.value)} placeholder="Optional" className="mt-1 rounded-lg text-sm" rows={3} />
-        </div>
-
-        <div>
-          <Label className="text-xs text-muted-foreground">Logo</Label>
-          <p className="text-xs text-muted-foreground/70 mt-0.5 mb-1.5">Shown as your square avatar on buyer-facing listing pages.</p>
-          <div className="flex items-center gap-3">
-            {draft.logoUrl ? (
-              <div className="relative">
-                <img src={draft.logoUrl} alt="" className="h-16 w-16 rounded-lg object-cover border" />
-                <button type="button" onClick={() => set("logoUrl", null)} className="absolute -top-1.5 -right-1.5 bg-black/60 hover:bg-black/80 text-white rounded-full p-0.5">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ) : (
-              <label className="h-16 w-16 rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer text-muted-foreground hover:bg-muted/30 transition-colors">
-                {uploadingLogo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                <input type="file" accept="image/*" className="hidden" disabled={uploadingLogo} onChange={(e) => handleLogoUpload(e.target.files)} />
-              </label>
-            )}
-          </div>
-        </div>
-
-        <div>
-          <Label className="text-xs text-muted-foreground">Nursery Photos</Label>
-          <div className="mt-1.5 flex flex-wrap gap-2">
-            {draft.nurseryImages.map((url) => (
-              <div key={url} className="relative">
-                <img src={url} alt="" className="h-16 w-16 rounded-lg object-cover border" />
-                <button type="button" onClick={() => removeImage(url)} className="absolute -top-1.5 -right-1.5 bg-black/60 hover:bg-black/80 text-white rounded-full p-0.5">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-            <label className="h-16 w-16 rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer text-muted-foreground hover:bg-muted/30 transition-colors">
-              {uploadingImages ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              <input type="file" accept="image/*" multiple className="hidden" disabled={uploadingImages} onChange={(e) => handleImagesUpload(e.target.files)} />
+      {/* Logo */}
+      <SectionCard
+        icon={ImageIcon}
+        iconClass="bg-sky-50 text-sky-700"
+        title="Store Logo"
+        subtitle="Shown as your square avatar on buyer-facing listing pages."
+      >
+        <div className="flex items-center gap-4">
+          {draft.logoUrl ? (
+            <div className="relative">
+              <img src={draft.logoUrl} alt="" className="h-20 w-20 rounded-xl object-cover border border-border" />
+              <button
+                type="button"
+                onClick={() => set("logoUrl", null)}
+                className="absolute -top-1.5 -right-1.5 bg-foreground/80 hover:bg-foreground text-background rounded-full p-1 transition-colors"
+                title="Remove logo"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ) : (
+            <label className="h-20 w-20 rounded-xl border-2 border-dashed border-border flex items-center justify-center cursor-pointer text-muted-foreground hover:bg-muted/40 hover:border-foreground/30 transition-colors">
+              {uploadingLogo ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}
+              <input type="file" accept="image/*" className="hidden" disabled={uploadingLogo} onChange={(e) => handleLogoUpload(e.target.files)} />
             </label>
+          )}
+          <div className="text-xs text-muted-foreground">
+            <p className="font-medium text-foreground mb-0.5">Square image recommended</p>
+            <p>Min 200×200px · PNG, JPG, or WebP</p>
           </div>
         </div>
+      </SectionCard>
 
+      {/* Nursery photos */}
+      <SectionCard
+        icon={ImageIcon}
+        iconClass="bg-emerald-50 text-emerald-700"
+        title="Nursery Photos"
+        subtitle="Show buyers what your nursery looks like — builds trust."
+      >
+        <div className="flex flex-wrap gap-3">
+          {draft.nurseryImages.map((url) => (
+            <div key={url} className="relative">
+              <img src={url} alt="" className="h-20 w-20 rounded-xl object-cover border border-border" />
+              <button
+                type="button"
+                onClick={() => removeImage(url)}
+                className="absolute -top-1.5 -right-1.5 bg-foreground/80 hover:bg-foreground text-background rounded-full p-1 transition-colors"
+                title="Remove"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+          <label className="h-20 w-20 rounded-xl border-2 border-dashed border-border flex items-center justify-center cursor-pointer text-muted-foreground hover:bg-muted/40 hover:border-foreground/30 transition-colors">
+            {uploadingImages ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}
+            <input type="file" accept="image/*" multiple className="hidden" disabled={uploadingImages} onChange={(e) => handleImagesUpload(e.target.files)} />
+          </label>
+        </div>
+      </SectionCard>
+
+      {/* Verification doc */}
+      <SectionCard
+        icon={FileText}
+        iconClass="bg-amber-50 text-amber-700"
+        title="Trade License / NID"
+        subtitle="Optional document to speed up admin verification."
+      >
         <div>
-          <Label className="text-xs text-muted-foreground">Trade License / NID</Label>
-          <div className="mt-1.5">
-            {draft.nidOrTradeLicenseUrl ? (
-              <div className="flex items-center justify-between bg-muted/30 rounded-lg border px-3 py-2">
-                <a href={draft.nidOrTradeLicenseUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm text-accent hover:underline min-w-0">
-                  <FileText className="h-4 w-4 shrink-0" />
-                  <span className="truncate">View uploaded document</span>
-                </a>
-                <button type="button" onClick={() => set("nidOrTradeLicenseUrl", null)} className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors shrink-0">
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ) : (
-              <label className="flex items-center gap-2 h-9 rounded-lg border-2 border-dashed px-3 text-sm text-muted-foreground hover:bg-muted/30 transition-colors cursor-pointer w-fit">
-                {uploadingDoc ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                Upload document
-                <input type="file" accept="image/*,.pdf" className="hidden" disabled={uploadingDoc} onChange={(e) => handleDocUpload(e.target.files)} />
-              </label>
-            )}
-          </div>
+          {draft.nidOrTradeLicenseUrl ? (
+            <div className="flex items-center justify-between bg-muted/40 rounded-xl border border-border px-4 py-3">
+              <a
+                href={draft.nidOrTradeLicenseUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-2 text-sm text-accent-text hover:underline min-w-0"
+              >
+                <FileText className="h-4 w-4 shrink-0" />
+                <span className="truncate">View uploaded document</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => set("nidOrTradeLicenseUrl", null)}
+                className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-rose-50 transition-colors shrink-0"
+                title="Remove document"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <label className="flex items-center gap-2 h-10 rounded-xl border-2 border-dashed border-border px-4 text-sm text-muted-foreground hover:bg-muted/40 hover:border-foreground/30 transition-colors cursor-pointer w-fit">
+              {uploadingDoc ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              Upload document
+              <input type="file" accept="image/*,.pdf" className="hidden" disabled={uploadingDoc} onChange={(e) => handleDocUpload(e.target.files)} />
+            </label>
+          )}
+
           {seller.status === "pending_verification" && (
-            <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-2 flex items-start gap-1.5">
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
               <ShieldAlert className="h-3.5 w-3.5 shrink-0 mt-0.5" />
               Your application is pending admin review — uploading a trade license or NID helps verification go faster.
             </p>
           )}
           {seller.status === "active" && draft.nidOrTradeLicenseUrl && (
-            <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2 mt-2 flex items-start gap-1.5">
+            <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
               <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5" />
               Document on file.
             </p>
           )}
         </div>
+      </SectionCard>
 
-        <Button type="submit" disabled={updateProfile.isPending} className="w-full rounded-full gap-1.5 mt-2">
-          {updateProfile.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Changes"}
-        </Button>
-      </form>
-    </div>
+      {/* Save bar */}
+      <div className="sticky bottom-4 z-10">
+        <div className="rounded-2xl border border-border bg-card shadow-lg px-5 py-3 flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground hidden sm:block">
+            Don't forget to save your changes before navigating away.
+          </p>
+          <div className="flex items-center gap-2 ml-auto">
+            <Button
+              type="submit"
+              disabled={updateProfile.isPending}
+              className="rounded-xl"
+            >
+              {updateProfile.isPending ? (
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4 mr-1.5" />
+              )}
+              Save Changes
+            </Button>
+          </div>
+        </div>
+      </div>
+    </form>
   );
 }

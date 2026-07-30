@@ -1,6 +1,12 @@
-import { useState } from "react";
-import { PackageX, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { useState, useMemo } from "react";
+import {
+  PackageX, Loader2, ChevronLeft, ChevronRight, Clock, CheckCircle2,
+  XCircle, PackageCheck, RotateCcw, Search,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -12,31 +18,30 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-/**
- * Seller "Returns" tab. Mirrors the shape and interaction pattern of admin's
- * ReturnsTab.tsx (approve/reject/complete-with-refund) but scoped to the
- * seller's own orders via GET/PUT /api/seller/returns -- server-side
- * ownership is enforced by requireSeller + an explicit orders.sellerId
- * check, this component just renders what the API already scoped for us.
- *
- * Status colors intentionally match admin's ReturnsTab.tsx exactly, since
- * both are describing the same returnsTable.status vocabulary.
- */
-
-const statusColors: Record<string, string> = {
-  requested: "bg-amber-100 text-amber-700 border border-amber-200",
-  approved: "bg-blue-100 text-blue-700 border border-blue-200",
-  rejected: "bg-red-100 text-red-700 border border-red-200",
-  completed: "bg-emerald-100 text-emerald-700 border border-emerald-200",
+const STATUS_META: Record<
+  string,
+  { label: string; icon: React.ElementType; chip: string; dot: string }
+> = {
+  requested: { label: "Requested", icon: Clock, chip: "bg-amber-50 text-amber-700 ring-amber-200/60", dot: "bg-amber-500" },
+  approved: { label: "Approved", icon: CheckCircle2, chip: "bg-sky-50 text-sky-700 ring-sky-200/60", dot: "bg-sky-500" },
+  rejected: { label: "Rejected", icon: XCircle, chip: "bg-rose-50 text-rose-700 ring-rose-200/60", dot: "bg-rose-500" },
+  completed: { label: "Completed", icon: PackageCheck, chip: "bg-emerald-50 text-emerald-700 ring-emerald-200/60", dot: "bg-emerald-500" },
 };
 
 const STATUS_FILTERS = ["all", "requested", "approved", "rejected", "completed"] as const;
+
+function formatTk(n: number): string {
+  return `Tk${Math.round(Number(n) || 0).toLocaleString()}`;
+}
 
 export function SellerReturnsTab() {
   const qc = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>("all");
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
   const [refundInputs, setRefundInputs] = useState<Record<number, string>>({});
+  const [rejectingId, setRejectingId] = useState<number | null>(null);
+  const [rejectNote, setRejectNote] = useState("");
 
   const { data, isLoading } = useListSellerReturns({
     status: statusFilter === "all" ? undefined : statusFilter,
@@ -49,7 +54,12 @@ export function SellerReturnsTab() {
     qc.invalidateQueries({ queryKey: getListSellerReturnsQueryKey() });
   }
 
-  function updateStatus(id: number, status: "approved" | "rejected" | "completed", adminNote?: string, refundAmount?: string) {
+  function updateStatus(
+    id: number,
+    status: "approved" | "rejected" | "completed",
+    adminNote?: string,
+    refundAmount?: string,
+  ) {
     updateReturn.mutate(
       { id, data: { status, adminNote, refundAmount: refundAmount ? Number(refundAmount) : undefined } },
       {
@@ -58,10 +68,12 @@ export function SellerReturnsTab() {
             status === "approved" ? "Return approved" : status === "rejected" ? "Return rejected" : "Return marked completed",
           );
           invalidate();
+          if (status === "rejected") {
+            setRejectingId(null);
+            setRejectNote("");
+          }
         },
-        onError: (err: any) => {
-          toast.error(err?.message ?? "Failed to update return");
-        },
+        onError: (err: any) => toast.error(err?.message ?? "Failed to update return"),
       },
     );
   }
@@ -69,22 +81,68 @@ export function SellerReturnsTab() {
   const returns = data?.returns ?? [];
   const totalPages = data?.totalPages ?? 1;
 
-  if (isLoading) {
-    return (
-      <div className="space-y-4">
-        {[1, 2].map((i) => (
-          <div key={i} className="h-32 bg-muted animate-pulse rounded-2xl" />
-        ))}
-      </div>
+  const filtered = useMemo(() => {
+    if (!search.trim()) return returns;
+    const q = search.trim().toLowerCase();
+    return returns.filter(
+      (r: any) =>
+        `#${r.id}`.toLowerCase().includes(q) ||
+        `#${r.orderId}`.toLowerCase().includes(q) ||
+        r.customerName?.toLowerCase().includes(q),
     );
-  }
+  }, [returns, search]);
+
+  // Stats
+  const stats = useMemo(() => {
+    const all = data?.returns ?? [];
+    return {
+      total: all.length,
+      requested: all.filter((r: any) => r.status === "requested").length,
+      approved: all.filter((r: any) => r.status === "approved").length,
+      completed: all.filter((r: any) => r.status === "completed").length,
+    };
+  }, [data]);
+
+  const statCards = [
+    { label: "Total Returns", value: stats.total, icon: RotateCcw, color: "bg-violet-50 text-violet-700" },
+    { label: "Pending Action", value: stats.requested, icon: Clock, color: "bg-amber-50 text-amber-700" },
+    { label: "Approved", value: stats.approved, icon: CheckCircle2, color: "bg-sky-50 text-sky-700" },
+    { label: "Completed", value: stats.completed, icon: PackageCheck, color: "bg-emerald-50 text-emerald-700" },
+  ];
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h2 className="text-lg font-semibold text-gray-900">Return Requests</h2>
-        <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v as typeof statusFilter); setPage(1); }}>
-          <SelectTrigger className="w-40 rounded-xl">
+    <div className="space-y-5">
+      {/* Stat strip */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {statCards.map((s) => (
+          <div key={s.label} className="rounded-2xl border border-border bg-card p-4 flex items-center gap-3">
+            <div className={cn("h-10 w-10 rounded-xl flex items-center justify-center shrink-0", s.color)}>
+              <s.icon className="h-4.5 w-4.5" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{s.label}</p>
+              <p className="text-xl font-bold text-foreground tabular-nums">{s.value}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="flex-1 relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by return ID, order ID, or customer…"
+            className="pl-9 h-10 rounded-xl bg-card"
+          />
+        </div>
+        <Select
+          value={statusFilter}
+          onValueChange={(v) => { setStatusFilter(v as typeof statusFilter); setPage(1); }}
+        >
+          <SelectTrigger className="h-10 w-full sm:w-[180px] rounded-xl">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -97,21 +155,39 @@ export function SellerReturnsTab() {
         </Select>
       </div>
 
-      {returns.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-center bg-white rounded-2xl border">
-          <PackageX className="h-10 w-10 text-gray-200 mb-3" />
-          <p className="text-sm text-muted-foreground">No return requests yet.</p>
+      {/* Content */}
+      {isLoading ? (
+        <div className="space-y-4">
+          {[1, 2].map((i) => (
+            <Skeleton key={i} className="h-40 rounded-2xl" />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-card rounded-2xl border border-border p-12 text-center">
+          <div className="h-16 w-16 mx-auto mb-4 rounded-2xl bg-muted flex items-center justify-center">
+            <PackageX className="h-8 w-8 text-muted-foreground/50" />
+          </div>
+          <p className="font-semibold text-foreground mb-1">No return requests</p>
+          <p className="text-sm text-muted-foreground">
+            {statusFilter !== "all" || search ? "Try clearing your filters." : "Returns will appear here when buyers request them."}
+          </p>
         </div>
       ) : (
         <div className="space-y-4">
-          {returns.map((ret) => {
+          {filtered.map((ret: any) => {
             const items = ret.orderItems ?? [];
             const isUpdating = updateReturn.isPending && updateReturn.variables?.id === ret.id;
+            const meta = STATUS_META[ret.status] ?? STATUS_META.requested;
+            const StatusIcon = meta.icon;
             return (
-              <div key={ret.id} className="bg-white border rounded-2xl overflow-hidden shadow-sm">
-                <div className="flex items-center justify-between px-4 py-3 bg-muted/40 border-b flex-wrap gap-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-sm">Return #{ret.id}</span>
+              <div key={ret.id} className="bg-card border border-border rounded-2xl overflow-hidden">
+                {/* Card header */}
+                <div className="flex items-center justify-between px-5 py-3.5 bg-muted/40 border-b border-border gap-2 flex-wrap">
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <div className={cn("h-8 w-8 rounded-lg flex items-center justify-center shrink-0", meta.chip.split(" ")[0])}>
+                      <StatusIcon className="h-4 w-4" />
+                    </div>
+                    <span className="font-semibold text-sm text-foreground">Return #{ret.id}</span>
                     <span className="text-muted-foreground text-xs">·</span>
                     <span className="text-xs text-muted-foreground">Order #{ret.orderId}</span>
                     {ret.customerName && (
@@ -121,27 +197,35 @@ export function SellerReturnsTab() {
                       </>
                     )}
                   </div>
-                  <span className={`text-xs px-2.5 py-1 rounded-full font-medium shrink-0 ${statusColors[ret.status] ?? "bg-muted"}`}>
-                    {ret.status}
+                  <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium rounded-full px-2.5 py-1 ring-1 capitalize shrink-0", meta.chip)}>
+                    <span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />
+                    {meta.label}
                   </span>
                 </div>
-                <div className="p-4 space-y-4">
+
+                {/* Body */}
+                <div className="p-5 space-y-4">
                   {items.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Items in order</p>
-                      <div className="space-y-2">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Items in order</p>
+                      <div className="space-y-1.5">
                         {items.map((item: any, idx: number) => (
-                          <div key={idx} className="flex items-center gap-3 bg-muted/30 rounded-xl p-2.5">
-                            {item.productImage && (
-                              <img src={item.productImage} alt={item.productName} className="w-12 h-12 rounded-lg object-cover shrink-0 border" />
+                          <div key={idx} className="flex items-center gap-3 bg-muted/40 rounded-lg p-2.5 border border-border/60">
+                            {item.productImage ? (
+                              <img src={item.productImage} alt={item.productName} className="w-12 h-12 rounded-lg object-cover shrink-0 border border-border" />
+                            ) : (
+                              <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center shrink-0 border border-border">
+                                <PackageX className="h-4 w-4 text-muted-foreground/50" />
+                              </div>
                             )}
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium truncate">{item.productName}</p>
-                              <p className="text-xs text-muted-foreground">Qty: {item.quantity}</p>
+                              <p className="text-sm font-medium text-foreground truncate">{item.productName}</p>
+                              <p className="text-xs text-muted-foreground">Qty: {item.quantity} · {formatTk(item.price)} each</p>
                             </div>
                             <div className="text-right shrink-0">
-                              <p className="text-sm font-semibold">Tk{(item.price * item.quantity).toLocaleString()}</p>
-                              <p className="text-xs text-muted-foreground">Tk{item.price} each</p>
+                              <p className="text-sm font-semibold text-foreground tabular-nums">
+                                {formatTk(item.price * item.quantity)}
+                              </p>
                             </div>
                           </div>
                         ))}
@@ -149,70 +233,104 @@ export function SellerReturnsTab() {
                     </div>
                   )}
 
-                  <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
-                    <p className="text-xs font-medium text-amber-700 mb-1">Customer reason</p>
+                  {/* Reason */}
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-700 mb-1">Customer reason</p>
                     <p className="text-sm text-foreground">{ret.reason}</p>
                   </div>
 
                   {ret.adminNote && (
-                    <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
-                      <p className="text-xs font-medium text-blue-700 mb-1">Note</p>
-                      <p className="text-sm">{ret.adminNote}</p>
+                    <div className="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-sky-700 mb-1">Internal note</p>
+                      <p className="text-sm text-foreground">{ret.adminNote}</p>
                     </div>
                   )}
 
                   {ret.refundAmount != null && ret.status === "completed" && (
-                    <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 flex items-center justify-between">
-                      <span className="text-xs font-medium text-emerald-700">Refund issued</span>
-                      <span className="text-lg font-bold text-emerald-700">Tk{Number(ret.refundAmount).toLocaleString()}</span>
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between">
+                      <span className="text-sm font-medium text-emerald-700">Refund issued</span>
+                      <span className="text-lg font-bold text-emerald-700 tabular-nums">{formatTk(Number(ret.refundAmount))}</span>
                     </div>
                   )}
 
+                  {/* Actions: requested */}
                   {ret.status === "requested" && (
-                    <div className="flex gap-2 pt-1">
+                    <div className="flex flex-col sm:flex-row gap-2 pt-1">
                       <Button
                         onClick={() => updateStatus(ret.id, "approved")}
                         disabled={isUpdating}
-                        className="flex-1 rounded-xl bg-blue-500 hover:bg-blue-600"
+                        className="flex-1 rounded-xl"
                       >
-                        {isUpdating ? <Loader2 className="h-4 w-4 animate-spin" /> : "Approve Return"}
+                        {isUpdating ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <CheckCircle2 className="h-4 w-4 mr-1.5" />}
+                        Approve Return
                       </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          const note = prompt("Rejection reason (min 3 characters)?");
-                          if (note && note.trim().length >= 3) updateStatus(ret.id, "rejected", note);
-                          else if (note !== null) toast.error("Please provide a reason (min 3 characters)");
-                        }}
-                        disabled={isUpdating}
-                        className="flex-1 rounded-xl border-red-200 text-red-600 hover:bg-red-50"
-                      >
-                        Reject
-                      </Button>
+                      {rejectingId === ret.id ? (
+                        <div className="flex-1 flex items-center gap-2 bg-rose-50 border border-rose-200 rounded-xl p-2">
+                          <input
+                            autoFocus
+                            value={rejectNote}
+                            onChange={(e) => setRejectNote(e.target.value)}
+                            placeholder="Reason (min 3 chars)…"
+                            className="flex-1 bg-card rounded-lg border border-border px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-rose-300"
+                          />
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="h-7 rounded-lg text-xs"
+                            disabled={isUpdating || rejectNote.trim().length < 3}
+                            onClick={() => updateStatus(ret.id, "rejected", rejectNote.trim())}
+                          >
+                            Confirm
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 rounded-lg text-xs"
+                            onClick={() => { setRejectingId(null); setRejectNote(""); }}
+                          >
+                            Back
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          onClick={() => { setRejectingId(ret.id); setRejectNote(""); }}
+                          disabled={isUpdating}
+                          className="flex-1 rounded-xl border-rose-200 text-rose-600 hover:bg-rose-50"
+                        >
+                          <XCircle className="h-4 w-4 mr-1.5" />
+                          Reject
+                        </Button>
+                      )}
                     </div>
                   )}
 
+                  {/* Actions: approved (complete with refund) */}
                   {ret.status === "approved" && (
                     <div className="space-y-2 pt-1">
                       <p className="text-xs text-muted-foreground">Enter refund amount to mark as completed</p>
                       <div className="flex gap-2">
-                        <input
-                          type="number"
-                          placeholder="Refund amount (Tk)"
-                          min="0"
-                          value={refundInputs[ret.id] ?? ""}
-                          onChange={(e) => setRefundInputs((prev) => ({ ...prev, [ret.id]: e.target.value }))}
-                          className="flex-1 text-sm border rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-400"
-                        />
+                        <div className="relative flex-1">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">Tk</span>
+                          <Input
+                            type="number"
+                            placeholder="0"
+                            min="0"
+                            value={refundInputs[ret.id] ?? ""}
+                            onChange={(e) => setRefundInputs((prev) => ({ ...prev, [ret.id]: e.target.value }))}
+                            className="pl-9 rounded-xl"
+                          />
+                        </div>
                         <Button
                           onClick={() => {
                             const amt = refundInputs[ret.id];
                             if (amt) updateStatus(ret.id, "completed", undefined, amt);
                           }}
                           disabled={isUpdating || !refundInputs[ret.id]}
-                          className="rounded-xl bg-emerald-500 hover:bg-emerald-600"
+                          className="rounded-xl"
                         >
-                          {isUpdating ? <Loader2 className="h-4 w-4 animate-spin" /> : "Complete"}
+                          {isUpdating ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <PackageCheck className="h-4 w-4 mr-1.5" />}
+                          Complete
                         </Button>
                       </div>
                     </div>
@@ -224,13 +342,26 @@ export function SellerReturnsTab() {
         </div>
       )}
 
+      {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-3 pt-2">
-          <Button variant="outline" size="sm" className="rounded-xl" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="rounded-xl"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => p - 1)}
+          >
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <span className="text-xs text-muted-foreground">Page {page} of {totalPages}</span>
-          <Button variant="outline" size="sm" className="rounded-xl" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+          <span className="text-xs text-muted-foreground tabular-nums">Page {page} of {totalPages}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="rounded-xl"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => p + 1)}
+          >
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
