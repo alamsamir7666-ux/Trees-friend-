@@ -164,6 +164,10 @@ function CollectionSlider() {
 
 const PAGE_SIZE = 4;
 
+// Maximum products shown per homepage section before the "View all" link
+const MAX_FEATURED_PRODUCTS = 4;
+const MAX_CATEGORY_PRODUCTS = 8;
+
 type HomeSection = { id: number; key: string; label: string };
 
 export function HomePage() {
@@ -328,8 +332,8 @@ export function HomePage() {
               </Link>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {activeProducts.map((product) => (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              {activeProducts.slice(0, MAX_FEATURED_PRODUCTS).map((product) => (
                 <HomepageProductCard
                   key={product.id}
                   product={product as any}
@@ -366,7 +370,7 @@ export function HomePage() {
                 ))}
               </div>
             ) : BEST_TABS.length === 0 ? null : (
-              <div className="inline-flex items-center rounded-full border border-border bg-muted/40 p-1 gap-1 mt-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+              <div className="flex items-center rounded-full border border-border bg-muted/40 p-1 gap-1 mt-2 overflow-x-auto max-w-full" style={{ scrollbarWidth: "none" }}>
                 {BEST_TABS.map(tab => (
                   <button
                     key={tab.key}
@@ -379,12 +383,14 @@ export function HomePage() {
           </div>
 
           {sectionsLoading || bestLoading ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
               {Array.from({ length: 8 }).map((_, i) => <ProductCardSkeleton key={i} />)}
             </div>
           ) : BEST_TABS.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
-              <span className="text-5xl">🌿</span>
+              <div className="h-20 w-20 rounded-full bg-muted/60 flex items-center justify-center">
+                <Leaf className="h-9 w-9 text-muted-foreground/60" />
+              </div>
               <p className="text-foreground font-medium text-base">No sections created yet.</p>
               <p className="text-muted-foreground text-sm">Go to Admin → Homepage Sections to add tabs.</p>
             </div>
@@ -404,12 +410,12 @@ export function HomePage() {
               </Link>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {bestProducts.map(product => (
-                <HomepageProductCard
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              {bestProducts.slice(0, MAX_CATEGORY_PRODUCTS).map(product => (
+                <ProductCard
                   key={product.id}
                   product={product as any}
-                  categoryName={categoryNameById.get(product.categoryId)}
+                  backContext="category"
                 />
               ))}
             </div>

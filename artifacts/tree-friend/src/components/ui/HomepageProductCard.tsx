@@ -95,11 +95,11 @@ function HomepageProductCardInner({
   return (
     <Link href={href}>
       <article
-        className="group block bg-card border border-border rounded-[20px] p-4 sm:p-5 shadow-[0_4px_20px_rgba(0,0,0,0.08)] hover:shadow-lg transition-shadow cursor-pointer"
+        className="group block bg-card border border-border rounded-[20px] p-4 sm:p-5 shadow-[0_4px_20px_rgba(0,0,0,0.08)] hover:shadow-lg transition-shadow cursor-pointer overflow-hidden"
         aria-label={product.name}
       >
         {/* Header: image + info + favorite (favorite is absolutely positioned) */}
-        <div className="flex gap-3.5 items-start relative">
+        <div className="flex gap-3.5 items-start relative min-w-0">
           {/* Image */}
           <div className="shrink-0 h-[72px] w-[72px] sm:h-[88px] sm:w-[88px] rounded-xl overflow-hidden bg-muted/30">
             {img ? (
@@ -120,8 +120,8 @@ function HomepageProductCardInner({
           {/* Info: title + subtitle + meta (tag + rating on same row) */}
           {/* pr-7 reserves space so the absolute-positioned favorite button
               never overlaps the title text on narrow cards. */}
-          <div className="flex-1 min-w-0 pr-7 flex flex-col">
-            <h3 className="text-[17px] sm:text-[19px] font-bold leading-tight text-foreground break-words mb-1">
+          <div className="flex-1 min-w-0 pr-8 flex flex-col">
+            <h3 className="text-[15px] sm:text-[19px] font-bold leading-tight text-foreground truncate mb-1">
               {product.name}
             </h3>
             {product.scientificName && (
@@ -131,11 +131,11 @@ function HomepageProductCardInner({
             )}
 
             {/* Tag + rating on a single row (previously stacked) */}
-            <div className="flex items-center gap-2.5 flex-wrap">
+            <div className="flex items-center gap-2.5 min-w-0">
               {categoryName && (
-                <span className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-700 px-2.5 py-[5px] rounded-full text-[11px] font-semibold leading-none whitespace-nowrap">
-                  <img src={CATEGORY_ICON} alt="" aria-hidden="true" className="h-3.5 w-3.5" />
-                  {categoryName}
+                <span className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-700 px-2.5 py-[5px] rounded-full text-[11px] font-semibold leading-none whitespace-nowrap max-w-[120px]">
+                  <img src={CATEGORY_ICON} alt="" aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{categoryName}</span>
                 </span>
               )}
 
