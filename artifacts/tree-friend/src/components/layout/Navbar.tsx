@@ -4,6 +4,7 @@ import { Show, useUser, useClerk } from "@clerk/react";
 import {
   ShoppingBag, User as UserIcon, Heart, Menu, LogOut,
   Settings, Package, X, Home, Sparkles, Sun, Moon, Star, Share2, Search, ChevronRight, ChevronDown, ShoppingBasket, TreeDeciduous,
+  TreePalm, Trees, Sprout, Flower, Flower2, Apple, Citrus, Leaf, Carrot, Wheat, Shrub, LayoutDashboard, Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useGetCart, getGetCartQueryKey, useListCategories, getListCategoriesQueryKey, useGetMe, useListProducts } from "@workspace/api-client-react";
@@ -20,33 +21,35 @@ import { SearchAutocomplete } from "@/components/ui/SearchAutocomplete";
 import { useTheme } from "next-themes";
 
 // Categories are user-defined (e.g. "Fruit Trees", "Indoor Plants") with no
-// fixed slug list, so there's no meaningful per-category icon lookup — a
-// single tree icon is used as the default for all categories.
-function getCategoryIcon(_slug: string): React.ElementType {
+// fixed slug list, so we match on the category name against common plant /
+// botanical keywords and fall back to a generic tree icon. This gives each
+// category a distinct, semantically-appropriate standard lucide icon.
+const CATEGORY_ICON_RULES: { keywords: string[]; icon: React.ElementType }[] = [
+  { keywords: ["indoor", "house plant", "houseplant"],              icon: Sprout },
+  { keywords: ["outdoor", "garden", "patio", "balcony"],            icon: Trees },
+  { keywords: ["fruit", "orchard"],                                 icon: Apple },
+  { keywords: ["citrus", "lemon", "orange", "lime"],                icon: Citrus },
+  { keywords: ["flower", "flowering", "bloom", "blossom"],          icon: Flower2 },
+  { keywords: ["medicinal", "herb", "herbal"],                       icon: Leaf },
+  { keywords: ["vegetable", "veg", "veggie"],                        icon: Carrot },
+  { keywords: ["seed", "seedling", "sapling"],                       icon: Wheat },
+  { keywords: ["succulent", "cactus", "desert"],                     icon: Shrub },
+  { keywords: ["palm", "tropical"],                                 icon: TreePalm },
+  { keywords: ["bonsai"],                                          icon: TreeDeciduous },
+  { keywords: ["rose"],                                            icon: Flower },
+];
+
+function getCategoryIcon(_slug: string, name?: string): React.ElementType {
+  const haystack = `${name ?? ""} ${_slug ?? ""}`.toLowerCase();
+  for (const rule of CATEGORY_ICON_RULES) {
+    if (rule.keywords.some((k) => haystack.includes(k))) return rule.icon;
+  }
   return TreeDeciduous;
 }
 
-function TruckIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10 17h4V5H2v12h3" />
-      <path d="M20 17h2v-3.34a4 4 0 0 0-1.17-2.83L19 9h-5v8h1" />
-      <circle cx="7.5" cy="17.5" r="2.5" />
-      <circle cx="17.5" cy="17.5" r="2.5" />
-    </svg>
-  );
-}
-
-function DashboardIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect width="7" height="9" x="3" y="3" rx="1" />
-      <rect width="7" height="5" x="14" y="3" rx="1" />
-      <rect width="7" height="9" x="14" y="12" rx="1" />
-      <rect width="7" height="5" x="3" y="16" rx="1" />
-    </svg>
-  );
-}
+// (Removed custom TruckIcon and DashboardIcon SVGs — replaced with the
+// standard `Truck` and `LayoutDashboard` icons from lucide-react for
+// visual consistency with the rest of the icon set.)
 
 function DrillCategoryProducts({ slug, onNavigate }: { slug: string; onNavigate: () => void }) {
   const { data, isLoading } = useListProducts({ category: slug, limit: 50 });
@@ -516,7 +519,7 @@ export function Navbar() {
           ) : (
             <ul className="tf-category-list flex flex-col list-none">
               {parentCategories.map((cat: any) => {
-                const Icon = getCategoryIcon(cat.slug);
+                const Icon = getCategoryIcon(cat.slug, cat.name);
                 return (
                   <li key={cat.slug}>
                     <button
@@ -552,7 +555,7 @@ export function Navbar() {
             <li>
               <Link href="/track" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/track" ? "active" : ""}`}>
                 <span className="flex items-center gap-3">
-                  <span className="tf-icon-box"><TruckIcon className="h-3.5 w-3.5" /></span>
+                  <span className="tf-icon-box"><Truck className="h-3.5 w-3.5" /></span>
                   Track Order
                 </span>
                 <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
@@ -642,7 +645,7 @@ export function Navbar() {
                 {isAdmin && (
                   <li>
                     <Link href="/admin" onClick={() => setMobileOpen(false)} className="tf-nav-item">
-                      <span className="flex items-center gap-3"><span className="tf-icon-box"><DashboardIcon className="h-3.5 w-3.5" /></span>Admin Dashboard</span>
+                      <span className="flex items-center gap-3"><span className="tf-icon-box"><LayoutDashboard className="h-3.5 w-3.5" /></span>Admin Dashboard</span>
                     </Link>
                   </li>
                 )}
