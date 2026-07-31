@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import {
-  LayoutDashboard, Package2, ShoppingCart, Wallet, Truck, Store,
-  Sprout, Loader2, Menu, PackageX, CalendarClock, X, ExternalLink,
+  LayoutDashboard, Package, ShoppingBag, Wallet, Truck, Building2,
+  Sprout, Loader2, Menu, Undo2, CalendarClock, X, ExternalLink,
   Settings, ChevronRight, LogOut, BadgeCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -33,9 +33,9 @@ const NAV_GROUPS: {
     label: "Overview",
     items: [
       { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-      { id: "listings", label: "Listings", icon: Package2 },
-      { id: "orders", label: "Orders", icon: ShoppingCart },
-      { id: "returns", label: "Returns", icon: PackageX },
+      { id: "listings", label: "Listings", icon: Package },
+      { id: "orders", label: "Orders", icon: ShoppingBag },
+      { id: "returns", label: "Returns", icon: Undo2 },
       { id: "monthlyHistory", label: "Monthly History", icon: CalendarClock },
     ],
   },
@@ -44,7 +44,7 @@ const NAV_GROUPS: {
     items: [
       { id: "payment", label: "Payment", icon: Wallet },
       { id: "courier", label: "Courier", icon: Truck },
-      { id: "profile", label: "Business Profile", icon: Store },
+      { id: "profile", label: "Business Profile", icon: Building2 },
     ],
   },
 ];
