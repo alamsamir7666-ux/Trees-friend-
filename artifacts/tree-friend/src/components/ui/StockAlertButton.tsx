@@ -73,10 +73,10 @@ function FormContent({ method, setMethod, status, phone, setPhone, email, setEma
 
       {status === "success" ? (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "16px 0", textAlign: "center" }}>
-          <div style={{ height: 48, width: 48, borderRadius: "50%", background: "#dcfce7", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Check size={24} color="#16a34a" />
+          <div style={{ height: 48, width: 48, borderRadius: "50%", background: "hsl(var(--success))", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Check size={24} style={{ color: "hsl(var(--success-foreground))" }} />
           </div>
-          <p style={{ fontSize: 14, color: "#6b7280" }}>We'll notify you when back in stock!</p>
+          <p style={{ fontSize: 14, color: "hsl(var(--muted-foreground))" }}>We'll notify you when back in stock!</p>
         </div>
       ) : (
         <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8 }}>
@@ -108,7 +108,7 @@ function FormContent({ method, setMethod, status, phone, setPhone, email, setEma
           </button>
         </form>
       )}
-      {status === "error" && <p style={{ fontSize: 12, color: "#ef4444" }}>{errorMsg}</p>}
+      {status === "error" && <p style={{ fontSize: 12, color: "hsl(var(--destructive))" }}>{errorMsg}</p>}
     </div>
   );
 }

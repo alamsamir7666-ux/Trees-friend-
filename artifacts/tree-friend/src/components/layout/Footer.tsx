@@ -150,7 +150,7 @@ export function Footer() {
         .tf-brand-title {
           font-family: var(--tf-font-serif);
           font-size: 2.15rem;
-          color: green;
+          color: hsl(var(--primary));
           margin-left: -10px;
           font-weight: 700;
           letter-spacing: -0.5px;
@@ -181,7 +181,7 @@ export function Footer() {
 
         .tf-title-text {
           margin-right: 12px;
-          color: green;
+          color: hsl(var(--primary));
         }
 
         .tf-title-line {
@@ -287,7 +287,7 @@ export function Footer() {
         }
 
         .tf-newsletter-input::placeholder {
-          color: #888888;
+          color: hsl(var(--muted-foreground));
         }
 
         .tf-newsletter-input:focus {
@@ -296,7 +296,7 @@ export function Footer() {
 
         .tf-btn-join {
           background-color: var(--tf-accent);
-          color: #ffffff;
+          color: hsl(var(--accent-foreground));
           border: none;
           border-radius: 8px;
           padding: 0 22px;
@@ -371,7 +371,7 @@ export function Footer() {
         .tf-bottom {
           text-align: center;
           font-size: 0.75rem;
-          color: #ffffff;
+          color: hsl(var(--accent-foreground));
           background-color: var(--tf-accent);
           padding: 15px 0;
           width: calc(100% + 40px);

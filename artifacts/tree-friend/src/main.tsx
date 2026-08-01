@@ -30,19 +30,24 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
     if (this.state.error) {
       const isDev = import.meta.env.DEV;
       return (
-        <div style={{ padding: "2rem", fontFamily: "system-ui, sans-serif", textAlign: "center", color: "#333" }}>
-          <h2 style={{ fontSize: "1.5rem", marginBottom: "0.5rem" }}>Something went wrong</h2>
-          <p style={{ color: "#666", marginBottom: "1.5rem" }}>
+        <div
+          className="flex flex-col items-center justify-center min-h-[100dvh] gap-3 px-8 py-12 text-center bg-background text-foreground"
+          style={{ fontFamily: "system-ui, sans-serif" }}
+        >
+          <h2 className="text-xl font-semibold mb-2">Something went wrong</h2>
+          <p className="text-sm text-muted-foreground mb-6 max-w-md">
             Please refresh the page. If the issue persists, contact support.
           </p>
           <button
             onClick={() => window.location.reload()}
-            style={{ padding: "0.5rem 1.5rem", background: "#2d4a30", color: "white", border: "none", borderRadius: "2rem", cursor: "pointer", fontSize: "0.9rem" }}
+            className="px-6 py-2 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors text-sm font-medium cursor-pointer"
           >
             Refresh Page
           </button>
           {isDev && (
-            <pre style={{ marginTop: "2rem", whiteSpace: "pre-wrap", wordBreak: "break-word", textAlign: "left", background: "#fee", padding: "1rem", borderRadius: "0.5rem", fontSize: "0.75rem", color: "red" }}>
+            <pre
+              className="mt-8 w-full max-w-2xl text-left text-xs whitespace-pre-wrap break-words bg-destructive/10 text-destructive border border-destructive/20 p-4 rounded-lg"
+            >
               {this.state.error.message}{"\n\n"}{this.state.error.stack}
             </pre>
           )}

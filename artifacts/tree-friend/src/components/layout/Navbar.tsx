@@ -3,7 +3,7 @@ import { Link, useLocation, useSearch } from "wouter";
 import { Show, useUser, useClerk } from "@clerk/react";
 import {
   ShoppingBag, User as UserIcon, Heart, Menu, LogOut,
-  Settings, Package, X, Home, Sparkles, Sun, Moon, Star, Share2, Search, ChevronRight, ChevronDown, ShoppingBasket, TreeDeciduous,
+  Settings, Package, X, Home, Sparkles, Star, Share2, Search, ChevronRight, ChevronDown, ShoppingBasket, TreeDeciduous,
   TreePalm, Trees, Sprout, Flower, Flower2, Apple, Citrus, Leaf, Carrot, Wheat, Shrub, LayoutDashboard, Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useGuestCart } from "@/hooks/useGuestCart";
 import { SearchAutocomplete } from "@/components/ui/SearchAutocomplete";
-import { useTheme } from "next-themes";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
 
 // Categories are user-defined (e.g. "Fruit Trees", "Indoor Plants") with no
 // fixed slug list, so we match on the category name against common plant /
@@ -113,7 +113,6 @@ export function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [accountExpanded, setAccountExpanded] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const { theme, setTheme } = useTheme();
   const guestCart = useGuestCart();
 
   const { data: cart } = useGetCart({
@@ -275,17 +274,8 @@ export function Navbar() {
               </DropdownMenu>
             </Show>
 
-            {/* Dark mode toggle */}
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              aria-label="Toggle dark mode"
-              className="hidden sm:flex"
-            >
-              <Sun className="h-5 w-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-              <Moon className="absolute h-5 w-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-            </Button>
+            {/* Dark mode toggle -- Sun/Moon quick toggle, long-press for System menu */}
+            <ThemeToggle className="hidden sm:flex" />
 
             {/* Mobile search icon */}
             <Button
@@ -427,10 +417,7 @@ export function Navbar() {
               <span className="tf-brand-name text-[19px] font-semibold tracking-tight" style={{ color: "hsl(var(--primary))" }}>Tree Friend</span>
             </Link>
             <div className="flex items-center gap-1.5">
-              <button className="tf-circle-btn" aria-label="Toggle dark mode" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-                <Sun className="h-3.5 w-3.5 dark:hidden" />
-                <Moon className="h-3.5 w-3.5 hidden dark:block" />
-              </button>
+              <ThemeToggle className="h-8 w-8" />
               <button className="tf-circle-btn" aria-label="Close menu" onClick={() => setMobileOpen(false)}>
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -616,7 +603,7 @@ export function Navbar() {
             </button>
 
             {accountExpanded && (
-              <ul className="flex flex-col gap-0.5 list-none mt-2 pt-2" style={{ borderTop: "1px solid rgba(0,0,0,0.06)" }}>
+              <ul className="flex flex-col gap-0.5 list-none mt-2 pt-2 border-t border-border">
                 <li>
                   <Link href="/profile" onClick={() => setMobileOpen(false)} className="tf-nav-item">
                     <span className="flex items-center gap-3"><span className="tf-icon-box"><UserIcon className="h-3.5 w-3.5" /></span>Profile</span>
@@ -652,7 +639,7 @@ export function Navbar() {
               </ul>
             )}
 
-            <div className="mt-1.5 pt-1.5" style={{ borderTop: "1px solid rgba(0,0,0,0.06)" }}>
+            <div className="mt-1.5 pt-1.5 border-t border-border">
               <button
                 onClick={() => { signOut(); setMobileOpen(false); }}
                 className="tf-nav-item w-full text-left text-destructive"

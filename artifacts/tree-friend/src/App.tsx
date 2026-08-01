@@ -53,6 +53,7 @@ const ReferralPage = lazy(() => import("@/pages/ReferralPage"));
 const ComparePage = lazy(() => import("@/pages/ComparePage"));
 import { useGetMe } from "@workspace/api-client-react";
 import { useUser } from "@clerk/react";
+import { useThemeColor } from "@/hooks/useThemeColor";
 
 function TokenSync() {
   const { getToken, isSignedIn } = useAuth();
@@ -100,14 +101,17 @@ const clerkAppearance = {
     logoImageUrl: 'https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783743859/IMG_20260710_151144-removebg-preview_11zon_ck95ax.png',
   },
   variables: {
-    colorPrimary: "hsl(20 10% 18%)",
-    colorForeground: "hsl(20 10% 18%)",
-    colorMutedForeground: "hsl(20 6% 45%)",
-    colorDanger: "hsl(0 72% 51%)",
-    colorBackground: "hsl(34 23% 98%)",
-    colorInput: "hsl(34 23% 98%)",
-    colorInputForeground: "hsl(20 10% 18%)",
-    colorNeutral: "hsl(30 15% 86%)",
+    // Use CSS variables so the Clerk auth forms automatically follow the
+    // app's light/dark theme. Previously these were hardcoded HSL strings
+    // which meant the sign-in/up pages stayed light even in dark mode.
+    colorPrimary: "hsl(var(--primary))",
+    colorForeground: "hsl(var(--foreground))",
+    colorMutedForeground: "hsl(var(--muted-foreground))",
+    colorDanger: "hsl(var(--destructive))",
+    colorBackground: "hsl(var(--background))",
+    colorInput: "hsl(var(--input))",
+    colorInputForeground: "hsl(var(--foreground))",
+    colorNeutral: "hsl(var(--border))",
     fontFamily: "'DM Sans', Inter, sans-serif",
     borderRadius: "0.5rem",
   },
@@ -124,7 +128,7 @@ const clerkAppearance = {
     footerActionText: "text-muted-foreground",
     dividerText: "text-muted-foreground",
     identityPreviewEditButton: "text-primary",
-    formFieldSuccessText: "text-green-600",
+    formFieldSuccessText: "text-success-foreground",
     alertText: "text-destructive",
     logoBox: "flex justify-center mb-2",
     logoImage: "h-12 w-12 rounded-full object-cover object-center",
@@ -321,6 +325,7 @@ function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <>
+      <ThemeColorSync />
       <div className="min-h-[100dvh] flex flex-col">
         <Navbar />
         <main className="flex-1">
@@ -438,7 +443,7 @@ function ClerkProviderWithRoutes() {
 
 function App() {
   return (
-    <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem={true} disableTransitionOnChange>
     <I18nProvider>
       <CurrencyProvider>
         <WouterRouter base={basePath}>
@@ -448,6 +453,12 @@ function App() {
     </I18nProvider>
     </ThemeProvider>
   );
+}
+
+/** Mounts the theme-color meta-sync hook once, inside ThemeProvider. */
+function ThemeColorSync() {
+  useThemeColor();
+  return null;
 }
 
 export default App;

@@ -7,7 +7,36 @@
     <meta name="description" content="Shop fruit trees, indoor plants, and saplings in Bangladesh. Quality plants from trusted nurseries, fair pricing, delivered responsibly." />
     <meta name="keywords" content="trees Bangladesh, plant nursery, fruit trees, indoor plants, saplings, buy trees online" />
     <meta name="robots" content="index, follow" />
-    <meta name="theme-color" content="#fdf6f0" />
+    <meta name="theme-color" content="#1f3b2a" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111d17" />
+
+    <!--
+      No-flash theme bootstrap — runs synchronously in <head> before the
+      app's React bundle, so the <html> class is correct on the very first
+      paint. Without this, users with a stored "dark" preference would see
+      a flash of light theme on every cold start. Mirrors next-themes'
+      internal `next-themes/script` but inlined so it doesn't have to wait
+      for the JS bundle to download.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('theme');
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          // next-themes stores the resolved value (light/dark/system) as a string
+          // under 'theme'. 'system' resolves against prefersDark at runtime.
+          if (theme === 'dark' || (theme === 'system' && prefersDark) || (!theme && prefersDark)) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {
+          // Storage / matchMedia may be unavailable (e.g. SSR, private mode);
+          // fall back to no class, which the ThemeProvider will set on mount.
+        }
+      })();
+    </script>
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
