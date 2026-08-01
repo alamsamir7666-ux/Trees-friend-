@@ -15,7 +15,6 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -177,6 +176,66 @@ function StarsRow({ rating, size = "sm" }: { rating: number; size?: "sm" | "md" 
 }
 
 /**
+ * Segmented rating filter — built with plain <button> elements rather than
+ * the Radix Tabs primitive. The Tabs primitive was rendering as inline text
+ * inside the admin slide-over on mobile (likely a portal/layout conflict),
+ * so we use a controlled button group instead. This gives us full control
+ * over the active state styling and is bulletproof across viewports.
+ */
+function RatingFilterGroup({
+  value,
+  onChange,
+  totalCount,
+  ratingCounts,
+}: {
+  value: RatingFilter;
+  onChange: (v: RatingFilter) => void;
+  totalCount: number;
+  ratingCounts: Record<1 | 2 | 3 | 4 | 5, number>;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Filter reviews by rating"
+      className="inline-flex items-center gap-1 rounded-lg bg-muted/60 p-1 overflow-x-auto max-w-full"
+    >
+      {RATING_TABS.map((t) => {
+        const count =
+          t.value === 0 ? totalCount : ratingCounts[t.value as 1 | 2 | 3 | 4 | 5];
+        const isActive = value === t.value;
+        return (
+          <button
+            key={t.value}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => onChange(t.value)}
+            className={
+              "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium whitespace-nowrap transition-colors " +
+              (isActive
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground hover:bg-background/50")
+            }
+          >
+            {t.label}
+            <span
+              className={
+                "inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums " +
+                (isActive
+                  ? "bg-primary/15 text-primary"
+                  : "bg-muted text-muted-foreground")
+              }
+            >
+              {count.toLocaleString()}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * Rating distribution panel — Amazon/Shopify style.
  * Shows a horizontal bar per rating tier (5★→1★) with proportional fill
  * and a count. Clicking a row filters the list to that rating.
@@ -193,29 +252,23 @@ function RatingDistributionCard({
   onSelect: (r: RatingFilter) => void;
 }) {
   const tiers: (1 | 2 | 3 | 4 | 5)[] = [5, 4, 3, 2, 1];
+  const avg =
+    total > 0
+      ? tiers.reduce((s, t) => s + t * ratingCounts[t], 0) / total
+      : 0;
+
   return (
     <Card>
       <CardContent className="p-4 sm:p-5">
-        <div className="flex flex-col lg:flex-row lg:items-center gap-5">
-          {/* Aggregate */}
-          <div className="flex items-center gap-4 lg:border-r lg:pr-6 lg:border-border shrink-0">
-            <div className="text-center">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6">
+          {/* Aggregate — prominent on all viewports */}
+          <div className="flex items-center gap-4 sm:border-r sm:pr-6 sm:border-border shrink-0">
+            <div className="text-center min-w-[80px]">
               <div className="text-3xl font-semibold tabular-nums text-foreground leading-none">
-                {total > 0
-                  ? (
-                      tiers.reduce((s, t) => s + t * ratingCounts[t], 0) / total
-                    ).toFixed(1)
-                  : "—"}
+                {total > 0 ? avg.toFixed(1) : "—"}
               </div>
               <div className="mt-1.5 flex justify-center">
-                <StarsRow
-                  rating={Math.round(
-                    total > 0
-                      ? tiers.reduce((s, t) => s + t * ratingCounts[t], 0) / total
-                      : 0,
-                  )}
-                  size="md"
-                />
+                <StarsRow rating={Math.round(avg)} size="md" />
               </div>
               <div className="text-[11px] text-muted-foreground mt-1 tabular-nums">
                 {total.toLocaleString()} {total === 1 ? "review" : "reviews"}
@@ -234,7 +287,7 @@ function RatingDistributionCard({
                   key={tier}
                   type="button"
                   onClick={() => onSelect(isActive ? 0 : tier)}
-                  className={`group w-full flex items-center gap-3 rounded-md px-2 py-1 -mx-2 transition-colors ${
+                  className={`group w-full flex items-center gap-2 sm:gap-3 rounded-md px-1.5 py-1 -mx-1.5 transition-colors ${
                     isActive ? "bg-primary/5" : "hover:bg-muted/40"
                   }`}
                   aria-pressed={isActive}
@@ -244,21 +297,21 @@ function RatingDistributionCard({
                       : `Filter to ${tier}-star reviews (${count})`
                   }
                 >
-                  <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground w-9 shrink-0">
+                  <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground w-8 shrink-0">
                     {tier}
                     <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
                   </span>
-                  <span className="relative flex-1 h-2 rounded-full bg-muted overflow-hidden">
+                  <span className="relative flex-1 h-2 rounded-full bg-muted overflow-hidden min-w-[60px]">
                     <span
                       className="absolute inset-y-0 left-0 rounded-full bg-amber-400/80 transition-all"
                       style={{ width: `${pct}%` }}
                     />
                   </span>
-                  <span className="text-xs tabular-nums text-muted-foreground w-10 text-right shrink-0">
+                  <span className="text-xs tabular-nums text-muted-foreground w-8 text-right shrink-0">
                     {count.toLocaleString()}
                   </span>
                   {isActive && (
-                    <span className="text-[10px] font-medium text-primary shrink-0 w-14 text-right">
+                    <span className="text-[10px] font-medium text-primary shrink-0 hidden sm:inline-block w-14 text-right">
                       Filtered
                     </span>
                   )}
@@ -278,13 +331,18 @@ function RatingDistributionCard({
  * Admin Reviews tab — customer review moderation queue.
  *
  * Industry-standard layout: page header with aggregate stat, rating
- * distribution card (clickable to filter), rating tabs + sort + live
- * search toolbar, a compact table with avatar/star/expandable comment,
- * and full client-side pagination with page-size selector. The backend
- * `listAllReviews` endpoint returns all reviews in one array (no
- * server-side pagination), so we paginate client-side — which is fine
- * for an admin moderation tool and means the filter/sort/distribution
- * panel always reflects the full dataset.
+ * distribution card (clickable to filter), rating filter chips + sort +
+ * live search toolbar, a compact table with avatar/star/expandable
+ * comment, and full client-side pagination with page-size selector.
+ *
+ * Implementation notes:
+ * - The rating filter uses plain <button> elements (not Radix Tabs) because
+ *   the Tabs primitive was rendering as inline text inside the admin
+ *   slide-over on mobile viewports.
+ * - All filter/sort/paginate logic is client-side because the
+ *   `listAllReviews` endpoint returns a flat array (no server-side
+ *   pagination). This keeps the API simple and lets the distribution
+ *   panel always reflect the full dataset.
  */
 export function ReviewsTab() {
   const { reviews, reviewsLoading, handleDeleteReview } = useAdminContext();
@@ -304,7 +362,10 @@ export function ReviewsTab() {
     const all = (reviews as Review[]) ?? [];
     const counts: Record<1 | 2 | 3 | 4 | 5, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     for (const r of all) {
-      const rating = Math.max(1, Math.min(5, Math.round(Number(r.rating) || 0))) as 1 | 2 | 3 | 4 | 5;
+      const rating = Math.max(
+        1,
+        Math.min(5, Math.round(Number(r.rating) || 0)),
+      ) as 1 | 2 | 3 | 4 | 5;
       counts[rating]++;
     }
     return { totalCount: all.length, ratingCounts: counts };
@@ -380,7 +441,7 @@ export function ReviewsTab() {
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 min-w-0">
       <PageHeader
         title="Customer Reviews"
         description="Moderate every customer review across the marketplace. Search, filter by rating, sort, and remove anything that violates policy."
@@ -406,74 +467,52 @@ export function ReviewsTab() {
         />
       )}
 
-      {/* Toolbar: rating tabs + sort + search */}
-      <div className="flex flex-col gap-3">
-        <Tabs
-          value={String(ratingFilter)}
-          onValueChange={(v) => changeRatingFilter(Number(v) as RatingFilter)}
-        >
-          <TabsList className="rounded-lg bg-muted/50 p-1 w-full sm:w-auto overflow-x-auto">
-            {RATING_TABS.map((t) => {
-              const count =
-                t.value === 0 ? totalCount : ratingCounts[t.value as 1 | 2 | 3 | 4 | 5];
-              const isActive = ratingFilter === t.value;
-              return (
-                <TabsTrigger
-                  key={t.value}
-                  value={String(t.value)}
-                  className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                >
-                  {t.label}
-                  <span
-                    className={
-                      "inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums " +
-                      (isActive ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")
-                    }
-                  >
-                    {count.toLocaleString()}
-                  </span>
-                </TabsTrigger>
-              );
-            })}
-          </TabsList>
-        </Tabs>
+      {/* Toolbar: rating filter chips (scrollable on mobile) */}
+      <div className="flex justify-start sm:justify-center">
+        <RatingFilterGroup
+          value={ratingFilter}
+          onChange={changeRatingFilter}
+          totalCount={totalCount}
+          ratingCounts={ratingCounts}
+        />
+      </div>
 
-        <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-between">
-          <div className="relative sm:max-w-xs flex-1">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
-            <Input
-              value={search}
-              onChange={(e) => changeSearch(e.target.value)}
-              placeholder="Search by product, customer, or review text…"
-              className="h-9 pl-8 text-sm"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Select value={sortKey} onValueChange={(v) => changeSort(v as SortKey)}>
-              <SelectTrigger className="h-9 w-[160px] text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SORT_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value} className="text-sm">
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {hasActiveFilters && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 gap-1.5 text-xs"
-                onClick={resetFilters}
-                title="Reset filters"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Reset
-              </Button>
-            )}
-          </div>
+      {/* Toolbar: search + sort */}
+      <div className="flex flex-col gap-2">
+        <div className="relative w-full">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
+          <Input
+            value={search}
+            onChange={(e) => changeSearch(e.target.value)}
+            placeholder="Search by product, customer, or review text…"
+            className="h-9 pl-8 text-sm"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Select value={sortKey} onValueChange={(v) => changeSort(v as SortKey)}>
+            <SelectTrigger className="h-9 w-full sm:w-[160px] text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SORT_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value} className="text-sm">
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {hasActiveFilters && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 shrink-0 gap-1.5 text-xs"
+              onClick={resetFilters}
+              title="Reset filters"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset
+            </Button>
+          )}
         </div>
       </div>
 
@@ -512,7 +551,7 @@ export function ReviewsTab() {
             />
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm min-w-[640px]">
                 <thead className="bg-muted/40 border-b">
                   <tr>
                     <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
@@ -544,7 +583,7 @@ export function ReviewsTab() {
                       <tr key={r.id} className="align-top hover:bg-muted/20 transition-colors">
                         {/* Product */}
                         <td className="px-4 sm:px-5 py-3.5">
-                          <div className="flex items-center gap-3 min-w-[180px]">
+                          <div className="flex items-center gap-3">
                             {r.productImage ? (
                               <img
                                 src={r.productImage}
@@ -570,7 +609,7 @@ export function ReviewsTab() {
 
                         {/* Customer */}
                         <td className="px-4 sm:px-5 py-3.5">
-                          <div className="flex items-center gap-2 min-w-[140px]">
+                          <div className="flex items-center gap-2">
                             <div className="h-7 w-7 rounded-full bg-gradient-to-br from-primary/25 to-primary/45 flex items-center justify-center shrink-0">
                               <span className="text-[11px] font-semibold text-primary-foreground">
                                 {(r.userName?.[0] ?? "?").toUpperCase()}
@@ -649,7 +688,9 @@ export function ReviewsTab() {
           {!reviewsLoading && filtered.length > 0 && (
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-5 py-3 border-t bg-muted/20">
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="tabular-nums">{rangeText(currentPage, pageSize, filtered.length)}</span>
+                <span className="tabular-nums">
+                  {rangeText(currentPage, pageSize, filtered.length)}
+                </span>
                 <span className="hidden sm:inline text-muted-foreground/40">·</span>
                 <div className="hidden sm:flex items-center gap-1.5">
                   <span>Rows:</span>
@@ -716,7 +757,9 @@ export function ReviewsTab() {
                           setExpandedId(null);
                         }}
                         aria-disabled={currentPage === totalPages}
-                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
+                        className={
+                          currentPage === totalPages ? "pointer-events-none opacity-50" : ""
+                        }
                       />
                     </PaginationItem>
                   </PaginationContent>
