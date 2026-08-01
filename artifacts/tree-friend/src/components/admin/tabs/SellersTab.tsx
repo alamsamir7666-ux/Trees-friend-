@@ -1,6 +1,15 @@
-import { useState } from "react";
-import { CheckCircle2, XCircle, Clock, Ban, Loader2, ExternalLink, Wallet, Truck, ShieldCheck, BadgeCheck } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import {
+  CheckCircle2, XCircle, Clock, Ban, Loader2, ExternalLink,
+  Wallet, Truck, ShieldCheck, BadgeCheck, Store, MapPin, Phone, Mail,
+  User, FileText, CalendarDays, Users2, Inbox, Search,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import {
+  Card, CardContent, CardDescription, CardHeader, CardTitle,
+} from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   useListSellers,
@@ -22,6 +31,36 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+// ─── Status palette ───────────────────────────────────────────────────────────
+// Mirrors the sellersTable.status enum (pending_verification | active |
+// suspended | vacation). Falls back to a neutral style for unknown values.
+
+const STATUS_META: Record<
+  string,
+  { label: string; tone: string; dot: string }
+> = {
+  pending_verification: {
+    label: "Pending Review",
+    tone: "bg-warning/15 text-warning-foreground border-warning-border",
+    dot: "bg-warning",
+  },
+  active: {
+    label: "Active",
+    tone: "bg-success/15 text-success-foreground border-success-border",
+    dot: "bg-success",
+  },
+  suspended: {
+    label: "Suspended",
+    tone: "bg-destructive/10 text-destructive border-destructive/20",
+    dot: "bg-destructive",
+  },
+  vacation: {
+    label: "On Vacation",
+    tone: "bg-info/15 text-info-foreground border-info-border",
+    dot: "bg-info",
+  },
+};
+
 const STATUS_TABS = [
   { value: "pending_verification", label: "Pending Review" },
   { value: "active", label: "Active" },
@@ -29,24 +68,110 @@ const STATUS_TABS = [
   { value: "vacation", label: "Vacation" },
 ] as const;
 
+type StatusValue = (typeof STATUS_TABS)[number]["value"];
+
+// ─── Small layout primitives ──────────────────────────────────────────────────
+
+function PageHeader({
+  title,
+  description,
+  icon: Icon,
+  actions,
+}: {
+  title: string;
+  description: string;
+  icon: React.ElementType;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-5">
+      <div className="flex items-start gap-3">
+        <div className="hidden sm:flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">{title}</h1>
+          <p className="text-sm text-muted-foreground mt-0.5 max-w-2xl">{description}</p>
+        </div>
+      </div>
+      {actions && <div className="shrink-0">{actions}</div>}
+    </div>
+  );
+}
+
+function EmptyState({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: React.ElementType;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center text-center py-14 px-6 rounded-xl border border-dashed bg-muted/20">
+      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-muted text-muted-foreground mb-3">
+        <Icon className="h-5 w-5" />
+      </div>
+      <p className="text-sm font-medium text-foreground">{title}</p>
+      {description && (
+        <p className="text-xs text-muted-foreground mt-1 max-w-sm">{description}</p>
+      )}
+    </div>
+  );
+}
+
+function InfoRow({
+  icon: Icon,
+  children,
+  title,
+}: {
+  icon: React.ElementType;
+  children: ReactNode;
+  title?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+      <span className="text-xs text-muted-foreground truncate" title={title}>
+        {children}
+      </span>
+    </div>
+  );
+}
+
+function StatChip({ count }: { count: number }) {
+  return (
+    <span
+      className={
+        "ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 " +
+        "rounded-full text-[10px] font-semibold tabular-nums " +
+        (count > 0
+          ? "bg-primary/10 text-primary"
+          : "bg-muted text-muted-foreground")
+      }
+    >
+      {count}
+    </span>
+  );
+}
+
+// ─── Main tab ─────────────────────────────────────────────────────────────────
+
 /**
- * Admin review queue for seller applications (plan doc §4 "Business
- * Verification" / §5.3). Manual document review only, per §9 -- this UI
- * doesn't attempt any automated KYC, it just surfaces the applicant's
- * submitted info/documents and lets admin approve or reject.
+ * Admin Sellers tab — seller application review queue + verification sub-queues.
  *
- * Also hosts payment/courier config verification (Part 6) below the
- * seller status queue -- the "safer default" admin-review toggle chosen
- * over a live bKash/Pathao/Steadfast API check (see
- * routes/adminSellers.ts's doc comment on the verify routes for the full
- * rationale). Kept in this same tab per the task brief's suggestion
- * rather than a new top-level admin nav entry, since it's the same
- * "review something a seller submitted" pattern as the queue above it,
- * just for a different table.
+ * Industry-standard admin layout: page header, status tabs with counts,
+ * search, two-column seller card (business info + actions), and a clear
+ * visual hierarchy. Below the main queue sit the Verified Badge and
+ * Payment/Courier config review queues, separated by section headers
+ * rather than dividers — matches the pattern used by Shopify Admin
+ * (Settings → Sellers) and Linear's team management views.
  */
 export function SellersTab() {
   const qc = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState<(typeof STATUS_TABS)[number]["value"]>("pending_verification");
+  const [statusFilter, setStatusFilter] = useState<StatusValue>("pending_verification");
+  const [search, setSearch] = useState("");
   const [actingOn, setActingOn] = useState<number | null>(null);
 
   const { data: sellers, isLoading } = useListSellers(
@@ -96,102 +221,240 @@ export function SellersTab() {
     );
   }
 
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-4 gap-3">
-        <Tabs value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
-          <TabsList className="rounded-full">
-            {STATUS_TABS.map((t) => (
-              <TabsTrigger key={t.value} value={t.value} className="rounded-full text-xs">
-                {t.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-        <p className="text-xs text-muted-foreground/70 shrink-0">{sellers?.length ?? 0} seller(s)</p>
-      </div>
+  const count = sellers?.length ?? 0;
+  const filtered = (sellers ?? []).filter((s: any) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (
+      `${s.businessName ?? ""}`.toLowerCase().includes(q) ||
+      `${s.nurseryName ?? ""}`.toLowerCase().includes(q) ||
+      `${s.ownerName ?? ""}`.toLowerCase().includes(q) ||
+      `${s.contactEmail ?? ""}`.toLowerCase().includes(q) ||
+      `${s.contactPhone ?? ""}`.toLowerCase().includes(q) ||
+      `${s.location ?? ""}`.toLowerCase().includes(q)
+    );
+  });
 
-      {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => <div key={i} className="h-24 rounded-2xl bg-muted animate-pulse" />)}
-        </div>
-      ) : !sellers || sellers.length === 0 ? (
-        <div className="text-center py-16 text-muted-foreground bg-card rounded-2xl border">
-          <Clock className="h-8 w-8 mx-auto mb-2 opacity-30" />
-          <p className="font-medium text-sm">No sellers in this status</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {sellers.map((s: any) => (
-            <div key={s.id} className="bg-card rounded-2xl border p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-foreground">{s.businessName}</p>
-                    <span className="text-xs text-muted-foreground/70">·</span>
-                    <p className="text-sm text-muted-foreground">{s.nurseryName}</p>
-                  </div>
-                  <p className="text-xs text-muted-foreground/70 mt-0.5">
-                    {s.ownerName} · {s.contactPhone} · {s.contactEmail}
-                  </p>
-                  <p className="text-xs text-muted-foreground/70 mt-0.5">{s.location}</p>
-                  {s.description && <p className="text-sm text-muted-foreground mt-2">{s.description}</p>}
-                  {s.nidOrTradeLicenseUrl && (
-                    <a
-                      href={s.nidOrTradeLicenseUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs text-info-foreground hover:underline mt-2"
+  return (
+    <div className="space-y-8">
+      <PageHeader
+        title="Sellers"
+        description="Review seller applications, manage seller status, and verify payment & courier credentials. This is the gatekeeper view for the marketplace."
+        icon={Store}
+        actions={
+          <Badge variant="outline" className="gap-1.5 px-2.5 py-1">
+            <Users2 className="h-3 w-3" />
+            <span className="tabular-nums">{count}</span>
+            <span className="text-muted-foreground font-normal">
+              {count === 1 ? "seller" : "sellers"}
+            </span>
+          </Badge>
+        }
+      />
+
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <Tabs value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusValue)}>
+              <TabsList className="rounded-lg bg-muted/50 p-1">
+                {STATUS_TABS.map((t) => {
+                  const isActive = statusFilter === t.value;
+                  return (
+                    <TabsTrigger
+                      key={t.value}
+                      value={t.value}
+                      className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
                     >
-                      View trade license/NID <ExternalLink className="h-3 w-3" />
-                    </a>
-                  )}
-                  <p className="text-xs text-muted-foreground/50 mt-2">
-                    Applied {new Date(s.createdAt).toLocaleDateString()}
-                  </p>
-                </div>
-                <div className="flex flex-col gap-2 shrink-0">
-                  {s.status === "pending_verification" && (
-                    <>
-                      <Button
-                        size="sm"
-                        className="rounded-full gap-1.5"
-                        disabled={actingOn === s.id}
-                        onClick={() => handleApprove(s.id)}
+                      {t.label}
+                      <span
+                        className={
+                          "inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums " +
+                          (isActive ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")
+                        }
                       >
-                        {actingOn === s.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                        Approve
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="rounded-full gap-1.5 text-destructive border-destructive/20 hover:bg-destructive/10"
-                        disabled={actingOn === s.id}
-                        onClick={() => handleReject(s.id)}
-                      >
-                        <XCircle className="h-3.5 w-3.5" />
-                        Reject
-                      </Button>
-                    </>
-                  )}
-                  {s.status === "active" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="rounded-full gap-1.5 text-destructive border-destructive/20 hover:bg-destructive/10"
-                      disabled={actingOn === s.id}
-                      onClick={() => handleSuspend(s.id)}
-                    >
-                      {actingOn === s.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
-                      Suspend
-                    </Button>
-                  )}
-                </div>
-              </div>
+                        {count}
+                      </span>
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            </Tabs>
+            <div className="relative sm:w-64">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by name, email, phone…"
+                className="h-9 pl-8 text-sm"
+              />
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        </CardHeader>
+
+        <CardContent className="pt-0">
+          {isLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-24 rounded-xl bg-muted/40 animate-pulse" />
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon={Inbox}
+              title={search.trim() ? "No sellers match your search" : "No sellers in this status"}
+              description={
+                search.trim()
+                  ? "Try a different name, email, or phone number."
+                  : "When a seller applies, they'll appear here for review."
+              }
+            />
+          ) : (
+            <div className="space-y-3">
+              {filtered.map((s: any) => {
+                const meta = STATUS_META[s.status as string] ?? STATUS_META.active;
+                return (
+                  <div
+                    key={s.id}
+                    className="rounded-xl border bg-card p-4 sm:p-5 transition-colors hover:bg-muted/20"
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                      {/* ── Left: identity ────────────────────────────────────── */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary text-xs font-semibold">
+                            {(s.businessName ?? "?").slice(0, 2).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-medium text-foreground truncate">
+                                {s.businessName}
+                              </p>
+                              <span
+                                className={
+                                  "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border " +
+                                  meta.tone
+                                }
+                              >
+                                <span className={"h-1.5 w-1.5 rounded-full " + meta.dot} />
+                                {meta.label}
+                              </span>
+                              {(s as any)?.isVerified && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20">
+                                  <BadgeCheck className="h-3 w-3" />
+                                  Verified
+                                </span>
+                              )}
+                            </div>
+                            {s.nurseryName && s.nurseryName !== s.businessName && (
+                              <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                                {s.nurseryName}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Contact + meta grid */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 mt-3 pl-0 sm:pl-11">
+                          {s.ownerName && (
+                            <InfoRow icon={User} title={s.ownerName}>
+                              {s.ownerName}
+                            </InfoRow>
+                          )}
+                          {s.contactPhone && (
+                            <InfoRow icon={Phone} title={s.contactPhone}>
+                              {s.contactPhone}
+                            </InfoRow>
+                          )}
+                          {s.contactEmail && (
+                            <InfoRow icon={Mail} title={s.contactEmail}>
+                              {s.contactEmail}
+                            </InfoRow>
+                          )}
+                          {s.location && (
+                            <InfoRow icon={MapPin} title={s.location}>
+                              {s.location}
+                            </InfoRow>
+                          )}
+                          {s.createdAt && (
+                            <InfoRow icon={CalendarDays}>
+                              Applied {new Date(s.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
+                            </InfoRow>
+                          )}
+                          {s.nidOrTradeLicenseUrl && (
+                            <a
+                              href={s.nidOrTradeLicenseUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline mt-0.5"
+                            >
+                              <FileText className="h-3.5 w-3.5" />
+                              View trade license / NID
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          )}
+                        </div>
+
+                        {s.description && (
+                          <p className="text-xs text-muted-foreground mt-3 sm:pl-11 line-clamp-2">
+                            {s.description}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* ── Right: actions ───────────────────────────────────── */}
+                      <div className="flex flex-row lg:flex-col gap-2 shrink-0 lg:items-end">
+                        {s.status === "pending_verification" && (
+                          <>
+                            <Button
+                              size="sm"
+                              className="gap-1.5"
+                              disabled={actingOn === s.id}
+                              onClick={() => handleApprove(s.id)}
+                            >
+                              {actingOn === s.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                              )}
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1.5 text-destructive border-destructive/20 hover:bg-destructive/10 hover:text-destructive"
+                              disabled={actingOn === s.id}
+                              onClick={() => handleReject(s.id)}
+                            >
+                              <XCircle className="h-3.5 w-3.5" />
+                              Reject
+                            </Button>
+                          </>
+                        )}
+                        {s.status === "active" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5 text-destructive border-destructive/20 hover:bg-destructive/10 hover:text-destructive"
+                            disabled={actingOn === s.id}
+                            onClick={() => handleSuspend(s.id)}
+                          >
+                            {actingOn === s.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Ban className="h-3.5 w-3.5" />
+                            )}
+                            Suspend
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <PendingSellerVerification />
       <PendingConfigVerification />
@@ -199,19 +462,19 @@ export function SellersTab() {
   );
 }
 
+// ─── Sub-section: Verified Seller Badge Requests ──────────────────────────────
+
 /**
  * Verified-seller badge review queue (public trust checkmark, separate
- * from the account-status queue at the top of this file -- see
- * sellers.ts schema doc comment / routes/adminSellers.ts's verify routes).
- * Mirrors PendingConfigVerification's shape/pending-vs-approved tab
- * pattern just below it, for a seller-level rather than config-level
- * request.
+ * from the account-status queue above — see sellers.ts schema doc
+ * comment / routes/adminSellers.ts's verify routes). Mirrors
+ * PendingConfigVerification's shape/pending-vs-approved tab pattern
+ * just below it, for a seller-level rather than config-level request.
  */
 function PendingSellerVerification() {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<"requested" | "approved" | "rejected">("requested");
   const [actingOn, setActingOn] = useState<number | null>(null);
-  const [rejectingId, setRejectingId] = useState<number | null>(null);
 
   const { data: sellers, isLoading } = useListSellerVerificationRequests(
     { status: filter },
@@ -248,90 +511,152 @@ function PendingSellerVerification() {
     );
   }
 
+  const count = sellers?.length ?? 0;
+
   return (
-    <div className="mt-10 pt-8 border-t">
-      <h2 className="font-medium text-foreground mb-1">Verified Seller Badge Requests</h2>
-      <p className="text-xs text-muted-foreground/70 mb-4">
-        Approving grants the public checkmark shown on this seller's listing cards.
-      </p>
-
-      <Tabs value={filter} onValueChange={(v) => setFilter(v as typeof filter)}>
-        <TabsList className="rounded-full mb-4">
-          <TabsTrigger value="requested" className="rounded-full text-xs">Pending</TabsTrigger>
-          <TabsTrigger value="approved" className="rounded-full text-xs">Verified</TabsTrigger>
-          <TabsTrigger value="rejected" className="rounded-full text-xs">Rejected</TabsTrigger>
-        </TabsList>
-      </Tabs>
-
-      {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2].map((i) => <div key={i} className="h-20 rounded-2xl bg-muted animate-pulse" />)}
+    <section className="pt-2">
+      <div className="flex items-start gap-3 mb-4">
+        <div className="hidden sm:flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <BadgeCheck className="h-4.5 w-4.5" />
         </div>
-      ) : !sellers || sellers.length === 0 ? (
-        <div className="text-center py-10 text-muted-foreground bg-card rounded-2xl border">
-          <BadgeCheck className="h-6 w-6 mx-auto mb-2 opacity-30" />
-          <p className="text-sm">No {filter} verification requests</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {sellers.map((s: any) => (
-            <div key={s.id} className="bg-card rounded-2xl border p-4 flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-medium text-sm text-foreground">{s.businessName}</p>
-                  <span className="text-xs text-muted-foreground/70">·</span>
-                  <p className="text-xs text-muted-foreground">{s.nurseryName}</p>
-                </div>
-                <p className="text-xs text-muted-foreground/70 mt-0.5">{s.location}</p>
-                {filter === "requested" && s.verificationRequestedAt && (
-                  <p className="text-xs text-muted-foreground/50 mt-1">
-                    Requested {new Date(s.verificationRequestedAt).toLocaleDateString()}
-                  </p>
-                )}
-                {filter === "rejected" && s.verificationRejectionReason && (
-                  <p className="text-xs text-destructive mt-1">Reason: {s.verificationRejectionReason}</p>
-                )}
-              </div>
-              {filter === "requested" && (
-                <div className="flex gap-2 shrink-0">
-                  <Button
-                    size="sm"
-                    className="rounded-full gap-1.5"
-                    disabled={actingOn === s.id}
-                    onClick={() => handleApprove(s.id)}
-                  >
-                    {actingOn === s.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                    Approve
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="rounded-full gap-1.5 text-destructive border-destructive/20 hover:bg-destructive/10"
-                    disabled={actingOn === s.id}
-                    onClick={() => handleReject(s.id)}
-                  >
-                    <XCircle className="h-3.5 w-3.5" />
-                    Reject
-                  </Button>
-                </div>
-              )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold tracking-tight text-foreground">
+                Verified Seller Badge Requests
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Approving grants the public checkmark shown on this seller's listing cards.
+              </p>
             </div>
-          ))}
+          </div>
+          <div className="mt-3">
+            <Tabs value={filter} onValueChange={(v) => setFilter(v as typeof filter)}>
+              <TabsList className="rounded-lg bg-muted/50 p-1">
+                {([
+                  { value: "requested", label: "Pending" },
+                  { value: "approved", label: "Verified" },
+                  { value: "rejected", label: "Rejected" },
+                ] as const).map((t) => (
+                  <TabsTrigger
+                    key={t.value}
+                    value={t.value}
+                    className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                  >
+                    {t.label}
+                    <StatChip count={count} />
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          </div>
         </div>
-      )}
-    </div>
+      </div>
+
+      <Card>
+        <CardContent className="p-4 sm:p-5">
+          {isLoading ? (
+            <div className="space-y-3">
+              {[1, 2].map((i) => (
+                <div key={i} className="h-20 rounded-xl bg-muted/40 animate-pulse" />
+              ))}
+            </div>
+          ) : !sellers || sellers.length === 0 ? (
+            <EmptyState
+              icon={BadgeCheck}
+              title={`No ${filter} verification requests`}
+              description="When a seller requests the verified badge, they'll appear here."
+            />
+          ) : (
+            <div className="space-y-3">
+              {sellers.map((s: any) => (
+                <div
+                  key={s.id}
+                  className="rounded-xl border bg-card p-4 transition-colors hover:bg-muted/20"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary text-xs font-semibold">
+                        {(s.businessName ?? "?").slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-medium text-sm text-foreground truncate">
+                            {s.businessName}
+                          </p>
+                          {s.nurseryName && s.nurseryName !== s.businessName && (
+                            <span className="text-xs text-muted-foreground/70">·</span>
+                          )}
+                          {s.nurseryName && s.nurseryName !== s.businessName && (
+                            <p className="text-xs text-muted-foreground">{s.nurseryName}</p>
+                          )}
+                        </div>
+                        {s.location && (
+                          <div className="mt-1">
+                            <InfoRow icon={MapPin} title={s.location}>{s.location}</InfoRow>
+                          </div>
+                        )}
+                        {filter === "requested" && s.verificationRequestedAt && (
+                          <p className="text-xs text-muted-foreground/70 mt-1.5">
+                            Requested {new Date(s.verificationRequestedAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
+                          </p>
+                        )}
+                        {filter === "rejected" && s.verificationRejectionReason && (
+                          <p className="text-xs text-destructive mt-1.5">
+                            Reason: {s.verificationRejectionReason}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {filter === "requested" && (
+                      <div className="flex gap-2 shrink-0">
+                        <Button
+                          size="sm"
+                          className="gap-1.5"
+                          disabled={actingOn === s.id}
+                          onClick={() => handleApprove(s.id)}
+                        >
+                          {actingOn === s.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          )}
+                          Approve
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5 text-destructive border-destructive/20 hover:bg-destructive/10 hover:text-destructive"
+                          disabled={actingOn === s.id}
+                          onClick={() => handleReject(s.id)}
+                        >
+                          <XCircle className="h-3.5 w-3.5" />
+                          Reject
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
+// ─── Sub-section: Payment & Courier Config Verification ───────────────────────
+
 /**
  * Payment/courier config verification queue (Part 6). Separate from the
- * seller status queue above -- a seller must already be "active" to have
+ * seller status queue above — a seller must already be "active" to have
  * saved a config at all (routes/sellerPaymentConfigs.ts and
  * sellerCourierConfigs.ts both gate on requireSeller, which requires
  * status === "active"), so this doesn't need its own status filter, just
  * a verified/unverified toggle per config type. Defaults to showing
- * unverified (the actual review queue); "Verified" lets admin double-check
- * or revoke an existing approval.
+ * unverified (the actual review queue); "Verified" lets admin
+ * double-check or revoke an existing approval.
  */
 function PendingConfigVerification() {
   const qc = useQueryClient();
@@ -381,70 +706,130 @@ function PendingConfigVerification() {
 
   const isLoading = tab === "payment" ? paymentConfigs.isLoading : courierConfigs.isLoading;
   const configs = tab === "payment" ? paymentConfigs.data : courierConfigs.data;
+  const configCount = configs?.length ?? 0;
 
   return (
-    <div className="mt-10 pt-8 border-t">
-      <h2 className="font-medium text-foreground mb-1">Payment &amp; Courier Verification</h2>
-      <p className="text-xs text-muted-foreground/70 mb-4">
-        Manual review only -- no live bKash/Pathao/Steadfast API check is performed here. Confirm credentials work
-        by some means outside this system before approving.
-      </p>
-
-      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-        <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
-          <TabsList className="rounded-full">
-            <TabsTrigger value="payment" className="rounded-full text-xs gap-1"><Wallet className="h-3 w-3" /> Payment</TabsTrigger>
-            <TabsTrigger value="courier" className="rounded-full text-xs gap-1"><Truck className="h-3 w-3" /> Courier</TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <Tabs value={String(showVerified)} onValueChange={(v) => setShowVerified(v === "true")}>
-          <TabsList className="rounded-full">
-            <TabsTrigger value="false" className="rounded-full text-xs">Pending</TabsTrigger>
-            <TabsTrigger value="true" className="rounded-full text-xs">Verified</TabsTrigger>
-          </TabsList>
-        </Tabs>
+    <section className="pt-2">
+      <div className="flex items-start gap-3 mb-4">
+        <div className="hidden sm:flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <ShieldCheck className="h-4.5 w-4.5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-semibold tracking-tight text-foreground">
+            Payment &amp; Courier Verification
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Manual review only — no live bKash/Pathao/Steadfast API check is performed here.
+            Confirm credentials work by some means outside this system before approving.
+          </p>
+          <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+              <TabsList className="rounded-lg bg-muted/50 p-1">
+                <TabsTrigger
+                  value="payment"
+                  className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                >
+                  <Wallet className="h-3 w-3" />
+                  Payment
+                </TabsTrigger>
+                <TabsTrigger
+                  value="courier"
+                  className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                >
+                  <Truck className="h-3 w-3" />
+                  Courier
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <Tabs value={String(showVerified)} onValueChange={(v) => setShowVerified(v === "true")}>
+              <TabsList className="rounded-lg bg-muted/50 p-1">
+                <TabsTrigger
+                  value="false"
+                  className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                >
+                  Pending
+                  <StatChip count={showVerified ? 0 : configCount} />
+                </TabsTrigger>
+                <TabsTrigger
+                  value="true"
+                  className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                >
+                  Verified
+                  <StatChip count={showVerified ? configCount : 0} />
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+        </div>
       </div>
 
-      {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2].map((i) => <div key={i} className="h-16 rounded-2xl bg-muted animate-pulse" />)}
-        </div>
-      ) : !configs || configs.length === 0 ? (
-        <div className="text-center py-10 text-muted-foreground bg-card rounded-2xl border">
-          <ShieldCheck className="h-6 w-6 mx-auto mb-2 opacity-30" />
-          <p className="text-sm">No {showVerified ? "verified" : "pending"} {tab} configs</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {configs.map((c: any) => (
-            <div key={c.id} className="bg-card rounded-2xl border p-4 flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-medium text-sm text-foreground capitalize">{c.provider}</p>
-                  <span className="text-xs text-muted-foreground/70">·</span>
-                  <p className="text-xs text-muted-foreground">Seller #{c.sellerId}</p>
-                </div>
-                <p className="text-xs text-muted-foreground/70 mt-0.5">
-                  {tab === "payment"
-                    ? `App Key: ${c.merchantAppKeyMasked} · Username: ${c.merchantUsernameMasked}`
-                    : `Key: ${c.apiKeyMasked} · Secret: ${c.apiSecretMasked}${c.storeId ? ` · Store ${c.storeId}` : ""}`}
-                </p>
-              </div>
-              {!showVerified && (
-                <Button
-                  size="sm"
-                  className="rounded-full gap-1.5 shrink-0"
-                  disabled={actingOn === c.id}
-                  onClick={() => (tab === "payment" ? handleVerifyPayment(c.id) : handleVerifyCourier(c.id))}
-                >
-                  {actingOn === c.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                  Verify
-                </Button>
-              )}
+      <Card>
+        <CardContent className="p-4 sm:p-5">
+          {isLoading ? (
+            <div className="space-y-3">
+              {[1, 2].map((i) => (
+                <div key={i} className="h-16 rounded-xl bg-muted/40 animate-pulse" />
+              ))}
             </div>
-          ))}
-        </div>
-      )}
-    </div>
+          ) : !configs || configs.length === 0 ? (
+            <EmptyState
+              icon={tab === "payment" ? Wallet : Truck}
+              title={`No ${showVerified ? "verified" : "pending"} ${tab} configs`}
+              description="When a seller saves a config for review, it'll appear here."
+            />
+          ) : (
+            <div className="space-y-3">
+              {configs.map((c: any) => (
+                <div
+                  key={c.id}
+                  className="rounded-xl border bg-card p-4 transition-colors hover:bg-muted/20"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                        {tab === "payment" ? (
+                          <Wallet className="h-4 w-4" />
+                        ) : (
+                          <Truck className="h-4 w-4" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-medium text-sm text-foreground capitalize">
+                            {c.provider}
+                          </p>
+                          <span className="text-xs text-muted-foreground/70">·</span>
+                          <p className="text-xs text-muted-foreground">Seller #{c.sellerId}</p>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1 font-mono">
+                          {tab === "payment"
+                            ? `App Key: ${c.merchantAppKeyMasked} · Username: ${c.merchantUsernameMasked}`
+                            : `Key: ${c.apiKeyMasked} · Secret: ${c.apiSecretMasked}${c.storeId ? ` · Store ${c.storeId}` : ""}`}
+                        </p>
+                      </div>
+                    </div>
+                    {!showVerified && (
+                      <Button
+                        size="sm"
+                        className="gap-1.5 shrink-0"
+                        disabled={actingOn === c.id}
+                        onClick={() => (tab === "payment" ? handleVerifyPayment(c.id) : handleVerifyCourier(c.id))}
+                      >
+                        {actingOn === c.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                        )}
+                        Verify
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </section>
   );
 }
