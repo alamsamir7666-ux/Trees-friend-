@@ -105,18 +105,28 @@
       Add ?debug=1 to any page URL on your phone to get a floating
       button that opens a DevTools-like console showing real JS
       errors, network requests, and console.log output.
+
+      Note: we wait for DOMContentLoaded so document.body exists,
+      then inject the Eruda script from the jsdelivr CDN.
     -->
     <script>
       (function () {
         var params = new URLSearchParams(window.location.search);
         var isDebug = params.get('debug') === '1' || window.location.hash.indexOf('debug') !== -1;
         if (!isDebug) return;
-        var script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/eruda';
-        script.onload = function () {
-          window.eruda && window.eruda.init();
-        };
-        document.body.appendChild(script);
+        function loadEruda() {
+          var script = document.createElement('script');
+          script.src = 'https://cdn.jsdelivr.net/npm/eruda';
+          script.onload = function () {
+            window.eruda && window.eruda.init();
+          };
+          document.body.appendChild(script);
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', loadEruda);
+        } else {
+          loadEruda();
+        }
       })();
     </script>
 

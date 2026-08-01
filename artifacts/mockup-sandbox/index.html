@@ -27,5 +27,33 @@
   <body style="height: 100%; margin: 0">
     <div id="root" style="height: 100%"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!--
+      Eruda mobile debug console -- loads ONLY when the page URL has
+      ?debug=1 (or #debug). Add ?debug=1 to any URL to open a floating
+      DevTools-like console (JS errors, network, console.log, storage, etc).
+
+      Note: we wait for DOMContentLoaded so document.body exists,
+      then inject the Eruda script from the jsdelivr CDN.
+    -->
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var isDebug = params.get('debug') === '1' || window.location.hash.indexOf('debug') !== -1;
+        if (!isDebug) return;
+        function loadEruda() {
+          var script = document.createElement('script');
+          script.src = 'https://cdn.jsdelivr.net/npm/eruda';
+          script.onload = function () {
+            window.eruda && window.eruda.init();
+          };
+          document.body.appendChild(script);
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', loadEruda);
+        } else {
+          loadEruda();
+        }
+      })();
+    </script>
   </body>
 </html>
