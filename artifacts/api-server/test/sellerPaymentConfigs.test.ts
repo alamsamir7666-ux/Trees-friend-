@@ -48,11 +48,12 @@ describe("seller-payment-configs routes (HTTP)", () => {
     expect(res.status).toBe(403);
   });
 
-  it("404s GET /api/seller-payment-configs/mine before any config exists", async () => {
+  it("returns 200 with null for GET /api/seller-payment-configs/mine before any config exists", async () => {
     const res = await request(app)
       .get("/api/seller-payment-configs/mine")
       .set(authHeader(sellerClerkId, "payconfig-seller@test.example"));
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.body).toBeNull();
   });
 
   it("happy path: seller creates a payment config, it's masked in the response, isVerified starts false", async () => {

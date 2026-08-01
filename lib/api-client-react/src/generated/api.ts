@@ -5700,11 +5700,11 @@ export const getGetMySellerCourierConfigUrl = () => {
 }
 
 /**
- * @summary Seller — get their own courier config (masked credentials). 404 means not set up yet (manual fallback).
+ * @summary Seller — get their own courier config (masked credentials). Returns null when not set up yet (manual fallback).
  */
-export const getMySellerCourierConfig = async ( options?: RequestInit): Promise<SellerCourierConfig> => {
+export const getMySellerCourierConfig = async ( options?: RequestInit): Promise<SellerCourierConfig | null> => {
 
-  return customFetch<SellerCourierConfig>(getGetMySellerCourierConfigUrl(),
+  return customFetch<SellerCourierConfig | null>(getGetMySellerCourierConfigUrl(),
   {
     ...options,
     method: 'GET'
@@ -5747,7 +5747,7 @@ export type GetMySellerCourierConfigQueryError = ErrorType<unknown>
 
 
 /**
- * @summary Seller — get their own courier config (masked credentials). 404 means not set up yet (manual fallback).
+ * @summary Seller — get their own courier config (masked credentials). Returns null when not set up yet (manual fallback).
  */
 
 export function useGetMySellerCourierConfig<TData = Awaited<ReturnType<typeof getMySellerCourierConfig>>, TError = ErrorType<unknown>>(
@@ -5917,11 +5917,11 @@ export const getGetMySellerPaymentConfigUrl = () => {
 }
 
 /**
- * @summary Seller — get their own bKash payment config (masked credentials). 404 means not set up yet (COD-only).
+ * @summary Seller — get their own bKash payment config (masked credentials). Returns null when not set up yet (COD-only).
  */
-export const getMySellerPaymentConfig = async ( options?: RequestInit): Promise<SellerPaymentConfig> => {
+export const getMySellerPaymentConfig = async ( options?: RequestInit): Promise<SellerPaymentConfig | null> => {
 
-  return customFetch<SellerPaymentConfig>(getGetMySellerPaymentConfigUrl(),
+  return customFetch<SellerPaymentConfig | null>(getGetMySellerPaymentConfigUrl(),
   {
     ...options,
     method: 'GET'
@@ -5964,7 +5964,7 @@ export type GetMySellerPaymentConfigQueryError = ErrorType<unknown>
 
 
 /**
- * @summary Seller — get their own bKash payment config (masked credentials). 404 means not set up yet (COD-only).
+ * @summary Seller — get their own bKash payment config (masked credentials). Returns null when not set up yet (COD-only).
  */
 
 export function useGetMySellerPaymentConfig<TData = Awaited<ReturnType<typeof getMySellerPaymentConfig>>, TError = ErrorType<unknown>>(
@@ -6498,11 +6498,11 @@ export const getGetMySellerPayoutAccountUrl = () => {
 }
 
 /**
- * @summary Seller — get their own bKash payout account. 404 means not set up yet.
+ * @summary Seller — get their own bKash payout account. Returns null when not set up yet.
  */
-export const getMySellerPayoutAccount = async ( options?: RequestInit): Promise<SellerPayoutAccount> => {
+export const getMySellerPayoutAccount = async ( options?: RequestInit): Promise<SellerPayoutAccount | null> => {
 
-  return customFetch<SellerPayoutAccount>(getGetMySellerPayoutAccountUrl(),
+  return customFetch<SellerPayoutAccount | null>(getGetMySellerPayoutAccountUrl(),
   {
     ...options,
     method: 'GET'
@@ -6545,7 +6545,7 @@ export type GetMySellerPayoutAccountQueryError = ErrorType<unknown>
 
 
 /**
- * @summary Seller — get their own bKash payout account. 404 means not set up yet.
+ * @summary Seller — get their own bKash payout account. Returns null when not set up yet.
  */
 
 export function useGetMySellerPayoutAccount<TData = Awaited<ReturnType<typeof getMySellerPayoutAccount>>, TError = ErrorType<unknown>>(

@@ -34,10 +34,12 @@ import { requireSeller } from "../middlewares/auth";
 const router = Router();
 
 /**
- * Seller: get their own payout account. 404 if none registered yet --
- * this is the normal "not set up yet" state (a new seller hasn't been
- * asked to provide a payout number until they need one), not an error
- * state, matching the old route's same 404-is-not-an-error convention.
+ * Seller: get their own payout account. Returns 200 with null when no account
+ * is registered yet -- this is the normal "not set up yet" state (a new
+ * seller hasn't been asked to provide a payout number until they need one),
+ * not an error state. Returning 200/null (instead of 404) means React Query
+ * treats the response as successful data and caches it normally, instead of
+ * refetching on every Clerk token refresh and flooding the Network tab.
  */
 router.get("/seller-payout-accounts/mine", requireSeller, async (req, res) => {
   try {
@@ -47,7 +49,7 @@ router.get("/seller-payout-accounts/mine", requireSeller, async (req, res) => {
       .where(eq(sellerPayoutAccountsTable.sellerId, req.dbSeller!.id))
       .limit(1);
     if (!account) {
-      res.status(404).json({ error: "No payout account set up yet" });
+      res.status(200).json(null);
       return;
     }
     res.json(account);

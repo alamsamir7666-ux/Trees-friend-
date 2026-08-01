@@ -2324,9 +2324,9 @@ export const RejectSellerListingResponse = zod.object({
 
 
 /**
- * @summary Seller — get their own courier config (masked credentials). 404 means not set up yet (manual fallback).
+ * @summary Seller — get their own courier config (masked credentials). Returns null when not set up yet (manual fallback).
  */
-export const GetMySellerCourierConfigResponse = zod.object({
+export const GetMySellerCourierConfigResponse = zod.union([zod.object({
   "id": zod.number(),
   "sellerId": zod.number(),
   "provider": zod.enum(['pathao', 'steadfast']),
@@ -2335,7 +2335,7 @@ export const GetMySellerCourierConfigResponse = zod.object({
   "storeId": zod.string().nullish(),
   "isVerified": zod.boolean(),
   "createdAt": zod.string()
-}).describe('Masked seller courier credentials (plan doc §4, §8). Never contains decrypted apiKey\/apiSecret -- only a last-4-style mask, per the schema\'s security note.')
+}).describe('Masked seller courier credentials (plan doc §4, §8). Never contains decrypted apiKey\/apiSecret -- only a last-4-style mask, per the schema\'s security note.'),zod.null()])
 
 
 /**
@@ -2358,9 +2358,9 @@ export const CreateSellerCourierConfigBody = zod.object({
 
 
 /**
- * @summary Seller — get their own bKash payment config (masked credentials). 404 means not set up yet (COD-only).
+ * @summary Seller — get their own bKash payment config (masked credentials). Returns null when not set up yet (COD-only).
  */
-export const GetMySellerPaymentConfigResponse = zod.object({
+export const GetMySellerPaymentConfigResponse = zod.union([zod.object({
   "id": zod.number(),
   "sellerId": zod.number(),
   "provider": zod.enum(['bkash']),
@@ -2371,7 +2371,7 @@ export const GetMySellerPaymentConfigResponse = zod.object({
   "isVerified": zod.boolean(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
-}).describe('Masked seller bKash merchant credentials (plan doc §4, §7 — Part 5). Never contains decrypted merchantAppKey\/merchantAppSecret\/ merchantUsername\/merchantPassword -- only a last-4-style mask, per the schema\'s security note. isVerified is never set true by the create\/replace route itself (no live-credential check exists) -- it stays false until some future verification step sets it, and routes\/sellerListings.ts + routes\/orders.ts both gate \"advance\"\/\"both\"\/\"bkash\" on isVerified specifically, not just row existence.')
+}).describe('Masked seller bKash merchant credentials (plan doc §4, §7 — Part 5). Never contains decrypted merchantAppKey\/merchantAppSecret\/ merchantUsername\/merchantPassword -- only a last-4-style mask, per the schema\'s security note. isVerified is never set true by the create\/replace route itself (no live-credential check exists) -- it stays false until some future verification step sets it, and routes\/sellerListings.ts + routes\/orders.ts both gate \"advance\"\/\"both\"\/\"bkash\" on isVerified specifically, not just row existence.'),zod.null()])
 
 
 /**
@@ -2463,21 +2463,22 @@ export const QueryBkashPaymentResponse = zod.object({
   "paymentID": zod.string(),
   "trxID": zod.string().nullish(),
   "transactionStatus": zod.string(),
-  "amount": zod.string().optional()
+  "amount": zod.string().optional(),
+  "merchantInvoiceNumber": zod.string().nullish().describe('Our own orders.trackingId, as originally sent to bKash at Create Payment time.')
 }).describe('Raw-ish status straight from bKash\'s own Query Payment API, for reconciliation\/debugging only.')
 
 
 /**
- * @summary Seller — get their own bKash payout account. 404 means not set up yet.
+ * @summary Seller — get their own bKash payout account. Returns null when not set up yet.
  */
-export const GetMySellerPayoutAccountResponse = zod.object({
+export const GetMySellerPayoutAccountResponse = zod.union([zod.object({
   "id": zod.number(),
   "sellerId": zod.number(),
   "bkashNumber": zod.string(),
   "accountHolderName": zod.string().nullish(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
-}).describe('A seller\'s plain bKash payout NUMBER (new admin-custodial payments design, Part 1 of 4) — not a secret credential, so unlike SellerPaymentConfig this is returned unmasked.')
+}).describe('A seller\'s plain bKash payout NUMBER (new admin-custodial payments design, Part 1 of 4) — not a secret credential, so unlike SellerPaymentConfig this is returned unmasked.'),zod.null()])
 
 
 /**

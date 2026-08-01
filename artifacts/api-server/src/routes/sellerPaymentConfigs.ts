@@ -49,10 +49,12 @@ function toMasked(c: PaymentConfigRow) {
 }
 
 /**
- * Seller: get their own payment config (masked). 404 if none configured --
- * that's the normal "COD only" state (plan doc §7), not an error state, so
- * the frontend should treat 404 as "not set up yet," not show an error
- * toast.
+ * Seller: get their own payment config (masked). Returns 200 with null when
+ * no config exists -- that's the normal "COD only" state (plan doc §7),
+ * not an error state. Returning 200/null (instead of 404) means React Query
+ * treats the response as successful data, so it gets cached normally and
+ * doesn't get refetched on every Clerk token refresh (which was flooding
+ * the seller dashboard's Network tab with ~12 identical 404s per session).
  */
 router.get("/seller-payment-configs/mine", requireSeller, async (req, res) => {
   try {
@@ -62,7 +64,7 @@ router.get("/seller-payment-configs/mine", requireSeller, async (req, res) => {
       .where(eq(sellerPaymentConfigsTable.sellerId, req.dbSeller!.id))
       .limit(1);
     if (!config) {
-      res.status(404).json({ error: "No payment config set up yet" });
+      res.status(200).json(null);
       return;
     }
     res.json(toMasked(config));

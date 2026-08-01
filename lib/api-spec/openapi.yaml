@@ -1562,14 +1562,21 @@ paths:
     get:
       operationId: getMySellerCourierConfig
       tags: [sellerOrders]
-      summary: Seller — get their own courier config (masked credentials). 404 means not set up yet (manual fallback).
+      summary: Seller — get their own courier config (masked credentials). Returns null when not set up yet (manual fallback).
       responses:
         "200":
-          description: Masked courier config
+          description: >-
+              Masked courier config, or null if not set up yet (manual
+              fallback). Returning 200/null instead of 404 lets the frontend
+              cache the "not configured" state like any other successful
+              response, instead of treating it as an error that gets
+              retried/refetched on every token refresh.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SellerCourierConfig"
+                oneOf:
+                  - $ref: "#/components/schemas/SellerCourierConfig"
+                  - type: "null"
     delete:
       operationId: deleteMySellerCourierConfig
       tags: [sellerOrders]
@@ -1605,14 +1612,21 @@ paths:
     get:
       operationId: getMySellerPaymentConfig
       tags: [sellerPaymentConfigs]
-      summary: Seller — get their own bKash payment config (masked credentials). 404 means not set up yet (COD-only).
+      summary: Seller — get their own bKash payment config (masked credentials). Returns null when not set up yet (COD-only).
       responses:
         "200":
-          description: Masked payment config
+          description: >-
+              Masked payment config, or null if not set up yet (COD-only).
+              Returning 200/null instead of 404 lets the frontend cache the
+              "not configured" state like any other successful response,
+              instead of treating it as an error that gets retried/refetched
+              on every token refresh.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SellerPaymentConfig"
+                oneOf:
+                  - $ref: "#/components/schemas/SellerPaymentConfig"
+                  - type: "null"
     delete:
       operationId: deleteMySellerPaymentConfig
       tags: [sellerPaymentConfigs]
@@ -1735,14 +1749,21 @@ paths:
     get:
       operationId: getMySellerPayoutAccount
       tags: [sellerPayoutAccounts]
-      summary: Seller — get their own bKash payout account. 404 means not set up yet.
+      summary: Seller — get their own bKash payout account. Returns null when not set up yet.
       responses:
         "200":
-          description: Payout account
+          description: >-
+              Payout account, or null if not set up yet. Returning 200/null
+              instead of 404 lets the frontend cache the "not configured"
+              state like any other successful response, instead of treating
+              it as an error that gets retried/refetched on every token
+              refresh.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SellerPayoutAccount"
+                oneOf:
+                  - $ref: "#/components/schemas/SellerPayoutAccount"
+                  - type: "null"
     delete:
       operationId: deleteMySellerPayoutAccount
       tags: [sellerPayoutAccounts]

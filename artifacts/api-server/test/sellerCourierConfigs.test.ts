@@ -90,7 +90,7 @@ describe("seller-courier-configs routes (HTTP)", () => {
     expect(res.body.provider).toBe("pathao");
   });
 
-  it("DELETE /api/seller-courier-configs/mine removes the config, then GET/DELETE both 404", async () => {
+  it("DELETE /api/seller-courier-configs/mine removes the config, then GET returns 200/null and DELETE 404s", async () => {
     const del = await request(app)
       .delete("/api/seller-courier-configs/mine")
       .set(authHeader(sellerClerkId, "courierconfig-seller@test.example"));
@@ -99,7 +99,8 @@ describe("seller-courier-configs routes (HTTP)", () => {
     const get = await request(app)
       .get("/api/seller-courier-configs/mine")
       .set(authHeader(sellerClerkId, "courierconfig-seller@test.example"));
-    expect(get.status).toBe(404);
+    expect(get.status).toBe(200);
+    expect(get.body).toBeNull();
 
     const del2 = await request(app)
       .delete("/api/seller-courier-configs/mine")

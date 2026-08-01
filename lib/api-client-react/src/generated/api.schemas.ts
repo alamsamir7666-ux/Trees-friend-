@@ -502,6 +502,11 @@ export interface BkashQueryPaymentResult {
   trxID?: string | null;
   transactionStatus: string;
   amount?: string;
+  /**
+     * Our own orders.trackingId, as originally sent to bKash at Create Payment time.
+     * @nullable
+     */
+  merchantInvoiceNumber?: string | null;
 }
 
 /**
