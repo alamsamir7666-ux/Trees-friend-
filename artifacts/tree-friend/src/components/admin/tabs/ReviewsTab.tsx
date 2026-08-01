@@ -568,7 +568,11 @@ export function ReviewsTab() {
         />
       )}
 
-      {/* Toolbar: search + target filter + sort + reset */}
+      {/* Toolbar: search + target filter + sort + reset
+          - Mobile (<sm): stacked — search / target-select / [sort (grows) + reset (icon-only)]
+          - Desktop (sm+): single row — search (flex-1) + target-select + sort + reset (with label)
+          Previous version put all three controls in a flex-nowrap row that needed 326px in a
+          309px mobile viewport, truncating the selects and clipping the Reset button. */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
@@ -579,21 +583,23 @@ export function ReviewsTab() {
             className="h-9 pl-8 text-sm"
           />
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Select value={targetFilter} onValueChange={(v) => changeTargetFilter(v as TargetFilter)}>
-            <SelectTrigger className="h-9 w-full sm:w-[180px] text-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TARGET_FILTER_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value} className="text-sm">
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* Target filter — full width on mobile, fixed width on desktop */}
+        <Select value={targetFilter} onValueChange={(v) => changeTargetFilter(v as TargetFilter)}>
+          <SelectTrigger className="h-9 w-full sm:w-[180px] text-sm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {TARGET_FILTER_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value} className="text-sm">
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {/* Sort + Reset share a row — sort grows on mobile, reset is icon-only on mobile */}
+        <div className="flex items-center gap-2 sm:shrink-0">
           <Select value={sortKey} onValueChange={(v) => changeSort(v as SortKey)}>
-            <SelectTrigger className="h-9 w-full sm:w-[160px] text-sm">
+            <SelectTrigger className="h-9 w-full sm:w-[160px] text-sm flex-1 sm:flex-none">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -608,12 +614,13 @@ export function ReviewsTab() {
             <Button
               variant="outline"
               size="sm"
-              className="h-9 shrink-0 gap-1.5 text-xs"
+              className="h-9 shrink-0 gap-1.5 text-xs px-2 sm:px-3"
               onClick={resetFilters}
               title="Reset filters"
+              aria-label="Reset filters"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              Reset
+              <span className="hidden sm:inline">Reset</span>
             </Button>
           )}
         </div>
