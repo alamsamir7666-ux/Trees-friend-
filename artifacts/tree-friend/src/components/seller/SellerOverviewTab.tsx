@@ -13,6 +13,8 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell,
 } from "recharts";
+import { useChartColors } from "@/hooks/useChartColors";
+import { ORDER_STATUS_CHART_COLORS } from "@/lib/chartColors";
 import {
   useListMySellerListings,
   useListSellerOrders,
@@ -25,60 +27,52 @@ import {
 } from "@workspace/api-client-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Design tokens (matches brand: forest green / cream / gold-brown)
-// ─────────────────────────────────────────────────────────────────────────────
-const CHART_PRIMARY = "hsl(150 30% 40%)"; // chart-1 — forest green
-const CHART_ACCENT = "hsl(32 55% 45%)"; // gold-brown
-const CHART_SOFT = "hsl(160 30% 60%)"; // sage
+// Chart colors are resolved at runtime via useChartColors() so they swap
+// correctly between light and dark themes. Previously these were hardcoded
+// HSL strings (e.g. "hsl(150 30% 40%)") that didn't change with theme.
 
 // Status metadata — single source of truth
 type OrderStatus = "pending" | "confirmed" | "processing" | "shipped" | "delivered" | "cancelled";
 
 const ORDER_STATUS_META: Record<
   OrderStatus,
-  { label: string; icon: React.ElementType; dot: string; chip: string; hex: string }
+  { label: string; icon: React.ElementType; dot: string; chip: string }
 > = {
   pending: {
     label: "Pending",
     icon: Clock,
     dot: "bg-warning-foreground",
     chip: "bg-warning text-warning-foreground ring-1 ring-warning-border/60",
-    hex: "#f59e0b",
   },
   confirmed: {
     label: "Confirmed",
     icon: CheckCircle2,
     dot: "bg-info-foreground",
     chip: "bg-info text-info-foreground ring-1 ring-info-border/60",
-    hex: "#0ea5e9",
   },
   processing: {
     label: "Processing",
     icon: BarChart3,
     dot: "bg-info-foreground",
     chip: "bg-info text-info-foreground ring-1 ring-info-border/60",
-    hex: "#8b5cf6",
   },
   shipped: {
     label: "Shipped",
     icon: Truck,
     dot: "bg-info-foreground",
     chip: "bg-info text-info-foreground ring-1 ring-info-border/60",
-    hex: "#6366f1",
   },
   delivered: {
     label: "Delivered",
     icon: PackageCheck,
     dot: "bg-success-foreground",
     chip: "bg-success text-success-foreground ring-1 ring-success-border/60",
-    hex: "#10b981",
   },
   cancelled: {
     label: "Cancelled",
     icon: XCircle,
     dot: "bg-destructive",
     chip: "bg-destructive/10 text-destructive ring-1 ring-destructive/20",
-    hex: "#f43f5e",
   },
 };
 
@@ -167,6 +161,7 @@ function KpiCard({
   sparkKey: string;
   isLoading?: boolean;
 }) {
+  const chart = useChartColors();
   if (isLoading) {
     return (
       <div className="rounded-2xl border border-border bg-card p-5">
@@ -185,7 +180,7 @@ function KpiCard({
   const trendDown = change !== null && change < 0;
   const trendNeutral = change === null || change === 0;
   const sparkColor =
-    trendUp ? "#10b981" : trendDown ? "#f43f5e" : CHART_PRIMARY;
+    trendUp ? chart.trendUp : trendDown ? chart.trendDown : chart.primary;
 
   return (
     <div className="group rounded-2xl border border-border bg-card p-5 transition-all duration-200 hover:shadow-md hover:border-foreground/10">
@@ -254,6 +249,7 @@ function KpiCard({
 // Order status donut
 // ─────────────────────────────────────────────────────────────────────────────
 function StatusDonut({ counts, total }: { counts: Record<OrderStatus, number>; total: number }) {
+  const chart = useChartColors();
   const segments = STATUS_ORDER.filter((s) => counts[s] > 0);
   const radius = 60;
   const strokeWidth = 14;
@@ -288,7 +284,7 @@ function StatusDonut({ counts, total }: { counts: Record<OrderStatus, number>; t
                 cy="80"
                 r={radius}
                 fill="none"
-                stroke={ORDER_STATUS_META[s].hex}
+                stroke={(ORDER_STATUS_CHART_COLORS[s] ?? ((p) => p.fallback))(chart)}
                 strokeWidth={strokeWidth}
                 strokeDasharray={`${dash} ${circumference - dash}`}
                 strokeDashoffset={-offset}
@@ -492,6 +488,7 @@ export function SellerOverviewTab({
   seller: Seller;
   onNavigate: (section: string) => void;
 }) {
+  const chart = useChartColors();
   const [rangeKey, setRangeKey] = useState<RangeKey>("30d");
   const [chartMetric, setChartMetric] = useState<"revenue" | "orders">("revenue");
 
@@ -1006,8 +1003,8 @@ export function SellerOverviewTab({
                 <AreaChart data={chartData} margin={{ top: 10, right: 8, left: -8, bottom: 0 }}>
                   <defs>
                     <linearGradient id="mainChartGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={CHART_PRIMARY} stopOpacity={0.32} />
-                      <stop offset="100%" stopColor={CHART_PRIMARY} stopOpacity={0.02} />
+                      <stop offset="0%" stopColor={chart.primary} stopOpacity={0.32} />
+                      <stop offset="100%" stopColor={chart.primary} stopOpacity={0.02} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
@@ -1037,12 +1034,12 @@ export function SellerOverviewTab({
                   <Area
                     type="monotone"
                     dataKey={chartMetric}
-                    stroke={CHART_PRIMARY}
+                    stroke={chart.primary}
                     strokeWidth={2.5}
                     fill="url(#mainChartGrad)"
                     name={chartMetric}
                     dot={false}
-                    activeDot={{ r: 4, fill: CHART_PRIMARY, stroke: "hsl(var(--card))", strokeWidth: 2 }}
+                    activeDot={{ r: 4, fill: chart.primary, stroke: "hsl(var(--card))", strokeWidth: 2 }}
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -1258,7 +1255,7 @@ export function SellerOverviewTab({
                 <Tooltip content={<ChartTooltip metric="revenue" />} cursor={{ fill: "hsl(var(--muted))", opacity: 0.5 }} />
                 <Bar dataKey="revenue" radius={[6, 6, 0, 0]} name="revenue" maxBarSize={48}>
                   {monthlyBarData.map((_: any, i: number) => (
-                    <Cell key={i} fill={i === monthlyBarData.length - 1 ? CHART_ACCENT : CHART_PRIMARY} />
+                    <Cell key={i} fill={i === monthlyBarData.length - 1 ? chart.accent : chart.primary} />
                   ))}
                 </Bar>
               </BarChart>

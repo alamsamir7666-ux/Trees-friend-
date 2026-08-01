@@ -12,6 +12,8 @@ import { apiClient } from "@/lib/apiClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { TrendingUp, TrendingDown, Users, ShoppingBag, Star, DollarSign } from "lucide-react";
+import { useChartColors } from "@/hooks/useChartColors";
+import { SEGMENT_CHART_COLORS } from "@/lib/chartColors";
 
 interface MonthlyRevenue {
   month: string;
@@ -43,11 +45,10 @@ interface AnalyticsData {
   monthlyRevenue: MonthlyRevenue[];
 }
 
-const SEGMENT_COLORS = {
-  New: "#a78bfa",
-  Returning: "#60a5fa",
-  VIP: "#f59e0b",
-};
+// Customer-segment colors are now resolved at runtime via useChartColors()
+// + SEGMENT_CHART_COLORS so they swap correctly between light and dark
+// themes. Previously these were hardcoded hexes that disappeared into dark
+// backgrounds.
 
 async function fetchAnalytics(): Promise<AnalyticsData> {
   const { data } = await apiClient.get<AnalyticsData>("/api/admin/analytics/products");
@@ -96,6 +97,7 @@ function StatCard({
 }
 
 export function AdminAnalyticsPanel() {
+  const chart = useChartColors();
   const [revenueView, setRevenueView] = useState<"revenue" | "orders" | "customers">("revenue");
 
   const { data, isLoading, error } = useQuery({
@@ -265,7 +267,7 @@ export function AdminAnalyticsPanel() {
                   {data.customerSegments.map((entry) => (
                     <Cell
                       key={entry.segment}
-                      fill={SEGMENT_COLORS[entry.segment] ?? "#94a3b8"}
+                      fill={(SEGMENT_CHART_COLORS[entry.segment] ?? ((p) => p.fallback))(chart)}
                     />
                   ))}
                 </Pie>
@@ -278,7 +280,7 @@ export function AdminAnalyticsPanel() {
                   <div className="flex items-center gap-2">
                     <div
                       className="h-2.5 w-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: SEGMENT_COLORS[seg.segment] ?? "#94a3b8" }}
+                      style={{ backgroundColor: (SEGMENT_CHART_COLORS[seg.segment] ?? ((p) => p.fallback))(chart) }}
                     />
                     <span className="text-sm">{seg.segment}</span>
                   </div>

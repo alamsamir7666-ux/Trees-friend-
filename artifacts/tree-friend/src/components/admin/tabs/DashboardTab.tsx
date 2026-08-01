@@ -1,5 +1,7 @@
 import { useAdminContext } from "@/contexts/AdminContext";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useChartColors } from "@/hooks/useChartColors";
+import { pickCategorical } from "@/lib/chartColors";
 import {
   DollarSign, ShoppingCart, Package2, Users, ChevronRight, AlertCircle, Store,
   TrendingUp, ArrowUpRight, ArrowDownRight, Clock, CheckCircle2,
@@ -31,7 +33,10 @@ const SELLER_STATUS_LABEL: Record<string, string> = {
   vacation: "On vacation",
 };
 
-const PIE_COLORS = ["#10b981", "#f59e0b", "#ef4444", "#0ea5e9", "#8b5cf6"];
+// Categorical chart colors are now resolved at runtime via useChartColors()
+// so the palette swaps correctly between light and dark themes. Previously
+// this was a hardcoded hex array (#10b981, #f59e0b, ...) that looked fine on
+// white backgrounds but disappeared into dark backgrounds.
 
 // ── Mini sparkline data generator (simulated from orders) ───────────────────
 function generateRevenueTrend(orders: any[]) {
@@ -104,6 +109,7 @@ function ChartTooltip({ active, payload, label }: any) {
 
 // ── Seller status donut ─────────────────────────────────────────────────────
 function SellerStatusDonut({ sellers }: { sellers: any[] }) {
+  const chart = useChartColors();
   const statusCounts = sellers.reduce<Record<string, number>>((acc, s) => {
     const st = s.status ?? "unknown";
     acc[st] = (acc[st] || 0) + 1;
@@ -131,7 +137,7 @@ function SellerStatusDonut({ sellers }: { sellers: any[] }) {
           <PieChart>
             <Pie data={data} cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={3} dataKey="value" stroke="none">
               {data.map((_, i) => (
-                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                <Cell key={i} fill={pickCategorical(chart, i)} />
               ))}
             </Pie>
           </PieChart>
@@ -140,7 +146,7 @@ function SellerStatusDonut({ sellers }: { sellers: any[] }) {
       <div className="space-y-2 flex-1 min-w-0">
         {data.map((d, i) => (
           <div key={d.status} className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
+            <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: pickCategorical(chart, i) }} />
             <span className="text-xs text-muted-foreground truncate flex-1">{d.name}</span>
             <span className="text-xs font-semibold text-foreground">{d.value}</span>
           </div>
@@ -235,6 +241,7 @@ function PendingActionCard({
 
 // ── Main DashboardTab ───────────────────────────────────────────────────────
 export function DashboardTab() {
+  const chart = useChartColors();
   const {
     dashStats,
     dashStatsLoading,
@@ -452,15 +459,15 @@ export function DashboardTab() {
                 <AreaChart data={revenueTrend} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
                   <defs>
                     <linearGradient id="revenueGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#f472b6" stopOpacity={0.3} />
-                      <stop offset="100%" stopColor="#f472b6" stopOpacity={0.02} />
+                      <stop offset="0%" stopColor={chart.primary} stopOpacity={0.3} />
+                      <stop offset="100%" stopColor={chart.primary} stopOpacity={0.02} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9ca3af" }} tickLine={false} axisLine={false} interval={4} />
-                  <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} tickLine={false} axisLine={false} tickFormatter={(v: number) => `Tk${v}`} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chart.gridStroke} />
+                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: chart.axisTick }} tickLine={false} axisLine={false} interval={4} />
+                  <YAxis tick={{ fontSize: 10, fill: chart.axisTick }} tickLine={false} axisLine={false} tickFormatter={(v: number) => `Tk${v}`} />
                   <Tooltip content={<ChartTooltip />} />
-                  <Area type="monotone" dataKey="revenue" stroke="#f472b6" strokeWidth={2} fill="url(#revenueGrad)" name="revenue" />
+                  <Area type="monotone" dataKey="revenue" stroke={chart.primary} strokeWidth={2} fill="url(#revenueGrad)" name="revenue" />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
@@ -670,11 +677,11 @@ export function DashboardTab() {
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={categoryData} layout="vertical" margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 10, fill: "#9ca3af" }} tickLine={false} axisLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: "#6b7280" }} tickLine={false} axisLine={false} width={80} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chart.gridStroke} horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisTick }} tickLine={false} axisLine={false} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: chart.axisTick }} tickLine={false} axisLine={false} width={80} />
                   <Tooltip content={<ChartTooltip />} />
-                  <Bar dataKey="count" name="count" fill="#f472b6" radius={[0, 6, 6, 0]} barSize={20} />
+                  <Bar dataKey="count" name="count" fill={chart.primary} radius={[0, 6, 6, 0]} barSize={20} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
