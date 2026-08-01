@@ -61,6 +61,7 @@ import type {
   ListListingAttributeOptionsParams,
   ListProductSellerListingsParams,
   ListProductsParams,
+  ListSellerCounts200,
   ListSellerListingsParams,
   ListSellerOrdersParams,
   ListSellerReturnsParams,
@@ -8072,6 +8073,83 @@ export function useListSellers<TData = Awaited<ReturnType<typeof listSellers>>, 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getListSellersQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getListSellerCountsUrl = () => {
+
+
+
+
+  return `/api/admin/sellers/counts`
+}
+
+/**
+ * @summary Per-status seller counts (admin only), single request for all 4 tab badges
+ */
+export const listSellerCounts = async ( options?: RequestInit): Promise<ListSellerCounts200> => {
+
+  return customFetch<ListSellerCounts200>(getListSellerCountsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListSellerCountsQueryKey = () => {
+    return [
+    `/api/admin/sellers/counts`
+    ] as const;
+    }
+
+
+export const getListSellerCountsQueryOptions = <TData = Awaited<ReturnType<typeof listSellerCounts>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerCounts>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSellerCountsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSellerCounts>>> = ({ signal }) => listSellerCounts({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSellerCounts>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSellerCountsQueryResult = NonNullable<Awaited<ReturnType<typeof listSellerCounts>>>
+export type ListSellerCountsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Per-status seller counts (admin only), single request for all 4 tab badges
+ */
+
+export function useListSellerCounts<TData = Awaited<ReturnType<typeof listSellerCounts>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSellerCounts>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSellerCountsQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

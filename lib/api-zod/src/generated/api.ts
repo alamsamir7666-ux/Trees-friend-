@@ -3122,8 +3122,18 @@ export const ToggleUserBlockResponse = zod.object({
 /**
  * @summary List seller applications/accounts (admin only), optionally filtered by status
  */
+export const listSellersQueryLimitDefault = 20;
+export const listSellersQueryLimitMax = 100;
+
+export const listSellersQueryOffsetDefault = 0;
+export const listSellersQueryOffsetMin = 0;
+
+
+
 export const ListSellersQueryParams = zod.object({
-  "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']).optional()
+  "status": zod.enum(['pending_verification', 'active', 'suspended', 'vacation']).optional(),
+  "limit": zod.coerce.number().min(1).max(listSellersQueryLimitMax).default(listSellersQueryLimitDefault).describe('Page size (default 20, max 100)'),
+  "offset": zod.coerce.number().min(listSellersQueryOffsetMin).default(listSellersQueryOffsetDefault).describe('Number of records to skip for pagination (default 0)')
 })
 
 export const ListSellersResponseItem = zod.object({
@@ -3152,6 +3162,17 @@ export const ListSellersResponseItem = zod.object({
   "updatedAt": zod.string()
 })
 export const ListSellersResponse = zod.array(ListSellersResponseItem)
+
+
+/**
+ * @summary Per-status seller counts (admin only), single request for all 4 tab badges
+ */
+export const ListSellerCountsResponse = zod.object({
+  "pending_verification": zod.number(),
+  "active": zod.number(),
+  "suspended": zod.number(),
+  "vacation": zod.number()
+})
 
 
 /**

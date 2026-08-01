@@ -1592,6 +1592,17 @@ page?: number;
 
 export type ListSellersParams = {
 status?: ListSellersStatus;
+/**
+ * Page size (default 20, max 100)
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Number of records to skip for pagination (default 0)
+ * @minimum 0
+ */
+offset?: number;
 };
 
 export type ListSellersStatus = typeof ListSellersStatus[keyof typeof ListSellersStatus];
@@ -1603,6 +1614,13 @@ export const ListSellersStatus = {
   suspended: 'suspended',
   vacation: 'vacation',
 } as const;
+
+export type ListSellerCounts200 = {
+  pending_verification: number;
+  active: number;
+  suspended: number;
+  vacation: number;
+};
 
 export type ListSellerVerificationRequestsParams = {
 status?: ListSellerVerificationRequestsStatus;

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import {
-  CheckCircle2, XCircle, Clock, Ban, Loader2, ExternalLink,
+  CheckCircle2, XCircle, Ban, Loader2, ExternalLink,
   Wallet, Truck, ShieldCheck, BadgeCheck, Store, MapPin, Phone, Mail,
   User, FileText, CalendarDays, Users2, Inbox, Search,
 } from "lucide-react";
@@ -8,15 +8,24 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
-  Card, CardContent, CardDescription, CardHeader, CardTitle,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  Card, CardContent,
 } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  Pagination, PaginationContent, PaginationItem, PaginationLink,
+  PaginationEllipsis, PaginationNext, PaginationPrevious,
+} from "@/components/ui/pagination";
+import {
   useListSellers,
+  useListSellerCounts,
   useApproveSeller,
   useRejectSeller,
   useSuspendSeller,
   getListSellersQueryKey,
+  getListSellerCountsQueryKey,
   useListAdminSellerPaymentConfigs,
   useVerifySellerPaymentConfig,
   getListAdminSellerPaymentConfigsQueryKey,
@@ -70,6 +79,8 @@ const STATUS_TABS = [
 
 type StatusValue = (typeof STATUS_TABS)[number]["value"];
 
+const PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
+
 // ─── Small layout primitives ──────────────────────────────────────────────────
 
 function PageHeader({
@@ -85,7 +96,7 @@ function PageHeader({
 }) {
   return (
     <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-5">
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-3 min-w-0">
         <div className="hidden sm:flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <Icon className="h-5 w-5" />
         </div>
@@ -109,7 +120,7 @@ function EmptyState({
   description?: string;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center py-14 px-6 rounded-xl border border-dashed bg-muted/20">
+    <div className="flex flex-col items-center justify-center text-center py-14 px-6">
       <div className="flex h-11 w-11 items-center justify-center rounded-full bg-muted text-muted-foreground mb-3">
         <Icon className="h-5 w-5" />
       </div>
@@ -140,20 +151,29 @@ function InfoRow({
   );
 }
 
-function StatChip({ count }: { count: number }) {
-  return (
-    <span
-      className={
-        "ml-1.5 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 " +
-        "rounded-full text-[10px] font-semibold tabular-nums " +
-        (count > 0
-          ? "bg-primary/10 text-primary"
-          : "bg-muted text-muted-foreground")
-      }
-    >
-      {count}
-    </span>
-  );
+// ─── Range text ("Showing 1–20 of 1,234") ─────────────────────────────────────
+
+function rangeText(page: number, pageSize: number, total: number) {
+  if (total === 0) return "No results";
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+  return `Showing ${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`;
+}
+
+// ─── Page-number list with ellipses (1 … 4 5 6 … 20) ──────────────────────────
+
+function pageList(current: number, totalPages: number): (number | "...")[] {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+  const pages: (number | "...")[] = [1];
+  const left = Math.max(2, current - 1);
+  const right = Math.min(totalPages - 1, current + 1);
+  if (left > 2) pages.push("...");
+  for (let i = left; i <= right; i++) pages.push(i);
+  if (right < totalPages - 1) pages.push("...");
+  pages.push(totalPages);
+  return pages;
 }
 
 // ─── Main tab ─────────────────────────────────────────────────────────────────
@@ -161,29 +181,43 @@ function StatChip({ count }: { count: number }) {
 /**
  * Admin Sellers tab — seller application review queue + verification sub-queues.
  *
- * Industry-standard admin layout: page header, status tabs with counts,
- * search, two-column seller card (business info + actions), and a clear
- * visual hierarchy. Below the main queue sit the Verified Badge and
- * Payment/Courier config review queues, separated by section headers
- * rather than dividers — matches the pattern used by Shopify Admin
- * (Settings → Sellers) and Linear's team management views.
+ * Industry-standard admin layout: page header, status tabs with per-status
+ * counts (single /counts request), live search, server-side pagination with
+ * page-size selector, and a clear visual hierarchy. Below the main queue sit
+ * the Verified Badge and Payment/Courier config review queues, separated by
+ * section headers.
  */
 export function SellersTab() {
   const qc = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<StatusValue>("pending_verification");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(20);
   const [actingOn, setActingOn] = useState<number | null>(null);
 
-  const { data: sellers, isLoading } = useListSellers(
-    { status: statusFilter },
-    { query: { queryKey: getListSellersQueryKey({ status: statusFilter }) } },
+  // Per-status counts -- single request for all 4 tab badges. Stale time
+  // 60s so switching tabs doesn't refetch; invalidated alongside the list
+  // when a mutation flips a seller's status.
+  const { data: counts } = useListSellerCounts(
+    { query: { queryKey: getListSellerCountsQueryKey(), staleTime: 60_000 } },
   );
+
+  const offset = (page - 1) * pageSize;
+  const { data: sellers, isLoading } = useListSellers(
+    { status: statusFilter, limit: pageSize, offset },
+    { query: { queryKey: getListSellersQueryKey({ status: statusFilter, limit: pageSize, offset }) } },
+  );
+
   const approveSeller = useApproveSeller();
   const rejectSeller = useRejectSeller();
   const suspendSeller = useSuspendSeller();
 
-  function invalidate() {
+  const totalForCurrentStatus = counts?.[statusFilter] ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalForCurrentStatus / pageSize));
+
+  function invalidateAll() {
     qc.invalidateQueries({ queryKey: getListSellersQueryKey() });
+    qc.invalidateQueries({ queryKey: getListSellerCountsQueryKey() });
   }
 
   function handleApprove(id: number) {
@@ -191,7 +225,7 @@ export function SellersTab() {
     approveSeller.mutate(
       { id },
       {
-        onSuccess: () => { toast.success("Seller approved"); invalidate(); setActingOn(null); },
+        onSuccess: () => { toast.success("Seller approved"); invalidateAll(); setActingOn(null); },
         onError: (err: any) => { toast.error(err?.message ?? "Failed to approve seller"); setActingOn(null); },
       },
     );
@@ -203,7 +237,7 @@ export function SellersTab() {
     rejectSeller.mutate(
       { id, data: {} },
       {
-        onSuccess: () => { toast.success("Application rejected"); invalidate(); setActingOn(null); },
+        onSuccess: () => { toast.success("Application rejected"); invalidateAll(); setActingOn(null); },
         onError: (err: any) => { toast.error(err?.message ?? "Failed to reject application"); setActingOn(null); },
       },
     );
@@ -215,13 +249,29 @@ export function SellersTab() {
     suspendSeller.mutate(
       { id },
       {
-        onSuccess: () => { toast.success("Seller suspended"); invalidate(); setActingOn(null); },
+        onSuccess: () => { toast.success("Seller suspended"); invalidateAll(); setActingOn(null); },
         onError: (err: any) => { toast.error(err?.message ?? "Failed to suspend seller"); setActingOn(null); },
       },
     );
   }
 
-  const count = sellers?.length ?? 0;
+  function changeStatus(next: StatusValue) {
+    setStatusFilter(next);
+    setPage(1);
+    setSearch("");
+  }
+
+  function changePageSize(next: number) {
+    setPageSize(next);
+    setPage(1);
+  }
+
+  // Client-side search within the current page slice. The backend list
+  // endpoint supports status + pagination but not full-text search; doing
+  // search client-side keeps the API simple and is fine for an admin tool
+  // where the admin typically knows which seller they're looking for and
+  // can flip tabs / pages to find them. Marked clearly so a future
+  // server-side search can replace this without UI changes.
   const filtered = (sellers ?? []).filter((s: any) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -244,56 +294,60 @@ export function SellersTab() {
         actions={
           <Badge variant="outline" className="gap-1.5 px-2.5 py-1">
             <Users2 className="h-3 w-3" />
-            <span className="tabular-nums">{count}</span>
+            <span className="tabular-nums">{totalForCurrentStatus.toLocaleString()}</span>
             <span className="text-muted-foreground font-normal">
-              {count === 1 ? "seller" : "sellers"}
+              {totalForCurrentStatus === 1 ? "seller" : "sellers"}
             </span>
+            <span className="text-muted-foreground/50 mx-0.5">·</span>
+            <span className="text-muted-foreground font-normal">{STATUS_META[statusFilter].label}</span>
           </Badge>
         }
       />
 
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <Tabs value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusValue)}>
-              <TabsList className="rounded-lg bg-muted/50 p-1">
-                {STATUS_TABS.map((t) => {
-                  const isActive = statusFilter === t.value;
-                  return (
-                    <TabsTrigger
-                      key={t.value}
-                      value={t.value}
-                      className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                    >
-                      {t.label}
-                      <span
-                        className={
-                          "inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums " +
-                          (isActive ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")
-                        }
-                      >
-                        {count}
-                      </span>
-                    </TabsTrigger>
-                  );
-                })}
-              </TabsList>
-            </Tabs>
-            <div className="relative sm:w-64">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search by name, email, phone…"
-                className="h-9 pl-8 text-sm"
-              />
-            </div>
-          </div>
-        </CardHeader>
+      {/* ─── Toolbar: status tabs (with counts) + search ───────────────────── */}
+      <div className="flex flex-col gap-3">
+        <Tabs value={statusFilter} onValueChange={(v) => changeStatus(v as StatusValue)}>
+          <TabsList className="rounded-lg bg-muted/50 p-1 w-full sm:w-auto overflow-x-auto">
+            {STATUS_TABS.map((t) => {
+              const c = counts?.[t.value] ?? 0;
+              const isActive = statusFilter === t.value;
+              return (
+                <TabsTrigger
+                  key={t.value}
+                  value={t.value}
+                  className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                >
+                  {t.label}
+                  <span
+                    className={
+                      "inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums " +
+                      (isActive ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")
+                    }
+                  >
+                    {c.toLocaleString()}
+                  </span>
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+        </Tabs>
 
-        <CardContent className="pt-0">
+        <div className="relative sm:max-w-sm">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search this page by name, email, phone…"
+            className="h-9 pl-8 text-sm"
+          />
+        </div>
+      </div>
+
+      {/* ─── Seller list ──────────────────────────────────────────────────── */}
+      <Card>
+        <CardContent className="p-0">
           {isLoading ? (
-            <div className="space-y-3">
+            <div className="space-y-3 p-4 sm:p-5">
               {[1, 2, 3].map((i) => (
                 <div key={i} className="h-24 rounded-xl bg-muted/40 animate-pulse" />
               ))}
@@ -304,18 +358,18 @@ export function SellersTab() {
               title={search.trim() ? "No sellers match your search" : "No sellers in this status"}
               description={
                 search.trim()
-                  ? "Try a different name, email, or phone number."
+                  ? "Try a different name, email, or phone number — or switch to another status tab."
                   : "When a seller applies, they'll appear here for review."
               }
             />
           ) : (
-            <div className="space-y-3">
+            <div className="divide-y">
               {filtered.map((s: any) => {
                 const meta = STATUS_META[s.status as string] ?? STATUS_META.active;
                 return (
                   <div
                     key={s.id}
-                    className="rounded-xl border bg-card p-4 sm:p-5 transition-colors hover:bg-muted/20"
+                    className="p-4 sm:p-5 transition-colors hover:bg-muted/20"
                   >
                     <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
                       {/* ── Left: identity ────────────────────────────────────── */}
@@ -453,6 +507,71 @@ export function SellersTab() {
               })}
             </div>
           )}
+
+          {/* ─── Footer: range text + page-size selector + pagination ─────── */}
+          {!search.trim() && totalForCurrentStatus > 0 && (
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-5 py-3 border-t bg-muted/20">
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="tabular-nums">{rangeText(page, pageSize, totalForCurrentStatus)}</span>
+                <span className="hidden sm:inline text-muted-foreground/40">·</span>
+                <div className="hidden sm:flex items-center gap-1.5">
+                  <span>Rows:</span>
+                  <Select value={String(pageSize)} onValueChange={(v) => changePageSize(Number(v))}>
+                    <SelectTrigger className="h-7 w-[68px] text-xs px-2">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PAGE_SIZE_OPTIONS.map((n) => (
+                        <SelectItem key={n} value={String(n)} className="text-xs">
+                          {n}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {totalPages > 1 && (
+                <Pagination className="mx-0 sm:mx-0 w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }}
+                        aria-disabled={page === 1}
+                        className={page === 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {pageList(page, totalPages).map((p, i) =>
+                      p === "..." ? (
+                        <PaginationItem key={`ellipsis-${i}`}>
+                          <PaginationEllipsis />
+                        </PaginationItem>
+                      ) : (
+                        <PaginationItem key={p}>
+                          <PaginationLink
+                            href="#"
+                            isActive={p === page}
+                            onClick={(e) => { e.preventDefault(); setPage(p); }}
+                          >
+                            {p}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ),
+                    )}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }}
+                        aria-disabled={page === totalPages}
+                        className={page === totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -512,6 +631,7 @@ function PendingSellerVerification() {
   }
 
   const count = sellers?.length ?? 0;
+  const filterLabel = filter === "requested" ? "Pending" : filter === "approved" ? "Verified" : "Rejected";
 
   return (
     <section className="pt-2">
@@ -520,16 +640,12 @@ function PendingSellerVerification() {
           <BadgeCheck className="h-4.5 w-4.5" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold tracking-tight text-foreground">
-                Verified Seller Badge Requests
-              </h2>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Approving grants the public checkmark shown on this seller's listing cards.
-              </p>
-            </div>
-          </div>
+          <h2 className="text-base font-semibold tracking-tight text-foreground">
+            Verified Seller Badge Requests
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Approving grants the public checkmark shown on this seller's listing cards.
+          </p>
           <div className="mt-3">
             <Tabs value={filter} onValueChange={(v) => setFilter(v as typeof filter)}>
               <TabsList className="rounded-lg bg-muted/50 p-1">
@@ -544,7 +660,11 @@ function PendingSellerVerification() {
                     className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
                   >
                     {t.label}
-                    <StatChip count={count} />
+                    {filter === t.value && (
+                      <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums bg-primary/15 text-primary">
+                        {count}
+                      </span>
+                    )}
                   </TabsTrigger>
                 ))}
               </TabsList>
@@ -554,9 +674,9 @@ function PendingSellerVerification() {
       </div>
 
       <Card>
-        <CardContent className="p-4 sm:p-5">
+        <CardContent className="p-0">
           {isLoading ? (
-            <div className="space-y-3">
+            <div className="space-y-3 p-4 sm:p-5">
               {[1, 2].map((i) => (
                 <div key={i} className="h-20 rounded-xl bg-muted/40 animate-pulse" />
               ))}
@@ -564,16 +684,13 @@ function PendingSellerVerification() {
           ) : !sellers || sellers.length === 0 ? (
             <EmptyState
               icon={BadgeCheck}
-              title={`No ${filter} verification requests`}
+              title={`No ${filterLabel.toLowerCase()} verification requests`}
               description="When a seller requests the verified badge, they'll appear here."
             />
           ) : (
-            <div className="space-y-3">
+            <div className="divide-y">
               {sellers.map((s: any) => (
-                <div
-                  key={s.id}
-                  className="rounded-xl border bg-card p-4 transition-colors hover:bg-muted/20"
-                >
+                <div key={s.id} className="p-4 transition-colors hover:bg-muted/20">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary text-xs font-semibold">
@@ -585,10 +702,10 @@ function PendingSellerVerification() {
                             {s.businessName}
                           </p>
                           {s.nurseryName && s.nurseryName !== s.businessName && (
-                            <span className="text-xs text-muted-foreground/70">·</span>
-                          )}
-                          {s.nurseryName && s.nurseryName !== s.businessName && (
-                            <p className="text-xs text-muted-foreground">{s.nurseryName}</p>
+                            <>
+                              <span className="text-xs text-muted-foreground/70">·</span>
+                              <p className="text-xs text-muted-foreground">{s.nurseryName}</p>
+                            </>
                           )}
                         </div>
                         {s.location && (
@@ -748,14 +865,28 @@ function PendingConfigVerification() {
                   className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
                 >
                   Pending
-                  <StatChip count={showVerified ? 0 : configCount} />
+                  <span
+                    className={
+                      "inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums " +
+                      (!showVerified ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")
+                    }
+                  >
+                    {configCount}
+                  </span>
                 </TabsTrigger>
                 <TabsTrigger
                   value="true"
                   className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
                 >
                   Verified
-                  <StatChip count={showVerified ? configCount : 0} />
+                  <span
+                    className={
+                      "inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums " +
+                      (showVerified ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")
+                    }
+                  >
+                    {configCount}
+                  </span>
                 </TabsTrigger>
               </TabsList>
             </Tabs>
@@ -764,9 +895,9 @@ function PendingConfigVerification() {
       </div>
 
       <Card>
-        <CardContent className="p-4 sm:p-5">
+        <CardContent className="p-0">
           {isLoading ? (
-            <div className="space-y-3">
+            <div className="space-y-3 p-4 sm:p-5">
               {[1, 2].map((i) => (
                 <div key={i} className="h-16 rounded-xl bg-muted/40 animate-pulse" />
               ))}
@@ -778,12 +909,9 @@ function PendingConfigVerification() {
               description="When a seller saves a config for review, it'll appear here."
             />
           ) : (
-            <div className="space-y-3">
+            <div className="divide-y">
               {configs.map((c: any) => (
-                <div
-                  key={c.id}
-                  className="rounded-xl border bg-card p-4 transition-colors hover:bg-muted/20"
-                >
+                <div key={c.id} className="p-4 transition-colors hover:bg-muted/20">
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">

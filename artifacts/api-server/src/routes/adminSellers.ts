@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { sellersTable, sellerPaymentConfigsTable, sellerCourierConfigsTable, sellerListingsTable } from "@workspace/db";
-import { eq, desc, and, ne } from "drizzle-orm";
+import { eq, desc, and, ne, count } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
 import { maskCredential } from "../lib/credentialEncryption";
@@ -42,20 +42,64 @@ function formatSeller(s: typeof sellersTable.$inferSelect) {
  * Admin: list sellers, optionally filtered by status. Defaults to no
  * filter (all sellers) since admin needs to see the full picture, unlike
  * the subscription queue which defaults to trial+active.
+ *
+ * Pagination: `limit` (default 20, max 100) and `offset` (default 0).
+ * The frontend tab badge counts come from the separate /counts endpoint
+ * below (single request for all 4 statuses) rather than a header on
+ * this response, so this endpoint just returns the page slice as a flat
+ * array -- keeps the response shape compatible with the orval-generated
+ * client which types this as Seller[].
  */
 router.get("/admin/sellers", requireAdmin, async (req, res) => {
   try {
     const { status } = req.query as { status?: string };
+    const rawLimit = parseInt(req.query.limit as string, 10);
+    const rawOffset = parseInt(req.query.offset as string, 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 20;
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
 
     const sellers = await db
       .select()
       .from(sellersTable)
       .where(status && VALID_SELLER_STATUSES.includes(status) ? eq(sellersTable.status, status) : undefined)
-      .orderBy(desc(sellersTable.createdAt));
+      .orderBy(desc(sellersTable.createdAt))
+      .limit(limit)
+      .offset(offset);
 
     res.json(sellers.map(formatSeller));
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch sellers" });
+  }
+});
+
+/**
+ * Admin: per-status seller counts in a single request. Returns
+ * { pending_verification, active, suspended, vacation } -- used by the
+ * Sellers tab to render the count badge on each status tab without
+ * fetching every seller. Counts only valid statuses; any row with an
+ * unexpected status is excluded (defensive -- the schema enum should
+ * make this impossible, but the DB is the source of truth).
+ */
+router.get("/admin/sellers/counts", requireAdmin, async (_req, res) => {
+  try {
+    const rows = await db
+      .select({ status: sellersTable.status, n: count() })
+      .from(sellersTable)
+      .groupBy(sellersTable.status);
+    const out: Record<string, number> = {
+      pending_verification: 0,
+      active: 0,
+      suspended: 0,
+      vacation: 0,
+    };
+    for (const r of rows) {
+      if (VALID_SELLER_STATUSES.includes(r.status)) {
+        out[r.status] = Number(r.n) || 0;
+      }
+    }
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch seller counts" });
   }
 });
 
