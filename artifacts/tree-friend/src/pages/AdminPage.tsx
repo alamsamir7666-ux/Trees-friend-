@@ -25,7 +25,7 @@ import {
   ChevronRight, X, Menu, BarChart3, CheckCircle2, Clock, Truck,
   AlertCircle, XCircle, Layers, MessageSquare, MapPin, Ban, UserCheck, ChevronDown, Archive,
   Calendar, ToggleLeft, ToggleRight, RotateCcw, Activity, GitBranch, Upload, HelpCircle,
-  BookOpen, FileText, Save, LayoutGrid, Sprout, Wallet,
+  BookOpen, FileText, Save, LayoutGrid, Store, Boxes, Wallet,
 } from "lucide-react";
 import { useAuth } from "@clerk/react";
 import { apiClient } from "@/lib/apiClient";
@@ -76,8 +76,8 @@ const navItems = [
   { id: "orders",     label: "Orders",          icon: ShoppingCart },
   { id: "archived",   label: "Archived Orders", icon: Archive },
   { id: "users",      label: "Users",           icon: Users },
-  { id: "sellers",    label: "Sellers",         icon: Sprout },
-  { id: "seller-listings", label: "Seller Listings", icon: Sprout },
+  { id: "sellers",    label: "Sellers",         icon: Store },
+  { id: "seller-listings", label: "Seller Listings", icon: Boxes },
   { id: "reviews",    label: "Reviews",         icon: MessageSquare },
   { id: "coupons",    label: "Coupons",         icon: Tag },
   { id: "monthly",    label: "Monthly History", icon: Calendar },
