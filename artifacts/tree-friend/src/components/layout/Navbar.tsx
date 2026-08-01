@@ -3,7 +3,7 @@ import { Link, useLocation, useSearch } from "wouter";
 import { Show, useUser, useClerk } from "@clerk/react";
 import {
   ShoppingBag, User as UserIcon, Heart, Menu, LogOut,
-  Settings, Package, X, Home, Sparkles, Star, Share2, Search, ChevronRight, ChevronDown, ShoppingBasket, TreeDeciduous,
+  Settings, Package, X, Home, Star, Share2, Search, ChevronRight, ChevronDown, TreeDeciduous,
   TreePalm, Trees, Sprout, Flower, Flower2, Apple, Citrus, Leaf, Carrot, Wheat, Shrub, LayoutDashboard, Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -438,7 +438,7 @@ export function Navbar() {
             <li>
               <Link href="/products" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/products" && !activeCategory ? "active" : ""}`}>
                 <span className="flex items-center gap-3">
-                  <span className="tf-icon-box"><ShoppingBasket className="h-3.5 w-3.5" /></span>
+                  <span className="tf-icon-box overflow-hidden"><img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1785594300/468682a4-07d0-484a-9ed5-a96add5d8bf1_1_c5944t.svg" alt="" className="h-5 w-5 object-contain" /></span>
                   Shop All
                 </span>
                 <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
@@ -447,7 +447,7 @@ export function Navbar() {
             <li>
               <Link href="/blog" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/blog" ? "active" : ""}`}>
                 <span className="flex items-center gap-3">
-                  <span className="tf-icon-box"><Sparkles className="h-3.5 w-3.5" /></span>
+                  <span className="tf-icon-box overflow-hidden"><img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1785594327/20ad4cd4-f569-46cd-bddd-7093be08888b_1_thxqjy.svg" alt="" className="h-5 w-5 object-contain" /></span>
                   Plant Care Blog
                 </span>
                 <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
