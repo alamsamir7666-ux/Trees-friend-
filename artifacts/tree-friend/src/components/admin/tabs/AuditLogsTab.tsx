@@ -12,24 +12,24 @@ const API = import.meta.env.VITE_API_BASE_URL ?? "";
 // the gray default in the render.
 const ACTION_META: Record<string, { icon: typeof ShieldCheck; tint: string; label?: string }> = {
   // Order actions
-  "order.status_changed":   { icon: Truck,        tint: "bg-blue-50 text-blue-700 border-blue-200" },
-  "order.payment_updated":  { icon: ShoppingBag,  tint: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+  "order.status_changed":   { icon: Truck,        tint: "bg-info text-info-foreground border-info-border" },
+  "order.payment_updated":  { icon: ShoppingBag,  tint: "bg-info text-info-foreground border-info-border" },
   // Product actions
-  "product.created":        { icon: Package,      tint: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  "product.updated":        { icon: Package,      tint: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  "product.deleted":        { icon: XCircle,       tint: "bg-rose-50 text-rose-700 border-rose-200" },
+  "product.created":        { icon: Package,      tint: "bg-success text-success-foreground border-success-border" },
+  "product.updated":        { icon: Package,      tint: "bg-success text-success-foreground border-success-border" },
+  "product.deleted":        { icon: XCircle,       tint: "bg-destructive/10 text-destructive border-destructive/20" },
   // User actions
-  "user.blocked":           { icon: UserCog,       tint: "bg-orange-50 text-orange-700 border-orange-200" },
-  "user.unblocked":         { icon: UserCog,       tint: "bg-amber-50 text-amber-700 border-amber-200" },
+  "user.blocked":           { icon: UserCog,       tint: "bg-warning text-warning-foreground border-warning-border" },
+  "user.unblocked":         { icon: UserCog,       tint: "bg-warning text-warning-foreground border-warning-border" },
   // Seller actions
-  "seller.approved":        { icon: CheckCircle2,  tint: "bg-emerald-50 text-emerald-700 border-emerald-200", label: "Seller approved" },
-  "seller.rejected":        { icon: XCircle,       tint: "bg-rose-50 text-rose-700 border-rose-200", label: "Seller rejected" },
-  "seller.suspended":       { icon: UserCog,       tint: "bg-rose-50 text-rose-700 border-rose-200", label: "Seller suspended" },
-  "seller.subscription_paid": { icon: ShieldCheck, tint: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  "seller.approved":        { icon: CheckCircle2,  tint: "bg-success text-success-foreground border-success-border", label: "Seller approved" },
+  "seller.rejected":        { icon: XCircle,       tint: "bg-destructive/10 text-destructive border-destructive/20", label: "Seller rejected" },
+  "seller.suspended":       { icon: UserCog,       tint: "bg-destructive/10 text-destructive border-destructive/20", label: "Seller suspended" },
+  "seller.subscription_paid": { icon: ShieldCheck, tint: "bg-success text-success-foreground border-success-border" },
   // Category actions
-  "category.created":       { icon: Tag,           tint: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  "category.updated":       { icon: Tag,           tint: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  "category.deleted":       { icon: XCircle,       tint: "bg-rose-50 text-rose-700 border-rose-200" },
+  "category.created":       { icon: Tag,           tint: "bg-success text-success-foreground border-success-border" },
+  "category.updated":       { icon: Tag,           tint: "bg-success text-success-foreground border-success-border" },
+  "category.deleted":       { icon: XCircle,       tint: "bg-destructive/10 text-destructive border-destructive/20" },
 };
 
 // Pretty-print the audit log's before/after JSON. The old version ran
@@ -131,12 +131,12 @@ export function AuditLogsTab() {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="bg-white rounded-2xl border p-12 text-center">
-          <ScrollText className="h-12 w-12 text-gray-200 mx-auto mb-4" />
-          <p className="font-semibold text-gray-500 mb-1">
+        <div className="bg-card rounded-2xl border p-12 text-center">
+          <ScrollText className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
+          <p className="font-semibold text-muted-foreground mb-1">
             {search ? "No actions match your search." : "No audit logs yet"}
           </p>
-          {!search && <p className="text-sm text-gray-400">Admin actions will appear here as they happen.</p>}
+          {!search && <p className="text-sm text-muted-foreground/70">Admin actions will appear here as they happen.</p>}
         </div>
       ) : (
         <div className="space-y-2">

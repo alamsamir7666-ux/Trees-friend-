@@ -48,7 +48,7 @@ export function CashoutsSection() {
             <div>
               <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2 font-medium">Pending ({pending.length})</p>
               {pending.map(co => (
-                <div key={co.id} className="border rounded-xl p-4 bg-yellow-50/50 space-y-2">
+                <div key={co.id} className="border rounded-xl p-4 bg-warning/30 space-y-2">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="font-semibold text-sm">{co.affiliateName} <span className="text-muted-foreground font-normal">({co.affiliateEmail})</span></p>
@@ -57,7 +57,7 @@ export function CashoutsSection() {
                     <p className="font-bold text-lg">Tk{Number(co.amount).toLocaleString()}</p>
                   </div>
                   <div className="flex gap-2">
-                    <Button size="sm" className="flex-1 rounded-full bg-green-600 hover:bg-green-700" onClick={() => handleAction(co.id, "approved")}>Approve</Button>
+                    <Button size="sm" className="flex-1 rounded-full bg-success hover:bg-success/90 text-success-foreground" onClick={() => handleAction(co.id, "approved")}>Approve</Button>
                     <Button size="sm" variant="outline" className="flex-1 rounded-full text-destructive border-destructive/30 hover:bg-destructive/5" onClick={() => {
                       const note = prompt("Rejection reason (optional):");
                       handleAction(co.id, "rejected", note ?? undefined);
@@ -79,9 +79,9 @@ export function CashoutsSection() {
                   <div className="text-right">
                     <p className="font-semibold">Tk{Number(co.amount).toLocaleString()}</p>
                     <div className="flex flex-col items-end gap-1">
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${co.status === "approved" ? "bg-green-100 text-green-700" : co.status === "paid" ? "bg-blue-100 text-blue-700" : "bg-red-100 text-red-600"}`}>{co.status}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${co.status === "approved" ? "bg-success text-success-foreground" : co.status === "paid" ? "bg-info text-info-foreground" : "bg-destructive/10 text-destructive"}`}>{co.status}</span>
                 {co.status === "approved" && (
-                  <button onClick={() => handleAction(co.id, "paid")} className="text-xs px-2 py-0.5 rounded-full bg-blue-600 text-white hover:bg-blue-700">Mark Paid</button>
+                  <button onClick={() => handleAction(co.id, "paid")} className="text-xs px-2 py-0.5 rounded-full bg-info text-info-foreground hover:bg-info/90">Mark Paid</button>
                 )}
               </div>
                   </div>

@@ -19,7 +19,7 @@ export function ProductsTab() {
     <div>
       <div className="flex items-center justify-between mb-4 gap-3">
         <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/70" />
           <Input
             placeholder="Search products..."
             value={search}
@@ -27,7 +27,7 @@ export function ProductsTab() {
             className="pl-9 rounded-xl"
           />
         </div>
-        <Button onClick={() => setShowProductModal(true)} className="rounded-xl bg-pink-500 hover:bg-pink-600 text-white shrink-0">
+        <Button onClick={() => setShowProductModal(true)} className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground shrink-0">
           <Plus className="h-4 w-4 mr-1.5" /> Add Product
         </Button>
       </div>
@@ -35,41 +35,41 @@ export function ProductsTab() {
       {productsLoading && productsPage === 1 ? (
         <div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>
       ) : (
-        <div className="bg-white rounded-2xl border overflow-hidden">
+        <div className="bg-card rounded-2xl border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b">
+              <thead className="bg-muted/50 border-b">
                 <tr>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Product</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Category</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Homepage</th>
-                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Price</th>
-                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Stock</th>
-                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Product</th>
+                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Category</th>
+                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Homepage</th>
+                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Price</th>
+                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Stock</th>
+                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
+              <tbody className="divide-y divide-muted/50">
                 {filteredProducts.map((p) => {
                   const category = categories.find((c) => c.id === p.categoryId);
                   return (
-                  <tr key={p.id} className="hover:bg-pink-50/30 transition-colors">
+                  <tr key={p.id} className="hover:bg-primary/5 transition-colors">
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
                         {(p as any).images?.[0] ? (
                           <img src={(p as any).images[0]} alt="" className="h-10 w-10 rounded-xl object-cover border" />
                         ) : (
-                          <div className="h-10 w-10 rounded-xl bg-gray-100 border" />
+                          <div className="h-10 w-10 rounded-xl bg-muted border" />
                         )}
                         <div>
-                          <p className="font-medium text-gray-800">{p.name}</p>
+                          <p className="font-medium text-foreground">{p.name}</p>
                           {false && (
-                            <span className="text-xs bg-pink-50 text-pink-500 border border-pink-200 px-1.5 py-0.5 rounded-md font-medium">Featured</span>
+                            <span className="text-xs bg-primary/10 text-primary border border-primary/20 px-1.5 py-0.5 rounded-md font-medium">Featured</span>
                           )}
                         </div>
                       </div>
                     </td>
                     <td className="px-5 py-3.5">
-                      <span className="capitalize text-gray-500 text-xs bg-gray-100 px-2.5 py-1 rounded-full font-medium">{category?.name ?? "Uncategorized"}</span>
+                      <span className="capitalize text-muted-foreground text-xs bg-muted px-2.5 py-1 rounded-full font-medium">{category?.name ?? "Uncategorized"}</span>
                     </td>
                     <td className="px-5 py-3.5">
                       {(p as any).homepageTag ? (() => {
@@ -78,13 +78,13 @@ export function ProductsTab() {
                         // taxonomy, so only the two built-in defaults get special styling;
                         // any custom section key just falls back to a neutral badge below.
                         const TAG_LABELS: Record<string, { label: string; cls: string }> = {
-                          trending:       { label: "🔥 Trending",      cls: "bg-emerald-50 text-emerald-600 border-emerald-200" },
-                          new_arrivals:   { label: "✨ New Arrivals",  cls: "bg-blue-50 text-blue-600 border-blue-200" },
+                          trending:       { label: "🔥 Trending",      cls: "bg-success text-success-foreground border-success-border" },
+                          new_arrivals:   { label: "✨ New Arrivals",  cls: "bg-info text-info-foreground border-info-border" },
                         };
                         const cfg = TAG_LABELS[(p as any).homepageTag];
-                        return <span className={`text-xs px-2.5 py-1 rounded-full font-medium border ${cfg?.cls ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>{cfg?.label ?? (p as any).homepageTag}</span>;
+                        return <span className={`text-xs px-2.5 py-1 rounded-full font-medium border ${cfg?.cls ?? "bg-muted text-muted-foreground border-border"}`}>{cfg?.label ?? (p as any).homepageTag}</span>;
                       })() : (
-                        <span className="text-xs text-gray-400">-</span>
+                        <span className="text-xs text-muted-foreground/70">-</span>
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-right">
@@ -99,13 +99,13 @@ export function ProductsTab() {
                           useful to admin than a field that will just say
                           "No variants" for every product going forward. */}
                       {(p as any).listingMinPrice != null ? (
-                        <p className="font-semibold text-gray-800">
+                        <p className="font-semibold text-foreground">
                           {(p as any).listingMinPrice === (p as any).listingMaxPrice
                             ? `Tk${Number((p as any).listingMinPrice).toLocaleString()}`
                             : `Tk${Number((p as any).listingMinPrice).toLocaleString()}–${Number((p as any).listingMaxPrice).toLocaleString()}`}
                         </p>
                       ) : (
-                        <p className="text-xs text-gray-400">No listings</p>
+                        <p className="text-xs text-muted-foreground/70">No listings</p>
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-right">
@@ -120,7 +120,7 @@ export function ProductsTab() {
                           existence check, matching what a single boolean
                           badge can represent. */}
                       {((p as any).listingHasPreOrder ?? false) ? (
-                        <span className="font-semibold text-blue-600">Pre-Order</span>
+                        <span className="font-semibold text-info-foreground">Pre-Order</span>
                       ) : (
                         <>
                           {/* Stock, like Price two rows up, must read the
@@ -131,10 +131,10 @@ export function ProductsTab() {
                               productVariantsTable). listingCount = number of
                               distinct qualifying seller listings; see
                               toProduct()'s doc comment in products.ts. */}
-                          <span className={`font-semibold ${((p as any).listingCount ?? 0) > 0 ? "text-gray-700" : "text-red-500"}`}>
+                          <span className={`font-semibold ${((p as any).listingCount ?? 0) > 0 ? "text-foreground" : "text-destructive"}`}>
                             {((p as any).listingCount ?? 0) > 0 ? "In Stock" : "Out of Stock"}
                           </span>
-                          {((p as any).listingCount ?? 0) === 0 && <p className="text-xs text-red-400">Restock needed</p>}
+                          {((p as any).listingCount ?? 0) === 0 && <p className="text-xs text-destructive/70">Restock needed</p>}
                         </>
                       )}
                     </td>
@@ -142,13 +142,13 @@ export function ProductsTab() {
                       <div className="flex justify-end gap-1">
                         <button
                           onClick={() => { setEditingProduct(p); setShowProductModal(true); }}
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
+                          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-info-foreground hover:bg-info/10 transition-colors"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
                         <button
                           onClick={() => handleDeleteProduct(p.id)}
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -160,14 +160,14 @@ export function ProductsTab() {
                 {productsHasMore && (
                   <tr>
                     <td colSpan={6} className="text-center py-4">
-                      <Button onClick={() => setProductsPage((p: number) => p + 1)} disabled={productsLoading} className="rounded-xl bg-pink-500 hover:bg-pink-600 text-white">
+                      <Button onClick={() => setProductsPage((p: number) => p + 1)} disabled={productsLoading} className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground">
                         {productsLoading ? "Loading..." : "Load More Products"}
                       </Button>
                     </td>
                   </tr>
                 )}
                 {filteredProducts.length === 0 && (
-                  <tr><td colSpan={6} className="text-center text-gray-400 py-12">No products found</td></tr>
+                  <tr><td colSpan={6} className="text-center text-muted-foreground/70 py-12">No products found</td></tr>
                 )}
               </tbody>
             </table>

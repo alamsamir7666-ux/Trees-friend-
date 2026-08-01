@@ -52,7 +52,7 @@ export function VariantEditor({ variants, onChange }: { variants: VariantDraft[]
           <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Variants *</Label>
           <p className="text-xs text-muted-foreground">At least one required. Each form (Seed, Sapling, Grafted, Potted) has its own price, stock, and delivery charge.</p>
         </div>
-        <Button type="button" size="sm" onClick={addVariant} className="rounded-lg bg-pink-500 hover:bg-pink-600 text-white shrink-0">
+        <Button type="button" size="sm" onClick={addVariant} className="rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground shrink-0">
           <Plus className="h-3.5 w-3.5 mr-1" /> Add Variant
         </Button>
       </div>
@@ -62,7 +62,7 @@ export function VariantEditor({ variants, onChange }: { variants: VariantDraft[]
       ) : (
         <div className="space-y-3">
           {variants.map((v, idx) => (
-            <div key={idx} className="border rounded-lg p-3 bg-white space-y-2.5">
+            <div key={idx} className="border rounded-lg p-3 bg-card space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-muted-foreground">Variant {idx + 1}</span>
                 {variants.length > 1 && (

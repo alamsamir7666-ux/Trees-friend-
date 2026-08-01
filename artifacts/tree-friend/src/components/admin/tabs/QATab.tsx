@@ -86,7 +86,7 @@ export function QATab() {
                   />
                   <div className="flex gap-2">
                     <button onClick={() => submitAnswer(q.id)} disabled={saving || answerText.trim().length < 2}
-                      className="text-xs bg-accent text-white px-4 py-1.5 rounded-full hover:bg-accent/90 transition-colors disabled:opacity-50">
+                      className="text-xs bg-accent text-accent-foreground px-4 py-1.5 rounded-full hover:bg-accent/90 transition-colors disabled:opacity-50">
                       {saving ? "Posting..." : "Post Answer"}
                     </button>
                     <button onClick={() => { setAnsweringId(null); setAnswerText(""); }}

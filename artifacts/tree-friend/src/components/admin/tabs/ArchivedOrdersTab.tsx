@@ -6,10 +6,10 @@ import { Archive, Store, Mail } from "lucide-react";
 // kept local to avoid a shared module just for these two tabs. If a third
 // consumer appears, lift to a shared file.
 const SELLER_STATUS_STYLE: Record<string, string> = {
-  active: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  pending_verification: "bg-amber-50 text-amber-700 border-amber-200",
-  suspended: "bg-rose-50 text-rose-700 border-rose-200",
-  vacation: "bg-sky-50 text-sky-700 border-sky-200",
+  active: "bg-success text-success-foreground border-success-border",
+  pending_verification: "bg-warning text-warning-foreground border-warning-border",
+  suspended: "bg-destructive/10 text-destructive border-destructive/20",
+  vacation: "bg-info text-info-foreground border-info-border",
 };
 const SELLER_STATUS_LABEL: Record<string, string> = {
   active: "Active",
@@ -33,38 +33,38 @@ const {
 return (
   <div>
     <div className="mb-4">
-      <p className="text-sm text-gray-500">Orders marked as <strong>delivered</strong> or <strong>cancelled</strong> more than 2 days ago are automatically moved here.</p>
+      <p className="text-sm text-muted-foreground">Orders marked as <strong>delivered</strong> or <strong>cancelled</strong> more than 2 days ago are automatically moved here.</p>
     </div>
     {archivedError ? (
-      <div className="bg-red-50 border border-red-200 rounded-2xl p-6 text-center text-red-600 text-sm">{archivedError}</div>
+      <div className="bg-destructive/10 border border-destructive/20 rounded-2xl p-6 text-center text-destructive text-sm">{archivedError}</div>
     ) : archivedLoading && archivedOrders.length === 0 ? (
       <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-14 rounded-xl" />)}</div>
     ) : archivedOrders.length === 0 ? (
-      <div className="bg-white rounded-2xl border p-14 text-center">
-        <Archive className="h-12 w-12 text-gray-200 mx-auto mb-4" />
-        <p className="font-semibold text-gray-500 mb-1">No archived orders yet</p>
-        <p className="text-sm text-gray-400">Delivered orders older than 2 days will appear here automatically.</p>
+      <div className="bg-card rounded-2xl border p-14 text-center">
+        <Archive className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
+        <p className="font-semibold text-muted-foreground mb-1">No archived orders yet</p>
+        <p className="text-sm text-muted-foreground/70">Delivered orders older than 2 days will appear here automatically.</p>
       </div>
     ) : (
-      <div className="bg-white rounded-2xl border overflow-hidden">
+      <div className="bg-card rounded-2xl border overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
+            <thead className="bg-muted/50 border-b">
               <tr>
-                <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Order</th>
-                <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Customer</th>
+                <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Order</th>
+                <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Customer</th>
                 {/* Seller column — added to match the redesigned Orders tab
                     and the new seller fields the /admin/orders/archived
                     endpoint now returns. Shows "—" for pre-orders (the
                     archived-preOrders response doesn't carry seller fields). */}
-                <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Seller</th>
-                <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Products</th>
-                <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status / Date</th>
-                <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Payment</th>
-                <th className="px-4 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Total</th>
+                <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Seller</th>
+                <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Products</th>
+                <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status / Date</th>
+                <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Payment</th>
+                <th className="px-4 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Total</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody className="divide-y divide-muted/50">
               {[...archivedOrders, ...archivedPreOrders.map((o: any) => ({ ...o, _type: "preorder", orderStatus: o.status }))].sort((a,b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).map((o) => {
                 const sAddr = (o as any).shippingAddress as { fullName?: string } | null;
                 const sellerName = (o as any).sellerBusinessName ?? null;
@@ -72,23 +72,23 @@ return (
                 const sellerEmail = (o as any).sellerContactEmail ?? null;
                 const isPreOrder = (o as any)._type === "preorder";
                 return (
-                  <tr key={o.id} className="hover:bg-gray-50/60 transition-colors">
+                  <tr key={o.id} className="hover:bg-muted/40 transition-colors">
                     <td className="px-4 py-3.5">
-                      <p className="font-semibold text-gray-800">#{o.id}</p>
-                      {(o as any).trackingId && <p className="text-xs text-gray-400 font-mono">{(o as any).trackingId}</p>}
+                      <p className="font-semibold text-foreground">#{o.id}</p>
+                      {(o as any).trackingId && <p className="text-xs text-muted-foreground/70 font-mono">{(o as any).trackingId}</p>}
                     </td>
                     <td className="px-4 py-3.5">
                       {(o as any).userName ? (
                         <div>
-                          <p className="font-medium text-gray-800 text-xs">{(o as any).userName}</p>
+                          <p className="font-medium text-foreground text-xs">{(o as any).userName}</p>
                           {!(o as any).userEmail?.endsWith("@clerk.user") && (o as any).userEmail && (
-                            <p className="text-xs text-gray-400">{(o as any).userEmail}</p>
+                            <p className="text-xs text-muted-foreground/70">{(o as any).userEmail}</p>
                           )}
                         </div>
                       ) : sAddr?.fullName ? (
-                        <p className="text-xs text-gray-600">{sAddr.fullName}</p>
+                        <p className="text-xs text-muted-foreground">{sAddr.fullName}</p>
                       ) : (
-                        <p className="text-xs text-gray-400">-</p>
+                        <p className="text-xs text-muted-foreground/70">-</p>
                       )}
                     </td>
                     {/* Seller column — for archived regular orders AND
@@ -103,24 +103,24 @@ return (
                         with no sellerListingVariantId). */}
                     <td className="px-4 py-3.5">
                       {!sellerName ? (
-                        <span className="text-xs text-gray-400 italic" title="Legacy order from before the marketplace migration, pre-Phase-6 pre-order with no sellerListingVariantId, or seller record deleted">
+                        <span className="text-xs text-muted-foreground/70 italic" title="Legacy order from before the marketplace migration, pre-Phase-6 pre-order with no sellerListingVariantId, or seller record deleted">
                           Unknown seller
                         </span>
                       ) : (
                         <div className="flex flex-col gap-1 min-w-0">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <Store className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                            <span className="text-xs font-medium text-gray-800 truncate" title={sellerName}>{sellerName}</span>
+                            <Store className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
+                            <span className="text-xs font-medium text-foreground truncate" title={sellerName}>{sellerName}</span>
                           </div>
                           {sellerStatus && (
-                            <span className={`w-fit px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${SELLER_STATUS_STYLE[sellerStatus] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                            <span className={`w-fit px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${SELLER_STATUS_STYLE[sellerStatus] ?? "bg-muted text-muted-foreground border-border"}`}>
                               {SELLER_STATUS_LABEL[sellerStatus] ?? sellerStatus}
                             </span>
                           )}
                           {sellerEmail && (
                             <a
                               href={`mailto:${sellerEmail}`}
-                              className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-800 transition-colors truncate"
+                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors truncate"
                               title={sellerEmail}
                               onClick={(e) => e.stopPropagation()}
                             >
@@ -134,14 +134,14 @@ return (
                     <td className="px-4 py-3.5">
                       <div className="space-y-0.5 max-w-[180px]">
                         {isPreOrder ? (
-                          <p className="text-xs text-gray-600 truncate">{(o as any).productName} ×{(o as any).quantity ?? 1}</p>
+                          <p className="text-xs text-muted-foreground truncate">{(o as any).productName} ×{(o as any).quantity ?? 1}</p>
                         ) : (
                           <>
                             {((o as any).items ?? []).slice(0, 2).map((item: any, idx: number) => (
-                              <p key={idx} className="text-xs text-gray-600 truncate">{item.productName} ×{item.quantity}</p>
+                              <p key={idx} className="text-xs text-muted-foreground truncate">{item.productName} ×{item.quantity}</p>
                             ))}
                             {((o as any).items ?? []).length > 2 && (
-                              <p className="text-xs text-gray-400">+{((o as any).items ?? []).length - 2} more</p>
+                              <p className="text-xs text-muted-foreground/70">+{((o as any).items ?? []).length - 2} more</p>
                             )}
                           </>
                         )}
@@ -150,25 +150,25 @@ return (
                     <td className="px-4 py-3.5 text-xs">
                       <div>
                         {(o as any).orderStatus === "cancelled" ? (
-                          <span className="inline-block bg-red-100 text-red-600 text-xs font-medium px-2 py-0.5 rounded-lg mb-1">Cancelled</span>
+                          <span className="inline-block bg-destructive/10 text-destructive text-xs font-medium px-2 py-0.5 rounded-lg mb-1">Cancelled</span>
                         ) : (
-                          <span className="inline-block bg-green-100 text-green-600 text-xs font-medium px-2 py-0.5 rounded-lg mb-1">Delivered</span>
+                          <span className="inline-block bg-success text-success-foreground text-xs font-medium px-2 py-0.5 rounded-lg mb-1">Delivered</span>
                         )}
-                        <p className="text-gray-400">{new Date(o.updatedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</p>
+                        <p className="text-muted-foreground/70">{new Date(o.updatedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</p>
                         {(o as any).orderStatus === "cancelled" && (o as any).cancellationReason && (
-                          <p className="text-red-400 text-xs mt-0.5 max-w-[120px] truncate" title={(o as any).cancellationReason}>⚠️ {(o as any).cancellationReason}</p>
+                          <p className="text-destructive/70 text-xs mt-0.5 max-w-[120px] truncate" title={(o as any).cancellationReason}>⚠️ {(o as any).cancellationReason}</p>
                         )}
                       </div>
                     </td>
                     <td className="px-4 py-3.5">
                       <div>
-                        <span className="text-xs bg-gray-100 px-2 py-1 rounded-lg font-medium text-gray-600 capitalize">{(o as any).paymentMethod ?? "-"}</span>
-                        <span className={`ml-1.5 text-xs font-medium capitalize ${(o as any).paymentStatus === "paid" ? "text-green-600" : "text-amber-500"}`}>
+                        <span className="text-xs bg-muted px-2 py-1 rounded-lg font-medium text-muted-foreground capitalize">{(o as any).paymentMethod ?? "-"}</span>
+                        <span className={`ml-1.5 text-xs font-medium capitalize ${(o as any).paymentStatus === "paid" ? "text-success-foreground" : "text-warning-foreground"}`}>
                           · {(o as any).paymentStatus}
                         </span>
                       </div>
                     </td>
-                    <td className="px-4 py-3.5 text-right font-semibold text-gray-800">Tk{Number((o as any).totalAmount ?? (o as any).discountedPrice ?? 0).toLocaleString()}</td>
+                    <td className="px-4 py-3.5 text-right font-semibold text-foreground">Tk{Number((o as any).totalAmount ?? (o as any).discountedPrice ?? 0).toLocaleString()}</td>
                   </tr>
                 );
               })}
@@ -180,7 +180,7 @@ return (
             <button
               onClick={() => fetchArchivedOrders(archivedPage + 1, true)}
               disabled={archivedLoading}
-              className="px-6 py-2 text-sm font-medium rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors disabled:opacity-50"
+              className="px-6 py-2 text-sm font-medium rounded-xl border border-border hover:bg-muted transition-colors disabled:opacity-50"
             >
               {archivedLoading ? "Loading..." : `Load More (${archivedTotal - archivedOrders.length} remaining)`}
             </button>

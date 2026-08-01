@@ -115,7 +115,7 @@ export function BlogTab() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h2 className="text-lg font-semibold">Blog Posts</h2>
         <button onClick={openCreate}
-          className="flex items-center gap-1.5 text-sm bg-accent text-white px-4 py-2 rounded-full hover:bg-accent/90 transition-colors">
+          className="flex items-center gap-1.5 text-sm bg-accent text-accent-foreground px-4 py-2 rounded-full hover:bg-accent/90 transition-colors">
           <Plus className="h-4 w-4" />New Post
         </button>
       </div>
@@ -205,7 +205,7 @@ export function BlogTab() {
                 <div className="relative mt-2 w-full h-40 rounded-xl overflow-hidden border">
                   <img src={form.image} alt="preview" className="w-full h-full object-cover" />
                   <button type="button" onClick={() => setForm(f => ({ ...f, image: "" }))}
-                    className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white rounded-full w-7 h-7 flex items-center justify-center transition-colors">
+                    className="absolute top-2 right-2 bg-foreground/60 hover:bg-foreground/80 text-background rounded-full w-7 h-7 flex items-center justify-center transition-colors">
                     <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
@@ -252,7 +252,7 @@ export function BlogTab() {
             )}
             <div className="flex gap-3 pt-1">
               <button onClick={handleSave} disabled={saving}
-                className="flex items-center gap-2 text-sm font-semibold bg-accent text-white px-5 py-2.5 rounded-xl hover:bg-accent/90 transition-colors disabled:opacity-50">
+                className="flex items-center gap-2 text-sm font-semibold bg-accent text-accent-foreground px-5 py-2.5 rounded-xl hover:bg-accent/90 transition-colors disabled:opacity-50">
                 <Save className="h-4 w-4" />{saving ? "Saving..." : editingPost ? "Save Changes" : "Publish Post"}
               </button>
               <button onClick={() => { setShowForm(false); setEditingPost(null); }}
@@ -278,7 +278,7 @@ export function BlogTab() {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap mb-1">
                   <span className="text-xs bg-accent/10 text-accent px-2 py-0.5 rounded-full">{post.category}</span>
-                  {post.featured && <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Featured</span>}
+                  {post.featured && <span className="text-xs bg-warning text-warning-foreground px-2 py-0.5 rounded-full">Featured</span>}
                   <span className="text-xs text-muted-foreground">{post.readTime}</span>
                 </div>
                 <h3 className="font-medium text-sm line-clamp-1">{post.title}</h3>
@@ -293,13 +293,13 @@ export function BlogTab() {
                 {deleteConfirm === post.id ? (
                   <div className="flex gap-1 items-center">
                     <button onClick={() => handleDelete(post.id)}
-                      className="text-xs px-2 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200">Delete</button>
+                      className="text-xs px-2 py-1 rounded bg-destructive/10 text-destructive hover:bg-destructive/20">Delete</button>
                     <button onClick={() => setDeleteConfirm(null)}
                       className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground hover:bg-muted/80">No</button>
                   </div>
                 ) : (
                   <button onClick={() => setDeleteConfirm(post.id)} title="Delete"
-                    className="p-1.5 rounded hover:bg-red-50 transition-colors text-muted-foreground hover:text-red-600">
+                    className="p-1.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 )}

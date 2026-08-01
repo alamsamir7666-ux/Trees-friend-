@@ -59,13 +59,13 @@ const API = import.meta.env.VITE_API_BASE_URL ?? "";
 
 // ??? Status helpers ?????????????????????????????????????????????????????????
 const statusConfig: Record<string, { color: string; icon: React.ElementType }> = {
-  pending:    { color: "bg-yellow-100 text-yellow-700 border-yellow-200", icon: Clock },
-  confirmed:  { color: "bg-blue-100 text-blue-700 border-blue-200", icon: CheckCircle2 },
-  processing: { color: "bg-violet-100 text-violet-700 border-violet-200", icon: BarChart3 },
-  shipped:    { color: "bg-indigo-100 text-indigo-700 border-indigo-200", icon: Truck },
-  delivered:  { color: "bg-emerald-100 text-emerald-700 border-emerald-200", icon: CheckCircle2 },
-  cancelled:       { color: "bg-red-100 text-red-700 border-red-200", icon: XCircle },
-  return_completed: { color: "bg-teal-100 text-teal-700 border-teal-200", icon: RotateCcw },
+  pending:    { color: "bg-warning text-warning-foreground border-warning-border", icon: Clock },
+  confirmed:  { color: "bg-info text-info-foreground border-info-border", icon: CheckCircle2 },
+  processing: { color: "bg-info text-info-foreground border-info-border", icon: BarChart3 },
+  shipped:    { color: "bg-info text-info-foreground border-info-border", icon: Truck },
+  delivered:  { color: "bg-success text-success-foreground border-success-border", icon: CheckCircle2 },
+  cancelled:       { color: "bg-destructive/10 text-destructive border-destructive/20", icon: XCircle },
+  return_completed: { color: "bg-success text-success-foreground border-success-border", icon: RotateCcw },
 };
 
 // ??? Sidebar nav items ???????????????????????????????????????????????????????
@@ -486,15 +486,15 @@ export function AdminPage() {
 
   // ??? Sidebar ???????????????????????????????????????????????????????????????
   const Sidebar = ({ mobile = false }: { mobile?: boolean }) => (
-    <aside className={`${mobile ? "w-64" : "w-64"} bg-white border-r flex flex-col h-full`}>
+    <aside className={`${mobile ? "w-64" : "w-64"} bg-card border-r flex flex-col h-full`}>
       <div className="px-6 py-5 border-b">
         <div className="flex items-center gap-2.5">
-          <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-pink-400 to-rose-500 flex items-center justify-center">
-            <span className="text-white text-xs font-bold">EE</span>
+          <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center">
+            <span className="text-primary-foreground text-xs font-bold">EE</span>
           </div>
           <div>
-            <p className="font-semibold text-sm text-gray-900">Tree Friend</p>
-            <p className="text-xs text-gray-400">Admin Panel</p>
+            <p className="font-semibold text-sm text-foreground">Tree Friend</p>
+            <p className="text-xs text-muted-foreground">Admin Panel</p>
           </div>
         </div>
       </div>
@@ -506,19 +506,19 @@ export function AdminPage() {
             onClick={() => { setActiveTab(id); setSidebarOpen(false); }}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 ${
               activeTab === id
-                ? "bg-pink-50 text-pink-600"
-                : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"
+                ? "bg-primary/10 text-primary"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
             }`}
           >
             <Icon className="h-[18px] w-[18px] shrink-0" />
             {label}
             {id === "orders" && ordersTotal > 0 && (
-              <span className="ml-auto bg-pink-100 text-pink-600 text-xs font-semibold px-2 py-0.5 rounded-full">
+              <span className="ml-auto bg-primary/10 text-primary text-xs font-semibold px-2 py-0.5 rounded-full">
                 {ordersTotal + adminPreOrders.length}
               </span>
             )}
             {id === "archived" && archivedTotal > 0 && (
-              <span className="ml-auto bg-gray-100 text-gray-500 text-xs font-semibold px-2 py-0.5 rounded-full">
+              <span className="ml-auto bg-muted text-muted-foreground text-xs font-semibold px-2 py-0.5 rounded-full">
                 {archivedTotal}
               </span>
             )}
@@ -528,14 +528,14 @@ export function AdminPage() {
 
       <div className="px-4 py-4 border-t">
         <div className="flex items-center gap-3 px-2">
-          <div className="h-8 w-8 rounded-full bg-gradient-to-br from-pink-300 to-rose-400 flex items-center justify-center shrink-0">
-            <span className="text-white text-xs font-bold">
+          <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shrink-0">
+            <span className="text-primary-foreground text-xs font-bold">
               {(me as any)?.firstName?.[0] ?? "A"}
             </span>
           </div>
           <div className="min-w-0">
-            <p className="text-xs font-semibold text-gray-800 truncate">{(me as any)?.firstName} {(me as any)?.lastName}</p>
-            <p className="text-xs text-gray-400">Administrator</p>
+            <p className="text-xs font-semibold text-foreground truncate">{(me as any)?.firstName} {(me as any)?.lastName}</p>
+            <p className="text-xs text-muted-foreground">Administrator</p>
           </div>
         </div>
       </div>
@@ -583,17 +583,17 @@ export function AdminPage() {
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-        <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="absolute inset-0 bg-foreground/40 backdrop-blur-sm" onClick={onClose} />
+        <div className="relative bg-card rounded-2xl shadow-2xl w-full max-w-md">
           <div className="flex items-center justify-between px-6 py-4 border-b">
             <h2 className="font-semibold text-lg">{coupon ? "Edit Coupon" : "New Coupon"}</h2>
-            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
-              <X className="h-5 w-5 text-gray-500" />
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
+              <X className="h-5 w-5 text-muted-foreground" />
             </button>
           </div>
           <form onSubmit={handleSubmit} className="p-6 space-y-4">
             <div>
-              <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Coupon Code *</Label>
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Coupon Code *</Label>
               <Input
                 value={form.code}
                 onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
@@ -604,7 +604,7 @@ export function AdminPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Discount Type *</Label>
+                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Discount Type *</Label>
                 <Select value={form.discountType} onValueChange={v => setForm(f => ({ ...f, discountType: v }))}>
                   <SelectTrigger className="mt-1.5 rounded-xl"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -614,7 +614,7 @@ export function AdminPage() {
                 </Select>
               </div>
               <div>
-                <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">
+                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                   Value {form.discountType === "percentage" ? "(%)" : "(Tk)"} *
                 </Label>
                 <Input
@@ -629,7 +629,7 @@ export function AdminPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Min Order (Tk)</Label>
+                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Min Order (Tk)</Label>
                 <Input
                   type="number"
                   value={form.minOrderAmount}
@@ -639,7 +639,7 @@ export function AdminPage() {
                 />
               </div>
               <div>
-                <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Expiry Date</Label>
+                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Expiry Date</Label>
                 <Input
                   type="date"
                   value={form.expiryDate}
@@ -649,7 +649,7 @@ export function AdminPage() {
               </div>
             </div>
             <div className="flex gap-3 pt-2">
-              <Button type="submit" disabled={couponSaving} className="flex-1 rounded-xl bg-pink-500 hover:bg-pink-600 text-white">
+              <Button type="submit" disabled={couponSaving} className="flex-1 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground">
                 {coupon ? "Update Coupon" : "Create Coupon"}
               </Button>
               <Button type="button" variant="outline" onClick={onClose} className="rounded-xl">Cancel</Button>
@@ -749,7 +749,7 @@ export function AdminPage() {
 
       {sidebarOpen && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm md:hidden" onClick={() => setSidebarOpen(false)} />
+          <div className="fixed inset-0 z-40 bg-foreground/40 backdrop-blur-sm md:hidden" onClick={() => setSidebarOpen(false)} />
           <div className="fixed inset-y-0 left-0 z-50 md:hidden">
             <Sidebar mobile />
           </div>
@@ -757,23 +757,23 @@ export function AdminPage() {
       )}
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className="h-16 bg-white border-b flex items-center justify-between px-5 shrink-0">
+        <header className="h-16 bg-card border-b flex items-center justify-between px-5 shrink-0">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSidebarOpen(true)}
-              className="md:hidden p-2 rounded-lg hover:bg-gray-100 transition-colors"
+              className="md:hidden p-2 rounded-lg hover:bg-muted transition-colors"
             >
-              <Menu className="h-5 w-5 text-gray-500" />
+              <Menu className="h-5 w-5 text-muted-foreground" />
             </button>
             <div>
-              <h1 className="font-semibold text-gray-900 text-sm sm:text-base">{activeNav?.label ?? "Dashboard"}</h1>
-              <p className="text-xs text-gray-400 hidden sm:block">Tree Friend Admin</p>
+              <h1 className="font-semibold text-foreground text-sm sm:text-base">{activeNav?.label ?? "Dashboard"}</h1>
+              <p className="text-xs text-muted-foreground hidden sm:block">Tree Friend Admin</p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-pink-300 to-rose-400 flex items-center justify-center">
-              <span className="text-white text-xs font-bold">{(me as any)?.firstName?.[0] ?? "A"}</span>
+            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center">
+              <span className="text-primary-foreground text-xs font-bold">{(me as any)?.firstName?.[0] ?? "A"}</span>
             </div>
           </div>
         </header>
@@ -827,7 +827,7 @@ export function AdminPage() {
               Keep Order
             </Button>
             <Button
-              className="rounded-xl bg-red-600 hover:bg-red-700 text-white"
+              className="rounded-xl bg-destructive hover:bg-destructive/90 text-destructive-foreground"
               disabled={updateOrderStatus.isPending}
               onClick={confirmCancellation}
             >

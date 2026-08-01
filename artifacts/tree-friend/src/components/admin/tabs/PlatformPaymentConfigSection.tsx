@@ -140,9 +140,9 @@ export function PlatformPaymentConfigSection() {
       </p>
 
       {!config || showForm ? (
-        <div className="border rounded-xl p-4 space-y-3 bg-white">
+        <div className="border rounded-xl p-4 space-y-3 bg-card">
           {config && (
-            <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
+            <p className="text-xs text-warning-foreground bg-warning rounded-lg px-3 py-2">
               Saving new credentials replaces the existing ones and resets verification -- you'll need to Test
               Connection again.
             </p>
@@ -200,7 +200,7 @@ export function PlatformPaymentConfigSection() {
           </div>
         </div>
       ) : (
-        <div className="border rounded-xl p-4 bg-white space-y-3">
+        <div className="border rounded-xl p-4 bg-card space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
               <p className="text-sm font-medium">bKash merchant account configured</p>
@@ -209,11 +209,11 @@ export function PlatformPaymentConfigSection() {
               </p>
             </div>
             {config.isVerified ? (
-              <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-green-100 text-green-700 flex items-center gap-1">
+              <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-success text-success-foreground flex items-center gap-1">
                 <ShieldCheck className="h-3.5 w-3.5" /> Verified &mdash; live
               </span>
             ) : (
-              <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-red-100 text-red-600 flex items-center gap-1">
+              <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-destructive/10 text-destructive flex items-center gap-1">
                 <ShieldAlert className="h-3.5 w-3.5" /> Not verified &mdash; checkout/payouts blocked
               </span>
             )}

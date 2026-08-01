@@ -22,7 +22,7 @@ function ToolbarBtn({ onClick, active, disabled, title, children }: {
       title={title}
       disabled={disabled}
       onMouseDown={e => { e.preventDefault(); onClick(); }}
-      className={`p-1.5 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${active ? "bg-accent text-white" : "hover:bg-muted text-muted-foreground hover:text-foreground"}`}
+      className={`p-1.5 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${active ? "bg-accent text-accent-foreground" : "hover:bg-muted text-muted-foreground hover:text-foreground"}`}
     >
       {children}
     </button>

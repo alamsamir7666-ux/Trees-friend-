@@ -99,7 +99,7 @@ export function SettingsTab() {
                   <div className="flex items-center justify-between gap-3 mb-1">
                     <p className="text-sm font-semibold text-foreground">{label}</p>
                     {editable && saved === field && (
-                      <span className="text-[11px] font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Saved</span>
+                      <span className="text-[11px] font-medium text-success-foreground bg-success px-2 py-0.5 rounded-full">Saved</span>
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mb-3">{desc}</p>

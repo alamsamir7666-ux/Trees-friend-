@@ -8,10 +8,10 @@ const API = import.meta.env.VITE_API_BASE_URL ?? "";
 // and ArchivedOrdersTab. Kept local for the same reason -- if a fourth
 // consumer appears, lift to a shared file.
 const SELLER_STATUS_STYLE: Record<string, string> = {
-  active: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  pending_verification: "bg-amber-50 text-amber-700 border-amber-200",
-  suspended: "bg-rose-50 text-rose-700 border-rose-200",
-  vacation: "bg-sky-50 text-sky-700 border-sky-200",
+  active: "bg-success text-success-foreground border-success-border",
+  pending_verification: "bg-warning text-warning-foreground border-warning-border",
+  suspended: "bg-destructive/10 text-destructive border-destructive/20",
+  vacation: "bg-info text-info-foreground border-info-border",
 };
 const SELLER_STATUS_LABEL: Record<string, string> = {
   active: "Active",
@@ -53,10 +53,10 @@ export function ReturnsTab() {
   }
 
   const statusColors: Record<string, string> = {
-    requested: "bg-amber-100 text-amber-700 border border-amber-200",
-    approved:  "bg-blue-100 text-blue-700 border border-blue-200",
-    rejected:  "bg-red-100 text-red-700 border border-red-200",
-    completed: "bg-emerald-100 text-emerald-700 border border-emerald-200",
+    requested: "bg-warning text-warning-foreground border border-warning-border",
+    approved:  "bg-info text-info-foreground border border-info-border",
+    rejected:  "bg-destructive/10 text-destructive border border-destructive/20",
+    completed: "bg-success text-success-foreground border border-success-border",
   };
 
   if (loading) return (
@@ -114,26 +114,26 @@ export function ReturnsTab() {
                       pill + email + phone, or "Unknown seller" for legacy
                       pre-Phase-2 orders with no sellerId. */}
                   {sellerName ? (
-                    <div className="bg-pink-50/50 border border-pink-100 rounded-xl px-4 py-3 flex flex-wrap items-center gap-3">
+                    <div className="bg-primary/5 border border-primary/10 rounded-xl px-4 py-3 flex flex-wrap items-center gap-3">
                       <div className="flex items-center gap-2 min-w-0">
-                        <div className="h-8 w-8 rounded-lg bg-pink-100 flex items-center justify-center shrink-0">
-                          <Store className="h-4 w-4 text-pink-700" />
+                        <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                          <Store className="h-4 w-4 text-primary" />
                         </div>
                         <div className="min-w-0">
-                          <p className="text-[10px] uppercase tracking-wider text-pink-700/70 font-semibold">Fulfilled by</p>
-                          <p className="text-sm font-semibold text-gray-800 truncate">{sellerName}{sellerOwnerName ? <span className="text-gray-500 font-normal"> · {sellerOwnerName}</span> : null}</p>
+                          <p className="text-[10px] uppercase tracking-wider text-primary/70 font-semibold">Fulfilled by</p>
+                          <p className="text-sm font-semibold text-foreground truncate">{sellerName}{sellerOwnerName ? <span className="text-muted-foreground font-normal"> · {sellerOwnerName}</span> : null}</p>
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 ml-auto">
                         {sellerStatus && (
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${SELLER_STATUS_STYLE[sellerStatus] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${SELLER_STATUS_STYLE[sellerStatus] ?? "bg-muted text-muted-foreground border-border"}`}>
                             {SELLER_STATUS_LABEL[sellerStatus] ?? sellerStatus}
                           </span>
                         )}
                         {sellerEmail && (
                           <a
                             href={`mailto:${sellerEmail}?subject=${encodeURIComponent(`Return #${ret.id} (Order #${ret.orderId}) — Tree Friend admin follow-up`)}&body=${encodeURIComponent(`Hi ${sellerOwnerName ?? sellerName},\n\nThis is the Tree Friend admin team. We're reaching out about return request #${ret.id} for order #${ret.orderId}.\n\nPlease advise on how to proceed (pickup arrangement, refund authorization, etc).\n\nThanks,\nTree Friend Admin`)}`}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-gray-700 bg-white hover:bg-pink-50 hover:text-pink-700 border border-gray-200 transition-colors"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-foreground bg-card hover:bg-primary/10 hover:text-primary border border-border transition-colors"
                           >
                             <Mail className="h-3 w-3" /> Contact
                           </a>
@@ -141,7 +141,7 @@ export function ReturnsTab() {
                         {sellerPhone && (
                           <a
                             href={`tel:${sellerPhone}`}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-gray-700 bg-white hover:bg-pink-50 hover:text-pink-700 border border-gray-200 transition-colors"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-foreground bg-card hover:bg-primary/10 hover:text-primary border border-border transition-colors"
                           >
                             <Phone className="h-3 w-3" /> Call
                           </a>
@@ -149,7 +149,7 @@ export function ReturnsTab() {
                       </div>
                     </div>
                   ) : (
-                    <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-2.5 text-xs text-gray-400 italic">
+                    <div className="bg-muted/50 border border-muted rounded-xl px-4 py-2.5 text-xs text-muted-foreground/70 italic">
                       Unknown seller — legacy order from before the marketplace migration, or seller record deleted.
                     </div>
                   )}
@@ -184,7 +184,7 @@ export function ReturnsTab() {
                       </div>
                     )}
                     {deliveredAt && (
-                      <div className="flex items-center gap-1.5 bg-green-50 text-green-700 rounded-lg px-3 py-1.5">
+                      <div className="flex items-center gap-1.5 bg-success text-success-foreground rounded-lg px-3 py-1.5">
                         <span>✅ Delivered</span>
                         <span className="font-medium">{deliveredAt.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
                       </div>
@@ -194,30 +194,30 @@ export function ReturnsTab() {
                       <span>{requestedAt.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
                     </div>
                   </div>
-                  <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
-                    <p className="text-xs font-medium text-amber-700 mb-1">Customer reason</p>
+                  <div className="bg-warning border border-warning-border rounded-xl px-4 py-3">
+                    <p className="text-xs font-medium text-warning-foreground mb-1">Customer reason</p>
                     <p className="text-sm text-foreground">{ret.reason}</p>
                   </div>
                   {ret.adminNote && (
-                    <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
-                      <p className="text-xs font-medium text-blue-700 mb-1">Admin note</p>
+                    <div className="bg-info border border-info-border rounded-xl px-4 py-3">
+                      <p className="text-xs font-medium text-info-foreground mb-1">Admin note</p>
                       <p className="text-sm">{ret.adminNote}</p>
                     </div>
                   )}
                   {ret.refundAmount != null && ret.status === "completed" && (
-                    <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 flex items-center justify-between">
-                      <span className="text-xs font-medium text-emerald-700">Refund issued</span>
-                      <span className="text-lg font-bold text-emerald-700">Tk{Number(ret.refundAmount).toLocaleString()}</span>
+                    <div className="bg-success border border-success-border rounded-xl px-4 py-3 flex items-center justify-between">
+                      <span className="text-xs font-medium text-success-foreground">Refund issued</span>
+                      <span className="text-lg font-bold text-success-foreground">Tk{Number(ret.refundAmount).toLocaleString()}</span>
                     </div>
                   )}
                   {ret.status === "requested" && (
                     <div className="flex gap-2 pt-1">
                       <button onClick={() => updateStatus(ret.id, "approved")} disabled={updatingId === ret.id}
-                        className="flex-1 text-sm font-medium bg-blue-500 text-white px-4 py-2 rounded-xl hover:bg-blue-600 transition-colors disabled:opacity-50">
+                        className="flex-1 text-sm font-medium bg-info text-info-foreground px-4 py-2 rounded-xl hover:bg-info/90 transition-colors disabled:opacity-50">
                         Approve Return
                       </button>
                       <button onClick={() => { const note = prompt("Rejection reason?"); if (note) updateStatus(ret.id, "rejected", note); }} disabled={updatingId === ret.id}
-                        className="flex-1 text-sm font-medium bg-red-500 text-white px-4 py-2 rounded-xl hover:bg-red-600 transition-colors disabled:opacity-50">
+                        className="flex-1 text-sm font-medium bg-destructive text-destructive-foreground px-4 py-2 rounded-xl hover:bg-destructive/90 transition-colors disabled:opacity-50">
                         Reject
                       </button>
                     </div>
@@ -229,10 +229,10 @@ export function ReturnsTab() {
                         <input type="number" placeholder="Refund amount (Tk)" min="0"
                           value={refundInputs[ret.id] ?? ""}
                           onChange={(e) => setRefundInputs(prev => ({ ...prev, [ret.id]: e.target.value }))}
-                          className="flex-1 text-sm border rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+                          className="flex-1 text-sm border rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-success-foreground/40" />
                         <button onClick={() => { const amt = refundInputs[ret.id]; if (amt) updateStatus(ret.id, "completed", undefined, amt); }}
                           disabled={updatingId === ret.id || !refundInputs[ret.id]}
-                          className="text-sm font-medium bg-emerald-500 text-white px-4 py-2 rounded-xl hover:bg-emerald-600 transition-colors disabled:opacity-50">
+                          className="text-sm font-medium bg-success text-success-foreground px-4 py-2 rounded-xl hover:bg-success/90 transition-colors disabled:opacity-50">
                           Complete
                         </button>
                       </div>

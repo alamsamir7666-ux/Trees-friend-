@@ -84,7 +84,7 @@ function StatCard({
       <div>
         <p className="text-2xl font-bold">{value}</p>
         {sub && (
-          <p className={`text-xs mt-0.5 flex items-center gap-1 ${trend === "up" ? "text-green-600" : trend === "down" ? "text-red-500" : "text-muted-foreground"}`}>
+          <p className={`text-xs mt-0.5 flex items-center gap-1 ${trend === "up" ? "text-success-foreground" : trend === "down" ? "text-destructive" : "text-muted-foreground"}`}>
             {trend === "up" && <TrendingUp className="h-3 w-3" />}
             {trend === "down" && <TrendingDown className="h-3 w-3" />}
             {sub}
@@ -177,7 +177,7 @@ export function AdminAnalyticsPanel() {
                 onClick={() => setRevenueView(v)}
                 className={`text-xs px-3 py-1.5 rounded-full transition-colors capitalize ${
                   revenueView === v
-                    ? "bg-accent text-white"
+                    ? "bg-accent text-accent-foreground"
                     : "bg-muted text-muted-foreground hover:text-foreground"
                 }`}
               >

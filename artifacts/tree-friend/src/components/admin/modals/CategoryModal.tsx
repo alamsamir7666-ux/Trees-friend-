@@ -69,21 +69,21 @@ export function CategoryModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+      <div className="absolute inset-0 bg-foreground/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-card rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b">
           <h2 className="font-semibold text-lg">
             {category
               ? isSubcategory ? "Edit Subcategory" : "Edit Category"
               : isSubcategory ? "Add Subcategory" : "Add Category"}
           </h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
-            <X className="h-5 w-5 text-gray-500" />
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
+            <X className="h-5 w-5 text-muted-foreground" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
               {isSubcategory ? "Subcategory Name *" : "Category Name *"}
             </Label>
             <Input
@@ -102,7 +102,7 @@ export function CategoryModal({
             />
           </div>
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Slug (auto-generated)</Label>
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Slug (auto-generated)</Label>
             <Input
               value={form.slug}
               onChange={e => setForm(f => ({ ...f, slug: e.target.value }))}
@@ -111,7 +111,7 @@ export function CategoryModal({
             />
           </div>
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Description (optional)</Label>
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Description (optional)</Label>
             <Textarea
               value={form.description}
               onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
@@ -123,14 +123,14 @@ export function CategoryModal({
             />
           </div>
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Icon (emoji, optional)</Label>
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Icon (emoji, optional)</Label>
             <Input
               value={form.icon}
               onChange={e => setForm(f => ({ ...f, icon: e.target.value }))}
               className="mt-1.5 rounded-xl"
               placeholder="🌳"
             />
-            <p className="text-[11px] text-gray-400 mt-1">Type an emoji, or upload an icon image below instead. If both are set, the uploaded image takes priority.</p>
+            <p className="text-[11px] text-muted-foreground/70 mt-1">Type an emoji, or upload an icon image below instead. If both are set, the uploaded image takes priority.</p>
             <div className="mt-2 flex gap-2 items-center">
               <Input
                 value={form.iconImage}
@@ -138,7 +138,7 @@ export function CategoryModal({
                 className="rounded-xl flex-1"
                 placeholder="Paste icon image URL or upload"
               />
-              <label className="cursor-pointer shrink-0 px-3 py-2 rounded-xl border border-gray-200 text-sm hover:bg-gray-50 transition-colors">
+              <label className="cursor-pointer shrink-0 px-3 py-2 rounded-xl border border-border text-sm hover:bg-muted transition-colors">
                 Upload
                 <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
                   const file = e.target.files?.[0];
@@ -156,11 +156,11 @@ export function CategoryModal({
             </div>
             {form.iconImage && (
               <div className="relative mt-2 inline-block">
-                <img src={form.iconImage} alt="icon preview" className="h-14 w-14 object-cover rounded-full border border-gray-200" />
+                <img src={form.iconImage} alt="icon preview" className="h-14 w-14 object-cover rounded-full border border-border" />
                 <button
                   type="button"
                   onClick={() => setForm(f => ({ ...f, iconImage: "" }))}
-                  className="absolute -top-1.5 -right-1.5 bg-black/60 hover:bg-black/80 text-white rounded-full p-1 transition-colors"
+                  className="absolute -top-1.5 -right-1.5 bg-foreground/60 hover:bg-foreground/80 text-background rounded-full p-1 transition-colors"
                   title="Remove icon image"
                 >
                   <X className="h-3 w-3" />
@@ -169,7 +169,7 @@ export function CategoryModal({
             )}
           </div>
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
               {isSubcategory ? "Subcategory Image (optional)" : "Category Image (optional)"}
             </Label>
             <div className="mt-1.5 flex gap-2 items-center">
@@ -179,7 +179,7 @@ export function CategoryModal({
                 className="rounded-xl flex-1"
                 placeholder="Paste image URL or upload"
               />
-              <label className="cursor-pointer shrink-0 px-3 py-2 rounded-xl border border-gray-200 text-sm hover:bg-gray-50 transition-colors">
+              <label className="cursor-pointer shrink-0 px-3 py-2 rounded-xl border border-border text-sm hover:bg-muted transition-colors">
                 Upload
                 <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
                   const file = e.target.files?.[0];
@@ -201,7 +201,7 @@ export function CategoryModal({
                 <button
                   type="button"
                   onClick={() => setForm(f => ({ ...f, image: "" }))}
-                  className="absolute top-1.5 right-1.5 bg-black/60 hover:bg-black/80 text-white rounded-full p-1 transition-colors"
+                  className="absolute top-1.5 right-1.5 bg-foreground/60 hover:bg-foreground/80 text-background rounded-full p-1 transition-colors"
                   title="Remove image"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -210,7 +210,7 @@ export function CategoryModal({
             )}
           </div>
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Display Order</Label>
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Display Order</Label>
             <Input
               type="number"
               value={form.displayOrder}
@@ -220,7 +220,7 @@ export function CategoryModal({
             />
           </div>
           <div className="flex gap-3 pt-2">
-            <Button type="submit" disabled={createCategory.isPending || updateCategory.isPending} className="flex-1 rounded-xl bg-pink-500 hover:bg-pink-600 text-white">
+            <Button type="submit" disabled={createCategory.isPending || updateCategory.isPending} className="flex-1 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground">
               {category ? "Update" : "Add"} {isSubcategory ? "Subcategory" : "Category"}
             </Button>
             <Button type="button" variant="outline" onClick={onClose} className="rounded-xl">Cancel</Button>

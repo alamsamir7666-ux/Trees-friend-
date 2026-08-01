@@ -124,10 +124,10 @@ export function PayoutsSection() {
   function statusPill(status: string) {
     const cls =
       status === "success"
-        ? "bg-green-100 text-green-700"
+        ? "bg-success text-success-foreground"
         : status === "failed"
-          ? "bg-red-100 text-red-600"
-          : "bg-amber-100 text-amber-700";
+          ? "bg-destructive/10 text-destructive"
+          : "bg-warning text-warning-foreground";
     return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>{status}</span>;
   }
 
@@ -145,10 +145,10 @@ export function PayoutsSection() {
             <p className="text-xs text-muted-foreground">
               {new Date(p.createdAt).toLocaleString()} {p.orderStatus && `· order: ${p.orderStatus}`}
             </p>
-            {p.failureReason && <p className="text-xs text-red-600 mt-1">{p.failureReason}</p>}
+            {p.failureReason && <p className="text-xs text-destructive mt-1">{p.failureReason}</p>}
             {p.bkashTransactionId && <p className="text-xs text-muted-foreground mt-1">trxID: {p.bkashTransactionId}</p>}
             {(p.adminNote || p.clawbackNotedAmount != null) && (
-              <div className="text-xs bg-amber-50 text-amber-800 rounded-lg px-2.5 py-1.5 mt-2 flex items-start gap-1.5">
+              <div className="text-xs bg-warning text-warning-foreground rounded-lg px-2.5 py-1.5 mt-2 flex items-start gap-1.5">
                 <StickyNote className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <span>
                   {p.adminNote}

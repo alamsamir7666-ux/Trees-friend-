@@ -65,37 +65,37 @@ export function CategoriesTab() {
           ]}
         />
         <div className="flex items-center justify-between mb-4 mt-3">
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-muted-foreground">
             Varieties are just products. Manage full details (price, stock, images, care info) from the Products tab -- this view is a quick filtered look at what is inside "{selectedSubcategory.name}".
           </p>
         </div>
         {varietyProducts.length === 0 ? (
-          <div className="bg-white rounded-2xl border p-12 text-center">
-            <Layers className="h-12 w-12 text-gray-200 mx-auto mb-4" />
-            <p className="font-semibold text-gray-500 mb-1">No varieties yet in "{selectedSubcategory.name}"</p>
-            <p className="text-sm text-gray-400">Add products from the Products tab and set their category to "{selectedSubcategory.name}".</p>
+          <div className="bg-card rounded-2xl border p-12 text-center">
+            <Layers className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
+            <p className="font-semibold text-muted-foreground mb-1">No varieties yet in "{selectedSubcategory.name}"</p>
+            <p className="text-sm text-muted-foreground/70">Add products from the Products tab and set their category to "{selectedSubcategory.name}".</p>
           </div>
         ) : (
-          <div className="bg-white rounded-2xl border overflow-hidden">
+          <div className="bg-card rounded-2xl border overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b">
+                <thead className="bg-muted/50 border-b">
                   <tr>
-                    <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Variety</th>
-                    <th className="px-5 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="px-5 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Variety</th>
+                    <th className="px-5 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-50">
+                <tbody className="divide-y divide-muted/50">
                   {varietyProducts.map((p: any) => (
-                    <tr key={p.id} className="hover:bg-pink-50/30 transition-colors">
+                    <tr key={p.id} className="hover:bg-primary/5 transition-colors">
                       <td className="px-5 py-3">
-                        <p className="font-medium text-gray-800">{p.name}</p>
+                        <p className="font-medium text-foreground">{p.name}</p>
                       </td>
                       {/* Phase 5: was a raw dump of p.productStatus (the
                           removed admin-set field -- see ProductModal.tsx).
                           Same listingCount/listingHasPreOrder signal as
                           ProductsTab.tsx's Stock/Status column. */}
-                      <td className="px-5 py-3 text-right text-gray-500 text-xs">
+                      <td className="px-5 py-3 text-right text-muted-foreground text-xs">
                         {((p as any).listingHasPreOrder ?? false)
                           ? "Pre-Order"
                           : ((p as any).listingCount ?? 0) > 0
@@ -124,64 +124,64 @@ export function CategoriesTab() {
           ]}
         />
         <div className="flex items-center justify-between mb-4 mt-3">
-          <p className="text-sm text-gray-500">Subcategories inside "{selectedCategory.name}". Click one to see its varieties.</p>
-          <Button onClick={() => openAdd(selectedCategory.id)} className="rounded-xl bg-pink-500 hover:bg-pink-600 text-white shrink-0">
+          <p className="text-sm text-muted-foreground">Subcategories inside "{selectedCategory.name}". Click one to see its varieties.</p>
+          <Button onClick={() => openAdd(selectedCategory.id)} className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground shrink-0">
             <Plus className="h-4 w-4 mr-1.5" /> Add Subcategory
           </Button>
         </div>
 
         {subs.length === 0 ? (
-          <div className="bg-white rounded-2xl border p-12 text-center">
-            <Layers className="h-12 w-12 text-gray-200 mx-auto mb-4" />
-            <p className="font-semibold text-gray-500 mb-1">No subcategories yet</p>
-            <p className="text-sm text-gray-400 mb-4">Add a subcategory (e.g. "Mango") inside "{selectedCategory.name}".</p>
-            <Button onClick={() => openAdd(selectedCategory.id)} className="rounded-xl bg-pink-500 hover:bg-pink-600 text-white">
+          <div className="bg-card rounded-2xl border p-12 text-center">
+            <Layers className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
+            <p className="font-semibold text-muted-foreground mb-1">No subcategories yet</p>
+            <p className="text-sm text-muted-foreground/70 mb-4">Add a subcategory (e.g. "Mango") inside "{selectedCategory.name}".</p>
+            <Button onClick={() => openAdd(selectedCategory.id)} className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground">
               <Plus className="h-4 w-4 mr-1.5" /> Add First Subcategory
             </Button>
           </div>
         ) : (
-          <div className="bg-white rounded-2xl border overflow-hidden">
+          <div className="bg-card rounded-2xl border overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b">
+                <thead className="bg-muted/50 border-b">
                   <tr>
-                    <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Subcategory</th>
-                    <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Slug</th>
-                    <th className="px-5 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Varieties</th>
-                    <th className="px-5 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+                    <th className="px-5 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Subcategory</th>
+                    <th className="px-5 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Slug</th>
+                    <th className="px-5 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Varieties</th>
+                    <th className="px-5 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-50">
+                <tbody className="divide-y divide-muted/50">
                   {subs.map((sub: any) => {
                     const productCount = products.filter((p: any) => p.categoryId === sub.id).length;
                     return (
-                      <tr key={sub.id} className="hover:bg-pink-50/30 transition-colors cursor-pointer" onClick={() => setSelectedSubcategoryId(sub.id)}>
+                      <tr key={sub.id} className="hover:bg-primary/5 transition-colors cursor-pointer" onClick={() => setSelectedSubcategoryId(sub.id)}>
                         <td className="px-5 py-3">
-                          <p className="font-medium text-gray-800">{sub.icon} {sub.name}</p>
+                          <p className="font-medium text-foreground">{sub.icon} {sub.name}</p>
                         </td>
                         <td className="px-5 py-3">
-                          <span className="font-mono text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">{sub.slug}</span>
+                          <span className="font-mono text-xs text-muted-foreground bg-muted px-2.5 py-1 rounded-full">{sub.slug}</span>
                         </td>
                         <td className="px-5 py-3 text-right">
-                          <span className="text-sm font-semibold text-gray-700">{productCount}</span>
+                          <span className="text-sm font-semibold text-foreground">{productCount}</span>
                         </td>
                         <td className="px-5 py-3 text-right">
                           <div className="flex justify-end gap-1" onClick={e => e.stopPropagation()}>
                             <button onClick={() => setOptionsModalCategory({ id: sub.id, name: sub.name })}
                               title="Manage listing attribute options (height, pot size, age, root type)"
-                              className="p-1.5 rounded-lg text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 transition-colors">
+                              className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-success-foreground hover:bg-success/10 transition-colors">
                               <ListTree className="h-3.5 w-3.5" />
                             </button>
                             <button onClick={() => openEdit(sub)}
-                              className="p-1.5 rounded-lg text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors">
+                              className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-info-foreground hover:bg-info/10 transition-colors">
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
                             <button onClick={() => handleDeleteCategory(sub.id)}
-                              className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors">
+                              className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors">
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
                             <button onClick={() => setSelectedSubcategoryId(sub.id)}
-                              className="p-1.5 rounded-lg text-gray-400 hover:text-pink-500 hover:bg-pink-50 transition-colors">
+                              className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-colors">
                               <ChevronRight className="h-3.5 w-3.5" />
                             </button>
                           </div>
@@ -218,7 +218,7 @@ export function CategoriesTab() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-gray-500">Manage your top-level categories. Click one to manage its subcategories.</p>
+        <p className="text-sm text-muted-foreground">Manage your top-level categories. Click one to manage its subcategories.</p>
         <div className="flex gap-2">
           {topLevel.length === 0 && (
             <Button
@@ -230,59 +230,59 @@ export function CategoriesTab() {
               {seedingCategories ? "Loading..." : "Load Defaults"}
             </Button>
           )}
-          <Button onClick={() => openAdd(null)} className="rounded-xl bg-pink-500 hover:bg-pink-600 text-white shrink-0">
+          <Button onClick={() => openAdd(null)} className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground shrink-0">
             <Plus className="h-4 w-4 mr-1.5" /> Add Category
           </Button>
         </div>
       </div>
 
       {topLevel.length === 0 ? (
-        <div className="bg-white rounded-2xl border p-12 text-center">
-          <Layers className="h-12 w-12 text-gray-200 mx-auto mb-4" />
-          <p className="font-semibold text-gray-500 mb-1">No categories yet</p>
-          <p className="text-sm text-gray-400 mb-4">Add your first category to organize products and update the navigation menu.</p>
-          <Button onClick={() => openAdd(null)} className="rounded-xl bg-pink-500 hover:bg-pink-600 text-white">
+        <div className="bg-card rounded-2xl border p-12 text-center">
+          <Layers className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
+          <p className="font-semibold text-muted-foreground mb-1">No categories yet</p>
+          <p className="text-sm text-muted-foreground/70 mb-4">Add your first category to organize products and update the navigation menu.</p>
+          <Button onClick={() => openAdd(null)} className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground">
             <Plus className="h-4 w-4 mr-1.5" /> Add First Category
           </Button>
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border overflow-hidden">
+        <div className="bg-card rounded-2xl border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b">
+              <thead className="bg-muted/50 border-b">
                 <tr>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Category</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Slug</th>
-                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Subcategories</th>
-                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Category</th>
+                  <th className="px-5 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Slug</th>
+                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Subcategories</th>
+                  <th className="px-5 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
+              <tbody className="divide-y divide-muted/50">
                 {topLevel.map((cat: any) => {
                   const subCount = allCats.filter((c: any) => c.parentId === cat.id).length;
                   return (
-                    <tr key={cat.id} className="hover:bg-pink-50/30 transition-colors cursor-pointer" onClick={() => setSelectedCategoryId(cat.id)}>
+                    <tr key={cat.id} className="hover:bg-primary/5 transition-colors cursor-pointer" onClick={() => setSelectedCategoryId(cat.id)}>
                       <td className="px-5 py-3">
-                        <p className="font-bold text-gray-800">{cat.icon} {cat.name}</p>
+                        <p className="font-bold text-foreground">{cat.icon} {cat.name}</p>
                       </td>
                       <td className="px-5 py-3">
-                        <span className="font-mono text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">{cat.slug}</span>
+                        <span className="font-mono text-xs text-muted-foreground bg-muted px-2.5 py-1 rounded-full">{cat.slug}</span>
                       </td>
                       <td className="px-5 py-3 text-right">
-                        <span className="text-sm font-semibold text-gray-700">{subCount}</span>
+                        <span className="text-sm font-semibold text-foreground">{subCount}</span>
                       </td>
                       <td className="px-5 py-3 text-right">
                         <div className="flex justify-end gap-1" onClick={e => e.stopPropagation()}>
                           <button onClick={() => openEdit(cat)}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors">
+                            className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-info-foreground hover:bg-info/10 transition-colors">
                             <Pencil className="h-3.5 w-3.5" />
                           </button>
                           <button onClick={() => handleDeleteCategory(cat.id)}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors">
+                            className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors">
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
                           <button onClick={() => setSelectedCategoryId(cat.id)}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-pink-500 hover:bg-pink-50 transition-colors">
+                            className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-colors">
                             <ChevronRight className="h-3.5 w-3.5" />
                           </button>
                         </div>
@@ -309,23 +309,23 @@ export function CategoriesTab() {
 
 function Breadcrumbs({ items }: { items: { label: string; onClick?: () => void }[] }) {
   return (
-    <div className="flex items-center gap-1.5 text-sm text-gray-500 mb-1">
+    <div className="flex items-center gap-1.5 text-sm text-muted-foreground mb-1">
       <button
         onClick={items[0]?.onClick}
-        className="flex items-center gap-1 hover:text-pink-600 transition-colors -ml-1 px-1 py-0.5 rounded"
+        className="flex items-center gap-1 hover:text-primary transition-colors -ml-1 px-1 py-0.5 rounded"
       >
         <ChevronLeft className="h-3.5 w-3.5" /> Back
       </button>
-      <span className="mx-1 text-gray-300">|</span>
+      <span className="mx-1 text-muted-foreground/40">|</span>
       {items.map((item, i) => (
         <span key={i} className="flex items-center gap-1.5">
-          {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-gray-300" />}
+          {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40" />}
           {item.onClick ? (
-            <button onClick={item.onClick} className="hover:text-pink-600 transition-colors font-medium">
+            <button onClick={item.onClick} className="hover:text-primary transition-colors font-medium">
               {item.label}
             </button>
           ) : (
-            <span className="font-semibold text-gray-800">{item.label}</span>
+            <span className="font-semibold text-foreground">{item.label}</span>
           )}
         </span>
       ))}

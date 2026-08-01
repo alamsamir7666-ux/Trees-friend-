@@ -88,7 +88,7 @@ export function BulkImportTab() {
       {/* File upload */}
       <div>
         <Label className="text-sm">Upload CSV File</Label>
-        <input type="file" accept=".csv" onChange={handleFile} className="mt-1 block w-full text-sm text-muted-foreground file:mr-3 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:bg-accent file:text-white hover:file:bg-accent/90 file:cursor-pointer" />
+        <input type="file" accept=".csv" onChange={handleFile} className="mt-1 block w-full text-sm text-muted-foreground file:mr-3 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:bg-accent file:text-accent-foreground hover:file:bg-accent/90 file:cursor-pointer" />
       </div>
 
       {/* Or paste */}
@@ -106,12 +106,12 @@ export function BulkImportTab() {
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       {result && (
-        <div className={`rounded-xl p-4 ${result.errors > 0 ? "bg-yellow-50 border-yellow-200 border" : "bg-green-50 border-green-200 border"}`}>
+        <div className={`rounded-xl p-4 ${result.errors > 0 ? "bg-warning border-warning-border border" : "bg-success border-success-border border"}`}>
           <p className="font-medium text-sm">{result.message}</p>
           {result.errorDetails?.length > 0 && (
             <ul className="mt-2 space-y-1">
               {result.errorDetails.map((e: string, i: number) => (
-                <li key={i} className="text-xs text-red-600">• {e}</li>
+                <li key={i} className="text-xs text-destructive">• {e}</li>
               ))}
             </ul>
           )}

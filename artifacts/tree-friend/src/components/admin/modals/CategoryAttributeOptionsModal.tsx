@@ -75,18 +75,18 @@ export function CategoryAttributeOptionsModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-white z-10">
+    <div className="fixed inset-0 bg-foreground/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-card rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-card z-10">
           <div>
-            <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-              <ListTree className="h-4 w-4 text-pink-500" /> Listing Attribute Options
+            <h3 className="font-semibold text-foreground flex items-center gap-2">
+              <ListTree className="h-4 w-4 text-primary" /> Listing Attribute Options
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-muted-foreground mt-0.5">
               Controlled dropdown values sellers pick from when listing a variety in "{categoryName}"
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground/70">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -98,7 +98,7 @@ export function CategoryAttributeOptionsModal({
                 key={a.key}
                 onClick={() => setActiveAttribute(a.key)}
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                  activeAttribute === a.key ? "bg-pink-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  activeAttribute === a.key ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/70"
                 }`}
               >
                 {a.label}
@@ -113,26 +113,26 @@ export function CategoryAttributeOptionsModal({
               placeholder={`Add a ${ATTRIBUTES.find((a) => a.key === activeAttribute)?.label.toLowerCase()} option, e.g. "3-4 ft"`}
               className="flex-1"
             />
-            <Button type="submit" size="sm" className="rounded-xl bg-pink-500 hover:bg-pink-600 text-white shrink-0" disabled={createOption.isPending || !newValue.trim()}>
+            <Button type="submit" size="sm" className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground shrink-0" disabled={createOption.isPending || !newValue.trim()}>
               {createOption.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
             </Button>
           </form>
 
           {isLoading ? (
             <div className="space-y-2">
-              {[1, 2, 3].map((i) => <div key={i} className="h-9 rounded-lg bg-gray-100 animate-pulse" />)}
+              {[1, 2, 3].map((i) => <div key={i} className="h-9 rounded-lg bg-muted animate-pulse" />)}
             </div>
           ) : !options || options.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-6">No options yet for this attribute in this category.</p>
+            <p className="text-sm text-muted-foreground/70 text-center py-6">No options yet for this attribute in this category.</p>
           ) : (
             <div className="space-y-1.5">
               {options.map((o) => (
-                <div key={o.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-50 border">
-                  <span className="text-sm text-gray-700">{o.value}</span>
+                <div key={o.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-muted/50 border">
+                  <span className="text-sm text-foreground">{o.value}</span>
                   <button
                     onClick={() => handleDelete(o.id)}
                     disabled={deleteOption.isPending}
-                    className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                    className="p-1 rounded text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>

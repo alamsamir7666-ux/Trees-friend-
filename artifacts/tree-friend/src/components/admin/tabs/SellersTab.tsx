@@ -108,7 +108,7 @@ export function SellersTab() {
             ))}
           </TabsList>
         </Tabs>
-        <p className="text-xs text-gray-400 shrink-0">{sellers?.length ?? 0} seller(s)</p>
+        <p className="text-xs text-muted-foreground/70 shrink-0">{sellers?.length ?? 0} seller(s)</p>
       </div>
 
       {isLoading ? (
@@ -116,37 +116,37 @@ export function SellersTab() {
           {[1, 2, 3].map((i) => <div key={i} className="h-24 rounded-2xl bg-muted animate-pulse" />)}
         </div>
       ) : !sellers || sellers.length === 0 ? (
-        <div className="text-center py-16 text-muted-foreground bg-white rounded-2xl border">
+        <div className="text-center py-16 text-muted-foreground bg-card rounded-2xl border">
           <Clock className="h-8 w-8 mx-auto mb-2 opacity-30" />
           <p className="font-medium text-sm">No sellers in this status</p>
         </div>
       ) : (
         <div className="space-y-3">
           {sellers.map((s: any) => (
-            <div key={s.id} className="bg-white rounded-2xl border p-5">
+            <div key={s.id} className="bg-card rounded-2xl border p-5">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-gray-800">{s.businessName}</p>
-                    <span className="text-xs text-gray-400">·</span>
-                    <p className="text-sm text-gray-500">{s.nurseryName}</p>
+                    <p className="font-medium text-foreground">{s.businessName}</p>
+                    <span className="text-xs text-muted-foreground/70">·</span>
+                    <p className="text-sm text-muted-foreground">{s.nurseryName}</p>
                   </div>
-                  <p className="text-xs text-gray-400 mt-0.5">
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">
                     {s.ownerName} · {s.contactPhone} · {s.contactEmail}
                   </p>
-                  <p className="text-xs text-gray-400 mt-0.5">{s.location}</p>
-                  {s.description && <p className="text-sm text-gray-600 mt-2">{s.description}</p>}
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">{s.location}</p>
+                  {s.description && <p className="text-sm text-muted-foreground mt-2">{s.description}</p>}
                   {s.nidOrTradeLicenseUrl && (
                     <a
                       href={s.nidOrTradeLicenseUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-2"
+                      className="inline-flex items-center gap-1 text-xs text-info-foreground hover:underline mt-2"
                     >
                       View trade license/NID <ExternalLink className="h-3 w-3" />
                     </a>
                   )}
-                  <p className="text-xs text-gray-300 mt-2">
+                  <p className="text-xs text-muted-foreground/50 mt-2">
                     Applied {new Date(s.createdAt).toLocaleDateString()}
                   </p>
                 </div>
@@ -165,7 +165,7 @@ export function SellersTab() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="rounded-full gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
+                        className="rounded-full gap-1.5 text-destructive border-destructive/20 hover:bg-destructive/10"
                         disabled={actingOn === s.id}
                         onClick={() => handleReject(s.id)}
                       >
@@ -178,7 +178,7 @@ export function SellersTab() {
                     <Button
                       size="sm"
                       variant="outline"
-                      className="rounded-full gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
+                      className="rounded-full gap-1.5 text-destructive border-destructive/20 hover:bg-destructive/10"
                       disabled={actingOn === s.id}
                       onClick={() => handleSuspend(s.id)}
                     >
@@ -250,8 +250,8 @@ function PendingSellerVerification() {
 
   return (
     <div className="mt-10 pt-8 border-t">
-      <h2 className="font-medium text-gray-800 mb-1">Verified Seller Badge Requests</h2>
-      <p className="text-xs text-gray-400 mb-4">
+      <h2 className="font-medium text-foreground mb-1">Verified Seller Badge Requests</h2>
+      <p className="text-xs text-muted-foreground/70 mb-4">
         Approving grants the public checkmark shown on this seller's listing cards.
       </p>
 
@@ -268,28 +268,28 @@ function PendingSellerVerification() {
           {[1, 2].map((i) => <div key={i} className="h-20 rounded-2xl bg-muted animate-pulse" />)}
         </div>
       ) : !sellers || sellers.length === 0 ? (
-        <div className="text-center py-10 text-muted-foreground bg-white rounded-2xl border">
+        <div className="text-center py-10 text-muted-foreground bg-card rounded-2xl border">
           <BadgeCheck className="h-6 w-6 mx-auto mb-2 opacity-30" />
           <p className="text-sm">No {filter} verification requests</p>
         </div>
       ) : (
         <div className="space-y-3">
           {sellers.map((s: any) => (
-            <div key={s.id} className="bg-white rounded-2xl border p-4 flex items-center justify-between gap-4">
+            <div key={s.id} className="bg-card rounded-2xl border p-4 flex items-center justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-medium text-sm text-gray-800">{s.businessName}</p>
-                  <span className="text-xs text-gray-400">·</span>
-                  <p className="text-xs text-gray-500">{s.nurseryName}</p>
+                  <p className="font-medium text-sm text-foreground">{s.businessName}</p>
+                  <span className="text-xs text-muted-foreground/70">·</span>
+                  <p className="text-xs text-muted-foreground">{s.nurseryName}</p>
                 </div>
-                <p className="text-xs text-gray-400 mt-0.5">{s.location}</p>
+                <p className="text-xs text-muted-foreground/70 mt-0.5">{s.location}</p>
                 {filter === "requested" && s.verificationRequestedAt && (
-                  <p className="text-xs text-gray-300 mt-1">
+                  <p className="text-xs text-muted-foreground/50 mt-1">
                     Requested {new Date(s.verificationRequestedAt).toLocaleDateString()}
                   </p>
                 )}
                 {filter === "rejected" && s.verificationRejectionReason && (
-                  <p className="text-xs text-red-500 mt-1">Reason: {s.verificationRejectionReason}</p>
+                  <p className="text-xs text-destructive mt-1">Reason: {s.verificationRejectionReason}</p>
                 )}
               </div>
               {filter === "requested" && (
@@ -306,7 +306,7 @@ function PendingSellerVerification() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="rounded-full gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
+                    className="rounded-full gap-1.5 text-destructive border-destructive/20 hover:bg-destructive/10"
                     disabled={actingOn === s.id}
                     onClick={() => handleReject(s.id)}
                   >
@@ -384,8 +384,8 @@ function PendingConfigVerification() {
 
   return (
     <div className="mt-10 pt-8 border-t">
-      <h2 className="font-medium text-gray-800 mb-1">Payment &amp; Courier Verification</h2>
-      <p className="text-xs text-gray-400 mb-4">
+      <h2 className="font-medium text-foreground mb-1">Payment &amp; Courier Verification</h2>
+      <p className="text-xs text-muted-foreground/70 mb-4">
         Manual review only -- no live bKash/Pathao/Steadfast API check is performed here. Confirm credentials work
         by some means outside this system before approving.
       </p>
@@ -410,21 +410,21 @@ function PendingConfigVerification() {
           {[1, 2].map((i) => <div key={i} className="h-16 rounded-2xl bg-muted animate-pulse" />)}
         </div>
       ) : !configs || configs.length === 0 ? (
-        <div className="text-center py-10 text-muted-foreground bg-white rounded-2xl border">
+        <div className="text-center py-10 text-muted-foreground bg-card rounded-2xl border">
           <ShieldCheck className="h-6 w-6 mx-auto mb-2 opacity-30" />
           <p className="text-sm">No {showVerified ? "verified" : "pending"} {tab} configs</p>
         </div>
       ) : (
         <div className="space-y-3">
           {configs.map((c: any) => (
-            <div key={c.id} className="bg-white rounded-2xl border p-4 flex items-center justify-between gap-4">
+            <div key={c.id} className="bg-card rounded-2xl border p-4 flex items-center justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-medium text-sm text-gray-800 capitalize">{c.provider}</p>
-                  <span className="text-xs text-gray-400">·</span>
-                  <p className="text-xs text-gray-500">Seller #{c.sellerId}</p>
+                  <p className="font-medium text-sm text-foreground capitalize">{c.provider}</p>
+                  <span className="text-xs text-muted-foreground/70">·</span>
+                  <p className="text-xs text-muted-foreground">Seller #{c.sellerId}</p>
                 </div>
-                <p className="text-xs text-gray-400 mt-0.5">
+                <p className="text-xs text-muted-foreground/70 mt-0.5">
                   {tab === "payment"
                     ? `App Key: ${c.merchantAppKeyMasked} · Username: ${c.merchantUsernameMasked}`
                     : `Key: ${c.apiKeyMasked} · Secret: ${c.apiSecretMasked}${c.storeId ? ` · Store ${c.storeId}` : ""}`}

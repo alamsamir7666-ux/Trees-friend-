@@ -158,22 +158,22 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-white rounded-t-2xl z-10">
+      <div className="absolute inset-0 bg-foreground/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-card rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-card rounded-t-2xl z-10">
           <h2 className="font-semibold text-lg">{product ? "Edit Product" : "Add New Product"}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
-            <X className="h-5 w-5 text-gray-500" />
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
+            <X className="h-5 w-5 text-muted-foreground" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
-              <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Product Name *</Label>
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Product Name *</Label>
               <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="mt-1.5 rounded-xl" placeholder="e.g. Alphonso Mango" />
             </div>
             <div>
-              <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Category *</Label>
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Category *</Label>
               <Select
                 value={form.parentCategory || ""}
                 onValueChange={v => {
@@ -194,7 +194,7 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
             </div>
             {!selectedParentIsLeaf && (
               <div>
-                <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Subcategory *</Label>
+                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Subcategory *</Label>
                 <Select value={form.categoryId} onValueChange={v => setForm(f => ({ ...f, categoryId: v }))} disabled={!form.parentCategory}>
                   <SelectTrigger className="mt-1.5 rounded-xl"><SelectValue placeholder="Select subcategory" /></SelectTrigger>
                   <SelectContent>
@@ -213,11 +213,11 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
               </div>
             )}
             <div>
-              <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Scientific Name</Label>
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Scientific Name</Label>
               <Input value={form.scientificName} onChange={e => setForm(f => ({ ...f, scientificName: e.target.value }))} className="mt-1.5 rounded-xl" placeholder="e.g. Mangifera indica" />
             </div>
             <div className="col-span-2 sm:col-span-1">
-              <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Homepage Section</Label>
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Homepage Section</Label>
               <Select value={form.homepageTag || "none"} onValueChange={v => setForm(f => ({ ...f, homepageTag: v === "none" ? "" : v }))}>
                 <SelectTrigger className="mt-1.5 rounded-xl"><SelectValue placeholder="Not on homepage" /></SelectTrigger>
                 <SelectContent>
@@ -268,7 +268,7 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
           </div>
 
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Description *</Label>
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Description *</Label>
             <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} required className="mt-1.5 rounded-xl" rows={3} placeholder="Product description..." />
           </div>
 
@@ -325,7 +325,7 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
           </div>
 
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Key Benefits (one per line)</Label>
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Key Benefits (one per line)</Label>
             <Textarea
               value={form.keyBenefits}
               onChange={e => setForm(f => ({ ...f, keyBenefits: e.target.value }))}
@@ -336,7 +336,7 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
           </div>
 
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Best For (one per line)</Label>
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Best For (one per line)</Label>
             <Textarea
               value={form.bestFor}
               onChange={e => setForm(f => ({ ...f, bestFor: e.target.value }))}
@@ -347,7 +347,7 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
           </div>
 
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Care Tips (one per line)</Label>
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Care Tips (one per line)</Label>
             <Textarea
               value={form.careTips}
               onChange={e => setForm(f => ({ ...f, careTips: e.target.value }))}
@@ -358,7 +358,7 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
           </div>
 
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">Product Images</Label>
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Product Images</Label>
             <div className="mt-1.5 space-y-2">
               <div className="flex gap-2">
                 <input type="file" accept="image/*" multiple id="product-image-upload" className="hidden"
@@ -398,7 +398,7 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
                   {String(form.images).split(",").map((url, i) => url.trim() && (
                     <div key={i} className="relative">
                       <img src={url.trim()} className="h-16 w-16 object-cover rounded-lg border" />
-                      <button type="button" className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-4 h-4 text-xs flex items-center justify-center"
+                      <button type="button" className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full w-4 h-4 text-xs flex items-center justify-center"
                         onClick={() => setForm(f => ({ ...f, images: String(f.images).split(",").filter((_, j) => j !== i).join(", ") }))}>×</button>
                     </div>
                   ))}
@@ -409,12 +409,12 @@ export function ProductModal({ product, categories, tagCounts, onClose, onProduc
           </div>
 
           <div>
-            <Label className="text-xs font-medium text-gray-600 uppercase tracking-wider">YouTube Video URL (optional)</Label>
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">YouTube Video URL (optional)</Label>
             <Input value={form.videoUrl ?? ""} onChange={e => setForm(f => ({ ...f, videoUrl: e.target.value }))} className="mt-1.5 rounded-xl" placeholder="https://www.youtube.com/watch?v=..." />
           </div>
 
           <div className="flex gap-3 pt-2">
-            <Button type="submit" disabled={createProduct.isPending || updateProduct.isPending} className="flex-1 rounded-xl bg-pink-500 hover:bg-pink-600 text-white">
+            <Button type="submit" disabled={createProduct.isPending || updateProduct.isPending} className="flex-1 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground">
               {product ? "Update Product" : "Create Product"}
             </Button>
             <Button type="button" variant="outline" onClick={onClose} className="rounded-xl">Cancel</Button>

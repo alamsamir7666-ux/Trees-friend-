@@ -35,9 +35,9 @@ const STATUS_FILTERS = [
 ] as const;
 
 const STATUS_META: Record<string, { icon: React.ElementType; chip: string; dot: string }> = {
-  pending:  { icon: Clock,       chip: "bg-amber-50 text-amber-700 ring-amber-200/60", dot: "bg-amber-500" },
-  approved: { icon: CheckCircle2, chip: "bg-emerald-50 text-emerald-700 ring-emerald-200/60", dot: "bg-emerald-500" },
-  rejected: { icon: XCircle,     chip: "bg-rose-50 text-rose-700 ring-rose-200/60", dot: "bg-rose-500" },
+  pending:  { icon: Clock,       chip: "bg-warning text-warning-foreground ring-warning-border/60", dot: "bg-warning-foreground" },
+  approved: { icon: CheckCircle2, chip: "bg-success text-success-foreground ring-success-border/60", dot: "bg-success-foreground" },
+  rejected: { icon: XCircle,     chip: "bg-destructive/10 text-destructive ring-destructive/20", dot: "bg-destructive" },
 };
 
 type SortKey = "newest" | "oldest" | "name_asc" | "name_desc";
@@ -196,10 +196,10 @@ export function SellerListingsTab() {
   }, [listings]);
 
   const statCards = [
-    { label: "Total", value: stats.total, icon: Package2, color: "bg-violet-50 text-violet-700" },
-    { label: "Pending", value: stats.pending, icon: Clock, color: "bg-amber-50 text-amber-700" },
-    { label: "Approved", value: stats.approved, icon: CheckCircle2, color: "bg-emerald-50 text-emerald-700" },
-    { label: "Rejected", value: stats.rejected, icon: XCircle, color: "bg-rose-50 text-rose-700" },
+    { label: "Total", value: stats.total, icon: Package2, color: "bg-info text-info-foreground" },
+    { label: "Pending", value: stats.pending, icon: Clock, color: "bg-warning text-warning-foreground" },
+    { label: "Approved", value: stats.approved, icon: CheckCircle2, color: "bg-success text-success-foreground" },
+    { label: "Rejected", value: stats.rejected, icon: XCircle, color: "bg-destructive/10 text-destructive" },
   ];
 
   /* ─── Render ────────────────────────────────────────────────────────── */
@@ -365,7 +365,7 @@ export function SellerListingsTab() {
                   <p className="text-sm font-medium text-foreground tabular-nums">{vs.priceLabel}</p>
 
                   {/* Stock */}
-                  <p className={cn("text-sm tabular-nums", vs.totalStock === 0 ? "text-rose-600 font-medium" : "text-foreground")}>
+                  <p className={cn("text-sm tabular-nums", vs.totalStock === 0 ? "text-destructive font-medium" : "text-foreground")}>
                     {vs.totalStock}
                   </p>
 
@@ -391,7 +391,7 @@ export function SellerListingsTab() {
                       <span className="text-[11px] text-muted-foreground">No actions</span>
                     )}
                     {l.approvalStatus === "rejected" && l.rejectionReason && (
-                      <span className="text-[11px] text-rose-600 truncate max-w-[100px]" title={l.rejectionReason}>{l.rejectionReason}</span>
+                      <span className="text-[11px] text-destructive truncate max-w-[100px]" title={l.rejectionReason}>{l.rejectionReason}</span>
                     )}
                   </div>
                 </div>
@@ -433,7 +433,7 @@ export function SellerListingsTab() {
 
                   {/* Rejection reason */}
                   {l.rejectionReason && (
-                    <p className="text-xs text-rose-600 mt-2 bg-rose-50 rounded-lg px-2.5 py-1.5">
+                    <p className="text-xs text-destructive mt-2 bg-destructive/10 rounded-lg px-2.5 py-1.5">
                       <span className="font-medium">Rejected:</span> {l.rejectionReason}
                     </p>
                   )}
@@ -453,13 +453,13 @@ export function SellerListingsTab() {
 
                 {/* Reject reason inline */}
                 {rejectingId === l.id && (
-                  <div className="mt-1 flex items-center gap-2 bg-rose-50 border border-rose-200 rounded-xl p-2.5">
+                  <div className="mt-1 flex items-center gap-2 bg-destructive/10 border border-destructive/20 rounded-xl p-2.5">
                     <input
                       autoFocus
                       value={rejectReason}
                       onChange={(e) => setRejectReason(e.target.value)}
                       placeholder="Reason for rejection (optional, shown to seller)"
-                      className="flex-1 bg-card rounded-lg border border-border px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-rose-300"
+                      className="flex-1 bg-card rounded-lg border border-border px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-destructive/30"
                     />
                     <Button size="sm" variant="destructive" className="h-7 rounded-lg text-xs shrink-0" onClick={() => handleReject(l.id)} disabled={reject.isPending}>
                       {reject.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm"}

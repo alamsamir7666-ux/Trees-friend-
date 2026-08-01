@@ -90,7 +90,7 @@ export function AffiliatesTab() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h2 className="text-lg font-semibold">Affiliates & Influencers</h2>
         <button onClick={() => setShowForm(v => !v)}
-          className="flex items-center gap-1.5 text-sm bg-accent text-white px-4 py-2 rounded-full hover:bg-accent/90 transition-colors">
+          className="flex items-center gap-1.5 text-sm bg-accent text-accent-foreground px-4 py-2 rounded-full hover:bg-accent/90 transition-colors">
           <Plus className="h-4 w-4" />Add Affiliate
         </button>
       </div>
@@ -118,7 +118,7 @@ export function AffiliatesTab() {
           {error && <p className="text-xs text-destructive">{error}</p>}
           <div className="flex gap-2">
             <button onClick={handleCreate} disabled={saving}
-              className="text-sm bg-accent text-white px-4 py-2 rounded-full hover:bg-accent/90 transition-colors">
+              className="text-sm bg-accent text-accent-foreground px-4 py-2 rounded-full hover:bg-accent/90 transition-colors">
               {saving ? "Creating..." : "Create Affiliate"}
             </button>
             <button onClick={() => setShowForm(false)} className="text-sm text-muted-foreground hover:text-foreground">Cancel</button>
@@ -153,12 +153,12 @@ export function AffiliatesTab() {
                       </td>
                       <td className="py-3 pr-4">{a.totalOrders}</td>
                       <td className="py-3 pr-4 font-semibold">Tk{Number(a.totalSales).toLocaleString()}</td>
-                      <td className="py-3 pr-4 text-green-600 font-semibold">Tk{Number(a.totalCommission ?? 0).toLocaleString()}</td>
+                      <td className="py-3 pr-4 text-success-foreground font-semibold">Tk{Number(a.totalCommission ?? 0).toLocaleString()}</td>
                       <td className="py-3 pr-4">-</td>
                       <td className="py-3">
                         <div className="flex gap-1">
                           <button onClick={() => handleSaveEdit(a.id)} disabled={saving}
-                            className="text-xs px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200 flex items-center gap-1">
+                            className="text-xs px-2 py-1 rounded bg-success text-success-foreground hover:bg-success/90 flex items-center gap-1">
                             <Save className="h-3 w-3" />{saving ? "..." : "Save"}
                           </button>
                           <button onClick={() => setEditingId(null)}
@@ -180,10 +180,10 @@ export function AffiliatesTab() {
                       <td className="py-3 pr-4">{a.commissionRate}%</td>
                       <td className="py-3 pr-4">{a.totalOrders}</td>
                       <td className="py-3 pr-4 font-semibold">Tk{Number(a.totalSales).toLocaleString()}</td>
-                      <td className="py-3 pr-4 text-green-600 font-semibold">Tk{Number(a.totalCommission ?? 0).toLocaleString()}</td>
+                      <td className="py-3 pr-4 text-success-foreground font-semibold">Tk{Number(a.totalCommission ?? 0).toLocaleString()}</td>
                       <td className="py-3 pr-4">
                         <button onClick={() => toggleAffiliate(a.id)}
-                          className={`text-xs px-3 py-1 rounded-full font-medium transition-colors ${a.isActive ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}>
+                          className={`text-xs px-3 py-1 rounded-full font-medium transition-colors ${a.isActive ? "bg-success text-success-foreground hover:bg-success/90" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}>
                           {a.isActive ? "Active" : "Inactive"}
                         </button>
                       </td>
@@ -196,13 +196,13 @@ export function AffiliatesTab() {
                           {deleteConfirm === a.id ? (
                             <div className="flex gap-1 items-center">
                               <button onClick={() => handleDelete(a.id)}
-                                className="text-xs px-2 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200">Delete</button>
+                                className="text-xs px-2 py-1 rounded bg-destructive/10 text-destructive hover:bg-destructive/20">Delete</button>
                               <button onClick={() => setDeleteConfirm(null)}
                                 className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground hover:bg-muted/80">No</button>
                             </div>
                           ) : (
                             <button onClick={() => setDeleteConfirm(a.id)} title="Delete"
-                              className="p-1.5 rounded hover:bg-red-50 transition-colors text-muted-foreground hover:text-red-600">
+                              className="p-1.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive">
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
                           )}

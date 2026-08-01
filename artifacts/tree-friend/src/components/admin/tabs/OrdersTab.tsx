@@ -11,10 +11,10 @@ const API = import.meta.env.VITE_API_BASE_URL ?? "";
 // (pending_verification | active | suspended | vacation). Anything
 // unexpected falls back to gray.
 const SELLER_STATUS_STYLE: Record<string, string> = {
-  active: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  pending_verification: "bg-amber-50 text-amber-700 border-amber-200",
-  suspended: "bg-rose-50 text-rose-700 border-rose-200",
-  vacation: "bg-sky-50 text-sky-700 border-sky-200",
+  active: "bg-success text-success-foreground border-success-border",
+  pending_verification: "bg-warning text-warning-foreground border-warning-border",
+  suspended: "bg-destructive/10 text-destructive border-destructive/20",
+  vacation: "bg-info text-info-foreground border-info-border",
 };
 const SELLER_STATUS_LABEL: Record<string, string> = {
   active: "Active",
@@ -157,15 +157,15 @@ export function OrdersTab() {
       {/* Summary stats bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         <StatCard label="Orders on page" value={String(stats.total)} icon={<ShoppingBag className="h-4 w-4" />} tint="text-foreground" />
-        <StatCard label="Pending" value={String(stats.pending)} icon={<Clock className="h-4 w-4" />} tint="text-amber-600" />
-        <StatCard label="Delivered" value={String(stats.delivered)} icon={<CheckCircle2 className="h-4 w-4" />} tint="text-emerald-600" />
+        <StatCard label="Pending" value={String(stats.pending)} icon={<Clock className="h-4 w-4" />} tint="text-warning-foreground" />
+        <StatCard label="Delivered" value={String(stats.delivered)} icon={<CheckCircle2 className="h-4 w-4" />} tint="text-success-foreground" />
         <StatCard label="GMV (delivered)" value={`Tk${stats.gmv.toLocaleString()}`} icon={<Banknote className="h-4 w-4" />} tint="text-foreground" />
       </div>
 
       {/* Toolbar: search + status pills + seller filter */}
       <div className="flex flex-wrap items-center justify-between mb-4 gap-3">
         <div className="relative flex-1 min-w-[220px] max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/70" />
           <Input
             placeholder="Search by order ID, customer, or status..."
             value={orderSearch}
@@ -175,15 +175,15 @@ export function OrdersTab() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* Status pills */}
-          <div className="flex gap-1.5 bg-gray-100 p-1 rounded-xl">
+          <div className="flex gap-1.5 bg-muted p-1 rounded-xl">
             {["all", "pending", "delivered"].map((s) => (
               <button
                 key={s}
                 onClick={() => setOrderSearch(s === "all" ? "" : s)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize ${
                   (s === "all" && !orderSearch) || orderSearch === s
-                    ? "bg-white text-pink-600 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
+                    ? "bg-card text-primary shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 {s}
@@ -195,7 +195,7 @@ export function OrdersTab() {
             value={sellerFilter === "all" ? "all" : String(sellerFilter)}
             onChange={(e) => setSellerFilter(e.target.value === "all" ? "all" : Number(e.target.value))}
             disabled={sellersLoading}
-            className="h-9 rounded-xl border border-gray-200 bg-white px-3 pr-8 text-xs font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-pink-200 disabled:opacity-50"
+            className="h-9 rounded-xl border border-border bg-card px-3 pr-8 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
             aria-label="Filter by seller"
           >
             <option value="all">{sellersLoading ? "Loading sellers…" : "All sellers"}</option>
@@ -210,7 +210,7 @@ export function OrdersTab() {
 
       {/* Empty-state for seller filter with no matches */}
       {sellerFilter !== "all" && visibleOrders.length === 0 && !ordersLoading && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4 text-sm text-amber-800 flex items-start gap-2">
+        <div className="bg-warning border border-warning-border rounded-xl p-4 mb-4 text-sm text-warning-foreground flex items-start gap-2">
           <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
           <div>
             No orders on this page match the selected seller. The seller may
@@ -224,22 +224,22 @@ export function OrdersTab() {
       {ordersLoading ? (
         <div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>
       ) : (
-        <div className="bg-white rounded-2xl border overflow-hidden">
+        <div className="bg-card rounded-2xl border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b">
+              <thead className="bg-muted/50 border-b">
                 <tr>
-                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Order</th>
-                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Customer</th>
-                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Seller</th>
-                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</th>
-                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Payment</th>
-                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-4 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Total</th>
-                  <th className="px-4 py-3.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Order</th>
+                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Customer</th>
+                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Seller</th>
+                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Date</th>
+                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Payment</th>
+                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
+                  <th className="px-4 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Total</th>
+                  <th className="px-4 py-3.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
+              <tbody className="divide-y divide-muted/50">
                 {visibleOrders.map((o) => {
                   if ((o as any)._type === "preorder") {
                     const isPreExpanded = expandedOrderId === `pre-${o.id}`;
@@ -255,19 +255,19 @@ export function OrdersTab() {
                     const preSellerEmail = (o as any).sellerContactEmail ?? null;
                     return (
                       <Fragment key={`pre-${o.id}`}>
-                        <tr className="hover:bg-blue-50/30 transition-colors cursor-pointer" onClick={() => setExpandedOrderId(isPreExpanded ? null : `pre-${o.id}`)}>
+                        <tr className="hover:bg-info/10 transition-colors cursor-pointer" onClick={() => setExpandedOrderId(isPreExpanded ? null : `pre-${o.id}`)}>
                           <td className="px-4 py-3.5">
                             <div className="flex items-center gap-1.5">
-                              <ChevronDown className={`h-3.5 w-3.5 text-blue-400 transition-transform shrink-0 ${isPreExpanded ? "rotate-180" : ""}`} />
+                              <ChevronDown className={`h-3.5 w-3.5 text-info-foreground/70 transition-transform shrink-0 ${isPreExpanded ? "rotate-180" : ""}`} />
                               <div>
-                                <span className="text-xs font-bold bg-blue-100 text-blue-700 rounded-full px-2 py-0.5">PRE-ORDER</span>
-                                <p className="text-xs font-mono text-gray-500 mt-0.5">{o.trackingId}</p>
+                                <span className="text-xs font-bold bg-info text-info-foreground rounded-full px-2 py-0.5">PRE-ORDER</span>
+                                <p className="text-xs font-mono text-muted-foreground mt-0.5">{o.trackingId}</p>
                               </div>
                             </div>
                           </td>
                           <td className="px-4 py-3.5">
-                            <p className="font-medium text-gray-800 text-xs">{o.shippingAddress?.fullName ?? "Guest"}</p>
-                            <p className="text-xs text-gray-400">{o.whatsappPhone ?? o.shippingAddress?.phone}</p>
+                            <p className="font-medium text-foreground text-xs">{o.shippingAddress?.fullName ?? "Guest"}</p>
+                            <p className="text-xs text-muted-foreground/70">{o.whatsappPhone ?? o.shippingAddress?.phone}</p>
                           </td>
                           {/* Seller column for pre-orders — same shape as the
                               regular-orders branch below. Pre-orders without
@@ -277,18 +277,18 @@ export function OrdersTab() {
                             {preSellerName ? (
                               <div className="flex flex-col gap-1 min-w-0">
                                 <div className="flex items-center gap-1.5 min-w-0">
-                                  <Store className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                                  <span className="text-xs font-medium text-gray-800 truncate" title={preSellerName}>{preSellerName}</span>
+                                  <Store className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
+                                  <span className="text-xs font-medium text-foreground truncate" title={preSellerName}>{preSellerName}</span>
                                 </div>
                                 {preSellerStatus && (
-                                  <span className={`w-fit px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${SELLER_STATUS_STYLE[preSellerStatus] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                                  <span className={`w-fit px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${SELLER_STATUS_STYLE[preSellerStatus] ?? "bg-muted text-muted-foreground border-border"}`}>
                                     {SELLER_STATUS_LABEL[preSellerStatus] ?? preSellerStatus}
                                   </span>
                                 )}
                                 {preSellerEmail && (
                                   <a
                                     href={`mailto:${preSellerEmail}?subject=${encodeURIComponent(`Pre-order #${o.id} — Tree Friend admin follow-up`)}&body=${encodeURIComponent(`Hi ${preSellerName},\n\nThis is the Tree friend admin team. We're reaching out about pre-order #${o.id} (tracking: ${o.trackingId}).\n\nPlease advise on the current status.\n\nThanks,\nTree Friend Admin`)}`}
-                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-gray-700 bg-gray-50 hover:bg-blue-50 hover:text-blue-700 border border-gray-200 transition-colors"
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-foreground bg-muted hover:bg-info/10 hover:text-info-foreground border border-border transition-colors"
                                     title={`Email ${preSellerEmail}`}
                                     onClick={(e) => e.stopPropagation()}
                   >
@@ -298,57 +298,57 @@ export function OrdersTab() {
                                 )}
                               </div>
                             ) : (
-                              <span className="text-xs text-gray-400 italic" title="Legacy pre-order from before Phase 6, or seller record deleted">Unknown seller</span>
+                              <span className="text-xs text-muted-foreground/70 italic" title="Legacy pre-order from before Phase 6, or seller record deleted">Unknown seller</span>
                             )}
                           </td>
-                          <td className="px-4 py-3.5 text-xs text-gray-500">{new Date(o.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</td>
+                          <td className="px-4 py-3.5 text-xs text-muted-foreground">{new Date(o.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</td>
                           <td className="px-4 py-3.5">
-                            <span className="text-xs bg-gray-100 px-2 py-1 rounded-lg font-medium text-gray-600 capitalize">{o.paymentMethod}</span>
+                            <span className="text-xs bg-muted px-2 py-1 rounded-lg font-medium text-muted-foreground capitalize">{o.paymentMethod}</span>
                           </td>
                           <td className="px-4 py-3.5">
                             <span className={`flex items-center gap-1.5 w-fit px-2.5 py-1 rounded-full text-xs font-medium border ${
-                              o.status === "delivered" ? "bg-green-50 text-green-700 border-green-200" :
-                              o.status === "cancelled" ? "bg-red-50 text-red-700 border-red-200" :
-                              o.status === "shipped" ? "bg-blue-50 text-blue-700 border-blue-200" :
-                              o.status === "arrived_in_bd" ? "bg-purple-50 text-purple-700 border-purple-200" :
-                              o.status === "confirmed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
-                              "bg-yellow-50 text-yellow-700 border-yellow-200"
+                              o.status === "delivered" ? "bg-success text-success-foreground border-success-border" :
+                              o.status === "cancelled" ? "bg-destructive/10 text-destructive border-destructive/20" :
+                              o.status === "shipped" ? "bg-info text-info-foreground border-info-border" :
+                              o.status === "arrived_in_bd" ? "bg-info text-info-foreground border-info-border" :
+                              o.status === "confirmed" ? "bg-success text-success-foreground border-success-border" :
+                              "bg-warning text-warning-foreground border-warning-border"
                             }`}>{o.status === "arrived_in_bd" ? "Arrived in BD" : o.status.charAt(0).toUpperCase() + o.status.slice(1)}</span>
                           </td>
-                          <td className="px-4 py-3.5 text-right font-semibold text-gray-800">Tk{(Number(o.discountedPrice) * Number(o.quantity) + Number(o.deliveryCharge)).toLocaleString()}</td>
-                          <td className="px-4 py-3.5 text-right text-xs text-gray-400 italic">pre-order</td>
+                          <td className="px-4 py-3.5 text-right font-semibold text-foreground">Tk{(Number(o.discountedPrice) * Number(o.quantity) + Number(o.deliveryCharge)).toLocaleString()}</td>
+                          <td className="px-4 py-3.5 text-right text-xs text-muted-foreground/70 italic">pre-order</td>
                         </tr>
                         {isPreExpanded && (
-                          <tr key={`pre-${o.id}-expanded`} className="bg-blue-50/40">
+                          <tr key={`pre-${o.id}-expanded`} className="bg-info/10">
                             <td colSpan={8} className="px-8 py-4">
                               <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 text-sm">
                                 <div>
-                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
                                     <MapPin className="h-3.5 w-3.5" /> Shipping Address
                                   </p>
-                                  <p className="font-medium text-gray-800">{o.shippingAddress?.fullName}</p>
-                                  <p className="text-gray-500 text-xs">{o.shippingAddress?.street}</p>
-                                  <p className="text-gray-500 text-xs">{o.shippingAddress?.city}{o.shippingAddress?.district ? `, ${o.shippingAddress.district}` : ""}</p>
-                                  {o.shippingAddress?.phone && <p className="text-gray-500 text-xs mt-0.5">📞 {o.shippingAddress.phone}</p>}
-                                  {o.whatsappPhone && <p className="text-gray-500 text-xs mt-0.5">💬 WhatsApp: {o.whatsappPhone}</p>}
+                                  <p className="font-medium text-foreground">{o.shippingAddress?.fullName}</p>
+                                  <p className="text-muted-foreground text-xs">{o.shippingAddress?.street}</p>
+                                  <p className="text-muted-foreground text-xs">{o.shippingAddress?.city}{o.shippingAddress?.district ? `, ${o.shippingAddress.district}` : ""}</p>
+                                  {o.shippingAddress?.phone && <p className="text-muted-foreground text-xs mt-0.5">📞 {o.shippingAddress.phone}</p>}
+                                  {o.whatsappPhone && <p className="text-muted-foreground text-xs mt-0.5">💬 WhatsApp: {o.whatsappPhone}</p>}
                                 </div>
                                 <div>
-                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Product</p>
-                                  <p className="text-xs text-gray-600">{o.productName} × {o.quantity}</p>
-                                  <p className="text-xs text-gray-500 mt-1">Price: Tk{Number(o.discountedPrice).toLocaleString()}</p>
-                                  <p className="text-xs text-gray-500">Delivery: Tk{Number(o.deliveryCharge).toLocaleString()}</p>
-                                  <p className="text-xs font-semibold text-gray-700 mt-1">Total: Tk{(Number(o.discountedPrice) * Number(o.quantity) + Number(o.deliveryCharge)).toLocaleString()}</p>
+                                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Product</p>
+                                  <p className="text-xs text-muted-foreground">{o.productName} × {o.quantity}</p>
+                                  <p className="text-xs text-muted-foreground mt-1">Price: Tk{Number(o.discountedPrice).toLocaleString()}</p>
+                                  <p className="text-xs text-muted-foreground">Delivery: Tk{Number(o.deliveryCharge).toLocaleString()}</p>
+                                  <p className="text-xs font-semibold text-foreground mt-1">Total: Tk{(Number(o.discountedPrice) * Number(o.quantity) + Number(o.deliveryCharge)).toLocaleString()}</p>
                                 </div>
                                 <div>
-                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Payment Info</p>
-                                  <p className="text-xs text-gray-600 capitalize">Method: {o.paymentMethod}</p>
-                                  <p className={`text-xs capitalize ${o.paymentStatus === "paid" ? "text-green-600" : "text-amber-600"}`}>Status: {o.paymentStatus}</p>
-                                  {o.senderNumber && <p className="text-xs text-gray-500 mt-1">From: <span className="font-mono">{o.senderNumber}</span></p>}
-                                  {o.transactionId && <p className="text-xs text-gray-500 font-mono mt-1">TxID: {o.transactionId}</p>}
+                                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Payment Info</p>
+                                  <p className="text-xs text-muted-foreground capitalize">Method: {o.paymentMethod}</p>
+                                  <p className={`text-xs capitalize ${o.paymentStatus === "paid" ? "text-success-foreground" : "text-warning-foreground"}`}>Status: {o.paymentStatus}</p>
+                                  {o.senderNumber && <p className="text-xs text-muted-foreground mt-1">From: <span className="font-mono">{o.senderNumber}</span></p>}
+                                  {o.transactionId && <p className="text-xs text-muted-foreground font-mono mt-1">TxID: {o.transactionId}</p>}
                                   {o.status === "cancelled" && o.cancellationReason && (
-                                    <div className="mt-2 bg-red-50 border border-red-200 rounded-lg p-2">
-                                      <p className="text-xs font-semibold text-red-600">Cancel Reason:</p>
-                                      <p className="text-xs text-red-500 mt-0.5">{o.cancellationReason}</p>
+                                    <div className="mt-2 bg-destructive/10 border border-destructive/20 rounded-lg p-2">
+                                      <p className="text-xs font-semibold text-destructive">Cancel Reason:</p>
+                                      <p className="text-xs text-destructive mt-0.5">{o.cancellationReason}</p>
                                     </div>
                                   )}
                                 </div>
@@ -359,7 +359,7 @@ export function OrdersTab() {
                       </Fragment>
                     );
                   }
-                  const cfg = statusConfig[o.orderStatus] ?? { color: "bg-gray-100 text-gray-600 border-gray-200", icon: AlertCircle };
+                  const cfg = statusConfig[o.orderStatus] ?? { color: "bg-muted text-muted-foreground border-border", icon: AlertCircle };
                   const StatusIcon = cfg.icon;
                   const isExpanded = expandedOrderId === o.id;
                   const addr = (o as any).shippingAddress as { fullName?: string; street?: string; line1?: string; city?: string; district?: string; phone?: string } | null;
@@ -371,29 +371,29 @@ export function OrdersTab() {
                   const itemTotal = ((o as any).items ?? []).reduce((n: number, it: any) => n + (it.quantity ?? 0), 0);
                   return (
                     <Fragment key={o.id}>
-                      <tr className="hover:bg-pink-50/30 transition-colors cursor-pointer" onClick={() => setExpandedOrderId(isExpanded ? null : o.id)}>
+                      <tr className="hover:bg-primary/5 transition-colors cursor-pointer" onClick={() => setExpandedOrderId(isExpanded ? null : o.id)}>
                         <td className="px-4 py-3.5">
                           <div className="flex items-center gap-1.5">
-                            <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform shrink-0 ${isExpanded ? "rotate-180" : ""}`} />
+                            <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground/70 transition-transform shrink-0 ${isExpanded ? "rotate-180" : ""}`} />
                             <div>
-                              <p className="font-semibold text-gray-800">#{o.id}</p>
-                              {(o as any).trackingId && <p className="text-xs text-gray-400 font-mono">{(o as any).trackingId}</p>}
-                              {itemTotal > 0 && <p className="text-[11px] text-gray-400 mt-0.5">{itemTotal} item{itemTotal === 1 ? "" : "s"}</p>}
+                              <p className="font-semibold text-foreground">#{o.id}</p>
+                              {(o as any).trackingId && <p className="text-xs text-muted-foreground/70 font-mono">{(o as any).trackingId}</p>}
+                              {itemTotal > 0 && <p className="text-[11px] text-muted-foreground/70 mt-0.5">{itemTotal} item{itemTotal === 1 ? "" : "s"}</p>}
                             </div>
                           </div>
                         </td>
                         <td className="px-4 py-3.5">
                           {(o as any).userName ? (
                             <div>
-                              <p className="font-medium text-gray-800 text-xs">{(o as any).userName}</p>
+                              <p className="font-medium text-foreground text-xs">{(o as any).userName}</p>
                               {!(o as any).userEmail?.endsWith("@clerk.user") && (o as any).userEmail && (
-                                <p className="text-xs text-gray-400">{(o as any).userEmail}</p>
+                                <p className="text-xs text-muted-foreground/70">{(o as any).userEmail}</p>
                               )}
                             </div>
                           ) : (o as any).shippingAddress?.fullName ? (
-                            <p className="text-xs text-gray-600">{(o as any).shippingAddress.fullName}</p>
+                            <p className="text-xs text-muted-foreground">{(o as any).shippingAddress.fullName}</p>
                           ) : (
-                            <p className="text-xs text-gray-400">-</p>
+                            <p className="text-xs text-muted-foreground/70">-</p>
                           )}
                         </td>
                         {/* Seller column — the headline addition. Shows
@@ -404,29 +404,29 @@ export function OrdersTab() {
                           {sellerName ? (
                             <div className="flex flex-col gap-1 min-w-0">
                               <div className="flex items-center gap-1.5 min-w-0">
-                                <Store className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                                <span className="text-xs font-medium text-gray-800 truncate" title={sellerName}>{sellerName}</span>
+                                <Store className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
+                                <span className="text-xs font-medium text-foreground truncate" title={sellerName}>{sellerName}</span>
                               </div>
                               {sellerStatus && (
-                                <span className={`w-fit px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${SELLER_STATUS_STYLE[sellerStatus] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                                <span className={`w-fit px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${SELLER_STATUS_STYLE[sellerStatus] ?? "bg-muted text-muted-foreground border-border"}`}>
                                   {SELLER_STATUS_LABEL[sellerStatus] ?? sellerStatus}
                                 </span>
                               )}
                             </div>
                           ) : (
-                            <span className="text-xs text-gray-400 italic" title="Legacy order from before the marketplace migration, or seller record deleted">Unknown seller</span>
+                            <span className="text-xs text-muted-foreground/70 italic" title="Legacy order from before the marketplace migration, or seller record deleted">Unknown seller</span>
                           )}
                         </td>
-                        <td className="px-4 py-3.5 text-gray-500 text-xs">{new Date(o.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</td>
+                        <td className="px-4 py-3.5 text-muted-foreground text-xs">{new Date(o.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</td>
                         <td className="px-4 py-3.5">
-                          <span className="text-xs bg-gray-100 px-2 py-1 rounded-lg font-medium text-gray-600 capitalize">{(o as any).paymentMethod ?? "-"}</span>
+                          <span className="text-xs bg-muted px-2 py-1 rounded-lg font-medium text-muted-foreground capitalize">{(o as any).paymentMethod ?? "-"}</span>
                         </td>
                         <td className="px-4 py-3.5">
                           <span className={`flex items-center gap-1.5 w-fit px-2.5 py-1 rounded-full text-xs font-medium border ${cfg.color}`}>
                             <StatusIcon className="h-3 w-3" />{o.orderStatus === "return_completed" ? "Refund Completed" : o.orderStatus}
                           </span>
                         </td>
-                        <td className="px-4 py-3.5 text-right font-semibold text-gray-800">Tk{Number((o as any).totalAmount ?? (o as any).discountedPrice ?? 0).toLocaleString()}</td>
+                        <td className="px-4 py-3.5 text-right font-semibold text-foreground">Tk{Number((o as any).totalAmount ?? (o as any).discountedPrice ?? 0).toLocaleString()}</td>
                         {/* Actions column — replaces the old "Update"
                             status dropdown. Admin shouldn't be the one
                             flipping fulfillment status post-Phase-2;
@@ -440,45 +440,45 @@ export function OrdersTab() {
                             {sellerEmail ? (
                               <a
                                 href={`mailto:${sellerEmail}?subject=${encodeURIComponent(`Order #${o.id} — Tree Friend admin follow-up`)}&body=${encodeURIComponent(`Hi ${sellerOwnerName ?? sellerName},\n\nThis is the Tree Friend admin team. We're reaching out about order #${o.id} (tracking: ${(o as any).trackingId ?? "n/a"}).\n\nPlease advise on the current status.\n\nThanks,\nTree Friend Admin`)}`}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-gray-700 bg-gray-50 hover:bg-pink-50 hover:text-pink-700 border border-gray-200 transition-colors"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-foreground bg-muted hover:bg-primary/10 hover:text-primary border border-border transition-colors"
                                 title={`Email ${sellerEmail}`}
                               >
                                 <Mail className="h-3 w-3" />
                                 <span className="hidden sm:inline">Contact</span>
                               </a>
                             ) : (
-                              <span className="text-xs text-gray-300 italic" title="No seller email on file">No contact</span>
+                              <span className="text-xs text-muted-foreground/50 italic" title="No seller email on file">No contact</span>
                             )}
                           </div>
                         </td>
                       </tr>
                       {isExpanded && (
-                        <tr key={`${o.id}-expanded`} className="bg-pink-50/40">
+                        <tr key={`${o.id}-expanded`} className="bg-primary/5">
                           <td colSpan={8} className="px-8 py-4">
                             {/* "Fulfilled by" header — leads the expanded
                                 view so admin instantly knows which seller
                                 is responsible before reading the rest. */}
                             {sellerName && (
-                              <div className="mb-5 pb-4 border-b border-pink-200/60 flex flex-wrap items-center gap-3">
+                              <div className="mb-5 pb-4 border-b border-primary/20 flex flex-wrap items-center gap-3">
                                 <div className="flex items-center gap-2">
-                                  <div className="h-9 w-9 rounded-xl bg-pink-100 flex items-center justify-center shrink-0">
-                                    <Store className="h-4 w-4 text-pink-700" />
+                                  <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+                                    <Store className="h-4 w-4 text-primary" />
                                   </div>
                                   <div>
-                                    <p className="text-[11px] uppercase tracking-wider text-pink-700/70 font-semibold">Fulfilled by</p>
-                                    <p className="text-sm font-semibold text-gray-800">{sellerName}{sellerOwnerName ? <span className="text-gray-500 font-normal"> · {sellerOwnerName}</span> : null}</p>
+                                    <p className="text-[11px] uppercase tracking-wider text-primary/70 font-semibold">Fulfilled by</p>
+                                    <p className="text-sm font-semibold text-foreground">{sellerName}{sellerOwnerName ? <span className="text-muted-foreground font-normal"> · {sellerOwnerName}</span> : null}</p>
                                   </div>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2 ml-auto">
                                   {sellerStatus && (
-                                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${SELLER_STATUS_STYLE[sellerStatus] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${SELLER_STATUS_STYLE[sellerStatus] ?? "bg-muted text-muted-foreground border-border"}`}>
                                       {SELLER_STATUS_LABEL[sellerStatus] ?? sellerStatus}
                                     </span>
                                   )}
                                   {sellerEmail && (
                                     <a
                                       href={`mailto:${sellerEmail}`}
-                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-gray-700 bg-white hover:bg-gray-50 border border-gray-200 transition-colors"
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-foreground bg-card hover:bg-muted border border-border transition-colors"
                                     >
                                       <Mail className="h-3 w-3" /> {sellerEmail}
                                     </a>
@@ -486,7 +486,7 @@ export function OrdersTab() {
                                   {sellerPhone && (
                                     <a
                                       href={`tel:${sellerPhone}`}
-                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-gray-700 bg-white hover:bg-gray-50 border border-gray-200 transition-colors"
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-foreground bg-card hover:bg-muted border border-border transition-colors"
                                     >
                                       <Phone className="h-3 w-3" /> {sellerPhone}
                                     </a>
@@ -497,59 +497,59 @@ export function OrdersTab() {
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 text-sm">
                               {addr && (
                                 <div>
-                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
                                     <MapPin className="h-3.5 w-3.5" /> Shipping Address
                                   </p>
-                                  <p className="font-medium text-gray-800">{addr.fullName}</p>
-                                  <p className="text-gray-500 text-xs">{addr.street ?? addr.line1}</p>
-                                  <p className="text-gray-500 text-xs">{addr.city}{addr.district ? `, ${addr.district}` : ""}</p>
-                                  {addr.phone && <p className="text-gray-500 text-xs mt-0.5">📞 {addr.phone}</p>}
+                                  <p className="font-medium text-foreground">{addr.fullName}</p>
+                                  <p className="text-muted-foreground text-xs">{addr.street ?? addr.line1}</p>
+                                  <p className="text-muted-foreground text-xs">{addr.city}{addr.district ? `, ${addr.district}` : ""}</p>
+                                  {addr.phone && <p className="text-muted-foreground text-xs mt-0.5">📞 {addr.phone}</p>}
                                 </div>
                               )}
                               <div>
-                                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Items Ordered</p>
+                                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Items Ordered</p>
                                 <div className="space-y-1">
                                   {((o as any).items ?? []).slice(0, 4).map((item: any) => (
-                                    <p key={item.productId} className="text-xs text-gray-600">
+                                    <p key={item.productId} className="text-xs text-muted-foreground">
                                       {item.productName} × {item.quantity} - Tk{(item.price * item.quantity).toLocaleString()}
                                     </p>
                                   ))}
                                   {((o as any).items ?? []).length > 4 && (
-                                    <p className="text-xs text-gray-400">+{((o as any).items ?? []).length - 4} more items</p>
+                                    <p className="text-xs text-muted-foreground/70">+{((o as any).items ?? []).length - 4} more items</p>
                                   )}
                                 </div>
                               </div>
                               <div>
                                 {(o.giftWrap === "true" || (o.giftWrap as any) === true) && (
-                                  <div className="mb-3 p-2 bg-pink-50 border border-pink-200 rounded-lg">
-                                    <p className="text-xs font-semibold text-pink-600 uppercase tracking-wider mb-1">🎁 Gift Wrapping</p>
-                                    {o.giftMessage && <p className="text-sm text-gray-700">{o.giftMessage}</p>}
+                                  <div className="mb-3 p-2 bg-primary/5 border border-primary/20 rounded-lg">
+                                    <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-1">🎁 Gift Wrapping</p>
+                                    {o.giftMessage && <p className="text-sm text-foreground">{o.giftMessage}</p>}
                                   </div>
                                 )}
-                                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Payment Info</p>
-                                <p className="text-xs text-gray-600 capitalize">Method: {(o as any).paymentMethod}</p>
-                                <p className={`text-xs capitalize ${(o as any).paymentStatus === "paid" ? "text-green-600" : "text-amber-600"}`}>
+                                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Payment Info</p>
+                                <p className="text-xs text-muted-foreground capitalize">Method: {(o as any).paymentMethod}</p>
+                                <p className={`text-xs capitalize ${(o as any).paymentStatus === "paid" ? "text-success-foreground" : "text-warning-foreground"}`}>
                                   Status: {(o as any).paymentStatus}
                                 </p>
                                 {(o as any).senderNumber && (
-                                  <p className="text-xs text-gray-500 mt-1">From: <span className="font-mono">{(o as any).senderNumber}</span></p>
+                                  <p className="text-xs text-muted-foreground mt-1">From: <span className="font-mono">{(o as any).senderNumber}</span></p>
                                 )}
                                 {(o as any).paidAt && (
-                                  <p className="text-xs text-gray-500 mt-0.5">Paid: {new Date((o as any).paidAt).toLocaleString()}</p>
+                                  <p className="text-xs text-muted-foreground mt-0.5">Paid: {new Date((o as any).paidAt).toLocaleString()}</p>
                                 )}
                                 {(o as any).transactionId && (
-                                  <p className="text-xs text-gray-500 font-mono mt-1">{(o as any).transactionId}</p>
+                                  <p className="text-xs text-muted-foreground font-mono mt-1">{(o as any).transactionId}</p>
                                 )}
                                 {(o as any).couponCode && (
-                                  <p className="text-xs text-pink-500 mt-1">Coupon: {(o as any).couponCode} (-Tk{(o as any).discountAmount})</p>
+                                  <p className="text-xs text-primary mt-1">Coupon: {(o as any).couponCode} (-Tk{(o as any).discountAmount})</p>
                                 )}
                               </div>
                               {o.orderStatus === "cancelled" && (o as any).cancellationReason && (
-                                <div className="col-span-full mt-2 p-2 bg-red-50 border border-red-200 rounded-lg">
-                                  <p className="text-xs font-semibold text-red-600 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                                <div className="col-span-full mt-2 p-2 bg-destructive/10 border border-destructive/20 rounded-lg">
+                                  <p className="text-xs font-semibold text-destructive uppercase tracking-wider mb-1 flex items-center gap-1.5">
                                     <XCircle className="h-3.5 w-3.5" /> Cancelled by Customer
                                   </p>
-                                  <p className="text-xs text-red-700">Reason: {(o as any).cancellationReason}</p>
+                                  <p className="text-xs text-destructive">Reason: {(o as any).cancellationReason}</p>
                                 </div>
                               )}
                             </div>
@@ -560,7 +560,7 @@ export function OrdersTab() {
                   );
                 })}
                 {visibleOrders.length === 0 && (
-                  <tr><td colSpan={8} className="text-center text-gray-400 py-12">No orders found</td></tr>
+                  <tr><td colSpan={8} className="text-center text-muted-foreground/70 py-12">No orders found</td></tr>
                 )}
               </tbody>
             </table>
@@ -570,7 +570,7 @@ export function OrdersTab() {
               <button
                 onClick={() => fetchOrders(ordersPage + 1, true)}
                 disabled={ordersLoading}
-                className="px-6 py-2 text-sm font-medium rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                className="px-6 py-2 text-sm font-medium rounded-xl border border-border hover:bg-muted transition-colors disabled:opacity-50"
               >
                 {ordersLoading ? "Loading..." : `Load More (${Math.max(0, ordersTotal - orders.length)} remaining)`}
               </button>
@@ -582,13 +582,13 @@ export function OrdersTab() {
       {/* Help banner — explains why the admin can no longer update order
           status directly. Placed at the bottom so it doesn't push the
           table down, but is still visible to a confused admin. */}
-      <div className="mt-5 flex items-start gap-3 p-4 bg-sky-50 border border-sky-200 rounded-xl text-sm text-sky-900">
-        <div className="h-7 w-7 rounded-lg bg-sky-100 flex items-center justify-center shrink-0">
-          <AlertCircle className="h-4 w-4 text-sky-700" />
+      <div className="mt-5 flex items-start gap-3 p-4 bg-info border border-info-border rounded-xl text-sm text-info-foreground">
+        <div className="h-7 w-7 rounded-lg bg-info/70 flex items-center justify-center shrink-0">
+          <AlertCircle className="h-4 w-4 text-info-foreground" />
         </div>
         <div>
           <p className="font-semibold mb-1">Why can't I update order status here?</p>
-          <p className="text-sky-800/80 leading-relaxed">
+          <p className="text-info-foreground/80 leading-relaxed">
             Since the marketplace migration, each order belongs to the seller
             who listed the items — they set the price, delivery charge, and
             quantity, and they fulfill the order end-to-end. Sellers update
@@ -609,11 +609,11 @@ export function OrdersTab() {
 // lifted later.
 function StatCard({ label, value, icon, tint }: { label: string; value: string; icon: React.ReactNode; tint: string }) {
   return (
-    <div className="bg-white border rounded-xl px-4 py-3 flex items-center gap-3">
-      <div className={`h-9 w-9 rounded-lg bg-gray-50 flex items-center justify-center ${tint}`}>{icon}</div>
+    <div className="bg-card border rounded-xl px-4 py-3 flex items-center gap-3">
+      <div className={`h-9 w-9 rounded-lg bg-muted/50 flex items-center justify-center ${tint}`}>{icon}</div>
       <div className="min-w-0">
-        <p className="text-[11px] uppercase tracking-wider text-gray-500 font-medium truncate">{label}</p>
-        <p className="text-base font-semibold text-gray-800 truncate">{value}</p>
+        <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium truncate">{label}</p>
+        <p className="text-base font-semibold text-foreground truncate">{value}</p>
       </div>
     </div>
   );
