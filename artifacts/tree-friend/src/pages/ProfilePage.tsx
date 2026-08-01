@@ -4,12 +4,11 @@ import { LoyaltyBanner } from "@/components/ui/LoyaltyBanner";
 import { ReferralSection } from "@/components/ui/ReferralSection";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
-  Star, Users, Package2, ArrowRight, Sprout, ShieldCheck, ChevronRight,
+  Star, Users, Package2, ArrowRight, ShieldCheck, ChevronRight,
   MapPin, Mail, Phone, Calendar, Edit3, Settings, LogOut, CreditCard,
   Truck, Heart, Gift, Store, BadgeCheck, Clock, CheckCircle2, XCircle,
-  MoreHorizontal, Plus, ExternalLink, ShoppingBag,
+  MoreHorizontal, Plus, ExternalLink, ShoppingBag, LayoutDashboard,
 } from "lucide-react";
-import { StoreIcon } from "@/components/ui/StoreIcon";
 import { BecomeSellerContent } from "@/pages/BecomeSellerPage";
 import {
   useGetMe, useListOrders, useGetMySeller, getGetMySellerQueryKey,
@@ -107,7 +106,7 @@ export function ProfilePage() {
                 {seller?.status === "active" && (
                   <Link href="/seller/dashboard">
                     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-success text-success-foreground hover:bg-success/90 transition-colors cursor-pointer">
-                      <Sprout className="h-3 w-3" /> Seller
+                      <Store className="h-3 w-3" /> Seller
                     </span>
                   </Link>
                 )}
@@ -130,7 +129,7 @@ export function ProfilePage() {
               {!seller && (
                 <Link href="/become-seller">
                   <span className="inline-flex items-center gap-1.5 text-xs text-accent hover:underline mt-2 cursor-pointer font-medium">
-                    <Sprout className="h-3 w-3" /> Become a Seller
+                    <Store className="h-3 w-3" /> Become a Seller
                   </span>
                 </Link>
               )}
@@ -165,7 +164,7 @@ export function ProfilePage() {
                     }
                   }}
                 >
-                  <StoreIcon className="h-3.5 w-3.5 shrink-0" />
+                  <LayoutDashboard className="h-3.5 w-3.5 shrink-0" />
                   <span className="whitespace-nowrap">{seller?.status === "active" ? "Seller Dashboard" : "Become a Seller"}</span>
                 </TabsTrigger>
                 <TabsTrigger value="rewards" className="rounded-full text-xs gap-1.5 shrink-0 snap-start data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
