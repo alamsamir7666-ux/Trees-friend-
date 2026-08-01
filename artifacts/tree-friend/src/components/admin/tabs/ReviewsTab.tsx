@@ -51,15 +51,6 @@ type SortKey = "newest" | "oldest" | "highest" | "lowest";
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 
-const RATING_TABS: { value: RatingFilter; label: string }[] = [
-  { value: 0, label: "All" },
-  { value: 5, label: "5★" },
-  { value: 4, label: "4★" },
-  { value: 3, label: "3★" },
-  { value: 2, label: "2★" },
-  { value: 1, label: "1★" },
-];
-
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "newest", label: "Newest first" },
   { value: "oldest", label: "Oldest first" },
@@ -167,7 +158,7 @@ function StarsRow({ rating, size = "sm" }: { rating: number; size?: "sm" | "md" 
           className={`${dim} ${
             i < rating
               ? "fill-amber-400 text-amber-400"
-              : "fill-muted-foreground/10 text-muted-foreground/30"
+              : "fill-muted-foreground/20 text-muted-foreground/40"
           }`}
         />
       ))}
@@ -176,69 +167,16 @@ function StarsRow({ rating, size = "sm" }: { rating: number; size?: "sm" | "md" 
 }
 
 /**
- * Segmented rating filter — built with plain <button> elements rather than
- * the Radix Tabs primitive. The Tabs primitive was rendering as inline text
- * inside the admin slide-over on mobile (likely a portal/layout conflict),
- * so we use a controlled button group instead. This gives us full control
- * over the active state styling and is bulletproof across viewports.
- */
-function RatingFilterGroup({
-  value,
-  onChange,
-  totalCount,
-  ratingCounts,
-}: {
-  value: RatingFilter;
-  onChange: (v: RatingFilter) => void;
-  totalCount: number;
-  ratingCounts: Record<1 | 2 | 3 | 4 | 5, number>;
-}) {
-  return (
-    <div
-      role="tablist"
-      aria-label="Filter reviews by rating"
-      className="inline-flex items-center gap-1 rounded-lg bg-muted/60 p-1 overflow-x-auto max-w-full"
-    >
-      {RATING_TABS.map((t) => {
-        const count =
-          t.value === 0 ? totalCount : ratingCounts[t.value as 1 | 2 | 3 | 4 | 5];
-        const isActive = value === t.value;
-        return (
-          <button
-            key={t.value}
-            type="button"
-            role="tab"
-            aria-selected={isActive}
-            onClick={() => onChange(t.value)}
-            className={
-              "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium whitespace-nowrap transition-colors " +
-              (isActive
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground hover:bg-background/50")
-            }
-          >
-            {t.label}
-            <span
-              className={
-                "inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums " +
-                (isActive
-                  ? "bg-primary/15 text-primary"
-                  : "bg-muted text-muted-foreground")
-              }
-            >
-              {count.toLocaleString()}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
  * Rating distribution panel — Amazon/Shopify style.
- * Shows a horizontal bar per rating tier (5★→1★) with proportional fill
- * and a count. Clicking a row filters the list to that rating.
+ * Shows the aggregate (avg + stars + total) on the left and a horizontal bar
+ * per rating tier (5★→1★) on the right. Clicking a row filters the list to
+ * that rating; clicking again clears the filter.
+ *
+ * This is the SOLE rating filter in this tab — an earlier version also had a
+ * separate row of "rating chip tabs" below this card, which (a) duplicated
+ * this filter and (b) rendered as flat unstyled text on mobile because the
+ * inactive chips had transparent backgrounds with no border. The distribution
+ * card is more informative and avoids that failure mode entirely.
  */
 function RatingDistributionCard({
   ratingCounts,
@@ -276,7 +214,7 @@ function RatingDistributionCard({
             </div>
           </div>
 
-          {/* Distribution bars */}
+          {/* Distribution bars — clickable to filter */}
           <div className="flex-1 min-w-0 space-y-1.5">
             {tiers.map((tier) => {
               const count = ratingCounts[tier];
@@ -288,7 +226,7 @@ function RatingDistributionCard({
                   type="button"
                   onClick={() => onSelect(isActive ? 0 : tier)}
                   className={`group w-full flex items-center gap-2 sm:gap-3 rounded-md px-1.5 py-1 -mx-1.5 transition-colors ${
-                    isActive ? "bg-primary/5" : "hover:bg-muted/40"
+                    isActive ? "bg-primary/10 ring-1 ring-primary/30" : "hover:bg-muted/60"
                   }`}
                   aria-pressed={isActive}
                   title={
@@ -297,13 +235,13 @@ function RatingDistributionCard({
                       : `Filter to ${tier}-star reviews (${count})`
                   }
                 >
-                  <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground w-8 shrink-0">
+                  <span className="flex items-center gap-1 text-xs font-medium text-foreground w-9 shrink-0">
                     {tier}
                     <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
                   </span>
                   <span className="relative flex-1 h-2 rounded-full bg-muted overflow-hidden min-w-[60px]">
                     <span
-                      className="absolute inset-y-0 left-0 rounded-full bg-amber-400/80 transition-all"
+                      className="absolute inset-y-0 left-0 rounded-full bg-amber-400/90 transition-all"
                       style={{ width: `${pct}%` }}
                     />
                   </span>
@@ -311,7 +249,7 @@ function RatingDistributionCard({
                     {count.toLocaleString()}
                   </span>
                   {isActive && (
-                    <span className="text-[10px] font-medium text-primary shrink-0 hidden sm:inline-block w-14 text-right">
+                    <span className="text-[10px] font-semibold text-primary shrink-0 hidden sm:inline-block w-14 text-right">
                       Filtered
                     </span>
                   )}
@@ -320,6 +258,22 @@ function RatingDistributionCard({
             })}
           </div>
         </div>
+
+        {/* Mobile-only active-filter hint, since the "Filtered" label is hidden on mobile */}
+        {activeFilter !== 0 && (
+          <div className="sm:hidden mt-3 flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">
+              Filtered to <span className="font-medium text-foreground">{activeFilter}-star</span> reviews
+            </span>
+            <button
+              type="button"
+              onClick={() => onSelect(0)}
+              className="text-primary font-medium hover:underline"
+            >
+              Clear
+            </button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -330,19 +284,17 @@ function RatingDistributionCard({
 /**
  * Admin Reviews tab — customer review moderation queue.
  *
- * Industry-standard layout: page header with aggregate stat, rating
- * distribution card (clickable to filter), rating filter chips + sort +
- * live search toolbar, a compact table with avatar/star/expandable
- * comment, and full client-side pagination with page-size selector.
+ * Layout:
+ * - Page header with total-count badge
+ * - Rating distribution card (the SOLE rating filter — click a tier to filter)
+ * - Toolbar: search + sort + reset (single responsive row)
+ * - Desktop (md+): table with Product / Customer / Rating / Review / Date / Actions
+ * - Mobile: stacked card list (table is unreadable at 375px — only ~2 of 6
+ *   columns are visible without horizontal scroll, which is a poor UX)
+ * - Full client-side pagination with page-size selector
  *
- * Implementation notes:
- * - The rating filter uses plain <button> elements (not Radix Tabs) because
- *   the Tabs primitive was rendering as inline text inside the admin
- *   slide-over on mobile viewports.
- * - All filter/sort/paginate logic is client-side because the
- *   `listAllReviews` endpoint returns a flat array (no server-side
- *   pagination). This keeps the API simple and lets the distribution
- *   panel always reflect the full dataset.
+ * All filter/sort/paginate logic is client-side because the `listAllReviews`
+ * endpoint returns a flat array (no server-side pagination).
  */
 export function ReviewsTab() {
   const { reviews, reviewsLoading, handleDeleteReview } = useAdminContext();
@@ -457,7 +409,7 @@ export function ReviewsTab() {
         }
       />
 
-      {/* Rating distribution + aggregate */}
+      {/* Rating distribution + aggregate (also the sole rating filter) */}
       {!reviewsLoading && totalCount > 0 && (
         <RatingDistributionCard
           ratingCounts={ratingCounts}
@@ -467,28 +419,18 @@ export function ReviewsTab() {
         />
       )}
 
-      {/* Toolbar: rating filter chips (scrollable on mobile) */}
-      <div className="flex justify-start sm:justify-center">
-        <RatingFilterGroup
-          value={ratingFilter}
-          onChange={changeRatingFilter}
-          totalCount={totalCount}
-          ratingCounts={ratingCounts}
-        />
-      </div>
-
-      {/* Toolbar: search + sort */}
-      <div className="flex flex-col gap-2">
-        <div className="relative w-full">
+      {/* Toolbar: search + sort + reset — single responsive row */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+        <div className="relative flex-1 min-w-0">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
           <Input
             value={search}
             onChange={(e) => changeSearch(e.target.value)}
-            placeholder="Search by product, customer, or review text…"
+            placeholder="Search by product, customer, or review…"
             className="h-9 pl-8 text-sm"
           />
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <Select value={sortKey} onValueChange={(v) => changeSort(v as SortKey)}>
             <SelectTrigger className="h-9 w-full sm:w-[160px] text-sm">
               <SelectValue />
@@ -516,7 +458,23 @@ export function ReviewsTab() {
         </div>
       </div>
 
-      {/* Table */}
+      {/* Active filter summary — visible on all viewports when a rating filter is active */}
+      {ratingFilter !== 0 && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground sm:hidden">
+          <span>
+            Showing only <span className="font-medium text-foreground">{ratingFilter}-star</span> reviews
+          </span>
+          <button
+            type="button"
+            onClick={() => changeRatingFilter(0)}
+            className="text-primary font-medium hover:underline"
+          >
+            Clear filter
+          </button>
+        </div>
+      )}
+
+      {/* List — card layout on mobile, table on md+ */}
       <Card>
         <CardContent className="p-0">
           {reviewsLoading ? (
@@ -550,138 +508,217 @@ export function ReviewsTab() {
               }
             />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[640px]">
-                <thead className="bg-muted/40 border-b">
-                  <tr>
-                    <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                      Product
-                    </th>
-                    <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                      Customer
-                    </th>
-                    <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">
-                      Rating
-                    </th>
-                    <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                      Review
-                    </th>
-                    <th className="px-4 sm:px-5 py-3 text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">
-                      Date
-                    </th>
-                    <th className="px-4 sm:px-5 py-3 text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/70">
-                  {paginated.map((r) => {
-                    const rating = Math.max(1, Math.min(5, Math.round(Number(r.rating) || 0)));
-                    const isExpanded = expandedId === r.id;
-                    const isLong = (r.comment?.length ?? 0) > 180;
-                    return (
-                      <tr key={r.id} className="align-top hover:bg-muted/20 transition-colors">
-                        {/* Product */}
-                        <td className="px-4 sm:px-5 py-3.5">
-                          <div className="flex items-center gap-3">
-                            {r.productImage ? (
-                              <img
-                                src={r.productImage}
-                                alt=""
-                                loading="lazy"
-                                className="h-10 w-10 rounded-lg object-cover border shrink-0"
-                              />
-                            ) : (
-                              <div className="h-10 w-10 rounded-lg bg-muted border shrink-0 flex items-center justify-center">
-                                <MessageSquare className="h-4 w-4 text-muted-foreground/50" />
-                              </div>
-                            )}
-                            <div className="min-w-0">
-                              <p className="text-xs font-medium text-foreground leading-tight line-clamp-2">
-                                {r.productName}
-                              </p>
-                              <p className="text-[11px] text-muted-foreground/70 mt-0.5 tabular-nums">
-                                #{r.productId}
-                              </p>
-                            </div>
+            <>
+              {/* ── Mobile / tablet: card list ─────────────────────────────── */}
+              <ul className="lg:hidden divide-y divide-border/70">
+                {paginated.map((r) => {
+                  const rating = Math.max(1, Math.min(5, Math.round(Number(r.rating) || 0)));
+                  const isExpanded = expandedId === r.id;
+                  const isLong = (r.comment?.length ?? 0) > 180;
+                  return (
+                    <li key={r.id} className="p-4">
+                      <div className="flex items-start gap-3">
+                        {r.productImage ? (
+                          <img
+                            src={r.productImage}
+                            alt=""
+                            loading="lazy"
+                            className="h-10 w-10 rounded-lg object-cover border shrink-0"
+                          />
+                        ) : (
+                          <div className="h-10 w-10 rounded-lg bg-muted border shrink-0 flex items-center justify-center">
+                            <MessageSquare className="h-4 w-4 text-muted-foreground/50" />
                           </div>
-                        </td>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-foreground leading-tight line-clamp-2">
+                            {r.productName}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">
+                            #{r.productId} · {formatDate(r.createdAt)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteReview(r.productId, r.id)}
+                          className="p-1.5 -mr-1 rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+                          title="Delete review"
+                          aria-label="Delete review"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <StarsRow rating={rating} />
+                        <span className="text-[11px] text-muted-foreground tabular-nums">{rating}/5</span>
+                        <span className="text-[11px] text-muted-foreground/50">·</span>
+                        <span className="text-[11px] font-medium text-foreground truncate">
+                          {r.userName}
+                        </span>
+                      </div>
+                      <p
+                        className={`mt-2 text-xs text-muted-foreground leading-relaxed ${
+                          isExpanded ? "" : isLong ? "line-clamp-2" : "line-clamp-3"
+                        }`}
+                      >
+                        {r.comment}
+                      </p>
+                      {isLong && (
+                        <button
+                          type="button"
+                          onClick={() => toggleExpand(r.id)}
+                          className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
+                        >
+                          {isExpanded ? (
+                            <>
+                              Show less <ChevronUp className="h-3 w-3" />
+                            </>
+                          ) : (
+                            <>
+                              Show more <ChevronDown className="h-3 w-3" />
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
 
-                        {/* Customer */}
-                        <td className="px-4 sm:px-5 py-3.5">
-                          <div className="flex items-center gap-2">
-                            <div className="h-7 w-7 rounded-full bg-gradient-to-br from-primary/25 to-primary/45 flex items-center justify-center shrink-0">
-                              <span className="text-[11px] font-semibold text-primary-foreground">
-                                {(r.userName?.[0] ?? "?").toUpperCase()}
+              {/* ── Desktop: table (lg+ so tablets get the card list) ─────── */}
+              <div className="hidden lg:block overflow-x-auto">
+                <table className="w-full text-sm min-w-[640px]">
+                  <thead className="bg-muted/40 border-b">
+                    <tr>
+                      <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        Product
+                      </th>
+                      <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        Customer
+                      </th>
+                      <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">
+                        Rating
+                      </th>
+                      <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        Review
+                      </th>
+                      <th className="px-4 sm:px-5 py-3 text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">
+                        Date
+                      </th>
+                      <th className="px-4 sm:px-5 py-3 text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        <span className="sr-only">Actions</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/70">
+                    {paginated.map((r) => {
+                      const rating = Math.max(1, Math.min(5, Math.round(Number(r.rating) || 0)));
+                      const isExpanded = expandedId === r.id;
+                      const isLong = (r.comment?.length ?? 0) > 180;
+                      return (
+                        <tr key={r.id} className="align-top hover:bg-muted/20 transition-colors">
+                          {/* Product */}
+                          <td className="px-4 sm:px-5 py-3.5">
+                            <div className="flex items-center gap-3">
+                              {r.productImage ? (
+                                <img
+                                  src={r.productImage}
+                                  alt=""
+                                  loading="lazy"
+                                  className="h-10 w-10 rounded-lg object-cover border shrink-0"
+                                />
+                              ) : (
+                                <div className="h-10 w-10 rounded-lg bg-muted border shrink-0 flex items-center justify-center">
+                                  <MessageSquare className="h-4 w-4 text-muted-foreground/50" />
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <p className="text-xs font-medium text-foreground leading-tight line-clamp-2">
+                                  {r.productName}
+                                </p>
+                                <p className="text-[11px] text-muted-foreground/70 mt-0.5 tabular-nums">
+                                  #{r.productId}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Customer */}
+                          <td className="px-4 sm:px-5 py-3.5">
+                            <div className="flex items-center gap-2">
+                              <div className="h-7 w-7 rounded-full bg-primary/15 flex items-center justify-center shrink-0">
+                                <span className="text-[11px] font-semibold text-primary">
+                                  {(r.userName?.[0] ?? "?").toUpperCase()}
+                                </span>
+                              </div>
+                              <span className="text-xs font-medium text-foreground truncate">
+                                {r.userName}
                               </span>
                             </div>
-                            <span className="text-xs font-medium text-foreground truncate">
-                              {r.userName}
-                            </span>
-                          </div>
-                        </td>
+                          </td>
 
-                        {/* Rating */}
-                        <td className="px-4 sm:px-5 py-3.5">
-                          <div className="flex flex-col gap-1">
-                            <StarsRow rating={rating} />
-                            <span className="text-[11px] text-muted-foreground/70 tabular-nums">
-                              {rating}/5
-                            </span>
-                          </div>
-                        </td>
+                          {/* Rating */}
+                          <td className="px-4 sm:px-5 py-3.5">
+                            <div className="flex flex-col gap-1">
+                              <StarsRow rating={rating} />
+                              <span className="text-[11px] text-muted-foreground/70 tabular-nums">
+                                {rating}/5
+                              </span>
+                            </div>
+                          </td>
 
-                        {/* Review text */}
-                        <td className="px-4 sm:px-5 py-3.5 max-w-[320px]">
-                          <p
-                            className={`text-xs text-muted-foreground leading-relaxed ${
-                              isExpanded ? "" : isLong ? "line-clamp-2" : "line-clamp-3"
-                            }`}
-                          >
-                            {r.comment}
-                          </p>
-                          {isLong && (
+                          {/* Review text */}
+                          <td className="px-4 sm:px-5 py-3.5 max-w-[320px]">
+                            <p
+                              className={`text-xs text-muted-foreground leading-relaxed ${
+                                isExpanded ? "" : isLong ? "line-clamp-2" : "line-clamp-3"
+                              }`}
+                            >
+                              {r.comment}
+                            </p>
+                            {isLong && (
+                              <button
+                                type="button"
+                                onClick={() => toggleExpand(r.id)}
+                                className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
+                              >
+                                {isExpanded ? (
+                                  <>
+                                    Show less <ChevronUp className="h-3 w-3" />
+                                  </>
+                                ) : (
+                                  <>
+                                    Show more <ChevronDown className="h-3 w-3" />
+                                  </>
+                                )}
+                              </button>
+                            )}
+                          </td>
+
+                          {/* Date */}
+                          <td className="px-4 sm:px-5 py-3.5 text-right text-xs text-muted-foreground/80 whitespace-nowrap tabular-nums">
+                            {formatDate(r.createdAt)}
+                          </td>
+
+                          {/* Actions */}
+                          <td className="px-4 sm:px-5 py-3.5 text-right">
                             <button
                               type="button"
-                              onClick={() => toggleExpand(r.id)}
-                              className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
+                              onClick={() => handleDeleteReview(r.productId, r.id)}
+                              className="p-1.5 rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                              title="Delete review"
+                              aria-label="Delete review"
                             >
-                              {isExpanded ? (
-                                <>
-                                  Show less <ChevronUp className="h-3 w-3" />
-                                </>
-                              ) : (
-                                <>
-                                  Show more <ChevronDown className="h-3 w-3" />
-                                </>
-                              )}
+                              <Trash2 className="h-3.5 w-3.5" />
                             </button>
-                          )}
-                        </td>
-
-                        {/* Date */}
-                        <td className="px-4 sm:px-5 py-3.5 text-right text-xs text-muted-foreground/80 whitespace-nowrap tabular-nums">
-                          {formatDate(r.createdAt)}
-                        </td>
-
-                        {/* Actions */}
-                        <td className="px-4 sm:px-5 py-3.5 text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteReview(r.productId, r.id)}
-                            className="p-1.5 rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                            title="Delete review"
-                            aria-label="Delete review"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
 
           {/* Pagination footer */}
@@ -692,7 +729,7 @@ export function ReviewsTab() {
                   {rangeText(currentPage, pageSize, filtered.length)}
                 </span>
                 <span className="hidden sm:inline text-muted-foreground/40">·</span>
-                <div className="hidden sm:flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5">
                   <span>Rows:</span>
                   <Select
                     value={String(pageSize)}
