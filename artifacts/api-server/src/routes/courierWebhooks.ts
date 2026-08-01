@@ -4,6 +4,7 @@ import { orderShipmentsTable, ordersTable, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { getCourierAdapter } from "../lib/courierAdapters";
 import { sendOrderStatusUpdate } from "../lib/email";
+import { attemptSellerPayout } from "../lib/payouts";
 
 /**
  * Shared normalized webhook endpoints (plan doc §8: "/webhooks/courier/pathao,
@@ -28,6 +29,26 @@ import { sendOrderStatusUpdate } from "../lib/email";
  * per courier, and updates whichever order that shipment belongs to. No
  * seller-scoping needed at this layer since the tracking id itself is the
  * join key.
+ *
+ * PART 3 ADDENDUM (see PART3_HANDOFF.md): this file's existing delivered-
+ * transition branch (the block guarded by `mappedOrderStatus` and the
+ * cancelled/already-set check below) also triggers a seller PAYOUT
+ * attempt via `attemptSellerPayout()` -- extending this SAME function
+ * rather than adding a new webhook or polling mechanism, per the Part 3
+ * prompt's explicit instruction. Follows this file's own existing
+ * non-blocking-side-effect precedent (the email-sending block a few lines
+ * below `attemptSellerPayout()`'s call site): a payout failure must never
+ * throw out of `handleCourierWebhook()` and break the courier's own `{ ok:
+ * true, ... }` response, since the courier doesn't care about our internal
+ * payout bookkeeping.
+ *
+ * PART 4 ADDENDUM (see PART4_HANDOFF.md): `attemptSellerPayout()` itself
+ * has moved to `../lib/payouts.ts` (behavior unchanged, see that file's
+ * own doc comment) so the new admin manual-retry route
+ * (`POST /admin/payouts/:id/retry` in routes/admin.ts) can call the exact
+ * same guard/insert/disburse logic this webhook already used, rather than
+ * a second near-identical implementation being written. This file's own
+ * call site and try/catch wrapping below is otherwise untouched.
  */
 
 const router = Router();
@@ -37,6 +58,15 @@ const ORDER_STATUS_ON_SHIPMENT: Record<string, string | undefined> = {
   in_transit: "shipped",
   delivered: "delivered",
 };
+
+// attemptSellerPayout() used to be defined in this file (Part 3). Part 4
+// EXTRACTED it, unchanged in behavior, to ../lib/payouts.ts so the new
+// admin manual-retry route (routes/admin.ts's
+// `POST /admin/payouts/:id/retry`) can call the exact same guard/insert/
+// disburse logic instead of a second near-identical implementation being
+// written. See that file's own doc comment for the full guard-order and
+// retry-policy reasoning (byte-for-byte the same as Part 3's original,
+// just moved) -- imported above as `attemptSellerPayout`.
 
 async function handleCourierWebhook(provider: "pathao" | "steadfast", payload: unknown) {
   const adapter = getCourierAdapter(provider);
@@ -104,6 +134,26 @@ async function handleCourierWebhook(provider: "pathao" | "steadfast", payload: u
         }
       } catch {
         /* non-blocking */
+      }
+
+      // PART 3: trigger a seller payout attempt, but ONLY on the specific
+      // "delivered" transition -- not "shipped" (picked_up/in_transit both
+      // also map through mappedOrderStatus, but only "delivered" is a
+      // payout trigger; see ORDER_STATUS_ON_SHIPMENT above). Wrapped in its
+      // own try/catch, matching this file's own existing precedent for the
+      // email block immediately above -- a payout failure must never
+      // surface as a 500 to the courier, since the courier doesn't care
+      // about our internal payout bookkeeping (attemptSellerPayout() itself
+      // already catches and records bKash-side failures into payoutsTable
+      // rather than throwing; this outer catch is a last-resort guard
+      // against something unexpected, e.g. a DB error on the very first
+      // insert, so even that can't break the courier's response).
+      if (mappedOrderStatus === "delivered") {
+        try {
+          await attemptSellerPayout(order);
+        } catch (err) {
+          console.error(`[courier-webhook:${provider}] Unexpected error in attemptSellerPayout for order ${order.id}:`, err);
+        }
       }
     }
   }

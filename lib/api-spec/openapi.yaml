@@ -33,6 +33,25 @@ tags:
     description: Seller order management + courier booking operations (plan doc §4, §8 — Part 4)
   - name: sellerPaymentConfigs
     description: Seller bKash payment settings CRUD (plan doc §4, §7 — Part 5)
+  - name: platformPaymentConfig
+    description: >-
+      Admin-only platform bKash merchant config (new admin-custodial payments
+      design, Part 1 of 4). The platform's single bKash merchant account —
+      buyers pay into this, not into any per-seller account.
+  - name: sellerPayoutAccounts
+    description: >-
+      Seller bKash payout number CRUD (new admin-custodial payments design,
+      Part 1 of 4). Replaces the old per-seller merchant-credential model for
+      NEW payouts — sellers register a plain account number to receive
+      disbursements instead of holding merchant API credentials themselves.
+  - name: bkashPayment
+    description: >-
+      bKash Tokenized Checkout create/execute/query cycle (Part 2 of 4). The
+      buyer-facing create-payment routes here ARE part of this typed spec;
+      /bkash/callback (bKash's own browser-redirect target after the buyer
+      authorizes on bKash's hosted page) deliberately is NOT — same
+      precedent as courierWebhooks/smsWebhook, neither of which is in this
+      spec either.
   - name: admin
     description: Admin operations
 paths:
@@ -1625,6 +1644,136 @@ paths:
               schema:
                 $ref: "#/components/schemas/SellerPaymentConfig"
 
+  /platform-payment-config:
+    get:
+      operationId: getPlatformPaymentConfig
+      tags: [platformPaymentConfig]
+      summary: Admin — get the platform's bKash merchant config (masked). 404 means not configured yet.
+      responses:
+        "200":
+          description: Masked platform payment config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlatformPaymentConfig"
+    post:
+      operationId: createPlatformPaymentConfig
+      tags: [platformPaymentConfig]
+      summary: Admin — create/replace the platform's bKash merchant config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePlatformPaymentConfigBody"
+      responses:
+        "201":
+          description: Created (masked) platform payment config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlatformPaymentConfig"
+
+  /bkash/create-payment:
+    post:
+      operationId: createBkashPayment
+      tags: [bkashPayment]
+      summary: Start a bKash Tokenized Checkout payment for an already-created order (authenticated buyer)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBkashPaymentBody"
+      responses:
+        "200":
+          description: bKash payment created — redirect the buyer to bkashURL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BkashPaymentSession"
+
+  /bkash/create-payment/guest:
+    post:
+      operationId: createBkashPaymentGuest
+      tags: [bkashPayment]
+      summary: Start a bKash Tokenized Checkout payment for an already-created guest order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBkashPaymentGuestBody"
+      responses:
+        "200":
+          description: bKash payment created — redirect the buyer to bkashURL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BkashPaymentSession"
+
+  /bkash/query-payment/{paymentID}:
+    get:
+      operationId: queryBkashPayment
+      tags: [bkashPayment]
+      summary: Admin — look up a bKash payment's live status directly from bKash (reconciliation/debugging)
+      parameters:
+        - name: paymentID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: bKash's own payment status for this paymentID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BkashQueryPaymentResult"
+
+  /seller-payout-accounts/mine:
+    get:
+      operationId: getMySellerPayoutAccount
+      tags: [sellerPayoutAccounts]
+      summary: Seller — get their own bKash payout account. 404 means not set up yet.
+      responses:
+        "200":
+          description: Payout account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerPayoutAccount"
+    delete:
+      operationId: deleteMySellerPayoutAccount
+      tags: [sellerPayoutAccounts]
+      summary: Seller — remove their payout account
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /seller-payout-accounts:
+    post:
+      operationId: createSellerPayoutAccount
+      tags: [sellerPayoutAccounts]
+      summary: Seller — create/replace their bKash payout account (upsert by sellerId)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSellerPayoutAccountBody"
+      responses:
+        "201":
+          description: Created payout account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerPayoutAccount"
+
   /seller/orders:
     get:
       operationId: listSellerOrders
@@ -3068,6 +3217,177 @@ components:
         - merchantAppSecret
         - merchantUsername
         - merchantPassword
+
+    PlatformPaymentConfig:
+      type: object
+      description: >-
+        Masked bKash merchant credentials for the PLATFORM's own single
+        merchant account (new admin-custodial payments design, Part 1 of 4).
+        Never contains decrypted credentials, only a last-4-style mask.
+        isVerified is never set true by the create/replace route itself (no
+        live credential check exists yet).
+      properties:
+        id:
+          type: integer
+        provider:
+          type: string
+          enum: [bkash]
+        merchantAppKeyMasked:
+          type: string
+        merchantAppSecretMasked:
+          type: string
+        merchantUsernameMasked:
+          type: string
+        merchantPasswordMasked:
+          type: string
+        isVerified:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - provider
+        - merchantAppKeyMasked
+        - merchantAppSecretMasked
+        - merchantUsernameMasked
+        - merchantPasswordMasked
+        - isVerified
+        - createdAt
+        - updatedAt
+
+    CreatePlatformPaymentConfigBody:
+      type: object
+      description: >-
+        provider defaults to "bkash" if omitted. All four merchant credential
+        fields are required, same shape as CreateSellerPaymentConfigBody —
+        this is the same bKash Merchant credential set, held by the admin
+        account instead of a per-seller account.
+      properties:
+        provider:
+          type: string
+          enum: [bkash]
+        merchantAppKey:
+          type: string
+        merchantAppSecret:
+          type: string
+        merchantUsername:
+          type: string
+        merchantPassword:
+          type: string
+      required:
+        - merchantAppKey
+        - merchantAppSecret
+        - merchantUsername
+        - merchantPassword
+
+    CreateBkashPaymentBody:
+      type: object
+      description: >-
+        Authenticated path — orderId must belong to the calling user, be
+        paymentMethod "bkash", and currently be paymentStatus
+        "payment_pending" (i.e. not already paid/failed/refunded).
+      properties:
+        orderId:
+          type: integer
+      required:
+        - orderId
+
+    CreateBkashPaymentGuestBody:
+      type: object
+      description: >-
+        Guest path — trackingId scopes to a guest order (userId starting
+        with "guest_") only; the tracking id itself is the bearer secret,
+        same trust model as GET /orders/track/{trackingId}.
+      properties:
+        trackingId:
+          type: string
+      required:
+        - trackingId
+
+    BkashPaymentSession:
+      type: object
+      description: >-
+        Redirect the buyer's browser (or open a popup/webview) to bkashURL
+        to complete authorization on bKash's own hosted page. bKash will
+        redirect back to our server's own /bkash/callback afterward, which
+        then redirects the buyer on to the order detail page with a
+        ?bkash=... status flag.
+      properties:
+        paymentID:
+          type: string
+        bkashURL:
+          type: string
+        orderId:
+          type: integer
+        trackingId:
+          type: string
+      required:
+        - paymentID
+        - bkashURL
+        - orderId
+        - trackingId
+
+    BkashQueryPaymentResult:
+      type: object
+      description: Raw-ish status straight from bKash's own Query Payment API, for reconciliation/debugging only.
+      properties:
+        paymentID:
+          type: string
+        trxID:
+          type: ["string", "null"]
+        transactionStatus:
+          type: string
+        amount:
+          type: string
+        merchantInvoiceNumber:
+          type: ["string", "null"]
+          description: Our own orders.trackingId, as originally sent to bKash at Create Payment time.
+      required:
+        - paymentID
+        - transactionStatus
+
+    SellerPayoutAccount:
+      type: object
+      description: >-
+        A seller's plain bKash payout NUMBER (new admin-custodial payments
+        design, Part 1 of 4) — not a secret credential, so unlike
+        SellerPaymentConfig this is returned unmasked.
+      properties:
+        id:
+          type: integer
+        sellerId:
+          type: integer
+        bkashNumber:
+          type: string
+        accountHolderName:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - sellerId
+        - bkashNumber
+        - createdAt
+        - updatedAt
+
+    CreateSellerPayoutAccountBody:
+      type: object
+      description: >-
+        bkashNumber must look like a plausible Bangladeshi mobile number
+        (simple format check, not a live bKash lookup). accountHolderName is
+        optional, for admin verification-by-eye only.
+      properties:
+        bkashNumber:
+          type: string
+        accountHolderName:
+          type: string
+      required:
+        - bkashNumber
 
     OrderShipment:
       type: object

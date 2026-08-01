@@ -59,6 +59,9 @@ import sellerOrdersRouter from "./sellerOrders";
 import courierWebhooksRouter from "./courierWebhooks";
 import sellerReturnsRouter from "./sellerReturns";
 import sellerMonthlyHistoryRouter from "./sellerMonthlyHistory";
+import platformPaymentConfigRouter from "./platformPaymentConfig";
+import sellerPayoutAccountsRouter from "./sellerPayoutAccounts";
+import bkashPaymentRouter from "./bkashPayment";
 
 const router: IRouter = Router();
 
@@ -109,5 +112,8 @@ router.use(sellerOrdersRouter);
 router.use(courierWebhooksRouter);
 router.use(sellerReturnsRouter);
 router.use(sellerMonthlyHistoryRouter);
+router.use(platformPaymentConfigRouter);
+router.use(sellerPayoutAccountsRouter);
+router.use(bkashPaymentRouter);
 
 export default router;

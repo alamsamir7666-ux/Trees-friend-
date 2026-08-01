@@ -91,7 +91,7 @@ export const ListProductsQueryParams = zod.object({
   "sortBy": zod.coerce.string().optional(),
   "page": zod.coerce.number().optional(),
   "limit": zod.coerce.number().optional(),
-  "homepageTag": zod.coerce.string().optional()
+  "homepageTag": zod.coerce.string().optional().describe('Filters products by homepage placement tag (e.g. \"trending\", \"new_arrivals\").')
 })
 
 export const ListProductsResponse = zod.object({
@@ -2392,6 +2392,109 @@ export const CreateSellerPaymentConfigBody = zod.object({
   "merchantUsername": zod.string(),
   "merchantPassword": zod.string()
 }).describe('provider defaults to \"bkash\" (the only provider this schema\/plan support today) if omitted. All four merchant credential fields are required -- bKash\'s merchant API needs all of them together, there is no partial-credential state.')
+
+
+/**
+ * @summary Admin — get the platform's bKash merchant config (masked). 404 means not configured yet.
+ */
+export const GetPlatformPaymentConfigResponse = zod.object({
+  "id": zod.number(),
+  "provider": zod.enum(['bkash']),
+  "merchantAppKeyMasked": zod.string(),
+  "merchantAppSecretMasked": zod.string(),
+  "merchantUsernameMasked": zod.string(),
+  "merchantPasswordMasked": zod.string(),
+  "isVerified": zod.boolean(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+}).describe('Masked bKash merchant credentials for the PLATFORM\'s own single merchant account (new admin-custodial payments design, Part 1 of 4). Never contains decrypted credentials, only a last-4-style mask. isVerified is never set true by the create\/replace route itself (no live credential check exists yet).')
+
+
+/**
+ * @summary Admin — create/replace the platform's bKash merchant config
+ */
+export const CreatePlatformPaymentConfigBody = zod.object({
+  "provider": zod.enum(['bkash']).optional(),
+  "merchantAppKey": zod.string(),
+  "merchantAppSecret": zod.string(),
+  "merchantUsername": zod.string(),
+  "merchantPassword": zod.string()
+}).describe('provider defaults to \"bkash\" if omitted. All four merchant credential fields are required, same shape as CreateSellerPaymentConfigBody — this is the same bKash Merchant credential set, held by the admin account instead of a per-seller account.')
+
+
+/**
+ * @summary Start a bKash Tokenized Checkout payment for an already-created order (authenticated buyer)
+ */
+export const CreateBkashPaymentBody = zod.object({
+  "orderId": zod.number()
+}).describe('Authenticated path — orderId must belong to the calling user, be paymentMethod \"bkash\", and currently be paymentStatus \"payment_pending\" (i.e. not already paid\/failed\/refunded).')
+
+export const CreateBkashPaymentResponse = zod.object({
+  "paymentID": zod.string(),
+  "bkashURL": zod.string(),
+  "orderId": zod.number(),
+  "trackingId": zod.string()
+}).describe('Redirect the buyer\'s browser (or open a popup\/webview) to bkashURL to complete authorization on bKash\'s own hosted page. bKash will redirect back to our server\'s own \/bkash\/callback afterward, which then redirects the buyer on to the order detail page with a ?bkash=... status flag.')
+
+
+/**
+ * @summary Start a bKash Tokenized Checkout payment for an already-created guest order
+ */
+export const CreateBkashPaymentGuestBody = zod.object({
+  "trackingId": zod.string()
+}).describe('Guest path — trackingId scopes to a guest order (userId starting with \"guest_\") only; the tracking id itself is the bearer secret, same trust model as GET \/orders\/track\/{trackingId}.')
+
+export const CreateBkashPaymentGuestResponse = zod.object({
+  "paymentID": zod.string(),
+  "bkashURL": zod.string(),
+  "orderId": zod.number(),
+  "trackingId": zod.string()
+}).describe('Redirect the buyer\'s browser (or open a popup\/webview) to bkashURL to complete authorization on bKash\'s own hosted page. bKash will redirect back to our server\'s own \/bkash\/callback afterward, which then redirects the buyer on to the order detail page with a ?bkash=... status flag.')
+
+
+/**
+ * @summary Admin — look up a bKash payment's live status directly from bKash (reconciliation/debugging)
+ */
+export const QueryBkashPaymentParams = zod.object({
+  "paymentID": zod.coerce.string()
+})
+
+export const QueryBkashPaymentResponse = zod.object({
+  "paymentID": zod.string(),
+  "trxID": zod.string().nullish(),
+  "transactionStatus": zod.string(),
+  "amount": zod.string().optional()
+}).describe('Raw-ish status straight from bKash\'s own Query Payment API, for reconciliation\/debugging only.')
+
+
+/**
+ * @summary Seller — get their own bKash payout account. 404 means not set up yet.
+ */
+export const GetMySellerPayoutAccountResponse = zod.object({
+  "id": zod.number(),
+  "sellerId": zod.number(),
+  "bkashNumber": zod.string(),
+  "accountHolderName": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+}).describe('A seller\'s plain bKash payout NUMBER (new admin-custodial payments design, Part 1 of 4) — not a secret credential, so unlike SellerPaymentConfig this is returned unmasked.')
+
+
+/**
+ * @summary Seller — remove their payout account
+ */
+export const DeleteMySellerPayoutAccountResponse = zod.object({
+  "message": zod.string()
+})
+
+
+/**
+ * @summary Seller — create/replace their bKash payout account (upsert by sellerId)
+ */
+export const CreateSellerPayoutAccountBody = zod.object({
+  "bkashNumber": zod.string(),
+  "accountHolderName": zod.string().optional()
+}).describe('bkashNumber must look like a plausible Bangladeshi mobile number (simple format check, not a live bKash lookup). accountHolderName is optional, for admin verification-by-eye only.')
 
 
 /**

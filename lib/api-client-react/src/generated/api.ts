@@ -26,13 +26,18 @@ import type {
   AdminReview,
   AdminSellerListing,
   AnswerQuestionBody,
+  BkashPaymentSession,
+  BkashQueryPaymentResult,
   Cart,
   Category,
   Coupon,
+  CreateBkashPaymentBody,
+  CreateBkashPaymentGuestBody,
   CreateCategoryBody,
   CreateCouponBody,
   CreateListingAttributeOptionBody,
   CreateOrderBody,
+  CreatePlatformPaymentConfigBody,
   CreateProductBody,
   CreateQuestionBody,
   CreateReviewBody,
@@ -40,6 +45,7 @@ import type {
   CreateSellerListingBody,
   CreateSellerListingReviewBody,
   CreateSellerPaymentConfigBody,
+  CreateSellerPayoutAccountBody,
   DashboardStats,
   FollowStatus,
   FollowedSellerCard,
@@ -66,6 +72,7 @@ import type {
   Order,
   OrderShipment,
   OrderTracking,
+  PlatformPaymentConfig,
   Product,
   ProductListResponse,
   PublicSeller,
@@ -84,6 +91,7 @@ import type {
   SellerMonthlyHistoryResponse,
   SellerOrder,
   SellerPaymentConfig,
+  SellerPayoutAccount,
   SellerReturn,
   SellerReturnListResponse,
   SellerReviewsPage,
@@ -6115,6 +6123,587 @@ export const useCreateSellerPaymentConfig = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getCreateSellerPaymentConfigMutationOptions(options));
+    }
+
+export const getGetPlatformPaymentConfigUrl = () => {
+
+
+
+
+  return `/api/platform-payment-config`
+}
+
+/**
+ * @summary Admin — get the platform's bKash merchant config (masked). 404 means not configured yet.
+ */
+export const getPlatformPaymentConfig = async ( options?: RequestInit): Promise<PlatformPaymentConfig> => {
+
+  return customFetch<PlatformPaymentConfig>(getGetPlatformPaymentConfigUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetPlatformPaymentConfigQueryKey = () => {
+    return [
+    `/api/platform-payment-config`
+    ] as const;
+    }
+
+
+export const getGetPlatformPaymentConfigQueryOptions = <TData = Awaited<ReturnType<typeof getPlatformPaymentConfig>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPlatformPaymentConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPlatformPaymentConfigQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPlatformPaymentConfig>>> = ({ signal }) => getPlatformPaymentConfig({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPlatformPaymentConfig>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetPlatformPaymentConfigQueryResult = NonNullable<Awaited<ReturnType<typeof getPlatformPaymentConfig>>>
+export type GetPlatformPaymentConfigQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Admin — get the platform's bKash merchant config (masked). 404 means not configured yet.
+ */
+
+export function useGetPlatformPaymentConfig<TData = Awaited<ReturnType<typeof getPlatformPaymentConfig>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPlatformPaymentConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetPlatformPaymentConfigQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getCreatePlatformPaymentConfigUrl = () => {
+
+
+
+
+  return `/api/platform-payment-config`
+}
+
+/**
+ * @summary Admin — create/replace the platform's bKash merchant config
+ */
+export const createPlatformPaymentConfig = async (createPlatformPaymentConfigBody: CreatePlatformPaymentConfigBody, options?: RequestInit): Promise<PlatformPaymentConfig> => {
+
+  return customFetch<PlatformPaymentConfig>(getCreatePlatformPaymentConfigUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(createPlatformPaymentConfigBody)
+  }
+);}
+
+
+
+
+export const getCreatePlatformPaymentConfigMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPlatformPaymentConfig>>, TError,{data: BodyType<CreatePlatformPaymentConfigBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createPlatformPaymentConfig>>, TError,{data: BodyType<CreatePlatformPaymentConfigBody>}, TContext> => {
+
+const mutationKey = ['createPlatformPaymentConfig'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createPlatformPaymentConfig>>, {data: BodyType<CreatePlatformPaymentConfigBody>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createPlatformPaymentConfig(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreatePlatformPaymentConfigMutationResult = NonNullable<Awaited<ReturnType<typeof createPlatformPaymentConfig>>>
+    export type CreatePlatformPaymentConfigMutationBody = BodyType<CreatePlatformPaymentConfigBody>
+    export type CreatePlatformPaymentConfigMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Admin — create/replace the platform's bKash merchant config
+ */
+export const useCreatePlatformPaymentConfig = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPlatformPaymentConfig>>, TError,{data: BodyType<CreatePlatformPaymentConfigBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createPlatformPaymentConfig>>,
+        TError,
+        {data: BodyType<CreatePlatformPaymentConfigBody>},
+        TContext
+      > => {
+      return useMutation(getCreatePlatformPaymentConfigMutationOptions(options));
+    }
+
+export const getCreateBkashPaymentUrl = () => {
+
+
+
+
+  return `/api/bkash/create-payment`
+}
+
+/**
+ * @summary Start a bKash Tokenized Checkout payment for an already-created order (authenticated buyer)
+ */
+export const createBkashPayment = async (createBkashPaymentBody: CreateBkashPaymentBody, options?: RequestInit): Promise<BkashPaymentSession> => {
+
+  return customFetch<BkashPaymentSession>(getCreateBkashPaymentUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(createBkashPaymentBody)
+  }
+);}
+
+
+
+
+export const getCreateBkashPaymentMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createBkashPayment>>, TError,{data: BodyType<CreateBkashPaymentBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createBkashPayment>>, TError,{data: BodyType<CreateBkashPaymentBody>}, TContext> => {
+
+const mutationKey = ['createBkashPayment'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createBkashPayment>>, {data: BodyType<CreateBkashPaymentBody>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createBkashPayment(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateBkashPaymentMutationResult = NonNullable<Awaited<ReturnType<typeof createBkashPayment>>>
+    export type CreateBkashPaymentMutationBody = BodyType<CreateBkashPaymentBody>
+    export type CreateBkashPaymentMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Start a bKash Tokenized Checkout payment for an already-created order (authenticated buyer)
+ */
+export const useCreateBkashPayment = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createBkashPayment>>, TError,{data: BodyType<CreateBkashPaymentBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createBkashPayment>>,
+        TError,
+        {data: BodyType<CreateBkashPaymentBody>},
+        TContext
+      > => {
+      return useMutation(getCreateBkashPaymentMutationOptions(options));
+    }
+
+export const getCreateBkashPaymentGuestUrl = () => {
+
+
+
+
+  return `/api/bkash/create-payment/guest`
+}
+
+/**
+ * @summary Start a bKash Tokenized Checkout payment for an already-created guest order
+ */
+export const createBkashPaymentGuest = async (createBkashPaymentGuestBody: CreateBkashPaymentGuestBody, options?: RequestInit): Promise<BkashPaymentSession> => {
+
+  return customFetch<BkashPaymentSession>(getCreateBkashPaymentGuestUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(createBkashPaymentGuestBody)
+  }
+);}
+
+
+
+
+export const getCreateBkashPaymentGuestMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createBkashPaymentGuest>>, TError,{data: BodyType<CreateBkashPaymentGuestBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createBkashPaymentGuest>>, TError,{data: BodyType<CreateBkashPaymentGuestBody>}, TContext> => {
+
+const mutationKey = ['createBkashPaymentGuest'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createBkashPaymentGuest>>, {data: BodyType<CreateBkashPaymentGuestBody>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createBkashPaymentGuest(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateBkashPaymentGuestMutationResult = NonNullable<Awaited<ReturnType<typeof createBkashPaymentGuest>>>
+    export type CreateBkashPaymentGuestMutationBody = BodyType<CreateBkashPaymentGuestBody>
+    export type CreateBkashPaymentGuestMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Start a bKash Tokenized Checkout payment for an already-created guest order
+ */
+export const useCreateBkashPaymentGuest = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createBkashPaymentGuest>>, TError,{data: BodyType<CreateBkashPaymentGuestBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createBkashPaymentGuest>>,
+        TError,
+        {data: BodyType<CreateBkashPaymentGuestBody>},
+        TContext
+      > => {
+      return useMutation(getCreateBkashPaymentGuestMutationOptions(options));
+    }
+
+export const getQueryBkashPaymentUrl = (paymentID: string,) => {
+
+
+
+
+  return `/api/bkash/query-payment/${paymentID}`
+}
+
+/**
+ * @summary Admin — look up a bKash payment's live status directly from bKash (reconciliation/debugging)
+ */
+export const queryBkashPayment = async (paymentID: string, options?: RequestInit): Promise<BkashQueryPaymentResult> => {
+
+  return customFetch<BkashQueryPaymentResult>(getQueryBkashPaymentUrl(paymentID),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getQueryBkashPaymentQueryKey = (paymentID: string,) => {
+    return [
+    `/api/bkash/query-payment/${paymentID}`
+    ] as const;
+    }
+
+
+export const getQueryBkashPaymentQueryOptions = <TData = Awaited<ReturnType<typeof queryBkashPayment>>, TError = ErrorType<unknown>>(paymentID: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof queryBkashPayment>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getQueryBkashPaymentQueryKey(paymentID);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof queryBkashPayment>>> = ({ signal }) => queryBkashPayment(paymentID, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: paymentID !== null && paymentID !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof queryBkashPayment>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type QueryBkashPaymentQueryResult = NonNullable<Awaited<ReturnType<typeof queryBkashPayment>>>
+export type QueryBkashPaymentQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Admin — look up a bKash payment's live status directly from bKash (reconciliation/debugging)
+ */
+
+export function useQueryBkashPayment<TData = Awaited<ReturnType<typeof queryBkashPayment>>, TError = ErrorType<unknown>>(
+ paymentID: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof queryBkashPayment>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getQueryBkashPaymentQueryOptions(paymentID,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getGetMySellerPayoutAccountUrl = () => {
+
+
+
+
+  return `/api/seller-payout-accounts/mine`
+}
+
+/**
+ * @summary Seller — get their own bKash payout account. 404 means not set up yet.
+ */
+export const getMySellerPayoutAccount = async ( options?: RequestInit): Promise<SellerPayoutAccount> => {
+
+  return customFetch<SellerPayoutAccount>(getGetMySellerPayoutAccountUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMySellerPayoutAccountQueryKey = () => {
+    return [
+    `/api/seller-payout-accounts/mine`
+    ] as const;
+    }
+
+
+export const getGetMySellerPayoutAccountQueryOptions = <TData = Awaited<ReturnType<typeof getMySellerPayoutAccount>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMySellerPayoutAccount>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMySellerPayoutAccountQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMySellerPayoutAccount>>> = ({ signal }) => getMySellerPayoutAccount({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMySellerPayoutAccount>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetMySellerPayoutAccountQueryResult = NonNullable<Awaited<ReturnType<typeof getMySellerPayoutAccount>>>
+export type GetMySellerPayoutAccountQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Seller — get their own bKash payout account. 404 means not set up yet.
+ */
+
+export function useGetMySellerPayoutAccount<TData = Awaited<ReturnType<typeof getMySellerPayoutAccount>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMySellerPayoutAccount>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetMySellerPayoutAccountQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getDeleteMySellerPayoutAccountUrl = () => {
+
+
+
+
+  return `/api/seller-payout-accounts/mine`
+}
+
+/**
+ * @summary Seller — remove their payout account
+ */
+export const deleteMySellerPayoutAccount = async ( options?: RequestInit): Promise<MessageResponse> => {
+
+  return customFetch<MessageResponse>(getDeleteMySellerPayoutAccountUrl(),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getDeleteMySellerPayoutAccountMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteMySellerPayoutAccount>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteMySellerPayoutAccount>>, TError,void, TContext> => {
+
+const mutationKey = ['deleteMySellerPayoutAccount'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteMySellerPayoutAccount>>, void> = () => {
+
+
+          return  deleteMySellerPayoutAccount(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteMySellerPayoutAccountMutationResult = NonNullable<Awaited<ReturnType<typeof deleteMySellerPayoutAccount>>>
+
+    export type DeleteMySellerPayoutAccountMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Seller — remove their payout account
+ */
+export const useDeleteMySellerPayoutAccount = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteMySellerPayoutAccount>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteMySellerPayoutAccount>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getDeleteMySellerPayoutAccountMutationOptions(options));
+    }
+
+export const getCreateSellerPayoutAccountUrl = () => {
+
+
+
+
+  return `/api/seller-payout-accounts`
+}
+
+/**
+ * @summary Seller — create/replace their bKash payout account (upsert by sellerId)
+ */
+export const createSellerPayoutAccount = async (createSellerPayoutAccountBody: CreateSellerPayoutAccountBody, options?: RequestInit): Promise<SellerPayoutAccount> => {
+
+  return customFetch<SellerPayoutAccount>(getCreateSellerPayoutAccountUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(createSellerPayoutAccountBody)
+  }
+);}
+
+
+
+
+export const getCreateSellerPayoutAccountMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSellerPayoutAccount>>, TError,{data: BodyType<CreateSellerPayoutAccountBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createSellerPayoutAccount>>, TError,{data: BodyType<CreateSellerPayoutAccountBody>}, TContext> => {
+
+const mutationKey = ['createSellerPayoutAccount'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createSellerPayoutAccount>>, {data: BodyType<CreateSellerPayoutAccountBody>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createSellerPayoutAccount(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateSellerPayoutAccountMutationResult = NonNullable<Awaited<ReturnType<typeof createSellerPayoutAccount>>>
+    export type CreateSellerPayoutAccountMutationBody = BodyType<CreateSellerPayoutAccountBody>
+    export type CreateSellerPayoutAccountMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Seller — create/replace their bKash payout account (upsert by sellerId)
+ */
+export const useCreateSellerPayoutAccount = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSellerPayoutAccount>>, TError,{data: BodyType<CreateSellerPayoutAccountBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createSellerPayoutAccount>>,
+        TError,
+        {data: BodyType<CreateSellerPayoutAccountBody>},
+        TContext
+      > => {
+      return useMutation(getCreateSellerPayoutAccountMutationOptions(options));
     }
 
 export const getListSellerOrdersUrl = (params?: ListSellerOrdersParams,) => {

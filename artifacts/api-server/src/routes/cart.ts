@@ -7,9 +7,9 @@ import {
   sellerListingsTable,
   sellerListingVariantsTable,
   sellersTable,
-  sellerPaymentConfigsTable,
+  platformPaymentConfigTable,
 } from "@workspace/db";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 
 const router = Router();
@@ -59,26 +59,22 @@ async function buildCart(userId: string) {
       .where(eq(cartItemsTable.userId, userId)),
   ]);
 
-  // Batch-fetch verified-payment-config status for every distinct seller
-  // touched by this cart's listing lines, in one query (not per-row), the
-  // same way this function already runs variantLines/listingVariantLines as
-  // two parallel top-level queries rather than one query per line.
-  // isVerified must be true AND a row must exist -- same rule as
-  // hasVerifiedPaymentConfig() in sellerListings.ts -- because a listing's
-  // own paymentMethod field can drift from the seller's actual config
-  // state (e.g. an admin unverifies a seller without touching their
-  // listings), and checkout needs the live truth, not the listing's claim.
-  const distinctSellerIds = [...new Set(listingVariantLines.map((row) => row.listing.sellerId))];
-  const verifiedSellerIds = new Set<number>();
-  if (distinctSellerIds.length > 0) {
-    const paymentConfigRows = await db
-      .select({ sellerId: sellerPaymentConfigsTable.sellerId, isVerified: sellerPaymentConfigsTable.isVerified })
-      .from(sellerPaymentConfigsTable)
-      .where(inArray(sellerPaymentConfigsTable.sellerId, distinctSellerIds));
-    for (const row of paymentConfigRows) {
-      if (row.isVerified === true) verifiedSellerIds.add(row.sellerId);
-    }
-  }
+  // Part 2 change (see PART2_HANDOFF.md): "hasVerifiedPaymentConfig" used
+  // to be a PER-SELLER lookup against sellerPaymentConfigsTable (each
+  // seller's own bKash merchant account). Under the new admin-custodial
+  // model every buyer bKash payment settles into the platform's single
+  // merchant account (platformPaymentConfigTable, Part 1) regardless of
+  // which seller's listing is being bought -- so this is now ONE lookup
+  // for the whole cart, not one per distinct seller. The field name/shape
+  // on each mapped listing line (seller.hasVerifiedPaymentConfig, below)
+  // is left unchanged so CheckoutPage.tsx's existing per-line read doesn't
+  // need restructuring -- every seller on the cart just gets the SAME
+  // value now, computed once here.
+  const [platformConfig] = await db
+    .select({ isVerified: platformPaymentConfigTable.isVerified })
+    .from(platformPaymentConfigTable)
+    .limit(1);
+  const platformBkashVerified = platformConfig?.isVerified === true;
 
   let subtotal = 0;
   let discount = 0;
@@ -161,7 +157,7 @@ async function buildCart(userId: string) {
         businessName: seller.businessName,
         nurseryName: seller.nurseryName,
         location: seller.location,
-        hasVerifiedPaymentConfig: verifiedSellerIds.has(seller.id),
+        hasVerifiedPaymentConfig: platformBkashVerified,
       },
       quantity: cart.quantity,
       variant: null,

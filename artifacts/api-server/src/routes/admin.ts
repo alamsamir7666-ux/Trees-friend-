@@ -9,13 +9,21 @@ import {
   sellersTable,
   sellerListingsTable,
   sellerListingVariantsTable,
+  payoutsTable,
 } from "@workspace/db";
 import { eq, desc, sql, and, lt, or, not, inArray } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { sendOrderStatusUpdate } from "../lib/email";
 import { logAudit } from "../lib/audit";
+import { attemptSellerPayout } from "../lib/payouts";
 
 const router = Router();
+
+// "pending" | "success" | "failed" today -- see payoutsTable's own schema
+// doc comment (lib/db/src/schema/payouts.ts) for why this is left as a
+// plain text column with room to extend, same reasoning as
+// VALID_ORDER_STATUSES/VALID_PAYMENT_STATUSES below.
+const VALID_PAYOUT_STATUSES = ["pending", "success", "failed"];
 
 function formatOrder(o: typeof ordersTable.$inferSelect) {
   return {
@@ -88,6 +96,14 @@ const VALID_ORDER_STATUSES = [
 const VALID_PAYMENT_STATUSES = [
   "pending",
   "pending_verification",
+  // Part 2 of 4 (bKash Tokenized Checkout, see PART2_HANDOFF.md): new
+  // value, distinct from "pending_verification" -- an order created for a
+  // "bkash" checkout whose real bKash Create Payment/Execute Payment cycle
+  // hasn't completed yet. Only routes/orders.ts (on insert) and
+  // routes/bkashPayment.ts (on a bKash-side cancel/failure, to allow
+  // retry) ever set this value; only routes/bkashPayment.ts's callback
+  // ever moves an order OUT of it (to "paid").
+  "payment_pending",
   "paid",
   "failed",
   "refunded",
@@ -742,6 +758,314 @@ router.put("/admin/users/:id/block", requireAdmin, async (req: any, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to update user" });
+  }
+});
+
+// ─── Admin payout visibility + manual retry -- Part 4 of 4 ─────────────────
+// (see PART4_HANDOFF.md). payoutsTable has been written to since Part 3
+// (bKash B2C disbursement on courier delivery), but nothing surfaced those
+// rows anywhere until now -- this is that surface.
+
+/**
+ * Formats a payoutsTable row joined against ordersTable/sellersTable for
+ * human-readable admin display -- raw ids alone (orderId, sellerId) don't
+ * tell an admin what actually happened; the tracking id and seller
+ * business name do. Both joins are LEFT: an order/seller row could in
+ * principle be gone (payoutsTable's own FKs are RESTRICT, not CASCADE --
+ * see that schema's doc comment -- so this is largely defensive, not an
+ * expected case, but the admin list must not 500 if it somehow happens).
+ */
+type PayoutWithContext = typeof payoutsTable.$inferSelect & {
+  orderTrackingId: string | null;
+  orderStatus: string | null;
+  sellerBusinessName: string | null;
+  sellerOwnerName: string | null;
+};
+
+function formatPayout(p: PayoutWithContext) {
+  return {
+    id: p.id,
+    orderId: p.orderId,
+    orderTrackingId: p.orderTrackingId ?? null,
+    orderStatus: p.orderStatus ?? null,
+    sellerId: p.sellerId,
+    sellerBusinessName: p.sellerBusinessName ?? null,
+    sellerOwnerName: p.sellerOwnerName ?? null,
+    amount: Number(p.amount),
+    status: p.status,
+    bkashTransactionId: p.bkashTransactionId ?? null,
+    failureReason: p.failureReason ?? null,
+    adminNote: p.adminNote ?? null,
+    clawbackNotedAmount: p.clawbackNotedAmount != null ? Number(p.clawbackNotedAmount) : null,
+    createdAt: p.createdAt.toISOString(),
+    updatedAt: p.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Admin: list payout attempts, newest first, optionally filtered by
+ * status. Follows /admin/orders's own query-param handling (checked that
+ * route first, per the prompt's instruction): `?status=` filter,
+ * `?page=` pagination with a fixed page size, `hasMore` in the response.
+ * No `notArchived`-style time-based exclusion here (unlike /admin/orders)
+ * -- there's no equivalent "archived" concept for payouts; every row stays
+ * visible regardless of age, since a payout is itself already a discrete,
+ * timestamped historical record rather than something evolving over time
+ * the way an order's orderStatus does.
+ */
+router.get("/admin/payouts", requireAdmin, async (req: any, res) => {
+  try {
+    const { status, page = "1" } = req.query as Record<string, string>;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = 20;
+    const offset = (pageNum - 1) * limitNum;
+
+    if (status && !VALID_PAYOUT_STATUSES.includes(status)) {
+      res.status(400).json({ error: "Invalid payout status filter" });
+      return;
+    }
+
+    const baseSelect = {
+      id: payoutsTable.id,
+      orderId: payoutsTable.orderId,
+      sellerId: payoutsTable.sellerId,
+      amount: payoutsTable.amount,
+      status: payoutsTable.status,
+      bkashTransactionId: payoutsTable.bkashTransactionId,
+      failureReason: payoutsTable.failureReason,
+      adminNote: payoutsTable.adminNote,
+      clawbackNotedAmount: payoutsTable.clawbackNotedAmount,
+      createdAt: payoutsTable.createdAt,
+      updatedAt: payoutsTable.updatedAt,
+      orderTrackingId: ordersTable.trackingId,
+      orderStatus: ordersTable.orderStatus,
+      sellerBusinessName: sellersTable.businessName,
+      sellerOwnerName: sellersTable.ownerName,
+    };
+
+    const whereClause = status ? eq(payoutsTable.status, status) : undefined;
+
+    const [payouts, [{ total }]] = await Promise.all([
+      db
+        .select(baseSelect)
+        .from(payoutsTable)
+        .leftJoin(ordersTable, eq(payoutsTable.orderId, ordersTable.id))
+        .leftJoin(sellersTable, eq(payoutsTable.sellerId, sellersTable.id))
+        .where(whereClause)
+        .orderBy(desc(payoutsTable.createdAt))
+        .limit(limitNum)
+        .offset(offset) as Promise<PayoutWithContext[]>,
+      whereClause
+        ? db.select({ total: sql<string>`COUNT(*)` }).from(payoutsTable).where(whereClause)
+        : db.select({ total: sql<string>`COUNT(*)` }).from(payoutsTable),
+    ]);
+
+    const totalNum = Number(total);
+    res.json({
+      payouts: payouts.map(formatPayout),
+      total: totalNum,
+      hasMore: offset + limitNum < totalNum,
+    });
+  } catch (err: any) {
+    console.error("admin payouts endpoint error:", err?.message, err?.stack);
+    res.status(500).json({ error: err?.message ?? "Failed to fetch payouts" });
+  }
+});
+
+/**
+ * Admin: manually retry a payout. Per the prompt's explicit instruction,
+ * this re-runs the EXACT SAME logic Part 3's attemptSellerPayout()
+ * already implements -- now shared via lib/payouts.ts (see that file's
+ * doc comment) -- rather than a second, separate retry implementation.
+ *
+ * `:id` identifies the FAILED payout row the admin is looking at, but note
+ * what actually gets re-attempted is the ORDER behind it
+ * (`payout.orderId`), not the row itself -- attemptSellerPayout() always
+ * inserts a fresh row per attempt (Part 3's retry policy, unchanged here),
+ * so this route looks up the order, calls attemptSellerPayout(order)
+ * again, and a NEW payoutsTable row is what actually records this retry's
+ * outcome. The original failed row named in the URL is left exactly as it
+ * was -- untouched, still visible in the list as history of the earlier
+ * attempt.
+ *
+ * Only allowed from a "failed" row -- retrying a "pending" row makes no
+ * sense (it may still be in flight, or its own last attempt already
+ * decided success/failed and this route's own DB read would be stale
+ * information to act on), and retrying a "success" row is actively wrong
+ * (attemptSellerPayout()'s own idempotency guard would refuse it anyway
+ * and simply return null with nothing recorded, but rejecting it here
+ * with a clear 400 is a better experience than a silent no-op).
+ */
+router.post("/admin/payouts/:id/retry", requireAdmin, async (req: any, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid payout ID" });
+      return;
+    }
+
+    const [existingPayout] = await db.select().from(payoutsTable).where(eq(payoutsTable.id, id)).limit(1);
+    if (!existingPayout) {
+      res.status(404).json({ error: "Payout not found" });
+      return;
+    }
+    if (existingPayout.status !== "failed") {
+      res.status(400).json({ error: `Only a "failed" payout can be retried (this one is "${existingPayout.status}")` });
+      return;
+    }
+
+    const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, existingPayout.orderId)).limit(1);
+    if (!order) {
+      // Shouldn't happen (payoutsTable.orderId is a NOT NULL FK), but
+      // payoutsTable's FK is RESTRICT not CASCADE (see its schema doc
+      // comment) specifically so this kind of dangling reference can't
+      // silently occur -- handled defensively anyway rather than assumed
+      // impossible.
+      res.status(404).json({ error: "The order behind this payout no longer exists" });
+      return;
+    }
+
+    const result = await attemptSellerPayout(order);
+
+    await logAudit({
+      adminId: req.userId,
+      adminEmail: req.dbUser?.email,
+      action: "payout.manual_retry",
+      targetType: "payout",
+      targetId: String(id),
+      before: { previousPayoutId: existingPayout.id, previousStatus: existingPayout.status },
+      after: result ? { newPayoutId: result.payoutId, newStatus: result.status } : { skipped: true },
+    });
+
+    if (!result) {
+      // attemptSellerPayout()'s own guards decided nothing should happen
+      // (e.g. a payout for this order already succeeded via some other
+      // path between page-load and this click, or the order's
+      // paymentStatus somehow isn't "paid") -- surfaced as a clear
+      // message rather than a silent 200 with nothing to show for it.
+      res.status(409).json({
+        error: "Retry was not attempted -- this order no longer qualifies for a payout (already paid out, or not marked paid). Refresh the list to see the current state.",
+      });
+      return;
+    }
+
+    const [newPayout] = await db
+      .select({
+        id: payoutsTable.id,
+        orderId: payoutsTable.orderId,
+        sellerId: payoutsTable.sellerId,
+        amount: payoutsTable.amount,
+        status: payoutsTable.status,
+        bkashTransactionId: payoutsTable.bkashTransactionId,
+        failureReason: payoutsTable.failureReason,
+        adminNote: payoutsTable.adminNote,
+        clawbackNotedAmount: payoutsTable.clawbackNotedAmount,
+        createdAt: payoutsTable.createdAt,
+        updatedAt: payoutsTable.updatedAt,
+        orderTrackingId: ordersTable.trackingId,
+        orderStatus: ordersTable.orderStatus,
+        sellerBusinessName: sellersTable.businessName,
+        sellerOwnerName: sellersTable.ownerName,
+      })
+      .from(payoutsTable)
+      .leftJoin(ordersTable, eq(payoutsTable.orderId, ordersTable.id))
+      .leftJoin(sellersTable, eq(payoutsTable.sellerId, sellersTable.id))
+      .where(eq(payoutsTable.id, result.payoutId))
+      .limit(1);
+
+    res.json(formatPayout(newPayout as PayoutWithContext));
+  } catch (err: any) {
+    console.error("admin payout retry error:", err?.message, err?.stack);
+    res.status(500).json({ error: err?.message ?? "Failed to retry payout" });
+  }
+});
+
+/**
+ * Admin: attach a manual note (and optionally a "noted" adjustment amount,
+ * for the admin's own record-keeping only) to a specific payout row --
+ * Part 4's lightest-weight item, deliberately. This exists ONLY for the
+ * project's explicit "returns-after-payout are handled manually,
+ * case-by-case, never automated" decision (restated in this part's own
+ * prompt). Setting these fields:
+ *  - Does NOT call bKash in any way.
+ *  - Does NOT touch sellerPayoutAccountsTable, sellersTable, or any
+ *    balance/ledger anywhere in this codebase (there is no such ledger --
+ *    confirmed by grep, nothing computes a running seller balance from
+ *    payoutsTable today).
+ *  - Does NOT change `status` -- a payout that succeeded stays "success"
+ *    even after a clawback note is attached; the note records a SEPARATE,
+ *    later real-world event (a return happening after the money already
+ *    moved), not a correction to whether the original disbursement
+ *    happened.
+ * `clawbackNotedAmount` accepts null/omitted (clearing it) or a
+ * non-negative number -- no upper-bound check against the payout's own
+ * `amount`, deliberately: an admin might legitimately want to note a
+ * larger figure (e.g. a partial return plus a separate goodwill
+ * adjustment) or this may not even correspond 1:1 to the original amount;
+ * constraining it would assume a shape this deliberately-freeform field
+ * doesn't need to have.
+ */
+router.patch("/admin/payouts/:id/note", requireAdmin, async (req: any, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid payout ID" });
+      return;
+    }
+
+    const { adminNote, clawbackNotedAmount } = req.body as {
+      adminNote?: string | null;
+      clawbackNotedAmount?: number | string | null;
+    };
+
+    const updateFields: Record<string, unknown> = { updatedAt: new Date() };
+
+    if (adminNote !== undefined) {
+      updateFields.adminNote = adminNote === null || adminNote.trim() === "" ? null : adminNote.trim();
+    }
+
+    if (clawbackNotedAmount !== undefined) {
+      if (clawbackNotedAmount === null || clawbackNotedAmount === "") {
+        updateFields.clawbackNotedAmount = null;
+      } else {
+        const amountNum = Number(clawbackNotedAmount);
+        if (isNaN(amountNum) || amountNum < 0) {
+          res.status(400).json({ error: "clawbackNotedAmount must be a non-negative number, or null to clear it" });
+          return;
+        }
+        updateFields.clawbackNotedAmount = amountNum.toFixed(2);
+      }
+    }
+
+    if (Object.keys(updateFields).length === 1) {
+      // Only updatedAt was set -- neither field was actually provided.
+      res.status(400).json({ error: "Provide adminNote and/or clawbackNotedAmount" });
+      return;
+    }
+
+    const [updated] = await db.update(payoutsTable).set(updateFields).where(eq(payoutsTable.id, id)).returning();
+    if (!updated) {
+      res.status(404).json({ error: "Payout not found" });
+      return;
+    }
+
+    await logAudit({
+      adminId: req.userId,
+      adminEmail: req.dbUser?.email,
+      action: "payout.note_updated",
+      targetType: "payout",
+      targetId: String(id),
+      after: { adminNote: updated.adminNote, clawbackNotedAmount: updated.clawbackNotedAmount },
+    });
+
+    res.json({
+      id: updated.id,
+      adminNote: updated.adminNote ?? null,
+      clawbackNotedAmount: updated.clawbackNotedAmount != null ? Number(updated.clawbackNotedAmount) : null,
+    });
+  } catch (err: any) {
+    console.error("admin payout note error:", err?.message, err?.stack);
+    res.status(500).json({ error: err?.message ?? "Failed to update payout note" });
   }
 });
 

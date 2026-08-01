@@ -93,6 +93,16 @@ app.use("/api", apiLimiter);
 app.use("/api/newsletter", newsletterLimiter);
 app.use("/api/stock-alerts", stockAlertLimiter);
 app.use("/api/orders", checkoutLimiter);
+// Part 2 of 4 (bKash Tokenized Checkout): create-payment is a
+// payment-initiating action with the same abuse surface as order creation
+// (routes/orders.ts, above), so it gets the same tight limiter. Scoped to
+// exactly the two create-payment paths, not the whole /api/bkash prefix --
+// /api/bkash/callback is bKash's OWN redirect target hitting the buyer's
+// browser after they've already authorized a real payment on bKash's
+// hosted page; rate-limiting that could strand a buyer who already paid.
+// /api/bkash/query-payment/:id is admin-gated separately (requireAdmin)
+// and used for occasional reconciliation, not a checkout-volume path.
+app.use("/api/bkash/create-payment", checkoutLimiter);
 
 // ─── API routes ───────────────────────────────────────────────────────────────
 app.use("/api", smsWebhookRouter);

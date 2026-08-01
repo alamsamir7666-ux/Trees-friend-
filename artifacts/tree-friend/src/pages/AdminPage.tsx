@@ -20,12 +20,12 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
-  LayoutDashboard, Package, ShoppingBag, Users, Ticket, Settings,
+  LayoutDashboard, Package2, ShoppingCart, Users, Tag, Settings,
   Plus, Pencil, Trash2, Search, TrendingUp, DollarSign, Star,
   ChevronRight, X, Menu, BarChart3, CheckCircle2, Clock, Truck,
-  AlertCircle, XCircle, FolderTree, MapPin, Ban, UserCheck, ChevronDown, Archive,
-  Calendar, ToggleLeft, ToggleRight, RotateCcw, Undo2, Network, FileUp, MessagesSquare,
-  Newspaper, ScrollText, FileText, Save, LayoutTemplate, Sprout, Store, ClipboardList,
+  AlertCircle, XCircle, Layers, MessageSquare, MapPin, Ban, UserCheck, ChevronDown, Archive,
+  Calendar, ToggleLeft, ToggleRight, RotateCcw, Activity, GitBranch, Upload, HelpCircle,
+  BookOpen, FileText, Save, LayoutGrid, Sprout, Wallet,
 } from "lucide-react";
 import { useAuth } from "@clerk/react";
 import { apiClient } from "@/lib/apiClient";
@@ -52,6 +52,7 @@ import { ReviewsTab } from "@/components/admin/tabs/ReviewsTab";
 import { ArchivedOrdersTab } from "@/components/admin/tabs/ArchivedOrdersTab";
 import { CouponsTab } from "@/components/admin/tabs/CouponsTab";
 import { MonthlyHistoryTab } from "@/components/admin/tabs/MonthlyHistoryTab";
+import { PaymentsTab } from "@/components/admin/tabs/PaymentsTab";
 
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -70,23 +71,24 @@ const statusConfig: Record<string, { color: string; icon: React.ElementType }> =
 // ??? Sidebar nav items ???????????????????????????????????????????????????????
 const navItems = [
   { id: "dashboard",  label: "Dashboard",       icon: LayoutDashboard },
-  { id: "products",   label: "Products",        icon: Package },
-  { id: "categories", label: "Categories",      icon: FolderTree },
-  { id: "orders",     label: "Orders",          icon: ShoppingBag },
+  { id: "products",   label: "Products",        icon: Package2 },
+  { id: "categories", label: "Categories",      icon: Layers },
+  { id: "orders",     label: "Orders",          icon: ShoppingCart },
   { id: "archived",   label: "Archived Orders", icon: Archive },
   { id: "users",      label: "Users",           icon: Users },
-  { id: "sellers",    label: "Sellers",         icon: Store },
-  { id: "seller-listings", label: "Seller Listings", icon: ClipboardList },
-  { id: "reviews",    label: "Reviews",         icon: Star },
-  { id: "coupons",    label: "Coupons",         icon: Ticket },
+  { id: "sellers",    label: "Sellers",         icon: Sprout },
+  { id: "seller-listings", label: "Seller Listings", icon: Sprout },
+  { id: "reviews",    label: "Reviews",         icon: MessageSquare },
+  { id: "coupons",    label: "Coupons",         icon: Tag },
   { id: "monthly",    label: "Monthly History", icon: Calendar },
-  { id: "returns",    label: "Returns",          icon: Undo2 },
-  { id: "affiliates", label: "Affiliates",       icon: Network },
-  { id: "blog",       label: "Blog Posts",       icon: Newspaper },
-  { id: "auditlogs",  label: "Audit Logs",       icon: ScrollText },
-  { id: "qa",         label: "Q&A",              icon: MessagesSquare },
-  { id: "bulkimport",        label: "Bulk Import",       icon: FileUp },
-  { id: "homepage-sections", label: "Homepage Sections", icon: LayoutTemplate },
+  { id: "payments",   label: "Payments",        icon: Wallet },
+  { id: "returns",    label: "Returns",          icon: RotateCcw },
+  { id: "affiliates", label: "Affiliates",       icon: GitBranch },
+  { id: "blog",       label: "Blog Posts",       icon: BookOpen },
+  { id: "auditlogs",  label: "Audit Logs",       icon: Activity },
+  { id: "qa",         label: "Q&A",              icon: HelpCircle },
+  { id: "bulkimport",        label: "Bulk Import",       icon: Upload },
+  { id: "homepage-sections", label: "Homepage Sections", icon: LayoutGrid },
 
   { id: "settings",   label: "Settings",         icon: Settings },
 ];
@@ -677,6 +679,7 @@ export function AdminPage() {
       case "reviews":    return <ReviewsTab />;
       case "coupons":    return <CouponsTab />;
       case "monthly":    return <MonthlyHistoryTab />;
+      case "payments":   return <PaymentsTab />;
       case "settings":   return <SettingsTab />;
       case "returns":    return <ReturnsTab />;
       case "affiliates": return <AffiliatesTab />;

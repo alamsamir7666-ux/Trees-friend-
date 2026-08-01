@@ -265,3 +265,60 @@ CREATE TABLE IF NOT EXISTS follows (
 
 CREATE UNIQUE INDEX IF NOT EXISTS follows_user_seller_unique
   ON follows (user_id, seller_id);
+
+-- ─── Admin-Custodial bKash Payments, Part 1: Schema ────────────────────────
+-- New payments design (see PART1_HANDOFF.md): platform holds ONE bKash
+-- merchant account, buyers pay into it, sellers register a plain payout
+-- number instead of merchant API credentials, platform disburses via B2C
+-- after delivery (Part 3, not built yet). Old seller_payment_configs table
+-- is left in place, untouched, still functional -- not migrated off yet.
+-- Applied via `drizzle-kit push` against schema/index.ts, not by running
+-- this file directly -- included here only for the same narrative-log
+-- continuity this file has followed for every prior phase.
+
+CREATE TABLE IF NOT EXISTS platform_payment_config (
+  id SERIAL PRIMARY KEY,
+  singleton TEXT NOT NULL UNIQUE DEFAULT 'singleton',
+  provider TEXT NOT NULL DEFAULT 'bkash',
+  merchant_app_key TEXT NOT NULL,
+  merchant_app_secret TEXT NOT NULL,
+  merchant_username TEXT NOT NULL,
+  merchant_password TEXT NOT NULL,
+  is_verified BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS seller_payout_accounts (
+  id SERIAL PRIMARY KEY,
+  seller_id INTEGER NOT NULL UNIQUE REFERENCES sellers(id) ON DELETE CASCADE,
+  bkash_number TEXT NOT NULL,
+  account_holder_name TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+-- No unique constraint on order_id -- a payout is a discrete attempt, not
+-- a continuously-updated status; retries are expected to add new rows.
+-- See payouts.ts's doc comment for the full reasoning (this differs from
+-- order_shipments.order_id's UNIQUE, deliberately).
+CREATE TABLE IF NOT EXISTS payouts (
+  id SERIAL PRIMARY KEY,
+  order_id INTEGER NOT NULL REFERENCES orders(id),
+  seller_id INTEGER NOT NULL REFERENCES sellers(id),
+  amount NUMERIC(10,2) NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  bkash_transaction_id TEXT,
+  failure_reason TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+-- ─── Admin-Custodial bKash Payments, Part 4: Admin note/adjust columns ─────
+-- (see PART4_HANDOFF.md). Purely manual bookkeeping for the project's
+-- explicit "case-by-case, never automated" returns-after-payout decision --
+-- no code anywhere reads these to compute a balance or trigger a real
+-- money movement. Applied via `drizzle-kit push`, same as every table
+-- above; included here only for narrative-log continuity.
+ALTER TABLE payouts ADD COLUMN IF NOT EXISTS admin_note TEXT;
+ALTER TABLE payouts ADD COLUMN IF NOT EXISTS clawback_noted_amount NUMERIC(10,2);

@@ -1,235 +1,164 @@
 import { useState } from "react";
-import {
-  Wallet, Loader2, Trash2, ShieldCheck, ShieldAlert, CheckCircle2,
-  Info, ExternalLink,
-} from "lucide-react";
+import { Wallet, Loader2, Trash2, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  useGetMySellerPaymentConfig,
-  useCreateSellerPaymentConfig,
-  useDeleteMySellerPaymentConfig,
-  getGetMySellerPaymentConfigQueryKey,
+  useGetMySellerPayoutAccount,
+  useCreateSellerPayoutAccount,
+  useDeleteMySellerPayoutAccount,
+  getGetMySellerPayoutAccountQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-function FieldRow({
-  label, children, hint, required,
-}: {
-  label: string;
-  children: React.ReactNode;
-  hint?: string;
-  required?: boolean;
-}) {
-  return (
-    <div>
-      <Label className="text-xs font-medium text-foreground">
-        {label}{required && <span className="text-destructive ml-0.5">*</span>}
-      </Label>
-      <div className="mt-1.5">{children}</div>
-      {hint && <p className="text-[11px] text-muted-foreground mt-1">{hint}</p>}
-    </div>
-  );
-}
-
+/**
+ * Payment Settings — new admin-custodial bKash payments design (Part 1 of
+ * 4, see PART1_HANDOFF.md). Replaces the old merchant-API-credentials form
+ * (App Key/App Secret/Merchant Username/Merchant Password, backed by
+ * seller-payment-configs) with a SINGLE bkashNumber field, backed by
+ * seller-payout-accounts, because sellers no longer need their own bKash
+ * merchant account under the new model — the platform holds one merchant
+ * account, buyers pay into it, and sellers just receive disbursements at
+ * a plain phone number after courier delivery is confirmed (Part 3).
+ *
+ * Mirrors the old form's loading/empty/connected-state shape and the
+ * delete-confirm pattern (kept for visual/UX continuity with
+ * CourierSettingsForm.tsx, which this dashboard tab sits next to) but:
+ *  - No isVerified/pending-verification messaging. This table has no
+ *    isVerified column (a payout number isn't "verified" the way merchant
+ *    API credentials are — see schema doc comment) and nothing downstream
+ *    reads this table's existence yet (Part 2/3's job), so there's no
+ *    "pending admin review" state to show here, unlike the old form's
+ *    amber notice.
+ *  - No password-masked input type on any field — bkashNumber isn't a
+ *    secret (see sellerPayoutAccounts.ts's schema doc comment on why it's
+ *    stored unencrypted), so it's shown/typed as plain text, and the
+ *    connected-state card shows the full number rather than a masked one
+ *    (the GET route returns it unmasked, matching the schema's own
+ *    "not a credential" stance).
+ */
 export function PaymentSettingsForm() {
   const qc = useQueryClient();
-  const { data: config, isLoading } = useGetMySellerPaymentConfig();
-  const createConfig = useCreateSellerPaymentConfig();
-  const deleteConfig = useDeleteMySellerPaymentConfig();
+  const { data: account, isLoading } = useGetMySellerPayoutAccount();
+  const createAccount = useCreateSellerPayoutAccount();
+  const deleteAccount = useDeleteMySellerPayoutAccount();
 
-  const [merchantAppKey, setMerchantAppKey] = useState("");
-  const [merchantAppSecret, setMerchantAppSecret] = useState("");
-  const [merchantUsername, setMerchantUsername] = useState("");
-  const [merchantPassword, setMerchantPassword] = useState("");
+  const [bkashNumber, setBkashNumber] = useState("");
+  const [accountHolderName, setAccountHolderName] = useState("");
 
   function invalidate() {
-    qc.invalidateQueries({ queryKey: getGetMySellerPaymentConfigQueryKey() });
+    qc.invalidateQueries({ queryKey: getGetMySellerPayoutAccountQueryKey() });
   }
 
   function handleSave() {
-    if (!merchantAppKey.trim() || !merchantAppSecret.trim() || !merchantUsername.trim() || !merchantPassword.trim()) {
-      toast.error("Fill in App Key, App Secret, Merchant Username, and Merchant Password");
+    if (!bkashNumber.trim()) {
+      toast.error("Enter your bKash number");
       return;
     }
 
-    createConfig.mutate(
+    createAccount.mutate(
       {
         data: {
-          provider: "bkash",
-          merchantAppKey: merchantAppKey.trim(),
-          merchantAppSecret: merchantAppSecret.trim(),
-          merchantUsername: merchantUsername.trim(),
-          merchantPassword: merchantPassword.trim(),
+          bkashNumber: bkashNumber.trim(),
+          accountHolderName: accountHolderName.trim() || undefined,
         },
       },
       {
         onSuccess: () => {
-          toast.success("bKash account saved — pending admin verification");
-          setMerchantAppKey(""); setMerchantAppSecret(""); setMerchantUsername(""); setMerchantPassword("");
+          toast.success("bKash number saved");
+          setBkashNumber("");
+          setAccountHolderName("");
           invalidate();
         },
-        onError: (err: any) => toast.error(err?.message ?? "Failed to save payment settings"),
+        onError: (err: any) => toast.error(err?.message ?? "Failed to save payout account"),
       },
     );
   }
 
   function handleDelete() {
-    if (!confirm("Disconnect your bKash account? Your listings will fall back to COD-only.")) return;
-    deleteConfig.mutate(undefined, {
-      onSuccess: () => { toast.success("bKash account disconnected"); invalidate(); },
-      onError: (err: any) => toast.error(err?.message ?? "Failed to disconnect"),
+    if (!confirm("Remove your bKash payout number? You won't be able to receive payouts until you add a new one.")) return;
+    deleteAccount.mutate(undefined, {
+      onSuccess: () => { toast.success("Payout number removed"); invalidate(); },
+      onError: (err: any) => toast.error(err?.message ?? "Failed to remove payout account"),
     });
   }
 
   if (isLoading) {
-    return (
-      <div className="space-y-4">
-        <div className="h-32 rounded-2xl bg-muted animate-pulse" />
-        <div className="h-64 rounded-2xl bg-muted animate-pulse" />
-      </div>
-    );
+    return <div className="h-40 rounded-2xl bg-muted animate-pulse" />;
   }
 
-  // Connected state
-  if (config) {
+  if (account) {
     return (
-      <div className="space-y-5 max-w-3xl">
-        <section className="rounded-2xl border border-border bg-card overflow-hidden">
-          <header className="px-5 py-4 border-b border-border/60">
-            <h3 className="text-sm font-semibold text-foreground">Payment Account</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">Your connected bKash Merchant account</p>
-          </header>
-          <div className="p-5">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="h-12 w-12 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0">
-                  <Wallet className="h-5 w-5 text-emerald-700" />
-                </div>
-                <div className="min-w-0">
-                  <p className="font-medium text-foreground capitalize flex items-center gap-2">
-                    {config.provider}
-                    {config.isVerified ? (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 ring-1 ring-emerald-200/60 bg-emerald-50 text-emerald-700">
-                        <CheckCircle2 className="h-3 w-3" /> Verified
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 ring-1 ring-amber-200/60 bg-amber-50 text-amber-700">
-                        <ShieldAlert className="h-3 w-3" /> Pending
-                      </span>
-                    )}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    App Key: <span className="font-mono">{config.merchantAppKeyMasked}</span> · Username: <span className="font-mono">{config.merchantUsernameMasked}</span>
-                  </p>
-                </div>
-              </div>
-              <Button
-                onClick={handleDelete}
-                disabled={deleteConfig.isPending}
-                variant="outline"
-                size="sm"
-                className="text-destructive hover:bg-rose-50 hover:border-rose-300 shrink-0"
-              >
-                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                Disconnect
-              </Button>
-            </div>
-
-            {config.isVerified ? (
-              <div className="mt-4 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
-                <ShieldCheck className="h-4 w-4 text-emerald-700 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-xs font-medium text-emerald-800">Verified — advance payment is live</p>
-                  <p className="text-xs text-emerald-700 mt-0.5">
-                    Your listings can offer advance / bKash payment options to buyers.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
-                <ShieldAlert className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-xs font-medium text-amber-800">Saved, pending verification</p>
-                  <p className="text-xs text-amber-700 mt-0.5">
-                    An admin reviews new payment accounts before advance/bKash payment unlocks. Your listings stay COD-only until then.
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
-    );
-  }
-
-  // Setup state
-  return (
-    <div className="space-y-5 max-w-3xl">
-      <section className="rounded-2xl border border-border bg-card overflow-hidden">
-        <header className="px-5 py-4 border-b border-border/60">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0">
-              <Wallet className="h-5 w-5 text-emerald-700" />
+      <div className="bg-card rounded-2xl border p-5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="h-10 w-10 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
+              <Wallet className="h-5 w-5 text-accent" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-foreground">Connect your bKash Merchant account</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">Required to offer advance or bKash payment on your listings.</p>
-            </div>
-          </div>
-        </header>
-
-        <div className="p-5 space-y-4">
-          <div className="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
-            <Info className="h-4 w-4 text-sky-700 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-xs font-medium text-sky-800">Why connect bKash?</p>
-              <p className="text-xs text-sky-700 mt-0.5">
-                By default your listings only accept Cash on Delivery. Connecting bKash lets buyers pay online — once an admin verifies the account, advance/bKash payment becomes available.
+              <p className="font-medium text-sm">{account.bkashNumber}</p>
+              <p className="text-xs text-muted-foreground">
+                {account.accountHolderName ? `Account holder: ${account.accountHolderName}` : "bKash payout number"}
               </p>
             </div>
           </div>
-
-          <p className="text-xs font-medium text-muted-foreground">Find these in your bKash Merchant Panel under API Credentials.</p>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <FieldRow label="App Key" required>
-              <Input value={merchantAppKey} onChange={(e) => setMerchantAppKey(e.target.value)} className="h-10 rounded-xl" />
-            </FieldRow>
-            <FieldRow label="App Secret" required>
-              <Input value={merchantAppSecret} onChange={(e) => setMerchantAppSecret(e.target.value)} type="password" className="h-10 rounded-xl" />
-            </FieldRow>
-            <FieldRow label="Merchant Username" required>
-              <Input value={merchantUsername} onChange={(e) => setMerchantUsername(e.target.value)} className="h-10 rounded-xl" />
-            </FieldRow>
-            <FieldRow label="Merchant Password" required>
-              <Input value={merchantPassword} onChange={(e) => setMerchantPassword(e.target.value)} type="password" className="h-10 rounded-xl" />
-            </FieldRow>
-          </div>
-
-          <div className="pt-2 flex items-center justify-between gap-3 flex-wrap">
-            <a
-              href="https://developer.bka.sh/"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline"
-            >
-              Open bKash developer docs
-              <ExternalLink className="h-3 w-3" />
-            </a>
-            <Button
-              onClick={handleSave}
-              disabled={createConfig.isPending}
-              className="rounded-xl"
-            >
-              {createConfig.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Wallet className="h-4 w-4 mr-1.5" />}
-              Connect account
-            </Button>
-          </div>
+          <button
+            onClick={handleDelete}
+            disabled={deleteAccount.isPending}
+            className="p-2 rounded-lg text-muted-foreground hover:text-destructive hover:bg-red-50 transition-colors"
+            title="Remove"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
         </div>
-      </section>
+        <p className="text-xs text-muted-foreground bg-muted rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
+          <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          Payouts are sent here automatically after courier delivery is confirmed.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-card rounded-2xl border p-5">
+      <div className="flex items-center gap-2.5 mb-4">
+        <div className="h-10 w-10 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
+          <Wallet className="h-5 w-5 text-accent" />
+        </div>
+        <div>
+          <p className="font-medium text-sm">Add your bKash number to receive payouts</p>
+          <p className="text-xs text-muted-foreground">Buyers pay Tree Friend directly — you get paid out here after delivery.</p>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <Label className="text-xs text-muted-foreground">bKash Number</Label>
+          <Input
+            value={bkashNumber}
+            onChange={(e) => setBkashNumber(e.target.value)}
+            placeholder="01712345678"
+            className="mt-1 h-9 rounded-lg text-sm"
+          />
+        </div>
+        <div>
+          <Label className="text-xs text-muted-foreground">Account Holder Name (optional)</Label>
+          <Input
+            value={accountHolderName}
+            onChange={(e) => setAccountHolderName(e.target.value)}
+            className="mt-1 h-9 rounded-lg text-sm"
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Use a bKash Personal or Agent number you check regularly — this is where your payouts arrive.
+        </p>
+
+        <Button onClick={handleSave} disabled={createAccount.isPending} className="w-full rounded-full gap-1.5 mt-2">
+          {createAccount.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
+          Save
+        </Button>
+      </div>
     </div>
   );
 }

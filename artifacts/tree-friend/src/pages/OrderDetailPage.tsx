@@ -1,15 +1,16 @@
 import { useState, useEffect } from "react";
-import { useParams } from "wouter";
+import { useParams, useSearch } from "wouter";
 import { useAuth } from "@clerk/react";
-import { useGetOrder, useListOrders, getListOrdersQueryKey } from "@workspace/api-client-react";
+import { useGetOrder, useListOrders, getListOrdersQueryKey, createBkashPayment, createBkashPaymentGuest } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, Circle, Package, Truck, Home, ChevronLeft, XCircle, RotateCcw, Loader2 } from "lucide-react";
+import { CheckCircle2, Circle, Package, Truck, Home, ChevronLeft, XCircle, RotateCcw, Loader2, AlertTriangle } from "lucide-react";
 import { Link } from "wouter";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
+import { BKASH_ICON } from "@/lib/preorderIcons";
 
 const STEPS = ["pending", "confirmed", "processing", "shipped", "delivered"];
 
@@ -69,6 +70,19 @@ export function OrderDetailPage() {
   const [returnSuccess, setReturnSuccess] = useState(false);
   const [existingReturn, setExistingReturn] = useState<any>(null);
 
+  // Part 2 of 4 (bKash Tokenized Checkout, see PART2_HANDOFF.md): after
+  // bKash's hosted page finishes, our own /api/bkash/callback redirects
+  // the buyer's browser HERE with a ?bkash=... query param describing the
+  // outcome ("success" | "cancel" | "failure" | "not_completed" |
+  // "execute_failed" | etc. -- see that route's own doc comment for the
+  // full set of values it can send). Read once via wouter's useSearch
+  // (this is a real hook, not a one-off URLSearchParams read, so it stays
+  // in sync if the query string changes without a full page reload).
+  const search = useSearch();
+  const bkashParam = new URLSearchParams(search).get("bkash");
+  const [bkashRetryLoading, setBkashRetryLoading] = useState(false);
+  const [bkashRetryError, setBkashRetryError] = useState("");
+
   useEffect(() => {
     if (!id || isGuest) return;
     getToken().then(token =>
@@ -95,6 +109,32 @@ export function OrderDetailPage() {
 
   const currentStep = STEPS.indexOf(order.orderStatus);
   const addr = order.shippingAddress as { fullName?: string; street?: string; line1?: string; city?: string; district?: string; phone?: string } | null;
+
+  /**
+   * "Pay with bKash" / "Retry payment" action -- reuses the exact same
+   * create-payment endpoints CheckoutPage.tsx calls right after order
+   * creation. Shown whenever an order is paymentMethod "bkash" and still
+   * sitting at paymentStatus "payment_pending" (buyer never finished
+   * paying, cancelled on bKash's page, or this is one of several bkash
+   * orders from a multi-seller checkout that CheckoutPage.tsx only paid
+   * the FIRST of -- see that file's own doc comment on
+   * payFirstBkashOrderOrGoToOrder). Does a full browser redirect, same as
+   * checkout's own flow, for the same reason (bKash's hosted page isn't
+   * designed for a popup round-trip).
+   */
+  async function handlePayWithBkash() {
+    setBkashRetryLoading(true);
+    setBkashRetryError("");
+    try {
+      const session = isGuest
+        ? await createBkashPaymentGuest({ trackingId: order.trackingId })
+        : await createBkashPayment({ orderId: order.id });
+      window.location.href = session.bkashURL;
+    } catch {
+      setBkashRetryLoading(false);
+      setBkashRetryError("Couldn't start bKash payment right now. Please try again in a moment.");
+    }
+  }
 
   async function handleCancelOrder() {
     if (!cancelReason.trim() || cancelReason.trim().length < 3) {
@@ -185,6 +225,45 @@ export function OrderDetailPage() {
           </a>
         </div>
 
+        {/* bKash payment outcome banner (Part 2 of 4) -- reflects the
+            ?bkash=... query param routes/bkashPayment.ts's callback
+            redirected here with. Purely informational: order.paymentStatus
+            itself (read fresh from the server above, not from this query
+            param) is always the source of truth for whether payment
+            actually succeeded -- this banner just explains WHY the buyer
+            landed back here, since bKash's own hosted page is where the
+            actual payment happened, off our site. */}
+        {bkashParam === "success" && order.paymentStatus === "paid" && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-5">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="h-5 w-5 text-green-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-green-700 text-sm">Payment received</p>
+                <p className="text-sm text-green-600 mt-1">Your bKash payment was successful. Thank you!</p>
+              </div>
+            </div>
+          </div>
+        )}
+        {bkashParam && bkashParam !== "success" && order.paymentStatus === "payment_pending" && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-5">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-amber-700 text-sm">
+                  {bkashParam === "cancel" || bkashParam === "cancelled"
+                    ? "Payment cancelled"
+                    : "Payment wasn't completed"}
+                </p>
+                <p className="text-sm text-amber-600 mt-1">
+                  {bkashParam === "cancel" || bkashParam === "cancelled"
+                    ? "You cancelled the bKash payment. Your order is saved -- pay whenever you're ready."
+                    : "Something interrupted your bKash payment. Your order is saved -- please try again below."}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Cancellation notice */}
         {order.orderStatus === "cancelled" && (
           <div className="bg-red-50 border border-red-200 rounded-xl p-5">
@@ -267,8 +346,45 @@ export function OrderDetailPage() {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Status</span>
-                <span className="capitalize text-green-600">{order.paymentStatus}</span>
+                <span
+                  className={`capitalize ${
+                    order.paymentStatus === "paid"
+                      ? "text-green-600"
+                      : order.paymentStatus === "failed" || order.paymentStatus === "refunded"
+                        ? "text-red-600"
+                        : "text-amber-600"
+                  }`}
+                >
+                  {order.paymentStatus.replace(/_/g, " ")}
+                </span>
               </div>
+              {/* Part 2 of 4: "Pay with bKash" retry action -- shown for
+                  any bkash order still awaiting a completed payment,
+                  whether the buyer never finished checkout's own redirect,
+                  cancelled on bKash's page, or this is one of several
+                  bkash orders from a multi-seller cart that checkout only
+                  paid the first of (see CheckoutPage.tsx's doc comment on
+                  payFirstBkashOrderOrGoToOrder). */}
+              {order.paymentMethod === "bkash" && order.paymentStatus === "payment_pending" && (
+                <div className="pt-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="w-full rounded-full"
+                    onClick={handlePayWithBkash}
+                    disabled={bkashRetryLoading}
+                  >
+                    {bkashRetryLoading ? (
+                      <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Redirecting...</>
+                    ) : (
+                      <><img src={BKASH_ICON} className="h-4 w-4 mr-1.5" /> Pay with bKash</>
+                    )}
+                  </Button>
+                  {bkashRetryError && (
+                    <p className="text-xs text-destructive mt-1.5">{bkashRetryError}</p>
+                  )}
+                </div>
+              )}
               <div className="border-t pt-2 mt-1 space-y-1.5">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Subtotal</span>

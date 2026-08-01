@@ -8,7 +8,7 @@ import {
   sellerListingsTable,
   sellerListingVariantsTable,
   sellersTable,
-  sellerPaymentConfigsTable,
+  platformPaymentConfigTable,
   couponsTable,
   usersTable,
   addressesTable,
@@ -89,10 +89,15 @@ router.post("/orders/guest", async (req: any, res) => {
       res.status(400).json({ error: "Incomplete shipping address" });
       return;
     }
-    if (paymentMethod === "bkash" && (!senderNumber || senderNumber.trim() === "")) {
-      res.status(400).json({ error: "Please enter your bKash/Nagad sending number" });
-      return;
-    }
+    // Part 2: guest checkout no longer collects a buyer-typed sending
+    // number for "bkash" -- the buyer is redirected to bKash's hosted
+    // payment page instead (routes/bkashPayment.ts), same as the
+    // authenticated /orders route. Guest orders are always sellerId=null
+    // (admin-direct only, see doc comment below), which is exactly the
+    // group that pays into the platform's single bKash merchant account,
+    // so there's no per-seller config to check here -- only whether the
+    // platform config itself exists and is verified, checked just before
+    // insert below.
     if (!Array.isArray(items) || items.length === 0) {
       res.status(400).json({ error: "Cart is empty" });
       return;
@@ -163,9 +168,27 @@ router.post("/orders/guest", async (req: any, res) => {
       }
     }
 
+    // Part 2: same platform-config gate as the authenticated route --
+    // "bkash" is refused up front if the platform's merchant account isn't
+    // configured/verified, rather than creating a payment_pending order
+    // that can never actually be paid.
+    if (paymentMethod === "bkash") {
+      const [config] = await db
+        .select({ isVerified: platformPaymentConfigTable.isVerified })
+        .from(platformPaymentConfigTable)
+        .limit(1);
+      if (config?.isVerified !== true) {
+        res.status(400).json({ error: "bKash payment isn't available right now. Please choose Cash on Delivery." });
+        return;
+      }
+    }
+
     const totalAmount = Math.max(0, subtotal - discountAmount + deliveryFee);
     const trackingId = "EE" + crypto.randomBytes(4).toString("hex").toUpperCase();
-    const paymentStatus = paymentMethod === "cod" ? "pending" : "pending_verification";
+    // See the authenticated /orders route's matching doc comment for why
+    // "bkash" now maps to "payment_pending" instead of the old
+    // "pending_verification".
+    const paymentStatus = paymentMethod === "cod" ? "pending" : "payment_pending";
     const guestUserId = "guest_" + crypto.randomBytes(8).toString("hex");
 
     const [order] = await db.insert(ordersTable).values({
@@ -177,8 +200,8 @@ router.post("/orders/guest", async (req: any, res) => {
       paymentMethod,
       paymentStatus,
       orderStatus: "pending",
-      transactionId: transactionId?.trim() ?? null,
-      senderNumber: senderNumber ?? null,
+      transactionId: paymentMethod === "bkash" ? null : (transactionId?.trim() ?? null),
+      senderNumber: paymentMethod === "bkash" ? null : (senderNumber ?? null),
       shippingAddress,
       couponCode: couponCode ?? null,
       discountAmount: String(discountAmount),
@@ -226,24 +249,36 @@ router.post("/orders/guest", async (req: any, res) => {
  * back to the top-level senderNumber, so single-seller/admin-direct
  * callers sending only `senderNumber` are unaffected).
  *
- * Payment-method enforcement (Part 5, plan doc §7): a marketplace seller
- * group (sellerId != null) resolving to "bkash" requires that seller to
- * have a VERIFIED seller_payment_configs row -- checked here at checkout
- * time, not just relied upon from sellerListingsTable.paymentMethod at
- * listing-write time. Listing-level enforcement (routes/sellerListings.ts)
- * stops a seller from ever SETTING a listing to "advance"/"both" without a
- * verified config, but it can't stop a listing from drifting out of sync
- * if the seller's config is deleted/unverified after the listing was
- * already set that way (routes/sellerPaymentConfigs.ts's DELETE route
- * doesn't cascade back to touch existing listings -- see that route's doc
- * comment). Re-checking here closes that gap at the point where it would
- * actually cost a buyer money: the moment a bKash payment request would be
- * generated against a merchant account that may no longer be
- * live/verified. The admin-direct group (sellerId === null) is exempt --
- * "bkash" there is the platform's own long-standing bKash flow, not a
- * per-seller merchant account, so it isn't gated by seller_payment_configs
- * at all.
+ * Payment-method enforcement (Part 2 of 4, see PART2_HANDOFF.md -- REPLACES
+ * the old Part 5 per-seller check this comment used to describe): "bkash"
+ * for ANY group -- admin-direct (sellerId === null) or marketplace
+ * (sellerId != null) -- now requires the PLATFORM's single
+ * platform_payment_config row to exist AND be verified, not a per-seller
+ * seller_payment_configs row. Under the new admin-custodial model every
+ * buyer bKash payment settles into the platform's one merchant account
+ * (Part 1's PART1_HANDOFF.md); a marketplace seller's own bKash
+ * merchant-account status is no longer relevant to whether their listing
+ * can be paid via bKash at checkout -- see cart.ts's matching change to
+ * hasVerifiedPaymentConfig, which this route's own gate must stay
+ * consistent with (both now read platformPaymentConfigTable.isVerified,
+ * not sellerPaymentConfigsTable). The OLD sellerPaymentConfigsTable /
+ * sellerPaymentConfigs.ts route are left untouched per this part's
+ * explicit scope (still used by sellerListings.ts to gate what a seller
+ * may SET their listing's paymentMethod to -- a separate, still-live
+ * concern this part doesn't change), but checkout-time eligibility no
+ * longer reads that table.
+ *
+ * senderNumber/sellerSenderNumbers are NO LONGER required or read for the
+ * "bkash" method (Part 2): the buyer no longer types their own sending
+ * number and transaction id at checkout -- they're redirected to bKash's
+ * own hosted payment page (routes/bkashPayment.ts's
+ * POST /bkash/create-payment), which collects the sending number/OTP/PIN
+ * itself. senderNumber fields are left in the schema/request body for
+ * backward compatibility (COD-only carts and any external caller that
+ * still sends them are unaffected) but are no longer validated as
+ * required when method === "bkash".
  */
+
 router.post("/orders", requireAuth, async (req: any, res) => {
   try {
     const {
@@ -405,10 +440,29 @@ router.post("/orders", requireAuth, async (req: any, res) => {
       return;
     }
 
-    // Validate/resolve payment method (and, Part 5, sender number) per
-    // group up front, before writing any order rows, so a bad payment
-    // method for one seller doesn't leave earlier groups' orders already
-    // committed.
+    // Validate/resolve payment method per group up front, before writing
+    // any order rows, so a bad payment method for one seller doesn't leave
+    // earlier groups' orders already committed.
+    //
+    // Part 2 change: the platform-config verified-check below used to be a
+    // per-seller lookup (sellerPaymentConfigsTable, keyed by g.sellerId).
+    // It's now a single check against platformPaymentConfigTable, done
+    // ONCE before the loop (not per-group) since every group either can or
+    // can't use "bkash" for the exact same reason now -- there's only one
+    // merchant account, not one per seller. senderNumber/
+    // sellerSenderNumbers are no longer required for "bkash" -- see doc
+    // comment above this route.
+    let platformBkashAvailable: boolean | null = null; // computed lazily, only if some group actually resolves to "bkash"
+    async function isPlatformBkashAvailable(): Promise<boolean> {
+      if (platformBkashAvailable !== null) return platformBkashAvailable;
+      const [config] = await db
+        .select({ isVerified: platformPaymentConfigTable.isVerified })
+        .from(platformPaymentConfigTable)
+        .limit(1);
+      platformBkashAvailable = config?.isVerified === true;
+      return platformBkashAvailable;
+    }
+
     const resolvedPaymentMethods = new Map<number | null, string>();
     const resolvedSenderNumbers = new Map<number | null, string | null>();
     for (const g of groups) {
@@ -418,32 +472,13 @@ router.post("/orders", requireAuth, async (req: any, res) => {
         res.status(400).json({ error: "Payment method is required for every seller in your cart" });
         return;
       }
-      const groupSenderNumber: string | undefined = sellerSenderNumbers?.[key] ?? senderNumber;
-      if (method === "bkash" && (!groupSenderNumber || groupSenderNumber.trim() === "")) {
+      if (method === "bkash" && !(await isPlatformBkashAvailable())) {
         res.status(400).json({
-          error: g.sellerId === null
-            ? "Please enter your bKash/Nagad sending number"
-            : "Please enter your bKash sending number for every seller you're paying via bKash",
+          error: "bKash payment isn't available right now. Please choose Cash on Delivery.",
         });
         return;
       }
-      // Part 5 enforcement: a marketplace seller group paying via bkash
-      // needs a verified seller_payment_configs row. See doc comment above
-      // this route for why this re-checks rather than trusting
-      // sellerListingsTable.paymentMethod alone.
-      if (method === "bkash" && g.sellerId !== null) {
-        const [config] = await db
-          .select({ isVerified: sellerPaymentConfigsTable.isVerified })
-          .from(sellerPaymentConfigsTable)
-          .where(eq(sellerPaymentConfigsTable.sellerId, g.sellerId))
-          .limit(1);
-        if (config?.isVerified !== true) {
-          res.status(400).json({
-            error: "This seller doesn't currently accept bKash payment. Please choose Cash on Delivery for their items.",
-          });
-          return;
-        }
-      }
+      const groupSenderNumber: string | undefined = sellerSenderNumbers?.[key] ?? senderNumber;
       resolvedPaymentMethods.set(g.sellerId, method);
       resolvedSenderNumbers.set(g.sellerId, groupSenderNumber?.trim() || null);
     }
@@ -456,7 +491,23 @@ router.post("/orders", requireAuth, async (req: any, res) => {
       const groupSenderNumber = resolvedSenderNumbers.get(g.sellerId) ?? null;
       const groupDeliveryFee = g.lines.reduce((s, l) => s + l.deliveryCharge, 0);
       const groupTotal = Math.max(0, g.subtotal - g.discountAmount + groupDeliveryFee);
-      const paymentStatus = method === "cod" ? "pending" : "pending_verification";
+      // Part 2: "bkash" now creates the order BEFORE any bKash API call has
+      // happened at all -- see PART2_HANDOFF.md's order-sequencing
+      // decision. "payment_pending" (new value, distinct from the old
+      // "pending_verification") specifically means "a real bKash Create
+      // Payment/Execute Payment cycle for this order hasn't completed yet"
+      // -- routes/bkashPayment.ts's callback handler is the only place
+      // that ever moves an order OUT of this status (to "paid" on success;
+      // left as "payment_pending" -- not "failed" -- on a bKash-side
+      // cancel/failure, so the buyer can retry payment against the SAME
+      // order via a fresh Create Payment call rather than the order being
+      // silently dead-ended; see that route's doc comment for the full
+      // reasoning). "pending_verification" is intentionally left alone and
+      // untouched by this part -- it remains preOrders.ts's and the old
+      // manual-SMS-matching flow's (smsWebhook.ts) status, not reused here,
+      // so a stale reader of "pending_verification" doesn't silently pick
+      // up unrelated bKash-in-progress orders.
+      const paymentStatus = method === "cod" ? "pending" : "payment_pending";
 
       const [order] = await db
         .insert(ordersTable)
@@ -469,8 +520,8 @@ router.post("/orders", requireAuth, async (req: any, res) => {
           paymentMethod: method,
           paymentStatus,
           orderStatus: "pending",
-          transactionId: transactionId?.trim() ?? null,
-          senderNumber: groupSenderNumber,
+          transactionId: method === "bkash" ? null : (transactionId?.trim() ?? null),
+          senderNumber: method === "bkash" ? null : groupSenderNumber,
           shippingAddress,
           couponCode: g.discountAmount > 0 && couponCode ? couponCode : null,
           discountAmount: String(g.discountAmount),

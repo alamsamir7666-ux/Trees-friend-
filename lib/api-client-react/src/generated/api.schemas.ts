@@ -429,6 +429,101 @@ export interface CreateSellerPaymentConfigBody {
   merchantPassword: string;
 }
 
+export type PlatformPaymentConfigProvider = typeof PlatformPaymentConfigProvider[keyof typeof PlatformPaymentConfigProvider];
+
+
+export const PlatformPaymentConfigProvider = {
+  bkash: 'bkash',
+} as const;
+
+/**
+ * Masked bKash merchant credentials for the PLATFORM's own single merchant account (new admin-custodial payments design, Part 1 of 4). Never contains decrypted credentials, only a last-4-style mask. isVerified is never set true by the create/replace route itself (no live credential check exists yet).
+ */
+export interface PlatformPaymentConfig {
+  id: number;
+  provider: PlatformPaymentConfigProvider;
+  merchantAppKeyMasked: string;
+  merchantAppSecretMasked: string;
+  merchantUsernameMasked: string;
+  merchantPasswordMasked: string;
+  isVerified: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CreatePlatformPaymentConfigBodyProvider = typeof CreatePlatformPaymentConfigBodyProvider[keyof typeof CreatePlatformPaymentConfigBodyProvider];
+
+
+export const CreatePlatformPaymentConfigBodyProvider = {
+  bkash: 'bkash',
+} as const;
+
+/**
+ * provider defaults to "bkash" if omitted. All four merchant credential fields are required, same shape as CreateSellerPaymentConfigBody — this is the same bKash Merchant credential set, held by the admin account instead of a per-seller account.
+ */
+export interface CreatePlatformPaymentConfigBody {
+  provider?: CreatePlatformPaymentConfigBodyProvider;
+  merchantAppKey: string;
+  merchantAppSecret: string;
+  merchantUsername: string;
+  merchantPassword: string;
+}
+
+/**
+ * Authenticated path — orderId must belong to the calling user, be paymentMethod "bkash", and currently be paymentStatus "payment_pending" (i.e. not already paid/failed/refunded).
+ */
+export interface CreateBkashPaymentBody {
+  orderId: number;
+}
+
+/**
+ * Guest path — trackingId scopes to a guest order (userId starting with "guest_") only; the tracking id itself is the bearer secret, same trust model as GET /orders/track/{trackingId}.
+ */
+export interface CreateBkashPaymentGuestBody {
+  trackingId: string;
+}
+
+/**
+ * Redirect the buyer's browser (or open a popup/webview) to bkashURL to complete authorization on bKash's own hosted page. bKash will redirect back to our server's own /bkash/callback afterward, which then redirects the buyer on to the order detail page with a ?bkash=... status flag.
+ */
+export interface BkashPaymentSession {
+  paymentID: string;
+  bkashURL: string;
+  orderId: number;
+  trackingId: string;
+}
+
+/**
+ * Raw-ish status straight from bKash's own Query Payment API, for reconciliation/debugging only.
+ */
+export interface BkashQueryPaymentResult {
+  paymentID: string;
+  /** @nullable */
+  trxID?: string | null;
+  transactionStatus: string;
+  amount?: string;
+}
+
+/**
+ * A seller's plain bKash payout NUMBER (new admin-custodial payments design, Part 1 of 4) — not a secret credential, so unlike SellerPaymentConfig this is returned unmasked.
+ */
+export interface SellerPayoutAccount {
+  id: number;
+  sellerId: number;
+  bkashNumber: string;
+  accountHolderName?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * bkashNumber must look like a plausible Bangladeshi mobile number (simple format check, not a live bKash lookup). accountHolderName is optional, for admin verification-by-eye only.
+ */
+export interface CreateSellerPayoutAccountBody {
+  bkashNumber: string;
+  accountHolderName?: string;
+}
+
 export type OrderShipmentCourierProvider = typeof OrderShipmentCourierProvider[keyof typeof OrderShipmentCourierProvider];
 
 

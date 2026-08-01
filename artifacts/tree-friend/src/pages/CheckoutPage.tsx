@@ -2,7 +2,7 @@ import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useLoyalty } from "@/hooks/useLoyalty";
-import { useGetCart, useCreateOrder, useValidateCoupon, useListAddresses, getGetCartQueryKey, getListAddressesQueryKey } from "@workspace/api-client-react";
+import { useGetCart, useCreateOrder, useValidateCoupon, useListAddresses, getGetCartQueryKey, getListAddressesQueryKey, createBkashPayment, createBkashPaymentGuest } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { BKASH_ICON } from "@/lib/preorderIcons";
@@ -62,21 +62,20 @@ export function CheckoutPage() {
   const [discount, setDiscount] = useState(0);
   const [couponApplied, setCouponApplied] = useState(false);
   const [couponError, setCouponError] = useState("");
-  const [bkashNumber, setBkashNumber] = useState("");
-  // Per-seller-group bKash sending numbers (Part 5 fix -- previously
-  // `bkashNumber` alone was reused as senderNumber for every seller group
-  // that resolved to bkash, which is wrong once different sellers' bKash
-  // accounts are actually in play; see routes/orders.ts's doc comment on
-  // sellerSenderNumbers). Keyed the same way as sellerPaymentMethod
-  // ("null" for the admin-direct group). `bkashNumber` remains the
-  // fallback/default for single-group carts, same relationship
-  // paymentMethod has to sellerPaymentMethod.
-  const [sellerSenderNumber, setSellerSenderNumber] = useState<Record<string, string>>({});
   const [giftWrap, setGiftWrap] = useState(false);
   const [giftMessage, setGiftMessage] = useState("");
   const [usePoints, setUsePoints] = useState(false);
   const { data: loyaltyData } = useLoyalty();
-  const [transactionId, setTransactionId] = useState("");
+  // Part 2 of 4 (bKash Tokenized Checkout, see PART2_HANDOFF.md): the
+  // buyer no longer types a sending number or transaction id here at all
+  // -- bKash's own hosted payment page collects the sending
+  // number/OTP/PIN, and the real transaction id comes back from bKash's
+  // Execute Payment call (routes/bkashPayment.ts's callback handler), not
+  // from buyer input. The old bkashNumber/sellerSenderNumber/transactionId
+  // state and their senderNumberFor/setSenderNumberFor/needsSenderNumber/
+  // missingSenderNumberGroups helpers are REMOVED entirely, not just
+  // unused -- keeping them around would invite a stale read somewhere.
+  const [redirectingToBkash, setRedirectingToBkash] = useState(false);
 
   // Normalize guest (localStorage) and logged-in (server) cart items into one
   // shape so the summary below doesn't need to branch on isGuest. Price
@@ -147,25 +146,6 @@ export function CheckoutPage() {
   function setMethodFor(sellerKey: string, method: PaymentMethod) {
     setSellerPaymentMethod((prev) => ({ ...prev, [sellerKey]: method }));
   }
-  function senderNumberFor(sellerKey: string): string {
-    return sellerSenderNumber[sellerKey] ?? bkashNumber;
-  }
-  function setSenderNumberFor(sellerKey: string, value: string) {
-    setSellerSenderNumber((prev) => ({ ...prev, [sellerKey]: value }));
-  }
-  // Whether any resolved payment method across all groups needs a sending
-  // number, and (Part 5) whether every group that needs one actually has
-  // one filled in -- each group now has its own number, so a filled-in
-  // number for one seller no longer silently satisfies another seller's
-  // requirement.
-  const needsSenderNumber = sellerGroups.some((g) => {
-    const m = methodFor(g.sellerId == null ? "null" : String(g.sellerId));
-    return m === "bkash";
-  });
-  const missingSenderNumberGroups = sellerGroups.filter((g) => {
-    const key = g.sellerId == null ? "null" : String(g.sellerId);
-    return methodFor(key) === "bkash" && !senderNumberFor(key).trim();
-  });
 
   function applyAddress(addr: any) {
     setAddress({
@@ -198,6 +178,78 @@ export function CheckoutPage() {
 
   const [submitError, setSubmitError] = useState("");
 
+  /**
+   * After AUTHENTICATED checkout creates order(s), kicks off bKash payment
+   * for the FIRST order that resolved to "bkash" and does a full browser
+   * redirect to bKash's hosted page (see PART2_HANDOFF.md's
+   * order-sequencing section for the full reasoning). A full redirect --
+   * not a popup -- because bKash's own flow is itself a full-page hosted
+   * checkout that redirects back to OUR /api/bkash/callback afterward; a
+   * popup would need postMessage/polling plumbing bKash's flow was never
+   * designed to support cleanly, and this codebase has no existing
+   * popup-based payment pattern to extend.
+   *
+   * MULTI-ORDER CARTS: bKash's Create Payment takes exactly one
+   * amount/invoice at a time -- there's no "pay N orders in one session."
+   * If MORE than one resulting order is "bkash", only the first is paid
+   * here; the rest stay at paymentStatus "payment_pending" and the buyer
+   * pays each remaining one from the order detail page afterward (a "Pay
+   * with bKash" action there calls the exact same create-payment
+   * endpoint -- see OrderDetailPage.tsx). This is a real, visible UX cost
+   * of bKash having no multi-invoice primitive, not hidden from the
+   * buyer: sessionStorage's existing "last_checkout_order_ids" list
+   * already lets the order detail page surface "N more orders from this
+   * checkout still need payment."
+   *
+   * cod-only orders need no bKash call at all and are just navigated to
+   * directly.
+   */
+  async function payFirstBkashOrderOrGoToOrder(orders: Array<{ id: number; paymentMethod: string }>) {
+    const firstBkash = orders.find((o) => o.paymentMethod === "bkash");
+    if (!firstBkash) {
+      setLocation(`/orders/${orders[0].id}`);
+      return;
+    }
+    setRedirectingToBkash(true);
+    try {
+      const session = await createBkashPayment({ orderId: firstBkash.id });
+      window.location.href = session.bkashURL;
+      // No further navigation here -- the browser is leaving this page
+      // entirely for bKash's hosted checkout.
+    } catch {
+      setRedirectingToBkash(false);
+      setSubmitError(
+        "Your order was placed, but we couldn't start bKash payment just now. You can retry payment from your order page.",
+      );
+      setLocation(`/orders/${firstBkash.id}`);
+    }
+  }
+
+  /**
+   * GUEST equivalent of the helper above -- guest checkout always
+   * produces exactly one order (routes/orders.ts's POST /orders/guest has
+   * no multi-seller split; guest orders are admin-direct only), so there's
+   * no "first of several" case to handle here, just "was this one order
+   * bkash or cod."
+   */
+  async function payGuestBkashOrderOrGoToOrder(trackingId: string, method: PaymentMethod) {
+    if (method !== "bkash") {
+      setLocation(`/orders/${trackingId}`);
+      return;
+    }
+    setRedirectingToBkash(true);
+    try {
+      const session = await createBkashPaymentGuest({ trackingId });
+      window.location.href = session.bkashURL;
+    } catch {
+      setRedirectingToBkash(false);
+      setSubmitError(
+        "Your order was placed, but we couldn't start bKash payment just now. You can retry payment from your order page.",
+      );
+      setLocation(`/orders/${trackingId}`);
+    }
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitError("");
@@ -205,18 +257,9 @@ export function CheckoutPage() {
       setSubmitError("Please fill in all required address fields.");
       return;
     }
-    if (needsSenderNumber && !isMultiSeller && !bkashNumber.trim()) {
-      setSubmitError("Please enter your sending number.");
-      return;
-    }
-    if (isMultiSeller && missingSenderNumberGroups.length > 0) {
-      setSubmitError(
-        missingSenderNumberGroups.length === sellerGroups.length
-          ? "Please enter a bKash sending number."
-          : `Please enter a bKash sending number for: ${missingSenderNumberGroups.map((g) => g.sellerName ?? "Tree Friend").join(", ")}.`,
-      );
-      return;
-    }
+    // Part 2 of 4: no more sending-number validation here -- bKash's own
+    // hosted page collects that. See doc comment above the (now removed)
+    // bkashNumber/sellerSenderNumber state for what used to live here.
     const shippingAddress = {
       fullName: address.fullName,
       phone: address.phone,
@@ -233,8 +276,6 @@ export function CheckoutPage() {
         body: JSON.stringify({
           shippingAddress,
           paymentMethod,
-          transactionId: transactionId || null,
-          senderNumber: bkashNumber || null,
           couponCode: couponApplied ? couponCode : null,
           giftWrap,
           giftMessage: giftWrap ? giftMessage : null,
@@ -265,7 +306,7 @@ export function CheckoutPage() {
             };
             localStorage.setItem(key, JSON.stringify([summary, ...existing.filter((o: any) => (o.trackingId ?? o) !== data.trackingId)]));
           } catch {}
-          setLocation(`/orders/${data.trackingId}`);
+          await payGuestBkashOrderOrGoToOrder(data.trackingId, paymentMethod);
         })
         .catch(() => setSubmitError("Failed to place order. Please try again."));
       return;
@@ -281,14 +322,6 @@ export function CheckoutPage() {
               return [key, methodFor(key)];
             }))
           : undefined,
-        transactionId: transactionId || null,
-        senderNumber: bkashNumber || null,
-        sellerSenderNumbers: isMultiSeller
-          ? Object.fromEntries(sellerGroups.map((g) => {
-              const key = g.sellerId == null ? "null" : String(g.sellerId);
-              return [key, senderNumberFor(key) || null];
-            }))
-          : undefined,
         couponCode: couponApplied ? couponCode : null,
         loyaltyPointsToRedeem: usePoints && maxPointsDiscount > 0 ? Math.ceil(maxPointsDiscount / 1) : 0,
         giftWrap,
@@ -296,7 +329,8 @@ export function CheckoutPage() {
       },
     }, {
       // Always an array now (routes/orders.ts): a multi-seller cart splits
-      // into multiple orders. Redirect to the first one; the order
+      // into multiple orders. Redirect to the first one (or, Part 2, kick
+      // off bKash payment for the first bkash-paying one); the order
       // confirmation/detail page links between sibling orders from the
       // same checkout if there's more than one (see OrderDetailPage).
       onSuccess: (orders) => {
@@ -306,7 +340,7 @@ export function CheckoutPage() {
             sessionStorage.setItem("last_checkout_order_ids", JSON.stringify(orders.map((o) => o.id)));
           } catch {}
         }
-        setLocation(`/orders/${orders[0].id}`);
+        payFirstBkashOrderOrGoToOrder(orders);
       },
     });
   }
@@ -491,7 +525,6 @@ export function CheckoutPage() {
                       ? (["bkash", "cod"] as PaymentMethod[]).filter((m) => allowedSets.every((set) => set.includes(m)))
                       : ["bkash", "cod"];
                     const current = methodFor(key);
-                    const needsNumber = current === "bkash";
 
                     return (
                       <div key={key} className="bg-card border rounded-xl p-6">
@@ -530,16 +563,10 @@ export function CheckoutPage() {
                             );
                           })}
                         </div>
-                        {needsNumber && (
-                          <div className="mt-3">
-                            <Label className="text-xs">bKash Sending Number</Label>
-                            <Input
-                              className="mt-1.5"
-                              value={senderNumberFor(key)}
-                              onChange={(e) => setSenderNumberFor(key, e.target.value)}
-                              placeholder="Number you'll send payment from"
-                            />
-                          </div>
+                        {current === "bkash" && (
+                          <p className="mt-3 text-xs text-muted-foreground">
+                            You'll be redirected to bKash to complete this payment securely after placing your order.
+                          </p>
                         )}
                       </div>
                     );
@@ -567,17 +594,12 @@ export function CheckoutPage() {
                   </div>
 
                   {paymentMethod === "bkash" && (
-                    <div className="bg-muted/30 rounded-lg p-4 space-y-3 text-sm">
-                      <p className="font-medium">bKash Payment Instructions</p>
+                    <div className="bg-muted/30 rounded-lg p-4 space-y-1.5 text-sm">
+                      <p className="font-medium">Pay with bKash</p>
                       <p className="text-muted-foreground">
-                        1. Send Tk{total.toLocaleString()} to our bKash number: <strong>01636575741</strong><br />
-                        2. Use "Send Money" option<br />
-                        3. Your order will be confirmed automatically after payment
+                        After you place your order, you'll be redirected to bKash's secure payment page to
+                        complete your Tk{total.toLocaleString()} payment.
                       </p>
-                      <div>
-                        <Label>bKash Number</Label>
-                        <Input className="mt-1.5" value={bkashNumber} onChange={e => setBkashNumber(e.target.value)} placeholder="Your sending number" />
-                      </div>
                     </div>
                   )}
                 </div>
@@ -676,9 +698,15 @@ export function CheckoutPage() {
                   type="submit"
                   className="w-full rounded-full"
                   size="lg"
-                  disabled={createOrder.isPending}
+                  disabled={createOrder.isPending || redirectingToBkash}
                 >
-                  {createOrder.isPending ? "Placing order..." : isMultiSeller ? `Place ${sellerGroups.length} Orders` : "Place Order"}
+                  {redirectingToBkash
+                    ? "Redirecting to bKash..."
+                    : createOrder.isPending
+                      ? "Placing order..."
+                      : isMultiSeller
+                        ? `Place ${sellerGroups.length} Orders`
+                        : "Place Order"}
                 </Button>
               </div>
             </div>
