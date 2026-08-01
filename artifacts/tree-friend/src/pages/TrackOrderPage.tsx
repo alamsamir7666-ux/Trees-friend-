@@ -93,8 +93,8 @@ export function TrackOrderPage() {
                         {i < STEPS.length - 1 && (
                           <div className={`absolute top-5 left-1/2 w-full h-0.5 ${done ? "bg-accent" : "bg-border"}`} />
                         )}
-                        <div className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors ${done ? "bg-accent border-accent" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}>
-                          {done ? <CheckCircle2 className="h-5 w-5 text-white" /> : <Icon className="h-5 w-5" />}
+                        <div className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors ${done ? "bg-accent border-accent text-accent-foreground" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}>
+                          {done ? <CheckCircle2 className="h-5 w-5 text-accent-foreground" /> : <Icon className="h-5 w-5" />}
                         </div>
                         <p className={`text-xs mt-2 capitalize text-center ${active ? "font-medium" : "text-muted-foreground"}`}>{step}</p>
                       </div>
@@ -102,7 +102,7 @@ export function TrackOrderPage() {
                   })}
                 </div>
               ) : (
-                <div className="bg-red-50 text-red-600 rounded-lg p-3 text-sm text-center">
+                <div className="bg-destructive/10 text-destructive rounded-lg p-3 text-sm text-center">
                   This order has been cancelled.
                 </div>
               )}
@@ -116,7 +116,7 @@ export function TrackOrderPage() {
                   {order.timeline.map((event, i) => (
                     <div key={i} className={`flex gap-3 text-sm ${event.completed ? "" : "opacity-50"}`}>
                       <div className={`mt-0.5 h-4 w-4 rounded-full shrink-0 flex items-center justify-center ${event.completed ? "bg-accent" : "bg-border"}`}>
-                        {event.completed && <CheckCircle2 className="h-3 w-3 text-white" />}
+                        {event.completed && <CheckCircle2 className="h-3 w-3 text-accent-foreground" />}
                       </div>
                       <div className="flex-1">
                         <p className="font-medium capitalize">{event.label}</p>
@@ -158,7 +158,7 @@ export function TrackOrderPage() {
                     {order.discountAmount > 0 && (
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Discount</span>
-                        <span className="text-green-600">-Tk{Number(order.discountAmount).toLocaleString()}</span>
+                        <span className="text-success-foreground">-Tk{Number(order.discountAmount).toLocaleString()}</span>
                       </div>
                     )}
                     {order.subtotal != null && (
@@ -166,7 +166,7 @@ export function TrackOrderPage() {
                         <span className="text-muted-foreground">Delivery</span>
                         <span>
                           {(Number(order.totalAmount) - Number(order.subtotal) + Number(order.discountAmount ?? 0)) === 0
-                            ? <span className="text-green-600">Free</span>
+                            ? <span className="text-success-foreground">Free</span>
                             : `Tk${(Number(order.totalAmount) - Number(order.subtotal) + Number(order.discountAmount ?? 0)).toLocaleString()}`}
                         </span>
                       </div>

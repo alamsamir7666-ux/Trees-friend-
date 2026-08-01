@@ -52,7 +52,7 @@ function renderCell(key: (typeof COMPARE_ROWS)[number]["key"], product: Product)
       // price) is the real marketplace-availability signal.
       const hasListings = product.listingCount > 0 && product.listingMinPrice != null;
       return hasListings ? (
-        <span className="text-green-600 text-sm font-medium">In Stock</span>
+        <span className="text-success-foreground text-sm font-medium">In Stock</span>
       ) : (
         <span className="text-destructive text-sm font-medium">Out of Stock</span>
       );
@@ -126,7 +126,7 @@ export default function ComparePage() {
                     <div className="relative">
                       <button
                         onClick={() => removeProduct(p.id)}
-                        className="absolute -top-1 -right-1 p-1 rounded-full bg-muted hover:bg-destructive hover:text-white transition-colors"
+                        className="absolute -top-1 -right-1 p-1 rounded-full bg-muted hover:bg-destructive hover:text-destructive-foreground transition-colors"
                         aria-label={`Remove ${p.name}`}
                       >
                         <X className="h-3 w-3" />

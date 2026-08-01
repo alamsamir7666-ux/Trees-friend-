@@ -122,7 +122,7 @@ export function SellerListingReviews({
         )}
         {user && alreadyReviewed && (
           <span className="flex items-center gap-1.5 text-sm text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full">
-            <Check className="h-3.5 w-3.5 text-green-600" /> You've reviewed this variant
+            <Check className="h-3.5 w-3.5 text-success-foreground" /> You've reviewed this variant
           </span>
         )}
       </div>
@@ -195,8 +195,8 @@ export function SellerListingReviews({
                     <span className="text-xs text-muted-foreground">{new Date(r.createdAt).toLocaleDateString()}</span>
                     {isOwner && !isEditing && (
                       <>
-                        <button onClick={() => startEditReview(r)} className="p-1.5 rounded-lg text-muted-foreground hover:text-blue-500 hover:bg-blue-50 transition-colors"><Pencil className="h-3.5 w-3.5" /></button>
-                        <button onClick={() => handleDeleteReview(r.id)} className="p-1.5 rounded-lg text-muted-foreground hover:text-red-500 hover:bg-red-50 transition-colors"><Trash2 className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => startEditReview(r)} className="p-1.5 rounded-lg text-muted-foreground hover:text-info-foreground hover:bg-info transition-colors"><Pencil className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => handleDeleteReview(r.id)} className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-3.5 w-3.5" /></button>
                       </>
                     )}
                   </div>

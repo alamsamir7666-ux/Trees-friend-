@@ -275,7 +275,7 @@ export function ProductDetailPage() {
                 <span className="text-sm text-muted-foreground">({product.reviewCount} reviews)</span>
               </div>
               <Button variant="outline" size="icon" className="rounded-full h-9 w-9 ml-auto" onClick={handleWishlist}>
-                <Heart className={`h-4 w-4 ${isWishlisted ? "fill-rose-500 text-rose-500" : ""}`} />
+                <Heart className={`h-4 w-4 ${isWishlisted ? "fill-destructive text-destructive" : ""}`} />
               </Button>
             </div>
           </div>
@@ -312,8 +312,8 @@ export function ProductDetailPage() {
         {(product.sunlight || product.watering || product.soilType || product.matureHeight || product.climateZone || product.growthRate || product.bloomSeason) && (
           <div className="mb-5 border border-border rounded-2xl overflow-hidden">
             <div className="flex items-center gap-2 px-5 py-4 bg-primary">
-              <Sprout className="h-5 w-5 text-white" />
-              <h3 className="font-serif text-lg font-medium text-white">Care Guide</h3>
+              <Sprout className="h-5 w-5 text-primary-foreground" />
+              <h3 className="font-serif text-lg font-medium text-primary-foreground">Care Guide</h3>
             </div>
             <div className="divide-y divide-border">
               {[
@@ -364,7 +364,7 @@ export function ProductDetailPage() {
             <ul className="space-y-1.5">
               {product.careTips.map((tip, i) => (
                 <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
-                  <span className="mt-0.5 shrink-0 h-4 w-4 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-[10px] font-bold">🌱</span>
+                  <span className="mt-0.5 shrink-0 h-4 w-4 rounded-full bg-success text-success-foreground flex items-center justify-center text-[10px] font-bold">🌱</span>
                   {tip}
                 </li>
               ))}
@@ -395,7 +395,7 @@ export function ProductDetailPage() {
             )}
             {user && alreadyReviewed && (
               <span className="flex items-center gap-1.5 text-sm text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full">
-                <Check className="h-3.5 w-3.5 text-green-600" /> You've reviewed this product
+                <Check className="h-3.5 w-3.5 text-success-foreground" /> You've reviewed this product
               </span>
             )}
           </div>
@@ -459,8 +459,8 @@ export function ProductDetailPage() {
                         <span className="text-xs text-muted-foreground">{new Date(r.createdAt).toLocaleDateString()}</span>
                         {isOwner && !isEditing && (
                           <>
-                            <button onClick={() => startEditReview(r)} className="p-1.5 rounded-lg text-muted-foreground hover:text-blue-500 hover:bg-blue-50 transition-colors"><Pencil className="h-3.5 w-3.5" /></button>
-                            <button onClick={() => handleDeleteReview(r.id)} className="p-1.5 rounded-lg text-muted-foreground hover:text-red-500 hover:bg-red-50 transition-colors"><Trash2 className="h-3.5 w-3.5" /></button>
+                            <button onClick={() => startEditReview(r)} className="p-1.5 rounded-lg text-muted-foreground hover:text-info-foreground hover:bg-info transition-colors"><Pencil className="h-3.5 w-3.5" /></button>
+                            <button onClick={() => handleDeleteReview(r.id)} className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-3.5 w-3.5" /></button>
                           </>
                         )}
                       </div>
@@ -493,15 +493,15 @@ export function ProductDetailPage() {
         {/* Trust Badges */}
         <section className="mb-8">
           <div className="flex gap-4 overflow-x-auto pb-2 snap-x snap-mandatory scrollbar-hide">
-            <div className="snap-start shrink-0 w-[calc(100%-2rem)] sm:w-[calc(50%-0.5rem)] bg-gradient-to-br from-rose-50 to-pink-50 border border-rose-100 rounded-2xl p-5 flex items-start gap-4">
-              <div className="shrink-0 h-12 w-12 rounded-full bg-rose-100 flex items-center justify-center"><ShieldCheck className="h-6 w-6 text-rose-500" /></div>
+            <div className="snap-start shrink-0 w-[calc(100%-2rem)] sm:w-[calc(50%-0.5rem)] bg-gradient-to-br from-destructive/10 to-destructive/5 border border-destructive/20 rounded-2xl p-5 flex items-start gap-4">
+              <div className="shrink-0 h-12 w-12 rounded-full bg-destructive/10 flex items-center justify-center"><ShieldCheck className="h-6 w-6 text-destructive" /></div>
               <div>
                 <p className="font-semibold text-sm text-foreground mb-1">100% Authentic, Healthy Plants</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">Every tree and plant sold on Tree Friend is nursery-grown and inspected before dispatch. No mislabeled varieties, ever.</p>
               </div>
             </div>
-            <div className="snap-start shrink-0 w-[calc(100%-2rem)] sm:w-[calc(50%-0.5rem)] bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-100 rounded-2xl p-5 flex items-start gap-4">
-              <div className="shrink-0 h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center"><Package className="h-6 w-6 text-amber-500" /></div>
+            <div className="snap-start shrink-0 w-[calc(100%-2rem)] sm:w-[calc(50%-0.5rem)] bg-gradient-to-br from-warning to-warning/70 border border-warning-border rounded-2xl p-5 flex items-start gap-4">
+              <div className="shrink-0 h-12 w-12 rounded-full bg-warning flex items-center justify-center"><Package className="h-6 w-6 text-warning-foreground" /></div>
               <div>
                 <p className="font-semibold text-sm text-foreground mb-1">Careful Plant Packaging</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">Saplings and potted plants are packed to survive transit, but minor leaf drop or soil settling can happen in shipping — this doesn't affect the plant's health.</p>

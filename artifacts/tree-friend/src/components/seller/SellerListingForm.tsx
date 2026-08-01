@@ -521,7 +521,7 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
           </select>
         </div>
       </div>
-      <p className="text-xs text-amber-600 -mt-1">
+      <p className="text-xs text-warning-foreground -mt-1">
         Advance payment requires a verified bKash merchant account (Payment Settings tab). Saving credentials
         there isn't enough by itself — an admin has to verify the account first, so selecting advance/both here
         will be rejected until that happens.
@@ -665,7 +665,7 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
           {draft.images.map((url) => (
             <div key={url} className="relative">
               <img src={url} alt="" className="h-16 w-16 rounded-lg object-cover border" />
-              <button type="button" onClick={() => removeImage(url)} className="absolute -top-1.5 -right-1.5 bg-black/60 hover:bg-black/80 text-white rounded-full p-0.5">
+              <button type="button" onClick={() => removeImage(url)} className="absolute -top-1.5 -right-1.5 bg-foreground/60 hover:bg-foreground/80 text-background rounded-full p-0.5">
                 <X className="h-3 w-3" />
               </button>
             </div>

@@ -185,7 +185,7 @@ export function PreOrderCheckoutPage() {
                     <div className="flex items-center gap-2 mt-1">
                       <span className="text-sm font-semibold">Tk{discountedPrice.toLocaleString()}</span>
                       <span className="text-xs text-muted-foreground line-through">Tk{originalPrice.toLocaleString()}</span>
-                      <Badge className="bg-green-100 text-green-700 border-green-200 text-xs">5% off</Badge>
+                      <Badge className="bg-success text-success-foreground border-success-border text-xs">5% off</Badge>
                     </div>
                   </div>
                 </div>

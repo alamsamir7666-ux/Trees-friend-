@@ -14,12 +14,12 @@ const PRE_STEPS = ["pending", "confirmed", "arrived_in_bd", "shipped", "delivere
 const PRE_STEP_LABELS = ["Pending", "Confirmed", "Arrived in BD", "Shipped", "Delivered"];
 
 const statusColors: Record<string, string> = {
-  pending:       "bg-yellow-100 text-yellow-800",
-  confirmed:     "bg-blue-100 text-blue-800",
-  arrived_in_bd: "bg-purple-100 text-purple-800",
-  shipped:       "bg-indigo-100 text-indigo-800",
-  delivered:     "bg-green-100 text-green-800",
-  cancelled:     "bg-red-100 text-red-800",
+  pending:       "bg-warning text-warning-foreground",
+  confirmed:     "bg-info text-info-foreground",
+  arrived_in_bd: "bg-info text-info-foreground",
+  shipped:       "bg-info text-info-foreground",
+  delivered:     "bg-success text-success-foreground",
+  cancelled:     "bg-destructive/10 text-destructive",
 };
 
 export function PreOrderDetailPage() {
@@ -96,7 +96,7 @@ export function PreOrderDetailPage() {
           <div className="flex items-start justify-between">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-xs font-bold bg-blue-100 text-blue-700 rounded-full px-2 py-0.5">PRE-ORDER</span>
+                <span className="text-xs font-bold bg-info text-info-foreground rounded-full px-2 py-0.5">PRE-ORDER</span>
               </div>
               <h1 className="font-serif text-3xl font-medium">{order.trackingId}</h1>
               <p className="text-muted-foreground mt-1 text-sm">{new Date(order.createdAt).toLocaleDateString("en-BD", { year: "numeric", month: "long", day: "numeric" })}</p>
@@ -118,15 +118,15 @@ export function PreOrderDetailPage() {
         </div>
 
         {order.status === "cancelled" && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-5">
+          <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-5">
             <div className="flex items-start gap-3">
-              <div className="h-9 w-9 rounded-full bg-red-100 flex items-center justify-center shrink-0">
-                <span className="text-red-600 text-lg">⚠️</span>
+              <div className="h-9 w-9 rounded-full bg-destructive/10 flex items-center justify-center shrink-0">
+                <span className="text-destructive text-lg">⚠️</span>
               </div>
               <div>
-                <p className="font-medium text-red-700 text-sm">This pre-order has been cancelled</p>
+                <p className="font-medium text-destructive text-sm">This pre-order has been cancelled</p>
                 {order.cancellationReason && (
-                  <p className="text-sm text-red-600 mt-1">Reason: {order.cancellationReason}</p>
+                  <p className="text-sm text-destructive mt-1">Reason: {order.cancellationReason}</p>
                 )}
               </div>
             </div>
@@ -147,8 +147,8 @@ export function PreOrderDetailPage() {
                     {i < PRE_STEPS.length - 1 && (
                       <div className={`absolute top-5 left-1/2 w-full h-0.5 ${done ? "bg-accent" : "bg-border"}`} />
                     )}
-                    <div className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors shrink-0 ${done ? "bg-accent border-accent text-white" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}>
-                      {done ? <CheckCircle2 className="h-5 w-5 text-white" /> : <Icon className="h-5 w-5" />}
+                    <div className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors shrink-0 ${done ? "bg-accent border-accent text-accent-foreground" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}>
+                      {done ? <CheckCircle2 className="h-5 w-5 text-accent-foreground" /> : <Icon className="h-5 w-5" />}
                     </div>
                     <div className="h-8 flex items-start justify-center mt-2 w-full px-0.5">
                       <p className={`text-xs text-center leading-tight ${active ? "font-medium" : "text-muted-foreground"}`}>{PRE_STEP_LABELS[i]}</p>
@@ -185,7 +185,7 @@ export function PreOrderDetailPage() {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Status</span>
-                <span className={`capitalize ${order.paymentStatus === "paid" ? "text-green-600" : "text-amber-600"}`}>{order.paymentStatus}</span>
+                <span className={`capitalize ${order.paymentStatus === "paid" ? "text-success-foreground" : "text-warning-foreground"}`}>{order.paymentStatus}</span>
               </div>
               {order.senderNumber && (
                 <div className="flex justify-between">

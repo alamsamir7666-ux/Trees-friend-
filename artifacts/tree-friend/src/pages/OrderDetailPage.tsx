@@ -15,20 +15,20 @@ import { BKASH_ICON } from "@/lib/preorderIcons";
 const STEPS = ["pending", "confirmed", "processing", "shipped", "delivered"];
 
 const statusColors: Record<string, string> = {
-  pending:          "bg-yellow-100 text-yellow-800",
-  confirmed:        "bg-blue-100 text-blue-800",
-  processing:       "bg-purple-100 text-purple-800",
-  shipped:          "bg-indigo-100 text-indigo-800",
-  delivered:        "bg-green-100 text-green-800",
-  cancelled:        "bg-red-100 text-red-800",
-  return_completed: "bg-teal-100 text-teal-800",
+  pending:          "bg-warning text-warning-foreground",
+  confirmed:        "bg-info text-info-foreground",
+  processing:       "bg-info text-info-foreground",
+  shipped:          "bg-info text-info-foreground",
+  delivered:        "bg-success text-success-foreground",
+  cancelled:        "bg-destructive/10 text-destructive",
+  return_completed: "bg-success text-success-foreground",
 };
 
 const returnStatusConfig: Record<string, { label: string; color: string; bg: string }> = {
-  requested: { label: "Return Requested - Under Review",     color: "text-amber-700", bg: "bg-amber-50 border-amber-200" },
-  approved:  { label: "Return Approved - Refund Processing", color: "text-blue-700",  bg: "bg-blue-50 border-blue-200"  },
-  rejected:  { label: "Return Rejected",                     color: "text-red-700",   bg: "bg-red-50 border-red-200"    },
-  completed: { label: "Refund Completed",                    color: "text-teal-700",  bg: "bg-teal-50 border-teal-200"  },
+  requested: { label: "Return Requested - Under Review",     color: "text-warning-foreground", bg: "bg-warning border-warning-border" },
+  approved:  { label: "Return Approved - Refund Processing", color: "text-info-foreground",  bg: "bg-info border-info-border"  },
+  rejected:  { label: "Return Rejected",                     color: "text-destructive",   bg: "bg-destructive/10 border-destructive/20"    },
+  completed: { label: "Refund Completed",                    color: "text-success-foreground",  bg: "bg-success border-success-border"  },
 };
 
 export function OrderDetailPage() {
@@ -234,27 +234,27 @@ export function OrderDetailPage() {
             landed back here, since bKash's own hosted page is where the
             actual payment happened, off our site. */}
         {bkashParam === "success" && order.paymentStatus === "paid" && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-5">
+          <div className="bg-success border border-success-border rounded-xl p-5">
             <div className="flex items-start gap-3">
-              <CheckCircle2 className="h-5 w-5 text-green-600 shrink-0 mt-0.5" />
+              <CheckCircle2 className="h-5 w-5 text-success-foreground shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-green-700 text-sm">Payment received</p>
-                <p className="text-sm text-green-600 mt-1">Your bKash payment was successful. Thank you!</p>
+                <p className="font-medium text-success-foreground text-sm">Payment received</p>
+                <p className="text-sm text-success-foreground mt-1">Your bKash payment was successful. Thank you!</p>
               </div>
             </div>
           </div>
         )}
         {bkashParam && bkashParam !== "success" && order.paymentStatus === "payment_pending" && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-5">
+          <div className="bg-warning border border-warning-border rounded-xl p-5">
             <div className="flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <AlertTriangle className="h-5 w-5 text-warning-foreground shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-amber-700 text-sm">
+                <p className="font-medium text-warning-foreground text-sm">
                   {bkashParam === "cancel" || bkashParam === "cancelled"
                     ? "Payment cancelled"
                     : "Payment wasn't completed"}
                 </p>
-                <p className="text-sm text-amber-600 mt-1">
+                <p className="text-sm text-warning-foreground mt-1">
                   {bkashParam === "cancel" || bkashParam === "cancelled"
                     ? "You cancelled the bKash payment. Your order is saved -- pay whenever you're ready."
                     : "Something interrupted your bKash payment. Your order is saved -- please try again below."}
@@ -266,17 +266,17 @@ export function OrderDetailPage() {
 
         {/* Cancellation notice */}
         {order.orderStatus === "cancelled" && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-5">
+          <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-5">
             <div className="flex items-start gap-3">
-              <div className="h-9 w-9 rounded-full bg-red-100 flex items-center justify-center shrink-0">
-                <span className="text-red-600 text-lg">⚠️</span>
+              <div className="h-9 w-9 rounded-full bg-destructive/10 flex items-center justify-center shrink-0">
+                <span className="text-destructive text-lg">⚠️</span>
               </div>
               <div>
-                <p className="font-medium text-red-700 text-sm">This order has been cancelled</p>
+                <p className="font-medium text-destructive text-sm">This order has been cancelled</p>
                 {(order as any).cancellationReason ? (
-                  <p className="text-sm text-red-600 mt-1">Reason: {(order as any).cancellationReason}</p>
+                  <p className="text-sm text-destructive mt-1">Reason: {(order as any).cancellationReason}</p>
                 ) : (
-                  <p className="text-sm text-red-500 mt-1">No reason provided.</p>
+                  <p className="text-sm text-destructive mt-1">No reason provided.</p>
                 )}
               </div>
             </div>
@@ -298,8 +298,8 @@ export function OrderDetailPage() {
                     {i < STEPS.length - 1 && (
                       <div className={`absolute top-5 left-1/2 w-full h-0.5 ${done ? "bg-accent" : "bg-border"}`} />
                     )}
-                    <div className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors ${done ? "bg-accent border-accent text-white" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}>
-                      {done ? <CheckCircle2 className="h-5 w-5 text-white" /> : <Icon className="h-5 w-5" />}
+                    <div className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors ${done ? "bg-accent border-accent text-accent-foreground" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}>
+                      {done ? <CheckCircle2 className="h-5 w-5 text-accent-foreground" /> : <Icon className="h-5 w-5" />}
                     </div>
                     <p className={`text-xs mt-2 capitalize text-center ${active ? "font-medium" : "text-muted-foreground"}`}>{step}</p>
                   </div>
@@ -349,10 +349,10 @@ export function OrderDetailPage() {
                 <span
                   className={`capitalize ${
                     order.paymentStatus === "paid"
-                      ? "text-green-600"
+                      ? "text-success-foreground"
                       : order.paymentStatus === "failed" || order.paymentStatus === "refunded"
-                        ? "text-red-600"
-                        : "text-amber-600"
+                        ? "text-destructive"
+                        : "text-warning-foreground"
                   }`}
                 >
                   {order.paymentStatus.replace(/_/g, " ")}
@@ -393,7 +393,7 @@ export function OrderDetailPage() {
                 {order.discountAmount > 0 && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Discount{order.couponCode ? ` (${order.couponCode})` : ""}</span>
-                    <span className="text-green-600">-Tk{Number(order.discountAmount).toLocaleString()}</span>
+                    <span className="text-success-foreground">-Tk{Number(order.discountAmount).toLocaleString()}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
@@ -402,7 +402,7 @@ export function OrderDetailPage() {
                     {(() => {
                       const subtotal = (order.items ?? []).reduce((s: number, i: any) => s + Number(i.price) * i.quantity, 0);
                       const delivery = Number(order.totalAmount) - subtotal + Number(order.discountAmount ?? 0);
-                      return delivery <= 0 ? <span className="text-green-600">Free</span> : `Tk${delivery.toLocaleString()}`;
+                      return delivery <= 0 ? <span className="text-success-foreground">Free</span> : `Tk${delivery.toLocaleString()}`;
                     })()}
                   </span>
                 </div>
@@ -431,7 +431,7 @@ export function OrderDetailPage() {
       {/* Action Buttons */}
       <div className="container mx-auto px-4 pb-10 max-w-3xl">
         {showLoginPrompt && (
-          <div className="mb-3 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3">
+          <div className="mb-3 bg-warning border border-warning-border text-warning-foreground text-sm rounded-xl px-4 py-3">
             Please <Link href="/sign-in" className="font-semibold underline">sign in</Link> or{" "}
             <Link href="/sign-up" className="font-semibold underline">sign up</Link> to cancel orders or request a return/refund.
           </div>
@@ -461,13 +461,13 @@ export function OrderDetailPage() {
                     </span>
                   </div>
                   {existingReturn.status === "completed" && existingReturn.refundAmount != null && (
-                    <span className="text-sm font-bold text-teal-700">
+                    <span className="text-sm font-bold text-success-foreground">
                       Tk{Number(existingReturn.refundAmount).toLocaleString()} refunded
                     </span>
                   )}
                 </div>
                 {existingReturn.status === "rejected" && existingReturn.adminNote && (
-                  <p className="text-xs text-red-600">Admin note: {existingReturn.adminNote}</p>
+                  <p className="text-xs text-destructive">Admin note: {existingReturn.adminNote}</p>
                 )}
               </div>
             ) : order.orderStatus === "delivered" ? (() => {
@@ -547,8 +547,8 @@ export function OrderDetailPage() {
           </DialogHeader>
           {returnSuccess ? (
             <div className="py-6 text-center space-y-2">
-              <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center mx-auto">
-                <CheckCircle2 className="h-6 w-6 text-green-600" />
+              <div className="h-12 w-12 rounded-full bg-success flex items-center justify-center mx-auto">
+                <CheckCircle2 className="h-6 w-6 text-success-foreground" />
               </div>
               <p className="font-medium">Return request submitted!</p>
               <p className="text-sm text-muted-foreground">We'll review your request and get back to you soon.</p>

@@ -17,7 +17,7 @@ function ProductMiniCard({ product }: { product: LinkedProduct }) {
   return (
     <Link
       href={`/products/${product.id}`}
-      className="shrink-0 w-40 snap-start bg-white border rounded-2xl overflow-hidden hover:shadow-md transition-shadow"
+      className="shrink-0 w-40 snap-start bg-card border rounded-2xl overflow-hidden hover:shadow-md transition-shadow"
     >
       <div className="relative aspect-square bg-muted">
         {product.images?.[0] ? (
@@ -36,7 +36,7 @@ function ProductMiniCard({ product }: { product: LinkedProduct }) {
         <Button
           size="sm"
           disabled={outOfStock}
-          className="w-full h-8 text-xs rounded-lg bg-accent hover:bg-accent/90 text-white pointer-events-none"
+          className="w-full h-8 text-xs rounded-lg bg-accent hover:bg-accent/90 text-accent-foreground pointer-events-none"
         >
           {outOfStock ? "Out of stock" : (<><ShoppingBag className="h-3.5 w-3.5 mr-1" /> View Product</>)}
         </Button>

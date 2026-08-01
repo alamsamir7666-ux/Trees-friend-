@@ -117,7 +117,7 @@ function GuestCartPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Delivery</span>
-                  <span>{shipping === 0 ? <span className="text-green-600">Free</span> : `Tk${shipping}`}</span>
+                  <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping}`}</span>
                 </div>
                 {shipping > 0 && (
                   <p className="text-xs text-muted-foreground">Free delivery on orders over Tk2,000</p>
@@ -130,7 +130,7 @@ function GuestCartPage() {
               <Button className="w-full rounded-full" size="lg" onClick={() => setLocation("/checkout")}>
                 Checkout
               </Button>
-              <Button className="w-full rounded-full mt-2 bg-green-500 hover:bg-green-600 text-white border-0" size="lg" onClick={() => setLocation("/sign-in")}>
+              <Button className="w-full rounded-full mt-2 bg-primary hover:bg-primary/90 text-primary-foreground border-0" size="lg" onClick={() => setLocation("/sign-in")}>
                 <LogIn className="mr-2 h-4 w-4" />
                 Sign in
               </Button>
@@ -307,7 +307,7 @@ function AuthenticatedCartPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Delivery</span>
-                  <span>{shipping === 0 ? <span className="text-green-600">Free</span> : `Tk${shipping}`}</span>
+                  <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping}`}</span>
                 </div>
                 {shipping > 0 && (
                   <p className="text-xs text-muted-foreground">Free delivery on orders over Tk2,000</p>

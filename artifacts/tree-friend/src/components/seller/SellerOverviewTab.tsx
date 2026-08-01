@@ -41,43 +41,43 @@ const ORDER_STATUS_META: Record<
   pending: {
     label: "Pending",
     icon: Clock,
-    dot: "bg-amber-500",
-    chip: "bg-amber-50 text-amber-700 ring-1 ring-amber-200/60",
+    dot: "bg-warning-foreground",
+    chip: "bg-warning text-warning-foreground ring-1 ring-warning-border/60",
     hex: "#f59e0b",
   },
   confirmed: {
     label: "Confirmed",
     icon: CheckCircle2,
-    dot: "bg-sky-500",
-    chip: "bg-sky-50 text-sky-700 ring-1 ring-sky-200/60",
+    dot: "bg-info-foreground",
+    chip: "bg-info text-info-foreground ring-1 ring-info-border/60",
     hex: "#0ea5e9",
   },
   processing: {
     label: "Processing",
     icon: BarChart3,
-    dot: "bg-violet-500",
-    chip: "bg-violet-50 text-violet-700 ring-1 ring-violet-200/60",
+    dot: "bg-info-foreground",
+    chip: "bg-info text-info-foreground ring-1 ring-info-border/60",
     hex: "#8b5cf6",
   },
   shipped: {
     label: "Shipped",
     icon: Truck,
-    dot: "bg-indigo-500",
-    chip: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/60",
+    dot: "bg-info-foreground",
+    chip: "bg-info text-info-foreground ring-1 ring-info-border/60",
     hex: "#6366f1",
   },
   delivered: {
     label: "Delivered",
     icon: PackageCheck,
-    dot: "bg-emerald-500",
-    chip: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/60",
+    dot: "bg-success-foreground",
+    chip: "bg-success text-success-foreground ring-1 ring-success-border/60",
     hex: "#10b981",
   },
   cancelled: {
     label: "Cancelled",
     icon: XCircle,
-    dot: "bg-rose-500",
-    chip: "bg-rose-50 text-rose-700 ring-1 ring-rose-200/60",
+    dot: "bg-destructive",
+    chip: "bg-destructive/10 text-destructive ring-1 ring-destructive/20",
     hex: "#f43f5e",
   },
 };
@@ -208,8 +208,8 @@ function KpiCard({
           <div
             className={cn(
               "flex items-center gap-0.5 text-xs font-semibold rounded-full px-1.5 py-0.5",
-              trendUp && "bg-emerald-50 text-emerald-700",
-              trendDown && "bg-rose-50 text-rose-700",
+              trendUp && "bg-success text-success-foreground",
+              trendDown && "bg-destructive/10 text-destructive",
               trendNeutral && "bg-muted text-muted-foreground",
             )}
           >
@@ -339,9 +339,9 @@ function ActionItem({
   severity: "warning" | "info" | "danger";
 }) {
   const severityRing =
-    severity === "danger" ? "ring-rose-200/70 bg-rose-50/40"
-    : severity === "warning" ? "ring-amber-200/70 bg-amber-50/40"
-    : "ring-sky-200/70 bg-sky-50/40";
+    severity === "danger" ? "ring-destructive/20 bg-destructive/10"
+    : severity === "warning" ? "ring-warning-border/70 bg-warning/40"
+    : "ring-info-border/70 bg-info/40";
 
   return (
     <div className={cn("flex items-center gap-3 rounded-xl ring-1 px-3.5 py-3", severityRing)}>
@@ -378,8 +378,8 @@ function HealthRow({
   cta?: { label: string; onClick: () => void };
 }) {
   const styles = {
-    ok: { dot: "bg-emerald-500", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200/60", label: "Active" },
-    warning: { dot: "bg-amber-500", chip: "bg-amber-50 text-amber-700 ring-amber-200/60", label: "Pending" },
+    ok: { dot: "bg-success-foreground", chip: "bg-success text-success-foreground ring-success-border/60", label: "Active" },
+    warning: { dot: "bg-warning-foreground", chip: "bg-warning text-warning-foreground ring-warning-border/60", label: "Pending" },
     missing: { dot: "bg-muted-foreground/40", chip: "bg-muted text-muted-foreground ring-border", label: "Not set up" },
   }[status];
 
@@ -423,9 +423,9 @@ function TopListingRow({
   const imageUrl = listing.images?.[0];
   const approvalStatus: string = listing.approvalStatus ?? "approved";
   const approvalChip =
-    approvalStatus === "approved" ? "bg-emerald-50 text-emerald-700 ring-emerald-200/60"
-    : approvalStatus === "pending" ? "bg-amber-50 text-amber-700 ring-amber-200/60"
-    : "bg-rose-50 text-rose-700 ring-rose-200/60";
+    approvalStatus === "approved" ? "bg-success text-success-foreground ring-success-border/60"
+    : approvalStatus === "pending" ? "bg-warning text-warning-foreground ring-warning-border/60"
+    : "bg-destructive/10 text-destructive ring-destructive/20";
 
   return (
     <div className="flex items-center gap-3 py-3">
@@ -783,7 +783,7 @@ export function SellerOverviewTab({
       <ActionItem
         key="pending-orders"
         icon={ShoppingCart}
-        iconClass="bg-amber-100 text-amber-700"
+        iconClass="bg-warning text-warning-foreground"
         title={`${pendingOrdersCount} pending order${pendingOrdersCount > 1 ? "s" : ""} need attention`}
         detail="Confirm or update status to keep buyers informed"
         ctaLabel="Review"
@@ -797,7 +797,7 @@ export function SellerOverviewTab({
       <ActionItem
         key="returns"
         icon={RotateCcw}
-        iconClass="bg-orange-100 text-orange-700"
+        iconClass="bg-warning text-warning-foreground"
         title={`${pendingReturnsCount} return request${pendingReturnsCount > 1 ? "s" : ""} pending`}
         detail="Respond promptly to maintain buyer trust"
         ctaLabel="Review"
@@ -811,7 +811,7 @@ export function SellerOverviewTab({
       <ActionItem
         key="payment"
         icon={CreditCard}
-        iconClass="bg-emerald-100 text-emerald-700"
+        iconClass="bg-success text-success-foreground"
         title="Set up payments to receive payouts"
         detail="Connect bKash or bank account to receive order payments"
         ctaLabel="Set up"
@@ -825,7 +825,7 @@ export function SellerOverviewTab({
       <ActionItem
         key="courier"
         icon={Truck}
-        iconClass="bg-violet-100 text-violet-700"
+        iconClass="bg-info text-info-foreground"
         title="Connect a courier to ship orders"
         detail="Integrate Pathao or Steadfast for automated shipping"
         ctaLabel="Set up"
@@ -839,7 +839,7 @@ export function SellerOverviewTab({
       <ActionItem
         key="no-listings"
         icon={Package2}
-        iconClass="bg-sky-100 text-sky-700"
+        iconClass="bg-info text-info-foreground"
         title="Create your first listing"
         detail="Add a product to start selling on Tree Friend"
         ctaLabel="Add listing"
@@ -917,7 +917,7 @@ export function SellerOverviewTab({
       {actionItems.length > 0 && (
         <div className="space-y-2.5">
           <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-600" />
+            <AlertTriangle className="h-4 w-4 text-warning-foreground" />
             <h3 className="text-sm font-semibold text-foreground">Action required</h3>
             <span className="text-xs text-muted-foreground">· {actionItems.length} item{actionItems.length > 1 ? "s" : ""}</span>
           </div>
@@ -936,7 +936,7 @@ export function SellerOverviewTab({
           value={formatTk(currentRevenue)}
           sublabel={`vs ${formatTk(previousRevenue)} prev`}
           icon={DollarSign}
-          accentClass="bg-emerald-100 text-emerald-700"
+          accentClass="bg-success text-success-foreground"
           change={revenueChange}
           sparkData={revenueSpark}
           sparkKey="revenue"
@@ -946,7 +946,7 @@ export function SellerOverviewTab({
           value={currentOrders.toLocaleString()}
           sublabel={`vs ${previousOrders} prev`}
           icon={ShoppingCart}
-          accentClass="bg-sky-100 text-sky-700"
+          accentClass="bg-info text-info-foreground"
           change={ordersChange}
           sparkData={ordersSpark}
           sparkKey="orders"
@@ -956,7 +956,7 @@ export function SellerOverviewTab({
           value={formatTk(currentAov)}
           sublabel={`vs ${formatTk(previousAov)} prev`}
           icon={TrendingUp}
-          accentClass="bg-amber-100 text-amber-700"
+          accentClass="bg-warning text-warning-foreground"
           change={aovChange}
           sparkData={aovSpark}
           sparkKey="aov"
@@ -966,7 +966,7 @@ export function SellerOverviewTab({
           value={activeListingsCount.toLocaleString()}
           sublabel={activeListingsCount > 0 ? "Live in marketplace" : "No listings yet"}
           icon={Package2}
-          accentClass="bg-violet-100 text-violet-700"
+          accentClass="bg-info text-info-foreground"
           change={null}
           sparkData={[]}
           sparkKey="listings"
@@ -1363,10 +1363,10 @@ export function SellerOverviewTab({
       ───────────────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: "Lifetime Revenue", value: formatTk(lifetimeRevenue), icon: DollarSign, color: "bg-emerald-50 text-emerald-600" },
-          { label: "Delivered Orders", value: lifetimeDelivered.toLocaleString(), icon: PackageCheck, color: "bg-sky-50 text-sky-600" },
-          { label: "Followers", value: followersCount.toLocaleString(), icon: Users, color: "bg-pink-50 text-pink-600" },
-          { label: "Avg. Rating", value: "—", icon: Star, color: "bg-amber-50 text-amber-600" },
+          { label: "Lifetime Revenue", value: formatTk(lifetimeRevenue), icon: DollarSign, color: "bg-success text-success-foreground" },
+          { label: "Delivered Orders", value: lifetimeDelivered.toLocaleString(), icon: PackageCheck, color: "bg-info text-info-foreground" },
+          { label: "Followers", value: followersCount.toLocaleString(), icon: Users, color: "bg-primary/10 text-primary" },
+          { label: "Avg. Rating", value: "—", icon: Star, color: "bg-warning text-warning-foreground" },
         ].map((stat) => (
           <div
             key={stat.label}

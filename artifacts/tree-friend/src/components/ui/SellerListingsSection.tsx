@@ -167,13 +167,13 @@ export function SellerListingsSection({ productId }: { productId: number }) {
                   <p className="font-medium text-sm truncate flex items-center gap-1.5">
                     {card.seller.nurseryName}
                     {card.seller.isVerified && (
-                      <BadgeCheck className="h-4 w-4 text-emerald-600 shrink-0" aria-label="Verified seller" />
+                      <BadgeCheck className="h-4 w-4 text-success-foreground shrink-0" aria-label="Verified seller" />
                     )}
                   </p>
 
                   {card.reviewCount > 0 && (
                     <div className="flex items-center gap-1 text-xs mt-1">
-                      <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                      <Star className="h-3.5 w-3.5 fill-warning-foreground text-warning-foreground" />
                       <span className="font-semibold">{card.rating.toFixed(1)}</span>
                       <span className="text-muted-foreground">({card.reviewCount})</span>
                     </div>
@@ -197,7 +197,7 @@ export function SellerListingsSection({ productId }: { productId: number }) {
                         <>
                           <span className="text-sm text-muted-foreground line-through">Tk{pricedVariant.price}</span>
                           {discountPct != null && discountPct > 0 && (
-                            <span className="text-xs font-semibold text-rose-600 bg-rose-50 rounded-md px-1.5 py-0.5">{discountPct}% OFF</span>
+                            <span className="text-xs font-semibold text-destructive bg-destructive/10 rounded-md px-1.5 py-0.5">{discountPct}% OFF</span>
                           )}
                         </>
                       )}

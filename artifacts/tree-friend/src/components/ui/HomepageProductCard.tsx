@@ -133,7 +133,7 @@ function HomepageProductCardInner({
             {/* Tag + rating on a single row (previously stacked) */}
             <div className="flex items-center gap-2.5 min-w-0">
               {categoryName && (
-                <span className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-700 px-2.5 py-[5px] rounded-full text-[11px] font-semibold leading-none whitespace-nowrap max-w-[120px]">
+                <span className="inline-flex items-center gap-1.5 bg-success text-success-foreground px-2.5 py-[5px] rounded-full text-[11px] font-semibold leading-none whitespace-nowrap max-w-[120px]">
                   <img src={CATEGORY_ICON} alt="" aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate">{categoryName}</span>
                 </span>

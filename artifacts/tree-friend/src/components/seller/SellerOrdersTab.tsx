@@ -30,21 +30,21 @@ const ORDER_STATUS_META: Record<
   OrderStatus,
   { label: string; icon: React.ElementType; chip: string; dot: string }
 > = {
-  pending: { label: "Pending", icon: Clock, chip: "bg-amber-50 text-amber-700 ring-amber-200/60", dot: "bg-amber-500" },
-  confirmed: { label: "Confirmed", icon: CheckCircle2, chip: "bg-sky-50 text-sky-700 ring-sky-200/60", dot: "bg-sky-500" },
-  processing: { label: "Processing", icon: BarChart3, chip: "bg-violet-50 text-violet-700 ring-violet-200/60", dot: "bg-violet-500" },
-  shipped: { label: "Shipped", icon: Truck, chip: "bg-indigo-50 text-indigo-700 ring-indigo-200/60", dot: "bg-indigo-500" },
-  delivered: { label: "Delivered", icon: PackageCheck, chip: "bg-emerald-50 text-emerald-700 ring-emerald-200/60", dot: "bg-emerald-500" },
-  cancelled: { label: "Cancelled", icon: XCircle, chip: "bg-rose-50 text-rose-700 ring-rose-200/60", dot: "bg-rose-500" },
+  pending: { label: "Pending", icon: Clock, chip: "bg-warning text-warning-foreground ring-warning-border/60", dot: "bg-warning-foreground" },
+  confirmed: { label: "Confirmed", icon: CheckCircle2, chip: "bg-info text-info-foreground ring-info-border/60", dot: "bg-info-foreground" },
+  processing: { label: "Processing", icon: BarChart3, chip: "bg-info text-info-foreground ring-info-border/60", dot: "bg-info-foreground" },
+  shipped: { label: "Shipped", icon: Truck, chip: "bg-info text-info-foreground ring-info-border/60", dot: "bg-info-foreground" },
+  delivered: { label: "Delivered", icon: PackageCheck, chip: "bg-success text-success-foreground ring-success-border/60", dot: "bg-success-foreground" },
+  cancelled: { label: "Cancelled", icon: XCircle, chip: "bg-destructive/10 text-destructive ring-destructive/20", dot: "bg-destructive" },
 };
 
 const SHIPMENT_STATUS_META: Record<string, { label: string; chip: string }> = {
-  pending: { label: "Pending", chip: "bg-amber-50 text-amber-700 ring-amber-200/60" },
-  picked_up: { label: "Picked up", chip: "bg-sky-50 text-sky-700 ring-sky-200/60" },
-  in_transit: { label: "In transit", chip: "bg-indigo-50 text-indigo-700 ring-indigo-200/60" },
-  delivered: { label: "Delivered", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200/60" },
-  returned: { label: "Returned", chip: "bg-orange-50 text-orange-700 ring-orange-200/60" },
-  failed: { label: "Failed", chip: "bg-rose-50 text-rose-700 ring-rose-200/60" },
+  pending: { label: "Pending", chip: "bg-warning text-warning-foreground ring-warning-border/60" },
+  picked_up: { label: "Picked up", chip: "bg-info text-info-foreground ring-info-border/60" },
+  in_transit: { label: "In transit", chip: "bg-info text-info-foreground ring-info-border/60" },
+  delivered: { label: "Delivered", chip: "bg-success text-success-foreground ring-success-border/60" },
+  returned: { label: "Returned", chip: "bg-warning text-warning-foreground ring-warning-border/60" },
+  failed: { label: "Failed", chip: "bg-destructive/10 text-destructive ring-destructive/20" },
 };
 
 const ORDER_STATUS_OPTIONS = ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"] as const;
@@ -155,7 +155,7 @@ function OrderRow({ order }: { order: SellerOrder }) {
               >
                 <span className="truncate">{order.trackingId}</span>
                 {copied ? (
-                  <Check className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                  <Check className="h-3.5 w-3.5 text-success-foreground shrink-0" />
                 ) : (
                   <Copy className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 )}
@@ -165,7 +165,7 @@ function OrderRow({ order }: { order: SellerOrder }) {
                 {meta.label}
               </span>
               {paymentPending && (
-                <span className="inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 ring-1 ring-amber-200/60 bg-amber-50 text-amber-700 shrink-0">
+                <span className="inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 ring-1 ring-warning-border/60 bg-warning text-warning-foreground shrink-0">
                   <AlertCircle className="h-3 w-3" />
                   Payment pending
                 </span>
@@ -199,13 +199,13 @@ function OrderRow({ order }: { order: SellerOrder }) {
 
         {/* Cancel reason input */}
         {cancelling && (
-          <div className="mt-3 flex items-center gap-2 bg-rose-50 border border-rose-200 rounded-xl p-2.5">
+          <div className="mt-3 flex items-center gap-2 bg-destructive/10 border border-destructive/20 rounded-xl p-2.5">
             <input
               autoFocus
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}
               placeholder="Reason for cancelling…"
-              className="flex-1 bg-card rounded-lg border border-border px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-rose-300"
+              className="flex-1 bg-card rounded-lg border border-border px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-destructive/30"
             />
             <Button size="sm" variant="destructive" className="h-7 rounded-lg text-xs" onClick={confirmCancel} disabled={updateStatus.isPending}>
               Confirm
@@ -265,7 +265,7 @@ function OrderRow({ order }: { order: SellerOrder }) {
         </div>
 
         {order.cancellationReason && (
-          <p className="text-xs text-rose-600 mt-2.5 bg-rose-50 rounded-lg px-2.5 py-1.5">
+          <p className="text-xs text-destructive mt-2.5 bg-destructive/10 rounded-lg px-2.5 py-1.5">
             <span className="font-medium">Cancelled:</span> {order.cancellationReason}
           </p>
         )}
@@ -365,10 +365,10 @@ export function SellerOrdersTab() {
   }, [orders]);
 
   const statCards = [
-    { label: "Total Orders", value: stats.total, icon: ShoppingCart, color: "bg-violet-50 text-violet-700" },
-    { label: "Pending", value: stats.pending, icon: Clock, color: "bg-amber-50 text-amber-700" },
-    { label: "Shipped", value: stats.shipped, icon: Truck, color: "bg-indigo-50 text-indigo-700" },
-    { label: "Delivered", value: stats.delivered, icon: PackageCheck, color: "bg-emerald-50 text-emerald-700" },
+    { label: "Total Orders", value: stats.total, icon: ShoppingCart, color: "bg-info text-info-foreground" },
+    { label: "Pending", value: stats.pending, icon: Clock, color: "bg-warning text-warning-foreground" },
+    { label: "Shipped", value: stats.shipped, icon: Truck, color: "bg-info text-info-foreground" },
+    { label: "Delivered", value: stats.delivered, icon: PackageCheck, color: "bg-success text-success-foreground" },
   ];
 
   return (
@@ -390,11 +390,11 @@ export function SellerOrdersTab() {
 
       {/* No courier warning */}
       {!courierConfig && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-sm text-amber-800 flex items-start gap-3">
+        <div className="bg-warning border border-warning-border rounded-2xl px-4 py-3 text-sm text-warning-foreground flex items-start gap-3">
           <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
           <div>
             <p className="font-medium">No courier account connected</p>
-            <p className="text-xs text-amber-700 mt-0.5">
+            <p className="text-xs text-warning-foreground mt-0.5">
               Set one up in Courier Settings to book shipments automatically, or update status manually below.
             </p>
           </div>

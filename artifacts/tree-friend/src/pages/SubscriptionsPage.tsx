@@ -52,9 +52,9 @@ const FREQ_LABEL: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  active: "bg-green-100 text-green-800",
-  paused: "bg-yellow-100 text-yellow-800",
-  cancelled: "bg-red-100 text-red-800",
+  active: "bg-success text-success-foreground",
+  paused: "bg-warning text-warning-foreground",
+  cancelled: "bg-destructive/10 text-destructive",
 };
 
 async function fetchSubscriptions(): Promise<Subscription[]> {
@@ -171,7 +171,7 @@ export function SubscriptionsPage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="text-red-500 hover:text-red-600 hover:bg-red-50"
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
                     onClick={() => {
                       if (confirm("Cancel this subscription?")) {
                         patch.mutate({ id: sub.id, body: { status: "cancelled" } });
@@ -213,7 +213,7 @@ export function SubscriptionsPage() {
                   <span>Next order: <strong className="text-foreground">{new Date(sub.nextOrderDate).toLocaleDateString("en-BD", { day: "numeric", month: "short", year: "numeric" })}</strong></span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <p className="text-sm font-semibold">Tk{sub.totalAmount.toFixed(0)} <span className="text-green-600 text-xs font-normal">({sub.discountPercent}% off)</span></p>
+                  <p className="text-sm font-semibold">Tk{sub.totalAmount.toFixed(0)} <span className="text-success-foreground text-xs font-normal">({sub.discountPercent}% off)</span></p>
                   <Button
                     variant="ghost"
                     size="sm"

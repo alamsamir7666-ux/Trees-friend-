@@ -86,7 +86,7 @@ export function ProductQA({ productId }: { productId: number }) {
               </div>
               {qa.answer ? (
                 <div className="flex items-start gap-2 mt-3 pl-4 border-l-2 border-accent/30">
-                  <span className="text-green-600 font-bold text-sm mt-0.5">A</span>
+                  <span className="text-success-foreground font-bold text-sm mt-0.5">A</span>
                   <div>
                     <p className="text-sm text-muted-foreground">{qa.answer}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">

@@ -137,7 +137,7 @@ function CollectionSlider() {
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-foreground/70 via-foreground/10 to-transparent" />
                   {((cat as { icon?: string; iconImage?: string }).icon || (cat as { icon?: string; iconImage?: string }).iconImage) && (
-                    <div className="absolute bottom-16 right-4 h-10 w-10 rounded-full flex items-center justify-center text-lg bg-white/90 backdrop-blur-sm shadow-md overflow-hidden">
+                    <div className="absolute bottom-16 right-4 h-10 w-10 rounded-full flex items-center justify-center text-lg bg-card/90 backdrop-blur-sm shadow-md overflow-hidden">
                       {(cat as { iconImage?: string }).iconImage ? (
                         <img src={(cat as { iconImage?: string }).iconImage} alt="" className="h-full w-full object-cover" />
                       ) : (
@@ -145,7 +145,7 @@ function CollectionSlider() {
                       )}
                     </div>
                   )}
-                  <div className="absolute bottom-4 left-4 right-4 text-white">
+                  <div className="absolute bottom-4 left-4 right-4 text-background">
                     <p className="text-[10px] uppercase tracking-[0.15em] mb-1 opacity-70">Collection</p>
                     <h3 className="font-serif text-lg font-medium leading-snug mb-1.5">{cat.name}</h3>
                     <span className="text-xs opacity-80 flex items-center gap-1 group-hover:gap-2.5 transition-all duration-300">

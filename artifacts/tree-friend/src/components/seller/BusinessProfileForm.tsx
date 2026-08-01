@@ -243,7 +243,7 @@ export function BusinessProfileForm() {
       {/* Vacation mode */}
       <SectionCard
         icon={PalmtreeIcon}
-        iconClass="bg-amber-50 text-amber-700"
+        iconClass="bg-warning text-warning-foreground"
         title="Vacation Mode"
         subtitle="Temporarily hide your listings from buyers."
       >
@@ -270,7 +270,7 @@ export function BusinessProfileForm() {
       {/* Verification */}
       <SectionCard
         icon={BadgeCheck}
-        iconClass="bg-emerald-50 text-emerald-700"
+        iconClass="bg-success text-success-foreground"
         title="Verified Seller Badge"
         subtitle="Earn a verified checkmark buyers see on your listings."
       >
@@ -283,12 +283,12 @@ export function BusinessProfileForm() {
             </p>
           </div>
           {seller.isVerified ? (
-            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 rounded-full px-3 py-1.5 ring-1 ring-emerald-200/60 shrink-0">
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-success-foreground bg-success rounded-full px-3 py-1.5 ring-1 ring-success-border/60 shrink-0">
               <CheckCircle2 className="h-4 w-4" />
               Verified
             </span>
           ) : seller.verificationRequestStatus === "requested" ? (
-            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-700 bg-amber-50 rounded-full px-3 py-1.5 ring-1 ring-amber-200/60 shrink-0">
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-warning-foreground bg-warning rounded-full px-3 py-1.5 ring-1 ring-warning-border/60 shrink-0">
               <Clock className="h-4 w-4" />
               Pending review
             </span>
@@ -315,7 +315,7 @@ export function BusinessProfileForm() {
         )}
 
         {seller.verificationRequestStatus === "rejected" && (
-          <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
+          <p className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
             <ShieldAlert className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             Your last request wasn't approved{seller.verificationRejectionReason ? `: ${seller.verificationRejectionReason}` : "."} You can request again once you've addressed this.
           </p>
@@ -325,7 +325,7 @@ export function BusinessProfileForm() {
       {/* Business profile */}
       <SectionCard
         icon={Store}
-        iconClass="bg-violet-50 text-violet-700"
+        iconClass="bg-info text-info-foreground"
         title="Business Profile"
         subtitle="Your public business and nursery details shown to buyers."
       >
@@ -366,7 +366,7 @@ export function BusinessProfileForm() {
       {/* Logo */}
       <SectionCard
         icon={ImageIcon}
-        iconClass="bg-sky-50 text-sky-700"
+        iconClass="bg-info text-info-foreground"
         title="Store Logo"
         subtitle="Shown as your square avatar on buyer-facing listing pages."
       >
@@ -399,7 +399,7 @@ export function BusinessProfileForm() {
       {/* Nursery photos */}
       <SectionCard
         icon={ImageIcon}
-        iconClass="bg-emerald-50 text-emerald-700"
+        iconClass="bg-success text-success-foreground"
         title="Nursery Photos"
         subtitle="Show buyers what your nursery looks like — builds trust."
       >
@@ -427,7 +427,7 @@ export function BusinessProfileForm() {
       {/* Verification doc */}
       <SectionCard
         icon={FileText}
-        iconClass="bg-amber-50 text-amber-700"
+        iconClass="bg-warning text-warning-foreground"
         title="Trade License / NID"
         subtitle="Optional document to speed up admin verification."
       >
@@ -446,7 +446,7 @@ export function BusinessProfileForm() {
               <button
                 type="button"
                 onClick={() => set("nidOrTradeLicenseUrl", null)}
-                className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-rose-50 transition-colors shrink-0"
+                className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
                 title="Remove document"
               >
                 <X className="h-4 w-4" />
@@ -461,13 +461,13 @@ export function BusinessProfileForm() {
           )}
 
           {seller.status === "pending_verification" && (
-            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
+            <p className="text-xs text-warning-foreground bg-warning border border-warning-border rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
               <ShieldAlert className="h-3.5 w-3.5 shrink-0 mt-0.5" />
               Your application is pending admin review — uploading a trade license or NID helps verification go faster.
             </p>
           )}
           {seller.status === "active" && draft.nidOrTradeLicenseUrl && (
-            <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
+            <p className="text-xs text-success-foreground bg-success border border-success-border rounded-lg px-3 py-2 mt-3 flex items-start gap-1.5">
               <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5" />
               Document on file.
             </p>

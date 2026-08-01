@@ -76,14 +76,14 @@ export function BlogPage() {
                 <BookOpen className="h-16 w-16 text-muted-foreground/30" />
               </div>
             )}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-            <div className="absolute bottom-0 left-0 p-6 md:p-8 text-white">
+            <div className="absolute inset-0 bg-gradient-to-t from-foreground/70 via-foreground/20 to-transparent" />
+            <div className="absolute bottom-0 left-0 p-6 md:p-8 text-background">
               <div className="flex items-center gap-3 mb-3">
-                <span className="bg-accent text-white text-xs px-3 py-1 rounded-full">{featured.category}</span>
-                <span className="text-white/70 text-xs flex items-center gap-1"><Clock className="h-3 w-3" />{featured.readTime}</span>
+                <span className="bg-accent text-accent-foreground text-xs px-3 py-1 rounded-full">{featured.category}</span>
+                <span className="text-background/70 text-xs flex items-center gap-1"><Clock className="h-3 w-3" />{featured.readTime}</span>
               </div>
               <h2 className="font-serif text-xl md:text-2xl font-medium mb-2">{featured.title}</h2>
-              <p className="text-white/80 text-sm line-clamp-2 max-w-xl">{featured.excerpt}</p>
+              <p className="text-background/80 text-sm line-clamp-2 max-w-xl">{featured.excerpt}</p>
               <div className="mt-4 flex items-center gap-1.5 text-accent text-sm font-medium">
                 Read Article <ArrowRight className="h-4 w-4" />
               </div>

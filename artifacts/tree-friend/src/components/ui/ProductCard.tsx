@@ -88,7 +88,7 @@ function ProductCardInner({
           )}
           <div className="absolute top-3 left-3 flex flex-col gap-1">
             {!hasListings && (
-              <Badge className="bg-gray-500 text-white text-xs font-medium shadow-sm">
+              <Badge className="bg-muted text-muted-foreground text-xs font-medium shadow-sm">
                 Currently Unavailable
               </Badge>
             )}
@@ -102,7 +102,7 @@ function ProductCardInner({
           </button>
           <button
             onClick={handleWishlist}
-            className={"absolute top-3 right-3 p-2 rounded-full bg-background/85 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110 " + (isWishlisted ? "text-rose-500 opacity-100" : "text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-rose-500")}
+            className={"absolute top-3 right-3 p-2 rounded-full bg-background/85 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110 " + (isWishlisted ? "text-destructive opacity-100" : "text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive")}
             aria-label={isWishlisted ? "Remove from wishlist" : "Add to wishlist"}
           >
             <Heart className={"h-4 w-4 " + (isWishlisted ? "fill-current" : "")} />

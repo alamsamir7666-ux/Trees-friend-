@@ -69,11 +69,11 @@ export function ReferralSection() {
     <div className="space-y-4">
       {/* Affiliate Stats - only shown if user is an affiliate */}
       {affiliate && (
-        <div className="rounded-2xl border bg-gradient-to-br from-amber-50/50 to-background p-6">
+        <div className="rounded-2xl border bg-gradient-to-br from-warning/30 to-background p-6">
           <div className="flex items-center gap-2 mb-1">
-            <TrendingUp className="h-5 w-5 text-amber-600" />
+            <TrendingUp className="h-5 w-5 text-warning-foreground" />
             <h3 className="font-semibold text-base">Your Affiliate Stats</h3>
-            <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${affiliate.isActive ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+            <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${affiliate.isActive ? "bg-success text-success-foreground" : "bg-destructive/10 text-destructive"}`}>
               {affiliate.isActive ? "Active" : "Inactive"}
             </span>
           </div>
@@ -83,14 +83,14 @@ export function ReferralSection() {
 
           <div className="grid grid-cols-3 gap-3">
             <div className="rounded-xl bg-muted/50 p-3 text-center">
-              <ShoppingBag className="h-4 w-4 text-amber-600 mx-auto mb-1" />
-              <p className="text-xl font-bold text-amber-600">{affiliate.totalOrders}</p>
+              <ShoppingBag className="h-4 w-4 text-warning-foreground mx-auto mb-1" />
+              <p className="text-xl font-bold text-warning-foreground">{affiliate.totalOrders}</p>
               <p className="text-xs text-muted-foreground mt-0.5">Orders</p>
             </div>
 
             <div className="rounded-xl bg-muted/50 p-3 text-center">
-              <TrendingUp className="h-4 w-4 text-amber-600 mx-auto mb-1" />
-              <p className="text-xl font-bold text-amber-600">Tk{affiliate.totalCommission.toLocaleString()}</p>
+              <TrendingUp className="h-4 w-4 text-warning-foreground mx-auto mb-1" />
+              <p className="text-xl font-bold text-warning-foreground">Tk{affiliate.totalCommission.toLocaleString()}</p>
               <p className="text-xs text-muted-foreground mt-0.5">Commission</p>
             </div>
           </div>
@@ -102,7 +102,7 @@ export function ReferralSection() {
           {/* Cashout button */}
           <div className="mt-4">
             {cashoutError && <p className="text-xs text-destructive text-center mb-2">{cashoutError}</p>}
-            {cashoutSuccess && <p className="text-xs text-green-600 text-center mb-2">Cashout request sent! Admin will process it soon.</p>}
+            {cashoutSuccess && <p className="text-xs text-success-foreground text-center mb-2">Cashout request sent! Admin will process it soon.</p>}
             <Button
               className="w-full rounded-full"
               disabled={cashoutLoading || affiliate.totalCommission < 500 || cashouts.some((c: any) => c.status === "pending")}
@@ -126,9 +126,9 @@ export function ReferralSection() {
                     <p className="text-xs text-muted-foreground">{new Date(co.createdAt).toLocaleDateString()}</p>
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                    co.status === "approved" ? "bg-green-100 text-green-700" :
-                    co.status === "rejected" ? "bg-red-100 text-red-600" :
-                    "bg-yellow-100 text-yellow-700"
+                    co.status === "approved" ? "bg-success text-success-foreground" :
+                    co.status === "rejected" ? "bg-destructive/10 text-destructive" :
+                    "bg-warning text-warning-foreground"
                   }`}>{co.status}</span>
                 </div>
               ))}
@@ -164,7 +164,7 @@ export function ReferralSection() {
               {data.code}
             </div>
             <Button size="sm" variant="outline" className="rounded-xl gap-1.5 shrink-0" onClick={handleCopy} aria-label="Copy referral link">
-              {copied ? <><Check className="h-4 w-4 text-green-500" />Copied!</> : <><Copy className="h-4 w-4" />Copy Link</>}
+              {copied ? <><Check className="h-4 w-4 text-success-foreground" />Copied!</> : <><Copy className="h-4 w-4" />Copy Link</>}
             </Button>
           </div>
 
@@ -172,7 +172,7 @@ export function ReferralSection() {
             href={`https://wa.me/?text=${encodeURIComponent(`Hey! Use my code ${data.code} for Tk100 off your first order at Tree Friend - quality trees & plants for your home! ${data.shareUrl}`)}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="mt-3 w-full flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium py-2.5 px-4 rounded-xl transition-colors"
+            className="mt-3 w-full flex items-center justify-center gap-2 bg-success-foreground hover:bg-success-foreground/90 text-success text-sm font-medium py-2.5 px-4 rounded-xl transition-colors"
           >
             <Gift className="h-4 w-4" />
             Share on WhatsApp

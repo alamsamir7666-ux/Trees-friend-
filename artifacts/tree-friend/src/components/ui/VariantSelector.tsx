@@ -51,7 +51,7 @@ export function VariantSelector({ variants, selected, onVariantChange }: Variant
                 >
                   {v.name}
                   {v.stock > 0 && v.stock <= 5 && (
-                    <span className="ml-1.5 text-xs text-amber-500">({v.stock} left)</span>
+                    <span className="ml-1.5 text-xs text-warning-foreground">({v.stock} left)</span>
                   )}
                 </button>
               ))}

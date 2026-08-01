@@ -169,7 +169,7 @@ export function EmailPreferencesPage() {
               {saving ? (
                 <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving?</>
               ) : saved ? (
-                <><Check className="h-4 w-4 mr-2 text-green-300" /> Saved!</>
+                <><Check className="h-4 w-4 mr-2 text-success-foreground" /> Saved!</>
               ) : (
                 "Save Preferences"
               )}

@@ -131,10 +131,10 @@ export function PhotoReviewForm({ productId, onSuccess, onCancel }: PhotoReviewF
               <img src={src} alt={`Preview ${i + 1}`} className="h-full w-full object-cover" />
               <button
                 onClick={() => removePhoto(i)}
-                className="absolute top-1 right-1 h-5 w-5 rounded-full bg-black/60 flex items-center justify-center"
+                className="absolute top-1 right-1 h-5 w-5 rounded-full bg-foreground/60 flex items-center justify-center"
                 type="button"
               >
-                <X className="h-3 w-3 text-white" />
+                <X className="h-3 w-3 text-background" />
               </button>
             </div>
           ))}

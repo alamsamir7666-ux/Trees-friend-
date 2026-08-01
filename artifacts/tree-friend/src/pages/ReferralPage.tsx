@@ -82,7 +82,7 @@ export default function ReferralPage() {
           <p className="text-sm text-muted-foreground mt-1">Friends Referred</p>
         </div>
         <div className="bg-card border border-border rounded-2xl p-5 text-center">
-          <p className="text-3xl font-bold text-green-600">{data?.successfulReferrals ?? 0}</p>
+          <p className="text-3xl font-bold text-success-foreground">{data?.successfulReferrals ?? 0}</p>
           <p className="text-sm text-muted-foreground mt-1">Successful Orders</p>
         </div>
       </div>
@@ -107,7 +107,7 @@ export default function ReferralPage() {
               onClick={handleCopy}
               className="shrink-0 rounded-xl"
             >
-              {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+              {copied ? <Check className="h-4 w-4 text-success-foreground" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>
         )}

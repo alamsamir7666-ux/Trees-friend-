@@ -96,25 +96,25 @@ export function BecomeSellerContent() {
     const statusMap: Record<string, { icon: React.ElementType; color: string; title: string; body: string }> = {
       pending_verification: {
         icon: Clock,
-        color: "text-amber-600 bg-amber-50 border-amber-200",
+        color: "text-warning-foreground bg-warning border-warning-border",
         title: "Application under review",
         body: "We're reviewing your documents. You'll be notified once your seller account is approved.",
       },
       active: {
         icon: CheckCircle2,
-        color: "text-emerald-600 bg-emerald-50 border-emerald-200",
+        color: "text-success-foreground bg-success border-success-border",
         title: "You're an approved seller",
         body: "Your seller account is active. Head to your seller dashboard to start listing.",
       },
       suspended: {
         icon: XCircle,
-        color: "text-red-600 bg-red-50 border-red-200",
+        color: "text-destructive bg-destructive/10 border-destructive/20",
         title: "Account suspended",
         body: "Your seller account is currently suspended. Contact support for more information.",
       },
       vacation: {
         icon: Clock,
-        color: "text-blue-600 bg-blue-50 border-blue-200",
+        color: "text-info-foreground bg-info border-info-border",
         title: "Vacation mode",
         body: "Your listings are hidden while you're on vacation mode. Turn it off from your seller dashboard to go live again.",
       },

@@ -9,12 +9,12 @@ import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 
 function PointsBadge({ points }: { points: number }) {
   return (
-    <div className="relative bg-gradient-to-br from-accent to-pink-400 rounded-2xl p-6 text-white overflow-hidden">
-      <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -translate-y-1/2 translate-x-1/2" />
-      <div className="absolute bottom-0 left-0 w-20 h-20 bg-white/10 rounded-full translate-y-1/2 -translate-x-1/2" />
+    <div className="relative bg-gradient-to-br from-accent to-accent/70 rounded-2xl p-6 text-accent-foreground overflow-hidden">
+      <div className="absolute top-0 right-0 w-32 h-32 bg-card/10 rounded-full -translate-y-1/2 translate-x-1/2" />
+      <div className="absolute bottom-0 left-0 w-20 h-20 bg-card/10 rounded-full translate-y-1/2 -translate-x-1/2" />
       <div className="relative">
         <div className="flex items-center gap-2 mb-1">
-          <Star className="h-4 w-4 fill-white" />
+          <Star className="h-4 w-4 fill-accent-foreground" />
           <span className="text-sm font-medium opacity-90">Your Balance</span>
         </div>
         <p className="text-4xl font-bold tracking-tight">{points.toLocaleString()}</p>
@@ -121,7 +121,7 @@ export default function LoyaltyPage() {
               </div>
               <span
                 className={`font-semibold text-sm ${
-                  t.points > 0 ? "text-green-600" : "text-destructive"
+                  t.points > 0 ? "text-success-foreground" : "text-destructive"
                 }`}
               >
                 {t.points > 0 ? "+" : ""}{t.points} pts

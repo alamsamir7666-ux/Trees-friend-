@@ -39,7 +39,7 @@ export function StockAlert({ productId }: { productId: number }) {
 
   if (subscribed) {
     return (
-      <div className="flex items-center gap-2 text-green-600 text-sm font-medium py-2">
+      <div className="flex items-center gap-2 text-success-foreground text-sm font-medium py-2">
         <Check className="h-4 w-4" />
         You'll be notified when this is back in stock
       </div>

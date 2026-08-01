@@ -242,21 +242,21 @@ export function SellerListingDetailPage() {
                 )}
               </div>
               <div className="min-w-0 flex flex-col gap-0.5">
-                <h3 className="flex items-center gap-1.5 truncate text-[13px] font-bold text-[#111827]">
+                <h3 className="flex items-center gap-1.5 truncate text-[13px] font-bold text-foreground">
                   {seller.nurseryName}
                   {seller.isVerified && (
                     <img src={ICON_VERIFIED} alt="Verified" className="w-4 h-4 shrink-0" />
                   )}
                 </h3>
                 <div className="flex items-center gap-1">
-                  <MapPin className="w-3 h-3 text-[#9CA3AF] shrink-0" strokeWidth={1.5} />
-                  <span className="text-[10px] font-medium text-[#6B7280] leading-[1.2]">{seller.location}</span>
+                  <MapPin className="w-3 h-3 text-muted-foreground/70 shrink-0" strokeWidth={1.5} />
+                  <span className="text-[10px] font-medium text-muted-foreground leading-[1.2]">{seller.location}</span>
                 </div>
               </div>
             </div>
             <Link
               href={`/store/${seller.id}`}
-              className="border bg-white shrink-0 h-7 px-[10px] rounded-md text-[11px] font-semibold text-[#111827] flex items-center hover:bg-[#F9FAFB] transition-colors"
+              className="border bg-card shrink-0 h-7 px-[10px] rounded-md text-[11px] font-semibold text-foreground flex items-center hover:bg-muted/50 transition-colors"
             >
               View Store
             </Link>
@@ -298,7 +298,7 @@ export function SellerListingDetailPage() {
 
           {/* Options + price + actions */}
           <div className="border rounded-2xl bg-card flex flex-col gap-[14px] p-[14px]">
-            <h2 className="text-[14px] font-bold text-[#111827]">
+            <h2 className="text-[14px] font-bold text-foreground">
               Available Option{listing.variants.length > 1 ? "s" : ""}
             </h2>
 
@@ -310,7 +310,7 @@ export function SellerListingDetailPage() {
                     key={v.id}
                     onClick={() => setSelectedVariantId(v.id)}
                     className={`shrink-0 flex items-center justify-center gap-1 whitespace-nowrap min-w-[80px] h-8 rounded-md text-xs font-semibold border ${
-                      active ? "border-[#15803D] text-[#15803D] bg-[#DCFCE7]" : "border-[#E5E7EB] text-[#6B7280] bg-white"
+                      active ? "border-success-border text-success-foreground bg-success" : "border-border text-muted-foreground bg-card"
                     }`}
                   >
                     {v.form === "grafted" && <img src={ICON_GRAFTED} alt="" className="w-3.5 h-3.5" />}
@@ -323,18 +323,18 @@ export function SellerListingDetailPage() {
             <div className="flex items-center justify-between flex-wrap gap-2">
               {reviewCount > 0 && (
                 <div className="flex items-center gap-1">
-                  <Star className="w-4 h-4 fill-[#15803D] text-[#15803D]" />
-                  <span className="text-[15px] font-bold text-[#15803D]">{rating.toFixed(1)}</span>
-                  <span className="text-[13px] font-medium text-[#6B7280]">({reviewCount} review{reviewCount !== 1 ? "s" : ""})</span>
+                  <Star className="w-4 h-4 fill-success-foreground text-success-foreground" />
+                  <span className="text-[15px] font-bold text-success-foreground">{rating.toFixed(1)}</span>
+                  <span className="text-[13px] font-medium text-muted-foreground">({reviewCount} review{reviewCount !== 1 ? "s" : ""})</span>
                 </div>
               )}
               <div className="flex items-center gap-2">
-                <span className="text-[19px] font-bold text-[#15803D]">৳{price.toLocaleString()}</span>
+                <span className="text-[19px] font-bold text-success-foreground">৳{price.toLocaleString()}</span>
                 {selectedVariant?.discountPrice != null && (
                   <>
-                    <span className="text-[13px] font-medium text-[#9CA3AF] line-through">৳{originalPrice.toLocaleString()}</span>
+                    <span className="text-[13px] font-medium text-muted-foreground/70 line-through">৳{originalPrice.toLocaleString()}</span>
                     {discountPct != null && discountPct > 0 && (
-                      <span className="bg-[#DCFCE7] text-[#15803D] text-[11px] font-semibold px-[6px] py-[3px] rounded">{discountPct}% OFF</span>
+                      <span className="bg-success text-success-foreground text-[11px] font-semibold px-[6px] py-[3px] rounded">{discountPct}% OFF</span>
                     )}
                   </>
                 )}
@@ -345,7 +345,7 @@ export function SellerListingDetailPage() {
               {addDisabled ? (
                 selectedVariant?.isPreOrder ? (
                   <Link href={selectedVariant ? preOrderHref(selectedVariant) : "#"} className="flex-1">
-                    <Button className="w-full rounded-lg bg-blue-500 text-white hover:bg-blue-600">
+                    <Button className="w-full rounded-lg bg-info text-info-foreground hover:bg-info/90">
                       <Ship className="mr-1.5 h-4 w-4" /> Pre-Order Now
                     </Button>
                   </Link>
@@ -358,7 +358,7 @@ export function SellerListingDetailPage() {
                 <button
                   onClick={handleAddToBag}
                   disabled={isAdding}
-                  className="flex-1 flex items-center justify-center gap-1.5 h-10 bg-[#15803D] text-white border-none rounded-lg text-sm font-semibold"
+                  className="flex-1 flex items-center justify-center gap-1.5 h-10 bg-primary text-primary-foreground border-none rounded-lg text-sm font-semibold"
                 >
                   {!user ? (
                     <><LogIn className="w-4 h-4" /> Sign in to buy</>
@@ -375,19 +375,19 @@ export function SellerListingDetailPage() {
                 </button>
               )}
 
-              <div className="flex items-center justify-between shrink-0 w-24 h-10 border border-[#E5E7EB] rounded-lg px-3">
+              <div className="flex items-center justify-between shrink-0 w-24 h-10 border border-border rounded-lg px-3">
                 <button
                   onClick={() => setQuantity((q) => Math.max(1, q - 1))}
                   disabled={quantity <= 1}
-                  className="flex items-center bg-transparent border-none text-[#6B7280] disabled:opacity-30"
+                  className="flex items-center bg-transparent border-none text-muted-foreground disabled:opacity-30"
                   aria-label="Decrease quantity"
                 >
                   <Minus className="w-3.5 h-3.5" />
                 </button>
-                <span className="text-sm font-semibold text-[#111827]">{quantity}</span>
+                <span className="text-sm font-semibold text-foreground">{quantity}</span>
                 <button
                   onClick={() => setQuantity((q) => q + 1)}
-                  className="flex items-center bg-transparent border-none text-[#6B7280]"
+                  className="flex items-center bg-transparent border-none text-muted-foreground"
                   aria-label="Increase quantity"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -396,17 +396,17 @@ export function SellerListingDetailPage() {
 
               <button
                 onClick={handleWishlistToggle}
-                className="shrink-0 flex items-center justify-center w-10 h-10 border border-[#E5E7EB] rounded-lg bg-white"
+                className="shrink-0 flex items-center justify-center w-10 h-10 border border-border rounded-lg bg-card"
                 aria-label={wishlisted ? "Remove from wishlist" : "Add to wishlist"}
               >
-                <Heart className={`w-5 h-5 ${wishlisted ? "fill-rose-500 stroke-rose-500" : "stroke-[#111827] fill-none"}`} />
+                <Heart className={`w-5 h-5 ${wishlisted ? "fill-destructive stroke-destructive" : "stroke-foreground fill-none"}`} />
               </button>
             </div>
 
             {/* Specs grid -- Tailwind arbitrary values from the design
                 HTML's .specs-box / .spec-item rules */}
             {selectedVariant && (
-              <div className="border border-[#E5E7EB] rounded-lg grid grid-cols-3 overflow-hidden">
+              <div className="border border-border rounded-lg grid grid-cols-3 overflow-hidden">
                 {[
                   { icon: ICON_AGE, title: "Age", value: selectedVariant.age },
                   { icon: ICON_HEIGHT, title: "Height", value: selectedVariant.height },
@@ -419,17 +419,17 @@ export function SellerListingDetailPage() {
                     key={i}
                     className="flex flex-col items-center justify-center text-center gap-1.5 p-[12px_4px] min-h-[62px]"
                     style={{
-                      borderRight: (i + 1) % 3 !== 0 ? "1px solid #E5E7EB" : "none",
-                      borderBottom: i < arr.length - 3 ? "1px solid #E5E7EB" : "none",
+                      borderRight: (i + 1) % 3 !== 0 ? "1px solid hsl(var(--border))" : "none",
+                      borderBottom: i < arr.length - 3 ? "1px solid hsl(var(--border))" : "none",
                     }}
                   >
                     {s.icon ? (
                       <img src={s.icon} alt={s.title} className="w-7 h-7 object-contain" />
                     ) : (
-                      <ReturnPolicyIcon className="w-7 h-7 text-[#111827]" />
+                      <ReturnPolicyIcon className="w-7 h-7 text-foreground" />
                     )}
-                    <span className="text-xs font-semibold text-[#111827]">{s.title}</span>
-                    <span className="text-[11px] font-medium text-[#6B7280] leading-[1.3]">{s.value}</span>
+                    <span className="text-xs font-semibold text-foreground">{s.title}</span>
+                    <span className="text-[11px] font-medium text-muted-foreground leading-[1.3]">{s.value}</span>
                   </div>
                 ))}
               </div>
@@ -438,12 +438,12 @@ export function SellerListingDetailPage() {
             {/* Stock + delivery -- Tailwind arbitrary values from
                 .stock-delivery-box */}
             {selectedVariant && (
-              <div className="flex h-[38px] border border-[#E5E7EB] rounded-lg overflow-hidden">
-                <div className="flex items-center justify-center flex-1 gap-1.5 text-[13px] font-semibold text-[#111827] border-r border-[#E5E7EB]">
+              <div className="flex h-[38px] border border-border rounded-lg overflow-hidden">
+                <div className="flex items-center justify-center flex-1 gap-1.5 text-[13px] font-semibold text-foreground border-r border-border">
                   <img src={ICON_STOCK} alt="" className="w-5 h-5" />
                   {inStock ? `${selectedVariant.availableQuantity} in stock` : "Out of stock"}
                 </div>
-                <div className="flex items-center justify-center flex-1 gap-1.5 text-[13px] font-semibold text-[#111827]">
+                <div className="flex items-center justify-center flex-1 gap-1.5 text-[13px] font-semibold text-foreground">
                   <img src={ICON_DELIVERY} alt="" className="w-5 h-5" />
                   {selectedVariant.deliveryCharge > 0 ? `৳${selectedVariant.deliveryCharge} delivery` : "Free delivery"}
                 </div>
@@ -455,16 +455,16 @@ export function SellerListingDetailPage() {
           <div className="border rounded-2xl bg-card overflow-hidden">
             {listing.description && (
               <div className="p-4">
-                <h4 className="text-sm font-bold text-[#111827] mb-2">Description</h4>
+                <h4 className="text-sm font-bold text-foreground mb-2">Description</h4>
                 <p
-                  className={`text-[13px] font-normal leading-[1.5] text-[#6B7280] mb-2 ${!descExpanded ? "line-clamp-3" : ""}`}
+                  className={`text-[13px] font-normal leading-[1.5] text-muted-foreground mb-2 ${!descExpanded ? "line-clamp-3" : ""}`}
                 >
                   {listing.description}
                 </p>
                 {listing.description.length > 140 && (
                   <button
                     onClick={() => setDescExpanded((v) => !v)}
-                    className="flex items-center gap-1 text-[13px] font-semibold text-[#15803D] bg-transparent border-none"
+                    className="flex items-center gap-1 text-[13px] font-semibold text-success-foreground bg-transparent border-none"
                   >
                     {descExpanded ? "Show Less" : "Read More"}
                     <ChevronDown className={`w-3.5 h-3.5 transition-transform ${descExpanded ? "rotate-180" : ""}`} />
@@ -474,16 +474,16 @@ export function SellerListingDetailPage() {
             )}
 
             {listing.offerText && (
-              <p className="text-[13px] text-[#15803D] font-medium px-4 pb-3">{listing.offerText}</p>
+              <p className="text-[13px] text-success-foreground font-medium px-4 pb-3">{listing.offerText}</p>
             )}
 
             {listing.certification && (
-              <div className="flex items-center justify-between p-[14px_12px] border-t border-[#E5E7EB]">
-                <span className="flex items-center gap-[5px] text-xs font-semibold text-[#111827]">
+              <div className="flex items-center justify-between p-[14px_12px] border-t border-border">
+                <span className="flex items-center gap-[5px] text-xs font-semibold text-foreground">
                   <img src={ICON_CERTIFICATION} alt="" className="w-7 h-7 object-contain" />
                   Certification
                 </span>
-                <span className="flex items-center gap-1 text-xs font-semibold text-[#111827]">
+                <span className="flex items-center gap-1 text-xs font-semibold text-foreground">
                   {listing.certification}
                   <img src={ICON_CERT_CHECK} alt="" className="w-3 h-3 object-contain" />
                 </span>
@@ -491,22 +491,22 @@ export function SellerListingDetailPage() {
             )}
 
             {listing.tags.length > 0 && (
-              <div className="flex items-center gap-[5px] p-[14px_12px] border-t border-[#E5E7EB]">
-                <Tag className="w-4 h-4 text-[#111827] shrink-0" strokeWidth={1.5} />
-                <span className="text-xs font-semibold text-[#111827]">Tags</span>
+              <div className="flex items-center gap-[5px] p-[14px_12px] border-t border-border">
+                <Tag className="w-4 h-4 text-foreground shrink-0" strokeWidth={1.5} />
+                <span className="text-xs font-semibold text-foreground">Tags</span>
                 <div className="flex gap-1 overflow-x-auto [scrollbar-width:none]">
                   {listing.tags.map((t, i) => (
-                    <span key={i} className="bg-[#DCFCE7] text-[#15803D] px-2 py-0.5 rounded text-[10px] font-medium whitespace-nowrap">{t}</span>
+                    <span key={i} className="bg-success text-success-foreground px-2 py-0.5 rounded text-[10px] font-medium whitespace-nowrap">{t}</span>
                   ))}
                 </div>
               </div>
             )}
 
-            <div className="flex items-center justify-between p-[14px_12px] border-t border-[#E5E7EB]">
-              <span className="flex items-center gap-[5px] text-xs font-semibold text-[#111827]">
-                <Eye className="w-4 h-4 text-[#111827]" strokeWidth={1.5} /> Visibility
+            <div className="flex items-center justify-between p-[14px_12px] border-t border-border">
+              <span className="flex items-center gap-[5px] text-xs font-semibold text-foreground">
+                <Eye className="w-4 h-4 text-foreground" strokeWidth={1.5} /> Visibility
               </span>
-              <span className="text-xs font-medium text-[#6B7280] capitalize">{listing.visibility}</span>
+              <span className="text-xs font-medium text-muted-foreground capitalize">{listing.visibility}</span>
             </div>
           </div>
         </div>

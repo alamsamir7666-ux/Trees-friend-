@@ -28,7 +28,7 @@ export function NewsletterForm() {
   if (done) {
     return (
       <div className="flex items-center gap-2 text-sm text-background/80">
-        <Check className="h-4 w-4 text-green-400" />
+        <Check className="h-4 w-4 text-success-foreground" />
         You're subscribed! Thank you.
       </div>
     );

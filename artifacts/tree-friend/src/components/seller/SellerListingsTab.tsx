@@ -23,9 +23,9 @@ const APPROVAL_BADGE: Record<
   string,
   { icon: React.ElementType; className: string; label: string }
 > = {
-  pending: { icon: Clock, className: "bg-amber-50 text-amber-700 ring-amber-200/60", label: "Pending" },
-  approved: { icon: CheckCircle2, className: "bg-emerald-50 text-emerald-700 ring-emerald-200/60", label: "Approved" },
-  rejected: { icon: XCircle, className: "bg-rose-50 text-rose-700 ring-rose-200/60", label: "Rejected" },
+  pending: { icon: Clock, className: "bg-warning text-warning-foreground ring-warning-border/60", label: "Pending" },
+  approved: { icon: CheckCircle2, className: "bg-success text-success-foreground ring-success-border/60", label: "Approved" },
+  rejected: { icon: XCircle, className: "bg-destructive/10 text-destructive ring-destructive/20", label: "Rejected" },
 };
 
 function variantPriceStockSummary(variants: SellerListing["variants"]): {
@@ -138,10 +138,10 @@ export function SellerListingsTab() {
   }
 
   const statCards = [
-    { label: "Total Listings", value: stats.total, icon: Package2, color: "bg-violet-50 text-violet-700" },
-    { label: "Approved", value: stats.approved, icon: CheckCircle2, color: "bg-emerald-50 text-emerald-700" },
-    { label: "Pending Review", value: stats.pending, icon: Clock, color: "bg-amber-50 text-amber-700" },
-    { label: "Low Stock", value: stats.lowStock, icon: AlertCircle, color: "bg-rose-50 text-rose-700" },
+    { label: "Total Listings", value: stats.total, icon: Package2, color: "bg-info text-info-foreground" },
+    { label: "Approved", value: stats.approved, icon: CheckCircle2, color: "bg-success text-success-foreground" },
+    { label: "Pending Review", value: stats.pending, icon: Clock, color: "bg-warning text-warning-foreground" },
+    { label: "Low Stock", value: stats.lowStock, icon: AlertCircle, color: "bg-destructive/10 text-destructive" },
   ];
 
   return (
@@ -304,7 +304,7 @@ export function SellerListingsTab() {
                           {approval.label}
                         </span>
                         {l.approvalStatus === "rejected" && l.rejectionReason && (
-                          <p className="text-[10px] text-rose-600 mt-1 max-w-[160px] truncate" title={l.rejectionReason}>
+                          <p className="text-[10px] text-destructive mt-1 max-w-[160px] truncate" title={l.rejectionReason}>
                             {l.rejectionReason}
                           </p>
                         )}
@@ -315,7 +315,7 @@ export function SellerListingsTab() {
                       <td className="px-5 py-3.5">
                         <span className={cn(
                           "text-sm font-semibold tabular-nums",
-                          isLowStock && totalStock > 0 && "text-rose-600",
+                          isLowStock && totalStock > 0 && "text-destructive",
                           totalStock === 0 && "text-muted-foreground",
                         )}>
                           {totalStock}
@@ -326,7 +326,7 @@ export function SellerListingsTab() {
                       </td>
                       <td className="px-5 py-3.5">
                         {l.visibility === "public" ? (
-                          <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
+                          <span className="inline-flex items-center gap-1 text-xs text-success-foreground">
                             <Eye className="h-3 w-3" /> Visible
                           </span>
                         ) : (
@@ -335,7 +335,7 @@ export function SellerListingsTab() {
                           </span>
                         )}
                         {l.hiddenReason === "subscription_expired" && (
-                          <p className="text-[10px] text-amber-600 mt-0.5">Auto: sub expired</p>
+                          <p className="text-[10px] text-warning-foreground mt-0.5">Auto: sub expired</p>
                         )}
                       </td>
                       <td className="px-5 py-3.5">
@@ -358,7 +358,7 @@ export function SellerListingsTab() {
                           <button
                             onClick={() => handleDelete(l)}
                             disabled={deleteListing.isPending}
-                            className="p-1.5 rounded-lg text-muted-foreground hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                            className="p-1.5 rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
                             title="Delete"
                           >
                             {deleteListing.isPending && deleteListing.variables?.id === l.id ? (
@@ -433,7 +433,7 @@ export function SellerListingsTab() {
                     <button
                       onClick={() => handleDelete(l)}
                       disabled={deleteListing.isPending}
-                      className="p-1.5 rounded-lg text-muted-foreground hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                      className="p-1.5 rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
                       title="Delete"
                     >
                       <Trash2 className="h-4 w-4" />

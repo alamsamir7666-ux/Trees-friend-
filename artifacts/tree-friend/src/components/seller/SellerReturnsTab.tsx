@@ -22,10 +22,10 @@ const STATUS_META: Record<
   string,
   { label: string; icon: React.ElementType; chip: string; dot: string }
 > = {
-  requested: { label: "Requested", icon: Clock, chip: "bg-amber-50 text-amber-700 ring-amber-200/60", dot: "bg-amber-500" },
-  approved: { label: "Approved", icon: CheckCircle2, chip: "bg-sky-50 text-sky-700 ring-sky-200/60", dot: "bg-sky-500" },
-  rejected: { label: "Rejected", icon: XCircle, chip: "bg-rose-50 text-rose-700 ring-rose-200/60", dot: "bg-rose-500" },
-  completed: { label: "Completed", icon: PackageCheck, chip: "bg-emerald-50 text-emerald-700 ring-emerald-200/60", dot: "bg-emerald-500" },
+  requested: { label: "Requested", icon: Clock, chip: "bg-warning text-warning-foreground ring-warning-border/60", dot: "bg-warning-foreground" },
+  approved: { label: "Approved", icon: CheckCircle2, chip: "bg-info text-info-foreground ring-info-border/60", dot: "bg-info-foreground" },
+  rejected: { label: "Rejected", icon: XCircle, chip: "bg-destructive/10 text-destructive ring-destructive/20", dot: "bg-destructive" },
+  completed: { label: "Completed", icon: PackageCheck, chip: "bg-success text-success-foreground ring-success-border/60", dot: "bg-success-foreground" },
 };
 
 const STATUS_FILTERS = ["all", "requested", "approved", "rejected", "completed"] as const;
@@ -104,10 +104,10 @@ export function SellerReturnsTab() {
   }, [data]);
 
   const statCards = [
-    { label: "Total Returns", value: stats.total, icon: RotateCcw, color: "bg-violet-50 text-violet-700" },
-    { label: "Pending Action", value: stats.requested, icon: Clock, color: "bg-amber-50 text-amber-700" },
-    { label: "Approved", value: stats.approved, icon: CheckCircle2, color: "bg-sky-50 text-sky-700" },
-    { label: "Completed", value: stats.completed, icon: PackageCheck, color: "bg-emerald-50 text-emerald-700" },
+    { label: "Total Returns", value: stats.total, icon: RotateCcw, color: "bg-info text-info-foreground" },
+    { label: "Pending Action", value: stats.requested, icon: Clock, color: "bg-warning text-warning-foreground" },
+    { label: "Approved", value: stats.approved, icon: CheckCircle2, color: "bg-info text-info-foreground" },
+    { label: "Completed", value: stats.completed, icon: PackageCheck, color: "bg-success text-success-foreground" },
   ];
 
   return (
@@ -234,22 +234,22 @@ export function SellerReturnsTab() {
                   )}
 
                   {/* Reason */}
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-700 mb-1">Customer reason</p>
+                  <div className="bg-warning border border-warning-border rounded-xl px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-warning-foreground mb-1">Customer reason</p>
                     <p className="text-sm text-foreground">{ret.reason}</p>
                   </div>
 
                   {ret.adminNote && (
-                    <div className="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-sky-700 mb-1">Internal note</p>
+                    <div className="bg-info border border-info-border rounded-xl px-4 py-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-info-foreground mb-1">Internal note</p>
                       <p className="text-sm text-foreground">{ret.adminNote}</p>
                     </div>
                   )}
 
                   {ret.refundAmount != null && ret.status === "completed" && (
-                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between">
-                      <span className="text-sm font-medium text-emerald-700">Refund issued</span>
-                      <span className="text-lg font-bold text-emerald-700 tabular-nums">{formatTk(Number(ret.refundAmount))}</span>
+                    <div className="bg-success border border-success-border rounded-xl px-4 py-3 flex items-center justify-between">
+                      <span className="text-sm font-medium text-success-foreground">Refund issued</span>
+                      <span className="text-lg font-bold text-success-foreground tabular-nums">{formatTk(Number(ret.refundAmount))}</span>
                     </div>
                   )}
 
@@ -265,13 +265,13 @@ export function SellerReturnsTab() {
                         Approve Return
                       </Button>
                       {rejectingId === ret.id ? (
-                        <div className="flex-1 flex items-center gap-2 bg-rose-50 border border-rose-200 rounded-xl p-2">
+                        <div className="flex-1 flex items-center gap-2 bg-destructive/10 border border-destructive/20 rounded-xl p-2">
                           <input
                             autoFocus
                             value={rejectNote}
                             onChange={(e) => setRejectNote(e.target.value)}
                             placeholder="Reason (min 3 chars)…"
-                            className="flex-1 bg-card rounded-lg border border-border px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-rose-300"
+                            className="flex-1 bg-card rounded-lg border border-border px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-destructive/30"
                           />
                           <Button
                             size="sm"
@@ -296,7 +296,7 @@ export function SellerReturnsTab() {
                           variant="outline"
                           onClick={() => { setRejectingId(ret.id); setRejectNote(""); }}
                           disabled={isUpdating}
-                          className="flex-1 rounded-xl border-rose-200 text-rose-600 hover:bg-rose-50"
+                          className="flex-1 rounded-xl border-destructive/20 text-destructive hover:bg-destructive/10"
                         >
                           <XCircle className="h-4 w-4 mr-1.5" />
                           Reject

@@ -104,9 +104,9 @@ export function GiftCardsPage() {
       <div className="grid md:grid-cols-2 gap-10">
         {/* Purchase form */}
         <div className="space-y-6">
-          <div className="bg-gradient-to-br from-rose-50 to-pink-50 border border-rose-100 rounded-2xl p-6 flex items-center gap-4">
-            <div className="h-12 w-12 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
-              <Gift className="h-6 w-6 text-rose-500" />
+          <div className="bg-gradient-to-br from-destructive/10 to-destructive/5 border border-destructive/20 rounded-2xl p-6 flex items-center gap-4">
+            <div className="h-12 w-12 rounded-full bg-destructive/10 flex items-center justify-center shrink-0">
+              <Gift className="h-6 w-6 text-destructive" />
             </div>
             <div>
               <p className="font-semibold text-sm">Send the gift of a greener home</p>
@@ -206,12 +206,12 @@ export function GiftCardsPage() {
               <Button variant="outline" onClick={handleCheckBalance}>Check</Button>
             </div>
             {checkedBalance !== null && (
-              <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+              <p className="text-sm text-success-foreground bg-success border border-success-border rounded-lg px-3 py-2">
                 ? Available balance: <strong>Tk{checkedBalance.toLocaleString()}</strong>
               </p>
             )}
             {checkError && (
-              <p className="text-sm text-red-600">{checkError}</p>
+              <p className="text-sm text-destructive">{checkError}</p>
             )}
           </div>
 
@@ -238,7 +238,7 @@ export function GiftCardsPage() {
                           title="Copy code"
                         >
                           {copiedCode === card.code ? (
-                            <Check className="h-4 w-4 text-green-500" />
+                            <Check className="h-4 w-4 text-success-foreground" />
                           ) : (
                             <Copy className="h-4 w-4" />
                           )}

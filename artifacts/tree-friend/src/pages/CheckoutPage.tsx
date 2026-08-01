@@ -536,7 +536,7 @@ export function CheckoutPage() {
                           )}
                           <span className="text-muted-foreground font-normal">— Tk{g.subtotal.toLocaleString()}</span>
                           {largestGroupKey === g.sellerId && (discount > 0 || loyaltyDiscount > 0) && (
-                            <span className="text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded-full ml-1">Discount applied here</span>
+                            <span className="text-xs bg-success text-success-foreground px-2 py-0.5 rounded-full ml-1">Discount applied here</span>
                           )}
                         </h3>
                         <div className="grid grid-cols-2 gap-3">
@@ -628,7 +628,7 @@ export function CheckoutPage() {
                     {couponError && <p className="text-xs text-destructive mt-1.5">{couponError}</p>}
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2 text-sm text-green-600">
+                  <div className="flex items-center gap-2 text-sm text-success-foreground">
                     <CheckCircle2 className="h-4 w-4" />
                     Coupon applied: -Tk{discount.toLocaleString()}{isMultiSeller ? " (largest order)" : ""}
                   </div>
@@ -662,7 +662,7 @@ export function CheckoutPage() {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Delivery</span>
-                    <span>{shipping === 0 ? <span className="text-green-600">Free</span> : `Tk${shipping}`}</span>
+                    <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping}`}</span>
                   </div>
                   {giftWrap && (
                     <div className="flex justify-between">
@@ -671,13 +671,13 @@ export function CheckoutPage() {
                     </div>
                   )}
                   {discount > 0 && (
-                    <div className="flex justify-between text-green-600">
+                    <div className="flex justify-between text-success-foreground">
                       <span>Coupon Discount</span>
                       <span>-Tk{discount.toLocaleString()}</span>
                     </div>
                   )}
                   {loyaltyDiscount > 0 && (
-                    <div className="flex justify-between text-amber-600">
+                    <div className="flex justify-between text-warning-foreground">
                       <span>? Loyalty Points</span>
                       <span>-Tk{loyaltyDiscount.toLocaleString()}</span>
                     </div>

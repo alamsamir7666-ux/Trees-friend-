@@ -111,21 +111,21 @@ export function SellerMonthlyHistoryTab() {
       label: "Total Revenue",
       value: formatTk(summary.totalRevenue),
       icon: DollarSign,
-      color: "bg-emerald-50 text-emerald-700",
+      color: "bg-success text-success-foreground",
       sub: `across ${sortedRecords.length} month${sortedRecords.length === 1 ? "" : "s"}`,
     },
     {
       label: "Total Orders",
       value: summary.totalOrders.toLocaleString(),
       icon: ShoppingCart,
-      color: "bg-violet-50 text-violet-700",
+      color: "bg-info text-info-foreground",
       sub: "lifetime delivered",
     },
     {
       label: "Avg / Month",
       value: formatTk(summary.avgRevenuePerMonth),
       icon: TrendingUp,
-      color: "bg-amber-50 text-amber-700",
+      color: "bg-warning text-warning-foreground",
       sub: "revenue per month",
     },
     {
@@ -134,7 +134,7 @@ export function SellerMonthlyHistoryTab() {
         ? `${monthAbbr[(summary.bestMonth as any).month]} ${String((summary.bestMonth as any).year).slice(-2)}`
         : "—",
       icon: Calendar,
-      color: "bg-sky-50 text-sky-700",
+      color: "bg-info text-info-foreground",
       sub: summary.bestMonth ? formatTk(Number((summary.bestMonth as any).totalRevenue)) : "no data yet",
     },
   ];
@@ -319,7 +319,7 @@ export function SellerMonthlyHistoryTab() {
                       <span className="font-semibold text-foreground tabular-nums">{r.totalOrders}</span>
                     </td>
                     <td className="px-5 py-4 text-right">
-                      <span className="font-semibold text-emerald-700 tabular-nums">{formatTk(Number(r.totalRevenue))}</span>
+                      <span className="font-semibold text-success-foreground tabular-nums">{formatTk(Number(r.totalRevenue))}</span>
                     </td>
                     <td className="px-5 py-4 text-right">
                       <span className="text-muted-foreground tabular-nums">{formatTk(aov)}</span>

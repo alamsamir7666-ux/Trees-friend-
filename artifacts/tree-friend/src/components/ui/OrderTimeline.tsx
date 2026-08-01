@@ -72,11 +72,11 @@ export function OrderTimeline({ currentStatus, timeline = [] }: OrderTimelinePro
           <h3 className="font-medium text-sm">Order Status</h3>
         </div>
         <div className="px-6 py-6 flex items-center gap-4">
-          <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center shrink-0">
-            <XCircle className="h-6 w-6 text-red-500" />
+          <div className="h-12 w-12 rounded-full bg-destructive/10 flex items-center justify-center shrink-0">
+            <XCircle className="h-6 w-6 text-destructive" />
           </div>
           <div>
-            <p className="font-semibold text-red-700">Order Cancelled</p>
+            <p className="font-semibold text-destructive">Order Cancelled</p>
             {cancelEvent && (
               <p className="text-xs text-muted-foreground mt-0.5">{formatDate(cancelEvent.timestamp)}</p>
             )}
@@ -112,8 +112,8 @@ export function OrderTimeline({ currentStatus, timeline = [] }: OrderTimelinePro
                     className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 transition-colors ${
                       isDone
                         ? isCurrent
-                          ? "bg-accent text-white ring-4 ring-accent/20"
-                          : "bg-green-500 text-white"
+                          ? "bg-accent text-accent-foreground ring-4 ring-accent/20"
+                          : "bg-success-foreground text-success"
                         : "bg-muted text-muted-foreground"
                     }`}
                   >
@@ -126,7 +126,7 @@ export function OrderTimeline({ currentStatus, timeline = [] }: OrderTimelinePro
                   {!isLast && (
                     <div
                       className={`w-0.5 flex-1 mt-1 mb-1 min-h-[2rem] rounded-full transition-colors ${
-                        isDone && index < currentStepIndex ? "bg-green-400" : "bg-border"
+                        isDone && index < currentStepIndex ? "bg-success-foreground/70" : "bg-border"
                       }`}
                     />
                   )}

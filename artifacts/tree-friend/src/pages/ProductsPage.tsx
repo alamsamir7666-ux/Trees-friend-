@@ -281,7 +281,7 @@ export function ProductsPage() {
               onClick={() => setShowFilterPanel(v => !v)}
               className={`flex items-center gap-2 h-10 px-4 rounded-xl border text-sm font-medium transition-colors ${
                 showFilterPanel || activeFiltersCount > 0
-                  ? "border-accent bg-accent text-white"
+                  ? "border-accent bg-accent text-accent-foreground"
                   : "border-border bg-card text-foreground hover:border-accent/60"
               }`}
               aria-label="Toggle filters"
@@ -372,7 +372,7 @@ export function ProductsPage() {
                                 onClick={() => navigate(`/products?category=${allSlug}`)}
                                 className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
                                   activeCategory === allSlug
-                                    ? "bg-accent text-white border-accent"
+                                    ? "bg-accent text-accent-foreground border-accent"
                                     : "border-border text-muted-foreground bg-card hover:border-accent/60 hover:text-foreground"
                                 }`}
                               >All</button>
@@ -383,7 +383,7 @@ export function ProductsPage() {
                               onClick={() => navigate(`/products?category=${sub.slug}`)}
                               className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
                                 activeCategory === sub.slug
-                                  ? "bg-accent text-white border-accent"
+                                  ? "bg-accent text-accent-foreground border-accent"
                                   : "border-border text-muted-foreground bg-card hover:border-accent/60 hover:text-foreground"
                               }`}
                             >{sub.name}</button>
@@ -395,7 +395,7 @@ export function ProductsPage() {
                         onClick={() => navigate("/products")}
                         className={`mt-2 text-xs px-3 py-1.5 rounded-full border transition-colors ${
                           activeCategory === ""
-                            ? "bg-accent text-white border-accent"
+                            ? "bg-accent text-accent-foreground border-accent"
                             : "border-border text-muted-foreground bg-card hover:border-accent/60 hover:text-foreground"
                         }`}
                       >All Products</button>
@@ -414,7 +414,7 @@ export function ProductsPage() {
                       onClick={() => setMinRating(r)}
                       className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded-full border transition-colors ${
                         minRating === r
-                          ? "bg-accent text-white border-accent"
+                          ? "bg-accent text-accent-foreground border-accent"
                           : "border-border text-muted-foreground bg-card hover:border-accent/60"
                       }`}
                     >
