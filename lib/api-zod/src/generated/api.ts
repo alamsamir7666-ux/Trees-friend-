@@ -1086,8 +1086,20 @@ export const ListAllReviewsResponseItem = zod.object({
   "comment": zod.string(),
   "createdAt": zod.string(),
   "productName": zod.string(),
-  "productImage": zod.string().nullish()
-})
+  "productImage": zod.string().nullish(),
+  "sellerId": zod.number().nullable(),
+  "sellerListingId": zod.number().nullable(),
+  "sellerListingVariantId": zod.number().nullable().describe('Discriminator for the review\'s target. When set, this review targets\na specific seller\'s listing variant; when null, it targets the\nproduct as a whole.\n'),
+  "sellerBusinessName": zod.string().nullable(),
+  "sellerNurseryName": zod.string().nullable(),
+  "sellerLogoUrl": zod.string().nullable(),
+  "sellerListingVariantForm": zod.string().nullable().describe('The variant\'s form — the most useful single discriminator for a\nvariant (\"seed\" | \"sapling\" | \"grafted\" | \"potted\").\n'),
+  "sellerListingVariantPotSize": zod.string().nullable(),
+  "sellerListingVariantAge": zod.string().nullable(),
+  "sellerListingVariantHeight": zod.string().nullable(),
+  "sellerListingVariantRootType": zod.string().nullable(),
+  "sellerListingVariantCondition": zod.string().nullable()
+}).describe('A customer review. Each review targets either:\n  - the product as a whole (sellerListingVariantId = null) — pre-marketplace \/ legacy \/ admin-direct-variant reviews\n  - a specific seller\'s listing variant (sellerListingVariantId != null) — Phase-2+ marketplace reviews\n\nWhen sellerListingVariantId is set, sellerId \/ sellerListingId \/ the\nseller\* \/ sellerListingVariant\* fields are also populated, so the admin\nUI can show \"Review for <variant> of <seller>\'s listing on <product>\".\n')
 export const ListAllReviewsResponse = zod.array(ListAllReviewsResponseItem)
 
 

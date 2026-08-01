@@ -854,6 +854,16 @@ export interface CreateReviewBody {
   comment: string;
 }
 
+/**
+ * A customer review. Each review targets either:
+ *   - the product as a whole (sellerListingVariantId = null) — pre-marketplace / legacy / admin-direct-variant reviews
+ *   - a specific seller's listing variant (sellerListingVariantId != null) — Phase-2+ marketplace reviews
+ *
+ * When sellerListingVariantId is set, sellerId / sellerListingId / the
+ * seller* / sellerListingVariant* fields are also populated, so the admin
+ * UI can show "Review for <variant> of <seller>'s listing on <product>".
+ *
+ */
 export interface AdminReview {
   id: number;
   productId: number;
@@ -864,6 +874,25 @@ export interface AdminReview {
   createdAt: string;
   productName: string;
   productImage?: string | null;
+  sellerId: number | null;
+  sellerListingId: number | null;
+  /** Discriminator for the review's target. When set, this review targets
+   * a specific seller's listing variant; when null, it targets the
+   * product as a whole.
+   *  */
+  sellerListingVariantId: number | null;
+  sellerBusinessName: string | null;
+  sellerNurseryName: string | null;
+  sellerLogoUrl: string | null;
+  /** The variant's form — the most useful single discriminator for a
+   * variant ("seed" | "sapling" | "grafted" | "potted").
+   *  */
+  sellerListingVariantForm: string | null;
+  sellerListingVariantPotSize: string | null;
+  sellerListingVariantAge: string | null;
+  sellerListingVariantHeight: string | null;
+  sellerListingVariantRootType: string | null;
+  sellerListingVariantCondition: string | null;
 }
 
 export interface WishlistItem {

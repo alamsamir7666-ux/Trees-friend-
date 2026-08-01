@@ -4,7 +4,7 @@
 
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { reviewsTable, ordersTable, productsTable, sellerListingsTable, sellerListingVariantsTable } from "@workspace/db";
+import { reviewsTable, ordersTable, productsTable, sellerListingsTable, sellerListingVariantsTable, sellersTable } from "@workspace/db";
 import { eq, and, sql, desc, isNull } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import multer from "multer";
@@ -414,6 +414,20 @@ router.delete("/reviews/:productId/:reviewId", requireAuth, async (req: any, res
 
 router.get("/admin/reviews", requireAdmin, async (_req, res) => {
   try {
+    // Join reviews -> sellerListingVariants -> sellerListings -> sellers so the
+    // admin Reviews tab can show what each review actually targets:
+    //
+    //   - Product-level review        (sellerListingVariantId IS NULL)
+    //     -> "Review for product X"
+    //
+    //   - Seller-listing-variant revw (sellerListingVariantId NOT NULL)
+    //     -> "Review for variant V of seller S's listing L on product X"
+    //
+    // All joins are LEFT because product-level reviews don't have a variant /
+    // listing / seller. The schema also allows sellerListingId to be set
+    // while sellerListingVariantId is null (Phase-1 marketplace rows); we
+    // expose both fields separately so the UI can show the most specific
+    // target that exists for each row.
     const rows = await db
       .select({
         id: reviewsTable.id,
@@ -423,18 +437,75 @@ router.get("/admin/reviews", requireAdmin, async (_req, res) => {
         rating: reviewsTable.rating,
         comment: reviewsTable.comment,
         createdAt: reviewsTable.createdAt,
+
         productName: productsTable.name,
         productImage: sql<string>`${productsTable.images}->>0`,
+
+        // Review target fields — all nullable; null = product-level review.
+        sellerId: reviewsTable.sellerId,
+        sellerListingId: reviewsTable.sellerListingId,
+        sellerListingVariantId: reviewsTable.sellerListingVariantId,
+
+        // Seller identity (for variant reviews).
+        sellerBusinessName: sellersTable.businessName,
+        sellerNurseryName: sellersTable.nurseryName,
+        sellerLogoUrl: sellersTable.logoUrl,
+
+        // Listing identity (variant reviews may also have a listing id
+        // denormalized on the review row; sellerListingId above is the same
+        // value but kept separate for clarity when no join hit happened).
+        sellerListingDescription: sellerListingsTable.description,
+
+        // Variant identity — form is the most useful single discriminator
+        // for a variant ("Sapling" vs "Grafted" vs "Potted"), and the other
+        // comparison-critical fields (potSize, age, height, rootType) are
+        // included so the admin can see exactly what the customer bought.
+        sellerListingVariantForm: sellerListingVariantsTable.form,
+        sellerListingVariantPotSize: sellerListingVariantsTable.potSize,
+        sellerListingVariantAge: sellerListingVariantsTable.age,
+        sellerListingVariantHeight: sellerListingVariantsTable.height,
+        sellerListingVariantRootType: sellerListingVariantsTable.rootType,
+        sellerListingVariantCondition: sellerListingVariantsTable.condition,
       })
       .from(reviewsTable)
       .leftJoin(productsTable, eq(reviewsTable.productId, productsTable.id))
+      .leftJoin(sellerListingVariantsTable, eq(reviewsTable.sellerListingVariantId, sellerListingVariantsTable.id))
+      .leftJoin(sellerListingsTable, eq(reviewsTable.sellerListingId, sellerListingsTable.id))
+      .leftJoin(sellersTable, eq(reviewsTable.sellerId, sellersTable.id))
       .orderBy(desc(reviewsTable.createdAt));
 
     res.json(
       rows.map((r) => ({
-        id: r.id, productId: r.productId, userId: r.userId, userName: r.userName,
-        rating: r.rating, comment: r.comment, createdAt: r.createdAt.toISOString(),
-        productName: r.productName ?? "Unknown", productImage: r.productImage ?? null,
+        id: r.id,
+        productId: r.productId,
+        userId: r.userId,
+        userName: r.userName,
+        rating: r.rating,
+        comment: r.comment,
+        createdAt: r.createdAt.toISOString(),
+
+        productName: r.productName ?? "Unknown",
+        productImage: r.productImage ?? null,
+
+        // Review target. sellerListingVariantId is the discriminator: when
+        // present, this is a variant review; when null, it's a product-level
+        // review (legacy / pre-marketplace / admin-direct).
+        sellerId: r.sellerId ?? null,
+        sellerListingId: r.sellerListingId ?? null,
+        sellerListingVariantId: r.sellerListingVariantId ?? null,
+
+        // Seller fields — present iff sellerId is set.
+        sellerBusinessName: r.sellerBusinessName ?? null,
+        sellerNurseryName: r.sellerNurseryName ?? null,
+        sellerLogoUrl: r.sellerLogoUrl ?? null,
+
+        // Variant fields — present iff sellerListingVariantId is set.
+        sellerListingVariantForm: r.sellerListingVariantForm ?? null,
+        sellerListingVariantPotSize: r.sellerListingVariantPotSize ?? null,
+        sellerListingVariantAge: r.sellerListingVariantAge ?? null,
+        sellerListingVariantHeight: r.sellerListingVariantHeight ?? null,
+        sellerListingVariantRootType: r.sellerListingVariantRootType ?? null,
+        sellerListingVariantCondition: r.sellerListingVariantCondition ?? null,
       })),
     );
   } catch { res.status(500).json({ error: "Failed to fetch reviews" }); }

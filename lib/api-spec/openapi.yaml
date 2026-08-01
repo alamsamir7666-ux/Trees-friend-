@@ -3987,6 +3987,14 @@ components:
 
     AdminReview:
       type: object
+      description: |
+        A customer review. Each review targets either:
+          - the product as a whole (sellerListingVariantId = null) — pre-marketplace / legacy / admin-direct-variant reviews
+          - a specific seller's listing variant (sellerListingVariantId != null) — Phase-2+ marketplace reviews
+
+        When sellerListingVariantId is set, sellerId / sellerListingId / the
+        seller* / sellerListingVariant* fields are also populated, so the admin
+        UI can show "Review for <variant> of <seller>'s listing on <product>".
       properties:
         id:
           type: integer
@@ -4007,6 +4015,54 @@ components:
         productImage:
           type: string
           nullable: true
+        # ── Review target ────────────────────────────────────────────────
+        # All target fields are nullable; null means "not applicable for this
+        # review" (e.g. a product-level review has sellerId = null).
+        sellerId:
+          type: integer
+          nullable: true
+        sellerListingId:
+          type: integer
+          nullable: true
+        sellerListingVariantId:
+          type: integer
+          nullable: true
+          description: |
+            Discriminator for the review's target. When set, this review targets
+            a specific seller's listing variant; when null, it targets the
+            product as a whole.
+        # ── Seller identity (present iff sellerId is set) ────────────────
+        sellerBusinessName:
+          type: string
+          nullable: true
+        sellerNurseryName:
+          type: string
+          nullable: true
+        sellerLogoUrl:
+          type: string
+          nullable: true
+        # ── Variant identity (present iff sellerListingVariantId is set) ─
+        sellerListingVariantForm:
+          type: string
+          nullable: true
+          description: |
+            The variant's form — the most useful single discriminator for a
+            variant ("seed" | "sapling" | "grafted" | "potted").
+        sellerListingVariantPotSize:
+          type: string
+          nullable: true
+        sellerListingVariantAge:
+          type: string
+          nullable: true
+        sellerListingVariantHeight:
+          type: string
+          nullable: true
+        sellerListingVariantRootType:
+          type: string
+          nullable: true
+        sellerListingVariantCondition:
+          type: string
+          nullable: true
       required:
         - id
         - productId
@@ -4016,6 +4072,22 @@ components:
         - comment
         - createdAt
         - productName
+        # All target/seller/variant fields are REQUIRED in the response (the
+        # backend always sets them, even if to null). This forces the
+        # generated client to expose them as `T | null` instead of `T | undefined`,
+        # which keeps the UI's null-check logic consistent across fields.
+        - sellerId
+        - sellerListingId
+        - sellerListingVariantId
+        - sellerBusinessName
+        - sellerNurseryName
+        - sellerLogoUrl
+        - sellerListingVariantForm
+        - sellerListingVariantPotSize
+        - sellerListingVariantAge
+        - sellerListingVariantHeight
+        - sellerListingVariantRootType
+        - sellerListingVariantCondition
 
     WishlistItem:
       type: object

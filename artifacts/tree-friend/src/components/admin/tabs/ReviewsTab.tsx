@@ -9,6 +9,9 @@ import {
   ChevronUp,
   RotateCcw,
   MessagesSquare,
+  Store,
+  Package,
+  Sprout,
 } from "lucide-react";
 import { useAdminContext } from "@/contexts/AdminContext";
 import { Input } from "@/components/ui/input";
@@ -44,10 +47,30 @@ type Review = {
   createdAt: string;
   productName: string;
   productImage?: string | null;
+  // Review-target fields. Discriminator is sellerListingVariantId:
+  //   set    -> review targets a seller's listing variant (Phase-2+ marketplace)
+  //   null   -> review targets the product as a whole (legacy / pre-marketplace)
+  sellerId?: number | null;
+  sellerListingId?: number | null;
+  sellerListingVariantId?: number | null;
+  sellerBusinessName?: string | null;
+  sellerNurseryName?: string | null;
+  sellerLogoUrl?: string | null;
+  sellerListingVariantForm?: string | null;
+  sellerListingVariantPotSize?: string | null;
+  sellerListingVariantAge?: string | null;
+  sellerListingVariantHeight?: string | null;
+  sellerListingVariantRootType?: string | null;
+  sellerListingVariantCondition?: string | null;
 };
 
 type RatingFilter = 0 | 1 | 2 | 3 | 4 | 5; // 0 = All
 type SortKey = "newest" | "oldest" | "highest" | "lowest";
+// Filter by what the review targets:
+//   - "all"      : every review
+//   - "product"  : only product-level reviews (sellerListingVariantId null)
+//   - "variant"  : only seller-listing-variant reviews (sellerListingVariantId set)
+type TargetFilter = "all" | "product" | "variant";
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 
@@ -56,6 +79,12 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "oldest", label: "Oldest first" },
   { value: "highest", label: "Highest rating" },
   { value: "lowest", label: "Lowest rating" },
+];
+
+const TARGET_FILTER_OPTIONS: { value: TargetFilter; label: string }[] = [
+  { value: "all", label: "All reviews" },
+  { value: "variant", label: "Seller listing variants" },
+  { value: "product", label: "Product-level only" },
 ];
 
 // ─── Small layout primitives ──────────────────────────────────────────────────
@@ -145,6 +174,16 @@ function formatDate(iso: string) {
   });
 }
 
+/**
+ * Render the variant's form as a small human-readable chip — e.g.
+ * "Grafted", "Potted", "Sapling". Capitalizes the first letter so the
+ * backend's lowercase enum ("grafted") doesn't leak through.
+ */
+function formatForm(form: string | null | undefined): string | null {
+  if (!form) return null;
+  return form.charAt(0).toUpperCase() + form.slice(1);
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 /** Compact 5-star row — gold for filled, muted for empty. */
@@ -167,16 +206,70 @@ function StarsRow({ rating, size = "sm" }: { rating: number; size?: "sm" | "md" 
 }
 
 /**
+ * A self-contained "Review target" badge — the small block under each
+ * product name that tells the admin WHAT this review is rating:
+ *
+ *   - Product-level:  [PRODUCT] icon + "Product review"
+ *   - Variant:        [SPROUT] icon + "Grafted · 8" pot · 2 yr" + seller name
+ *
+ * The badge's visual style (icon + label + secondary line) is identical
+ * between mobile card and desktop table so users learn one mental model.
+ */
+function ReviewTargetBadge({ r }: { r: Review }) {
+  if (r.sellerListingVariantId != null) {
+    // Seller-listing-variant review — the most informative case.
+    const parts: string[] = [];
+    const form = formatForm(r.sellerListingVariantForm);
+    if (form) parts.push(form);
+    if (r.sellerListingVariantPotSize) parts.push(`${r.sellerListingVariantPotSize} pot`);
+    if (r.sellerListingVariantAge) parts.push(r.sellerListingVariantAge);
+    if (r.sellerListingVariantHeight) parts.push(r.sellerListingVariantHeight);
+
+    const sellerName = r.sellerBusinessName ?? r.sellerNurseryName ?? "Unknown seller";
+
+    return (
+      <div className="mt-1 flex flex-col gap-0.5">
+        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-primary">
+          <Sprout className="h-3 w-3" />
+          Seller listing variant
+        </span>
+        {parts.length > 0 && (
+          <span className="text-[11px] text-muted-foreground leading-tight">
+            {parts.join(" · ")}
+          </span>
+        )}
+        <span className="inline-flex items-center gap-1 text-[11px] text-foreground/80 leading-tight">
+          <Store className="h-3 w-3 text-muted-foreground" />
+          <span className="font-medium truncate">{sellerName}</span>
+          {r.sellerListingId != null && (
+            <span className="text-muted-foreground/60 tabular-nums">· #{r.sellerListingId}</span>
+          )}
+        </span>
+      </div>
+    );
+  }
+
+  // Product-level review.
+  return (
+    <div className="mt-1 flex flex-col gap-0.5">
+      <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <Package className="h-3 w-3" />
+        Product review
+      </span>
+      <span className="text-[11px] text-muted-foreground/70 leading-tight">
+        No specific seller
+      </span>
+    </div>
+  );
+}
+
+/**
  * Rating distribution panel — Amazon/Shopify style.
  * Shows the aggregate (avg + stars + total) on the left and a horizontal bar
  * per rating tier (5★→1★) on the right. Clicking a row filters the list to
  * that rating; clicking again clears the filter.
  *
- * This is the SOLE rating filter in this tab — an earlier version also had a
- * separate row of "rating chip tabs" below this card, which (a) duplicated
- * this filter and (b) rendered as flat unstyled text on mobile because the
- * inactive chips had transparent backgrounds with no border. The distribution
- * card is more informative and avoids that failure mode entirely.
+ * This is the SOLE rating filter in this tab.
  */
 function RatingDistributionCard({
   ratingCounts,
@@ -287,14 +380,15 @@ function RatingDistributionCard({
  * Layout:
  * - Page header with total-count badge
  * - Rating distribution card (the SOLE rating filter — click a tier to filter)
- * - Toolbar: search + sort + reset (single responsive row)
- * - Desktop (md+): table with Product / Customer / Rating / Review / Date / Actions
- * - Mobile: stacked card list (table is unreadable at 375px — only ~2 of 6
- *   columns are visible without horizontal scroll, which is a poor UX)
+ * - Toolbar: search + target filter + sort + reset
+ * - Desktop (lg+): table with Product / Customer / Rating / Review / Date / Actions
+ * - Mobile: stacked card list (table is unreadable at 375px)
  * - Full client-side pagination with page-size selector
  *
- * All filter/sort/paginate logic is client-side because the `listAllReviews`
- * endpoint returns a flat array (no server-side pagination).
+ * Each review shows WHAT it targets:
+ *   - Product review            (sellerListingVariantId IS NULL)
+ *   - Seller listing variant    (sellerListingVariantId IS NOT NULL)
+ *     with the variant's form / pot size / age / height + the seller's name
  */
 export function ReviewsTab() {
   const { reviews, reviewsLoading, handleDeleteReview } = useAdminContext();
@@ -303,36 +397,51 @@ export function ReviewsTab() {
   // this tab is fully self-contained and easy to reason about.
   const [search, setSearch] = useState("");
   const [ratingFilter, setRatingFilter] = useState<RatingFilter>(0);
+  const [targetFilter, setTargetFilter] = useState<TargetFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("newest");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(10);
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   // Aggregate stats computed across ALL reviews (not affected by filter).
-  // Recomputed only when the reviews array reference changes.
-  const { totalCount, ratingCounts } = useMemo(() => {
+  const { totalCount, ratingCounts, targetCounts } = useMemo(() => {
     const all = (reviews as Review[]) ?? [];
     const counts: Record<1 | 2 | 3 | 4 | 5, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    let productCount = 0;
+    let variantCount = 0;
     for (const r of all) {
       const rating = Math.max(
         1,
         Math.min(5, Math.round(Number(r.rating) || 0)),
       ) as 1 | 2 | 3 | 4 | 5;
       counts[rating]++;
+      if (r.sellerListingVariantId != null) variantCount++;
+      else productCount++;
     }
-    return { totalCount: all.length, ratingCounts: counts };
+    return {
+      totalCount: all.length,
+      ratingCounts: counts,
+      targetCounts: { product: productCount, variant: variantCount },
+    };
   }, [reviews]);
 
-  // Apply rating filter + search + sort.
+  // Apply rating filter + target filter + search + sort.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const arr = ((reviews as Review[]) ?? []).filter((r) => {
       if (ratingFilter !== 0 && Math.round(Number(r.rating) || 0) !== ratingFilter) return false;
+      if (targetFilter === "variant" && r.sellerListingVariantId == null) return false;
+      if (targetFilter === "product" && r.sellerListingVariantId != null) return false;
       if (!q) return true;
+      // Search includes seller + variant fields, so admins can find all
+      // reviews of a specific seller or variant form in one keystroke.
       return (
         `${r.productName ?? ""}`.toLowerCase().includes(q) ||
         `${r.userName ?? ""}`.toLowerCase().includes(q) ||
-        `${r.comment ?? ""}`.toLowerCase().includes(q)
+        `${r.comment ?? ""}`.toLowerCase().includes(q) ||
+        `${r.sellerBusinessName ?? ""}`.toLowerCase().includes(q) ||
+        `${r.sellerNurseryName ?? ""}`.toLowerCase().includes(q) ||
+        `${r.sellerListingVariantForm ?? ""}`.toLowerCase().includes(q)
       );
     });
 
@@ -351,7 +460,7 @@ export function ReviewsTab() {
       }
     });
     return arr;
-  }, [reviews, search, ratingFilter, sortKey]);
+  }, [reviews, search, ratingFilter, targetFilter, sortKey]);
 
   // Pagination math.
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -359,10 +468,14 @@ export function ReviewsTab() {
   const startIdx = (currentPage - 1) * pageSize;
   const paginated = filtered.slice(startIdx, startIdx + pageSize);
 
-  // State mutators that also reset the page back to 1 (so the user never
-  // ends up on an empty out-of-range page after changing filters).
+  // State mutators that also reset the page back to 1.
   function changeRatingFilter(next: RatingFilter) {
     setRatingFilter(next);
+    setPage(1);
+    setExpandedId(null);
+  }
+  function changeTargetFilter(next: TargetFilter) {
+    setTargetFilter(next);
     setPage(1);
     setExpandedId(null);
   }
@@ -381,6 +494,7 @@ export function ReviewsTab() {
   function resetFilters() {
     setSearch("");
     setRatingFilter(0);
+    setTargetFilter("all");
     setSortKey("newest");
     setPage(1);
     setExpandedId(null);
@@ -389,14 +503,15 @@ export function ReviewsTab() {
     setExpandedId((cur) => (cur === id ? null : id));
   }
 
-  const hasActiveFilters = search.trim() !== "" || ratingFilter !== 0 || sortKey !== "newest";
+  const hasActiveFilters =
+    search.trim() !== "" || ratingFilter !== 0 || targetFilter !== "all" || sortKey !== "newest";
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5 min-w-0">
       <PageHeader
         title="Customer Reviews"
-        description="Moderate every customer review across the marketplace. Search, filter by rating, sort, and remove anything that violates policy."
+        description="Moderate every customer review across the marketplace. Each review targets either a product as a whole or a specific seller's listing variant — search, filter, sort, and remove anything that violates policy."
         icon={MessageSquare}
         actions={
           <Badge variant="outline" className="gap-1.5 px-2.5 py-1">
@@ -409,6 +524,40 @@ export function ReviewsTab() {
         }
       />
 
+      {/* Target-type quick-stat row — shows how many reviews are
+          product-level vs seller-listing-variant. Visible on all viewports
+          so the admin can see the mix at a glance. */}
+      {!reviewsLoading && totalCount > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-lg border bg-card px-3 py-2.5 flex items-center gap-2.5">
+            <div className="h-8 w-8 rounded-md bg-muted flex items-center justify-center shrink-0">
+              <Package className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[11px] text-muted-foreground uppercase tracking-wide font-medium">
+                Product reviews
+              </div>
+              <div className="text-sm font-semibold text-foreground tabular-nums">
+                {targetCounts.product.toLocaleString()}
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border bg-card px-3 py-2.5 flex items-center gap-2.5">
+            <div className="h-8 w-8 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+              <Sprout className="h-4 w-4 text-primary" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[11px] text-muted-foreground uppercase tracking-wide font-medium">
+                Seller listing variants
+              </div>
+              <div className="text-sm font-semibold text-foreground tabular-nums">
+                {targetCounts.variant.toLocaleString()}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Rating distribution + aggregate (also the sole rating filter) */}
       {!reviewsLoading && totalCount > 0 && (
         <RatingDistributionCard
@@ -419,18 +568,30 @@ export function ReviewsTab() {
         />
       )}
 
-      {/* Toolbar: search + sort + reset — single responsive row */}
+      {/* Toolbar: search + target filter + sort + reset */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
           <Input
             value={search}
             onChange={(e) => changeSearch(e.target.value)}
-            placeholder="Search by product, customer, or review…"
+            placeholder="Search by product, customer, seller, or review…"
             className="h-9 pl-8 text-sm"
           />
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <Select value={targetFilter} onValueChange={(v) => changeTargetFilter(v as TargetFilter)}>
+            <SelectTrigger className="h-9 w-full sm:w-[180px] text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TARGET_FILTER_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value} className="text-sm">
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select value={sortKey} onValueChange={(v) => changeSort(v as SortKey)}>
             <SelectTrigger className="h-9 w-full sm:w-[160px] text-sm">
               <SelectValue />
@@ -458,23 +619,30 @@ export function ReviewsTab() {
         </div>
       </div>
 
-      {/* Active filter summary — visible on all viewports when a rating filter is active */}
-      {ratingFilter !== 0 && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground sm:hidden">
-          <span>
-            Showing only <span className="font-medium text-foreground">{ratingFilter}-star</span> reviews
-          </span>
+      {/* Active filter summary — visible on all viewports when a filter is active */}
+      {(ratingFilter !== 0 || targetFilter !== "all") && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground sm:hidden">
+          {ratingFilter !== 0 && (
+            <span>
+              <span className="font-medium text-foreground">{ratingFilter}-star</span> only
+            </span>
+          )}
+          {targetFilter !== "all" && (
+            <span>
+              {targetFilter === "variant" ? "Seller listing variants" : "Product reviews"} only
+            </span>
+          )}
           <button
             type="button"
-            onClick={() => changeRatingFilter(0)}
+            onClick={resetFilters}
             className="text-primary font-medium hover:underline"
           >
-            Clear filter
+            Clear all
           </button>
         </div>
       )}
 
-      {/* List — card layout on mobile, table on md+ */}
+      {/* List — card layout on mobile/tablet, table on lg+ */}
       <Card>
         <CardContent className="p-0">
           {reviewsLoading ? (
@@ -495,7 +663,7 @@ export function ReviewsTab() {
               }
               description={
                 hasActiveFilters
-                  ? "Try clearing the search or switching to a different rating filter."
+                  ? "Try clearing the search or switching to a different rating / target filter."
                   : "When customers start leaving reviews, they'll appear here for moderation."
               }
               action={
@@ -534,7 +702,8 @@ export function ReviewsTab() {
                           <p className="text-sm font-medium text-foreground leading-tight line-clamp-2">
                             {r.productName}
                           </p>
-                          <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">
+                          <ReviewTargetBadge r={r} />
+                          <p className="text-[11px] text-muted-foreground mt-1 tabular-nums">
                             #{r.productId} · {formatDate(r.createdAt)}
                           </p>
                         </div>
@@ -587,11 +756,11 @@ export function ReviewsTab() {
 
               {/* ── Desktop: table (lg+ so tablets get the card list) ─────── */}
               <div className="hidden lg:block overflow-x-auto">
-                <table className="w-full text-sm min-w-[640px]">
+                <table className="w-full text-sm min-w-[760px]">
                   <thead className="bg-muted/40 border-b">
                     <tr>
                       <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                        Product
+                        Product / Target
                       </th>
                       <th className="px-4 sm:px-5 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                         Customer
@@ -617,9 +786,9 @@ export function ReviewsTab() {
                       const isLong = (r.comment?.length ?? 0) > 180;
                       return (
                         <tr key={r.id} className="align-top hover:bg-muted/20 transition-colors">
-                          {/* Product */}
-                          <td className="px-4 sm:px-5 py-3.5">
-                            <div className="flex items-center gap-3">
+                          {/* Product + target */}
+                          <td className="px-4 sm:px-5 py-3.5 min-w-[260px]">
+                            <div className="flex items-start gap-3">
                               {r.productImage ? (
                                 <img
                                   src={r.productImage}
@@ -636,8 +805,12 @@ export function ReviewsTab() {
                                 <p className="text-xs font-medium text-foreground leading-tight line-clamp-2">
                                   {r.productName}
                                 </p>
-                                <p className="text-[11px] text-muted-foreground/70 mt-0.5 tabular-nums">
-                                  #{r.productId}
+                                <ReviewTargetBadge r={r} />
+                                <p className="text-[11px] text-muted-foreground/70 mt-1 tabular-nums">
+                                  Product #{r.productId}
+                                  {r.sellerListingVariantId != null && (
+                                    <> · Variant #{r.sellerListingVariantId}</>
+                                  )}
                                 </p>
                               </div>
                             </div>
