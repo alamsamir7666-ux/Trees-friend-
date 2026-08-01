@@ -99,6 +99,27 @@
       }
     </script>
 
+    <!--
+      Eruda mobile debug console -- loads ONLY when the page URL has
+      ?debug=1 (or #debug), so normal visitors/buyers never see it.
+      Add ?debug=1 to any page URL on your phone to get a floating
+      button that opens a DevTools-like console showing real JS
+      errors, network requests, and console.log output.
+    -->
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var isDebug = params.get('debug') === '1' || window.location.hash.indexOf('debug') !== -1;
+        if (!isDebug) return;
+        var script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/eruda';
+        script.onload = function () {
+          window.eruda && window.eruda.init();
+        };
+        document.body.appendChild(script);
+      })();
+    </script>
+
   </head>
   <body>
     <div id="root"></div>
