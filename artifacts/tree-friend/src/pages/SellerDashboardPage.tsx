@@ -178,9 +178,9 @@ export function SellerDashboardPage() {
 
         {/* Vacation notice */}
         {onVacation && (
-          <div className="mx-4 mt-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 text-[11px] text-amber-800 leading-relaxed">
+          <div className="mx-4 mt-3 bg-warning border border-warning-border rounded-xl px-3 py-2.5 text-[11px] text-warning-foreground leading-relaxed">
             <p className="font-semibold mb-0.5">Vacation mode active</p>
-            <p className="text-amber-700">Listings, Orders, Payment, and Courier are paused. Turn it off in Business Profile.</p>
+            <p className="text-warning-foreground">Listings, Orders, Payment, and Courier are paused. Turn it off in Business Profile.</p>
           </div>
         )}
 
@@ -258,7 +258,7 @@ export function SellerDashboardPage() {
                   {activeSeller.businessName}
                 </p>
                 <p className="text-[11px] text-sidebar-foreground/60 truncate flex items-center gap-1">
-                  {activeSeller.isVerified && <BadgeCheck className="h-3 w-3 text-emerald-500" />}
+                  {activeSeller.isVerified && <BadgeCheck className="h-3 w-3 text-success-foreground" />}
                   {activeSeller.location || "No location"}
                 </p>
               </div>
@@ -347,7 +347,7 @@ export function SellerDashboardPage() {
                   {activeNav?.label ?? "Dashboard"}
                 </h1>
                 {onVacation && (
-                  <span className="hidden sm:inline-flex text-[10px] font-medium text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-full px-2 py-0.5">
+                  <span className="hidden sm:inline-flex text-[10px] font-medium text-warning-foreground bg-warning ring-1 ring-warning-border rounded-full px-2 py-0.5">
                     Vacation
                   </span>
                 )}
@@ -383,7 +383,7 @@ export function SellerDashboardPage() {
         <main className="flex-1 overflow-y-auto bg-background">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
             {onVacation && activeSection === "profile" && (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 mb-6 text-sm text-amber-800">
+              <div className="bg-warning border border-warning-border rounded-2xl px-4 py-3 mb-6 text-sm text-warning-foreground">
                 You're on vacation mode — your listings are hidden from buyers and Listings/Orders/Payment/Courier are
                 paused until you turn it off below.
               </div>

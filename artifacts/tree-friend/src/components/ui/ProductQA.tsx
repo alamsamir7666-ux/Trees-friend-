@@ -88,7 +88,7 @@ export function ProductQA({ productId }: { productId: number }) {
             </div>
           </div>
           {createQuestion.isError && (
-            <p className="text-sm text-red-500 mt-2">Failed to submit. Please try again.</p>
+            <p className="text-sm text-destructive mt-2">Failed to submit. Please try again.</p>
           )}
         </div>
       )}

@@ -4,8 +4,8 @@
   "description": "Trees, Plants & Saplings in Bangladesh",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#fdf6f0",
-  "theme_color": "#f43f5e",
+  "background_color": "#111d17",
+  "theme_color": "#1f3b2a",
   "orientation": "portrait-primary",
   "icons": [
     {

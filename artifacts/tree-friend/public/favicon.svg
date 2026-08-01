@@ -1,3 +1,34 @@
-<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="180" height="180" rx="36" fill="#FF3C00"/>
+<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tree Friend">
+  <!--
+    Tree Friend favicon.
+
+    Design: forest-green rounded square (#1f3b2a, matches --primary) with
+    a cream leaf shape (#fdf6f0, matches --primary-foreground) -- same
+    brand identity as the in-app logo. Replaces the old orange #FF3C00
+    square which didn't match the brand at all.
+
+    The leaf is a simple teardrop with a vein, drawn in a single path
+    so it stays crisp at 16x16 / 32x32 / 180x180. The rounded corners
+    (rx=36 on a 180x180 viewBox = 20% radius) match Apple's icon corner
+    convention.
+  -->
+  <rect width="180" height="180" rx="36" fill="#1f3b2a"/>
+  <g transform="translate(90 90)">
+    <!-- Leaf body, rotated so tip points up-right -->
+    <path d="M 0 -48 C 28 -42, 48 -18, 42 12 C 36 32, 18 44, -6 42 C -28 40, -44 24, -42 0 C -40 -22, -22 -42, 0 -48 Z"
+          transform="rotate(-20)"
+          fill="#fdf6f0"/>
+    <!-- Central vein -->
+    <path d="M -28 18 Q 0 0 24 -24"
+          stroke="#1f3b2a"
+          stroke-width="3.5"
+          stroke-linecap="round"
+          fill="none"/>
+    <!-- Side veins -->
+    <path d="M -16 8 L -22 0 M -6 0 L -14 -10 M 6 -10 L 0 -20 M 18 -18 L 12 -28"
+          stroke="#1f3b2a"
+          stroke-width="2"
+          stroke-linecap="round"
+          fill="none"/>
+  </g>
 </svg>

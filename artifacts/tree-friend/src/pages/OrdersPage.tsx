@@ -9,20 +9,20 @@ import { Package2, ArrowRight, Copy, Check } from "lucide-react";
 import { BKASH_ICON, NAGAD_ICON, SHIP_ICON } from "@/lib/preorderIcons";
 
 const statusColors: Record<string, string> = {
-  pending:          "bg-yellow-100 text-yellow-800",
-  confirmed:        "bg-blue-100 text-blue-800",
-  processing:       "bg-purple-100 text-purple-800",
-  shipped:          "bg-indigo-100 text-indigo-800",
-  delivered:        "bg-green-100 text-green-800",
-  cancelled:        "bg-red-100 text-red-800",
-  return_completed: "bg-teal-100 text-teal-800",
+  pending:          "bg-warning text-warning-foreground",
+  confirmed:        "bg-info text-info-foreground",
+  processing:       "bg-info text-info-foreground",
+  shipped:          "bg-info text-info-foreground",
+  delivered:        "bg-success text-success-foreground",
+  cancelled:        "bg-destructive/10 text-destructive",
+  return_completed: "bg-success text-success-foreground",
 };
 
 const returnBadgeColors: Record<string, string> = {
-  requested: "bg-amber-100 text-amber-700",
-  approved:  "bg-blue-100 text-blue-700",
-  rejected:  "bg-red-100 text-red-700",
-  completed: "bg-teal-100 text-teal-700",
+  requested: "bg-warning text-warning-foreground",
+  approved:  "bg-info text-info-foreground",
+  rejected:  "bg-destructive/10 text-destructive",
+  completed: "bg-success text-success-foreground",
 };
 
 const returnBadgeLabels: Record<string, string> = {
@@ -51,7 +51,7 @@ function CopyTrackingButton({ trackingId }: { trackingId: string }) {
       className="inline-flex items-center gap-1 ml-1 text-muted-foreground hover:text-foreground transition-colors"
     >
       {copied
-        ? <Check className="h-3 w-3 text-green-500" />
+        ? <Check className="h-3 w-3 text-success-foreground" />
         : <Copy className="h-3 w-3" />
       }
     </button>
@@ -158,7 +158,7 @@ export function OrdersPage() {
               <div className="border rounded-xl p-4 hover:bg-muted/30 transition-colors cursor-pointer">
                 <div className="flex items-center justify-between mb-2">
                   <div>
-                    <span className="text-xs font-bold bg-blue-100 text-blue-700 rounded-full px-2.5 py-1">PRE-ORDER</span>
+                    <span className="text-xs font-bold bg-info text-info-foreground rounded-full px-2.5 py-1">PRE-ORDER</span>
                     <p className="font-mono font-semibold text-sm mt-1">{o.trackingId}</p>
                     {o.createdAt && <p className="text-xs text-muted-foreground mt-0.5">{new Date(o.createdAt).toLocaleDateString("en-BD", { year: "numeric", month: "long", day: "numeric" })}</p>}
                   </div>
@@ -206,13 +206,13 @@ export function OrdersPage() {
                     {o.discount > 0 && (
                       <div className="flex justify-between text-xs">
                         <span className="text-muted-foreground">Discount{o.couponCode ? ` (${o.couponCode})` : ""}</span>
-                        <span className="text-green-600">-Tk{Number(o.discount).toLocaleString()}</span>
+                        <span className="text-success-foreground">-Tk{Number(o.discount).toLocaleString()}</span>
                       </div>
                     )}
                     {o.shipping != null && (
                       <div className="flex justify-between text-xs text-muted-foreground">
                         <span>Delivery</span>
-                        <span>{o.shipping === 0 ? <span className="text-green-600">Free</span> : `Tk${Number(o.shipping).toLocaleString()}`}</span>
+                        <span>{o.shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${Number(o.shipping).toLocaleString()}`}</span>
                       </div>
                     )}
                     <div className="flex justify-between text-sm font-semibold pt-1">
@@ -284,8 +284,8 @@ export function OrdersPage() {
                       </div>
 
                       <div className="flex items-center gap-2 mb-3">
-                        <span className="text-xs font-bold bg-blue-100 text-blue-700 rounded-full px-2.5 py-1">PRE-ORDER</span>
-                        <span className={`text-xs font-bold rounded-full px-2.5 py-1 ${isCancelled ? "bg-red-100 text-red-700" : order.status === "arrived_in_bd" ? "bg-purple-100 text-purple-700" : order.status === "shipped" ? "bg-indigo-100 text-indigo-700" : order.status === "delivered" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-800"}`}>
+                        <span className="text-xs font-bold bg-info text-info-foreground rounded-full px-2.5 py-1">PRE-ORDER</span>
+                        <span className={`text-xs font-bold rounded-full px-2.5 py-1 ${isCancelled ? "bg-destructive/10 text-destructive" : order.status === "arrived_in_bd" ? "bg-info text-info-foreground" : order.status === "shipped" ? "bg-info text-info-foreground" : order.status === "delivered" ? "bg-success text-success-foreground" : "bg-warning text-warning-foreground"}`}>
                           {isCancelled ? "✕ CANCELLED" : order.status === "arrived_in_bd" ? "Arrived in BD" : order.status.charAt(0).toUpperCase() + order.status.slice(1)}
                         </span>
                       </div>
