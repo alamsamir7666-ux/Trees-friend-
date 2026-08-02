@@ -127,7 +127,7 @@ export function ChatPage() {
 
     setIsLoading(true);
     apiClient
-      .get(`/conversations/${id}`)
+      .get(`/api/conversations/${id}`)
       .then((res) => {
         setConversation(res.data as ConversationInfo);
       })
@@ -150,7 +150,7 @@ export function ChatPage() {
       if (cursor) params.set("cursor", String(cursor));
 
       try {
-        const res = await apiClient.get(`/conversations/${id}/messages?${params}`);
+        const res = await apiClient.get(`/api/conversations/${id}/messages?${params}`);
         const data = res.data as { messages: ChatMessage[]; hasMore: boolean };
         const { messages: newMessages, hasMore: more } = data;
 
@@ -195,7 +195,7 @@ export function ChatPage() {
           params.set("direction", "after");
         }
 
-        const res = await apiClient.get(`/conversations/${id}/messages?${params}`);
+        const res = await apiClient.get(`/api/conversations/${id}/messages?${params}`);
         const data = res.data as { messages: ChatMessage[]; hasMore: boolean };
         const { messages: newMessages } = data;
 
@@ -244,7 +244,7 @@ export function ChatPage() {
 
     try {
       const id = parseInt(conversationId);
-      const res = await apiClient.post(`/conversations/${id}/messages`, {
+      const res = await apiClient.post(`/api/conversations/${id}/messages`, {
         content,
         messageType: "text",
       });

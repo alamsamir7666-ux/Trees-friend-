@@ -78,7 +78,7 @@ export function MessagesPage() {
 
     setIsLoading(true);
     apiClient
-      .get("/conversations")
+      .get("/api/conversations")
       .then((res) => {
         const data = res.data as ConversationListResponse;
         setConversations(data);

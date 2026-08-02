@@ -9,10 +9,20 @@ type RequestConfig = {
   params?: Record<string, string | number | boolean | undefined>;
 };
 
+// Every backend route is mounted under /api (see artifacts/api-server/src/app.ts:
+// `app.use("/api", router)`). Callers pass paths without the prefix (e.g.
+// "/conversations"), and it's applied here exactly once. This is the single
+// source of truth for the prefix, so no call site can accidentally omit it —
+// that class of bug (an apiClient.* call silently 404ing because it forgot
+// "/api") is why this normalization exists.
+function withApiPrefix(url: string): string {
+  return url.startsWith("/api/") || url === "/api" ? url : `/api${url.startsWith("/") ? url : `/${url}`}`;
+}
+
 async function request<T = unknown>(url: string, config: RequestConfig = {}): Promise<{ data: T }> {
   const { method = "GET", headers = {}, data, params } = config;
 
-  let fullUrl = `${BASE_URL}${url}`;
+  let fullUrl = `${BASE_URL}${withApiPrefix(url)}`;
   if (params) {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {

@@ -125,7 +125,7 @@ export function SellerStorePage() {
     }
     try {
       // Create or retrieve conversation (idempotent) then navigate to it
-      const res = await apiClient.post("/conversations", {
+      const res = await apiClient.post("/api/conversations", {
         sellerId: id,
       });
       setLocation(`/messages/${(res.data as { id: number }).id}`);
