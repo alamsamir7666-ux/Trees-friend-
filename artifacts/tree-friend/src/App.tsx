@@ -324,6 +324,16 @@ function AdminRoute() {
 
 function AppLayout({ children }: { children: React.ReactNode }) {
   const { pageReady } = usePageContext();
+  const [location] = useLocation();
+
+  // Chat pages are full-screen focused experiences (like WhatsApp/Telegram).
+  // They use h-[calc(100dvh-4rem)] and have their own internal scroll. If we
+  // render the Footer below them, the document becomes taller than the
+  // viewport and any scrollIntoView() inside the chat would yank the window
+  // down to reveal the Footer. Hiding the Footer on /messages keeps the
+  // chat page exactly viewport-height.
+  const isChatRoute =
+    location.startsWith("/messages") || location.startsWith("/messages/");
 
   return (
     <>
@@ -333,9 +343,11 @@ function AppLayout({ children }: { children: React.ReactNode }) {
         <main className="flex-1">
           {children}
         </main>
-        {pageReady && <Footer />}
+        {pageReady && !isChatRoute && <Footer />}
       </div>
-      <FloatingCartIcon />
+      {/* FloatingCartIcon also hidden on chat routes — it would overlap
+          the chat composer and isn't relevant while messaging. */}
+      {!isChatRoute && <FloatingCartIcon />}
     </>
   );
 }

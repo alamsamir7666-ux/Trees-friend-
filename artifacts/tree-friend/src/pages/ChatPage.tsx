@@ -261,14 +261,22 @@ export function ChatPage() {
   }, [fetchMessages]);
 
   // ─── Initial scroll-to-bottom ───────────────────────────────────────────
-  // Runs after messages first render. Using a layout effect + rAF avoids
-  // the old setTimeout(100) race where images hadn't loaded yet and the
-  // scroll position was wrong.
+  // Runs after messages first render. We set scrollTop DIRECTLY on the
+  // messages container instead of calling scrollIntoView() on the bottom
+  // sentinel — scrollIntoView() scrolls ALL scrollable ancestors, including
+  // the window/document. When the Footer is rendered below the chat (which
+  // it is, on every route), the document becomes taller than the viewport,
+  // and scrollIntoView() would yank the WINDOW down to reveal the Footer.
+  // Setting scrollTop on the container only scrolls that one element,
+  // leaving the window alone. This matches WhatsApp/Telegram behavior.
   useEffect(() => {
     if (didInitialScrollRef.current) return;
     if (messages.length === 0) return;
     const raf = requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      const container = messagesContainerRef.current;
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+      }
       didInitialScrollRef.current = true;
       isNearBottomRef.current = true;
     });
@@ -347,9 +355,17 @@ export function ChatPage() {
           // Auto-scroll to bottom ONLY if the user is already there.
           // Reading the ref is safe — it's updated by the
           // IntersectionObserver, not by stale scroll math.
+          // We set scrollTop directly on the container (NOT scrollIntoView)
+          // so the window doesn't get yanked down to reveal the Footer.
           if (isNearBottomRef.current) {
             requestAnimationFrame(() => {
-              messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+              const container = messagesContainerRef.current;
+              if (container) {
+                container.scrollTo({
+                  top: container.scrollHeight,
+                  behavior: "smooth",
+                });
+              }
             });
           }
         }
@@ -487,9 +503,15 @@ export function ChatPage() {
   // ─── Scroll helper ────────────────────────────────────────────────────
   // Always scrolls to bottom. Used after sending (user intent is clear)
   // and never after polling (polling checks isNearBottomRef instead).
+  // Sets scrollTop DIRECTLY on the messages container — never calls
+  // scrollIntoView() because that would also scroll the window/document
+  // and reveal the Footer below the chat.
   function scrollToBottom(behavior: ScrollBehavior) {
     requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior });
+      const container = messagesContainerRef.current;
+      if (container) {
+        container.scrollTo({ top: container.scrollHeight, behavior });
+      }
     });
   }
 
