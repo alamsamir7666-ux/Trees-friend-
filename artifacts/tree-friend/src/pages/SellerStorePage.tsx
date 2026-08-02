@@ -23,6 +23,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Star, MapPin, Package, Headset,
   ShieldCheck as ShieldIcon,
+  MessageCircle,
 } from "lucide-react";
 
 const ICON_VERIFIED =
@@ -115,6 +116,22 @@ export function SellerStorePage() {
     }
   }
 
+  function handleMessageSeller() {
+    // Messaging backend isn't built yet — the original SellerStorePage
+    // spec explicitly deferred this. Surface a "coming soon" toast so the
+    // button does something visible instead of silently no-op'ing, and so
+    // we get product feedback on whether buyers actually try to use it
+    // before committing to building the full conversation system.
+    if (!user) {
+      toast({ title: "Sign in to message this store", description: "Create a free account to chat with sellers." });
+      return;
+    }
+    toast({
+      title: "Messaging coming soon",
+      description: "You'll be able to chat with this seller directly here. For now, use the contact info on their listings.",
+    });
+  }
+
   if (sellerError) {
     return (
       <div className="max-w-5xl mx-auto px-4 py-16 text-center">
@@ -191,15 +208,25 @@ export function SellerStorePage() {
                   Member since {new Date(seller.createdAt).toLocaleDateString(undefined, { month: "short", year: "numeric" })}
                 </p>
               </div>
-              <Button
-                size="sm"
-                variant={isFollowing ? "secondary" : "default"}
-                disabled={followPending}
-                onClick={handleFollowToggle}
-                className="shrink-0"
-              >
-                {isFollowing ? "Following" : "Follow"}
-              </Button>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleMessageSeller}
+                  className="gap-1.5"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  Message
+                </Button>
+                <Button
+                  size="sm"
+                  variant={isFollowing ? "secondary" : "default"}
+                  disabled={followPending}
+                  onClick={handleFollowToggle}
+                >
+                  {isFollowing ? "Following" : "Follow"}
+                </Button>
+              </div>
             </div>
 
             <div className="grid grid-cols-4 border-t border-border mt-4 pt-3">
