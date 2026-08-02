@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { ensureConversationsTables } from "./lib/ensureConversationsTables";
 import { archiveLastMonth } from "./routes/monthlyRecords";
 import {
   runSellerSubscriptionReminderJob,
@@ -27,6 +28,10 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Ensure conversations & messages tables exist (idempotent — safe to run
+  // every startup; uses CREATE TABLE IF NOT EXISTS).
+  ensureConversationsTables().catch(() => {});
 
   // Monthly archiving scheduler — runs every hour, archives on the 1st of the month
   scheduleMonthlyArchive();
