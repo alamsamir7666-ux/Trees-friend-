@@ -1,11 +1,15 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { ensureConversationsTables } from "./lib/ensureConversationsTables";
 import { archiveLastMonth } from "./routes/monthlyRecords";
 import {
   runSellerSubscriptionReminderJob,
   runSellerSubscriptionExpiryJob,
 } from "./jobs/sellerSubscriptionJob";
+
+// Note: ensureConversationsTables() is invoked from app.ts at module load,
+// so it runs on every cold start (including Vercel serverless). We do NOT
+// call it again here to avoid a redundant DB round-trip on long-lived
+// processes.
 
 const rawPort = process.env["PORT"];
 
@@ -28,10 +32,6 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
-
-  // Ensure conversations & messages tables exist (idempotent — safe to run
-  // every startup; uses CREATE TABLE IF NOT EXISTS).
-  ensureConversationsTables().catch(() => {});
 
   // Monthly archiving scheduler — runs every hour, archives on the 1st of the month
   scheduleMonthlyArchive();

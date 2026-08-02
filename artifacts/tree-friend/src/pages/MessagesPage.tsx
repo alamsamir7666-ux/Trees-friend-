@@ -12,6 +12,8 @@ import {
   Search,
   Store,
   ShoppingBag,
+  AlertCircle,
+  RefreshCw,
 } from "lucide-react";
 
 const ICON_VERIFIED =
@@ -70,13 +72,15 @@ export function MessagesPage() {
 
   const [conversations, setConversations] = useState<ConversationListResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"buyer" | "seller">("buyer");
   const [searchQuery, setSearchQuery] = useState("");
 
-  useEffect(() => {
+  const loadConversations = () => {
     if (!user) return;
 
     setIsLoading(true);
+    setFetchError(null);
     apiClient
       .get("/api/conversations")
       .then((res) => {
@@ -90,10 +94,30 @@ export function MessagesPage() {
           setActiveTab("seller");
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
+        // Surface a meaningful error to the user instead of logging silently.
+        // Axios wraps server errors in err.response.data; we prefer the
+        // server-provided `detail` (only present in non-production) then fall
+        // back to a stable generic message.
+        const serverDetail =
+          (err as { response?: { data?: { detail?: string; error?: string } } })
+            ?.response?.data?.detail ??
+          (err as { response?: { data?: { error?: string } } })
+            ?.response?.data?.error;
+        const fallback =
+          (err as { message?: string })?.message ?? "Unknown error";
+        setFetchError(serverDetail ?? fallback);
+        // Still log the full error so it shows up in browser devtools with
+        // the request URL, status, and stack trace if available.
+        // eslint-disable-next-line no-console
         console.error("Failed to fetch conversations:", err);
       })
       .finally(() => setIsLoading(false));
+  };
+
+  useEffect(() => {
+    loadConversations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   const currentConversations =
@@ -187,8 +211,27 @@ export function MessagesPage() {
         </div>
       )}
 
+      {/* Error state */}
+      {!isLoading && fetchError && (
+        <div className="flex flex-col items-center justify-center py-16 text-center px-4">
+          <div className="w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center mb-4">
+            <AlertCircle className="w-8 h-8 text-destructive" />
+          </div>
+          <h2 className="font-serif text-lg font-medium mb-1">
+            Couldn’t load messages
+          </h2>
+          <p className="text-sm text-muted-foreground max-w-[320px] mb-4 break-words">
+            {fetchError}
+          </p>
+          <Button onClick={loadConversations} variant="outline" className="gap-2">
+            <RefreshCw className="w-4 h-4" />
+            Try again
+          </Button>
+        </div>
+      )}
+
       {/* Empty state */}
-      {!isLoading && filteredConversations.length === 0 && (
+      {!isLoading && !fetchError && filteredConversations.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <div className="w-16 h-16 rounded-full bg-accent/10 flex items-center justify-center mb-4">
             <MessageCircle className="w-8 h-8 text-accent" />
@@ -210,7 +253,7 @@ export function MessagesPage() {
       )}
 
       {/* Conversation list */}
-      {!isLoading && filteredConversations.length > 0 && (
+      {!isLoading && !fetchError && filteredConversations.length > 0 && (
         <div className="space-y-1">
           {filteredConversations.map((conv) => (
             <button

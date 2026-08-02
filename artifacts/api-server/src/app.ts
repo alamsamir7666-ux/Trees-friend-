@@ -12,9 +12,24 @@ import {
 import router from "./routes";
 import smsWebhookRouter from "./routes/smsWebhook";
 import { logger } from "./lib/logger";
+import { ensureConversationsTables } from "./lib/ensureConversationsTables";
 import { apiLimiter, checkoutLimiter, newsletterLimiter, stockAlertLimiter } from "./middlewares/rateLimiter";
 
 const app: Express = express();
+
+// ─── Self-bootstrap DB schema for messaging ─────────────────────────────────
+// Runs on every cold start (both long-lived `index.ts` AND Vercel serverless
+// `vercel.ts`), since both import `app.ts`. The migration is fully idempotent
+// (CREATE TABLE IF NOT EXISTS + ADD COLUMN IF NOT EXISTS) so concurrent
+// invocations are safe — Postgres serializes DDL inside its own transaction
+// per statement. We intentionally do NOT await this; the first request that
+// hits /conversations before the migration finishes will get a 500, but the
+// migration completes within milliseconds and subsequent requests succeed.
+// This trade-off is preferable to blocking the entire app on a DB round-trip
+// during cold start.
+ensureConversationsTables().catch((err) => {
+  logger.error({ err }, "ensureConversationsTables failed at app init");
+});
 
 // ─── Security: Trust proxy (required if behind nginx/load balancer) ──────────
 app.set("trust proxy", 1);

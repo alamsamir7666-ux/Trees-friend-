@@ -15,6 +15,24 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, sql, lt, gt } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
+import { logger } from "../lib/logger";
+
+/**
+ * Normalize any thrown value (Error, string, object, unknown) into a string
+ * suitable for both structured logging and (in non-production) the JSON
+ * response body. Without this, thrown non-Error values serialize to `{}`,
+ * which is exactly what was producing the empty `Error {}` in the browser
+ * console for the /conversations 500.
+ */
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
 
 cloudinaryV2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -345,8 +363,14 @@ router.get("/conversations", requireAuth, async (req: any, res) => {
       sellerConversations: sellerResults,
     });
   } catch (err) {
-    console.error("List conversations error:", err);
-    res.status(500).json({ error: "Failed to fetch conversations" });
+    const detail = describeError(err);
+    logger.error({ err, detail }, "List conversations error");
+    res.status(500).json({
+      error: "Failed to fetch conversations",
+      // Include detail in non-production so the client can surface it for
+      // debugging. In production we hide internals to avoid leaking schema.
+      detail: process.env.NODE_ENV === "production" ? undefined : detail,
+    });
   }
 });
 
@@ -483,8 +507,12 @@ router.post("/conversations", requireAuth, async (req: any, res) => {
       createdAt: conversation.createdAt.toISOString(),
     });
   } catch (err) {
-    console.error("Create conversation error:", err);
-    res.status(500).json({ error: "Failed to create conversation" });
+    const detail = describeError(err);
+    logger.error({ err, detail }, "Create conversation error");
+    res.status(500).json({
+      error: "Failed to create conversation",
+      detail: process.env.NODE_ENV === "production" ? undefined : detail,
+    });
   }
 });
 
@@ -607,8 +635,12 @@ router.get("/conversations/:id", requireAuth, async (req: any, res) => {
       createdAt: conv.createdAt.toISOString(),
     });
   } catch (err) {
-    console.error("Get conversation error:", err);
-    res.status(500).json({ error: "Failed to fetch conversation" });
+    const detail = describeError(err);
+    logger.error({ err, detail }, "Get conversation error");
+    res.status(500).json({
+      error: "Failed to fetch conversation",
+      detail: process.env.NODE_ENV === "production" ? undefined : detail,
+    });
   }
 });
 
@@ -733,8 +765,12 @@ router.get("/conversations/:id/messages", requireAuth, async (req: any, res) => 
       nextCursor: hasMore ? sorted[sorted.length - 1]?.id ?? null : null,
     });
   } catch (err) {
-    console.error("Get messages error:", err);
-    res.status(500).json({ error: "Failed to fetch messages" });
+    const detail = describeError(err);
+    logger.error({ err, detail }, "Get messages error");
+    res.status(500).json({
+      error: "Failed to fetch messages",
+      detail: process.env.NODE_ENV === "production" ? undefined : detail,
+    });
   }
 });
 
@@ -843,8 +879,12 @@ router.post("/conversations/:id/messages", requireAuth, async (req: any, res) =>
 
     res.status(201).json(formatMessage(message));
   } catch (err) {
-    console.error("Send message error:", err);
-    res.status(500).json({ error: "Failed to send message" });
+    const detail = describeError(err);
+    logger.error({ err, detail }, "Send message error");
+    res.status(500).json({
+      error: "Failed to send message",
+      detail: process.env.NODE_ENV === "production" ? undefined : detail,
+    });
   }
 });
 
@@ -942,7 +982,7 @@ router.post(
           uploadOptions,
           (err, result) => {
             if (err || !result) {
-              console.error("Cloudinary chat upload error:", err);
+              logger.error({ err }, "Cloudinary chat upload error");
               return reject(err ?? new Error("Upload failed"));
             }
             resolve(result as { secure_url: string });
@@ -985,8 +1025,12 @@ router.post(
 
       res.status(201).json(formatMessage(message));
     } catch (err) {
-      console.error("Chat file upload error:", err);
-      res.status(500).json({ error: "Failed to upload file" });
+      const detail = describeError(err);
+      logger.error({ err, detail }, "Chat file upload error");
+      res.status(500).json({
+        error: "Failed to upload file",
+        detail: process.env.NODE_ENV === "production" ? undefined : detail,
+      });
     }
   }
 );
@@ -1050,8 +1094,12 @@ router.put("/conversations/:id/read", requireAuth, async (req: any, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("Mark read error:", err);
-    res.status(500).json({ error: "Failed to mark messages as read" });
+    const detail = describeError(err);
+    logger.error({ err, detail }, "Mark read error");
+    res.status(500).json({
+      error: "Failed to mark messages as read",
+      detail: process.env.NODE_ENV === "production" ? undefined : detail,
+    });
   }
 });
 
