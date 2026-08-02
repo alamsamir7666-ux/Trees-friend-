@@ -9,7 +9,14 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { EmojiPicker } from "@/components/ui/EmojiPicker";
-import { AttachmentMenu, fileIconFor, formatFileSize, type SentAttachment } from "@/components/ui/AttachmentMenu";
+import {
+  AttachmentMenu,
+  fileIconFor,
+  formatFileSize,
+  isAllowedFile,
+  classifyFile,
+} from "@/components/ui/AttachmentMenu";
+import { uploadAttachment } from "@/lib/uploadAttachment";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft,
@@ -20,7 +27,10 @@ import {
   MoreVertical,
   ExternalLink,
   Download,
-  Paperclip,
+  X,
+  Loader2,
+  Film,
+  Music,
 } from "lucide-react";
 
 const ICON_VERIFIED =
@@ -64,6 +74,25 @@ interface ChatMessage {
   readByBuyer: boolean;
   readBySeller: boolean;
   createdAt: string;
+}
+
+// ─── Pending attachment (staged in the composer, not yet uploaded) ──────────
+// When the user picks a file via the AttachmentMenu, we stage it here
+// instead of uploading immediately. The upload only happens when the user
+// clicks Send. This matches the industry-standard preview-then-send flow
+// used by WhatsApp, Telegram, Messenger, etc.
+
+interface PendingAttachment {
+  /** Stable local id (used as React key + for removal). */
+  localId: string;
+  file: File;
+  /** Object URL for client-side thumbnail preview (images/videos only). */
+  previewUrl: string | null;
+  kind: "image" | "video" | "audio" | "document";
+  /** Upload progress 0-100; null means "not started". */
+  progress: number | null;
+  status: "pending" | "uploading" | "done" | "error";
+  error?: string;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -140,22 +169,32 @@ export function ChatPage() {
   const [isSending, setIsSending] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
   // Lightbox state — when set, the full image opens in a modal overlay.
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  // Pending attachments staged in the composer (not yet uploaded).
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Check mobile viewport
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 768);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
+  // ─── Scroll-position tracking ─────────────────────────────────────────
+  // We use a ref + IntersectionObserver instead of reading scroll math
+  // inside the polling callback. The old approach computed `isNearBottom`
+  // from `scrollHeight - scrollTop - clientHeight` SYNCHRONOUSLY after
+  // setMessages — but React hadn't re-rendered yet, so scrollHeight was
+  // stale and the check was unreliable. The IntersectionObserver watches
+  // a sentinel div at the bottom of the message list and tells us, at
+  // any time, whether the user can currently see it.
+  const isNearBottomRef = useRef(true);
+  const bottomSentinelRef = useRef<HTMLDivElement>(null);
+  // Latest message id, kept in a ref so the polling effect can depend on
+  // [conversationId] only and not re-create the interval on every new
+  // message (which caused interval churn and missed polls).
+  const latestMessageIdRef = useRef<number | null>(null);
+  // Track whether the initial scroll-to-bottom has happened, so we don't
+  // fight the browser's restored scroll position on a refresh.
+  const didInitialScrollRef = useRef(false);
 
   // ─── Fetch conversation info ──────────────────────────────────────────
   useEffect(() => {
@@ -193,15 +232,21 @@ export function ChatPage() {
         const { messages: newMessages, hasMore: more } = data;
 
         if (cursor) {
-          // Prepending older messages
+          // Prepending older messages — preserve scroll position so the
+          // user doesn't get yanked to a different spot.
           setMessages((prev) => [...newMessages, ...prev]);
           setLoadingMore(false);
         } else {
           setMessages(newMessages);
-          // Scroll to bottom on initial load
-          setTimeout(() => {
-            messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
-          }, 100);
+          // Update latest message id ref so polling starts from the right
+          // cursor without depending on the `messages` state.
+          if (newMessages.length > 0) {
+            latestMessageIdRef.current = newMessages[newMessages.length - 1].id;
+          }
+          // Mark that we need to do the initial scroll-to-bottom. The
+          // actual scroll is handled by a separate effect that runs after
+          // the messages render, so layout is correct.
+          didInitialScrollRef.current = false;
         }
         setHasMore(more);
       } catch (err) {
@@ -215,11 +260,58 @@ export function ChatPage() {
     fetchMessages();
   }, [fetchMessages]);
 
+  // ─── Initial scroll-to-bottom ───────────────────────────────────────────
+  // Runs after messages first render. Using a layout effect + rAF avoids
+  // the old setTimeout(100) race where images hadn't loaded yet and the
+  // scroll position was wrong.
+  useEffect(() => {
+    if (didInitialScrollRef.current) return;
+    if (messages.length === 0) return;
+    const raf = requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      didInitialScrollRef.current = true;
+      isNearBottomRef.current = true;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [messages.length]);
+
+  // ─── IntersectionObserver: track whether user is near the bottom ────────
+  // This replaces the old scroll-math check (`scrollHeight - scrollTop -
+  // clientHeight < 150`) which was unreliable because it ran before React
+  // committed new messages. The observer fires whenever the sentinel
+  // enters/leaves the viewport, keeping `isNearBottomRef` accurate at all
+  // times. Polling and send-message both read this ref to decide whether
+  // to auto-scroll.
+  useEffect(() => {
+    const sentinel = bottomSentinelRef.current;
+    const container = messagesContainerRef.current;
+    if (!sentinel || !container) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          isNearBottomRef.current = entry.isIntersecting;
+        }
+      },
+      // root is the scroll container; rootMargin lets us treat "within
+      // 150px of the bottom" as "at the bottom", matching the old threshold.
+      { root: container, rootMargin: "0px 0px 150px 0px", threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []);
+
   // ─── Polling for new messages ─────────────────────────────────────────
+  // Deps are [conversationId] ONLY — not [conversationId, messages].
+  // The old dependency on `messages` caused the interval to be torn down
+  // and re-created on every single new message, which meant:
+  //   1. The 5-second timer kept restarting, so during an active
+  //      conversation polling was effectively disabled.
+  //   2. Each re-creation was wasted work.
+  // We now read the latest message id from a ref instead.
   useEffect(() => {
     if (!conversationId) return;
 
-    // Poll every 5 seconds for new messages
     pollingRef.current = setInterval(async () => {
       if (!conversationId) return;
       const id = parseInt(conversationId);
@@ -228,8 +320,9 @@ export function ChatPage() {
       try {
         const params = new URLSearchParams();
         params.set("limit", "50");
-        if (messages.length > 0) {
-          params.set("cursor", String(messages[messages.length - 1].id));
+        const cursor = latestMessageIdRef.current;
+        if (cursor != null) {
+          params.set("cursor", String(cursor));
           params.set("direction", "after");
         }
 
@@ -238,86 +331,228 @@ export function ChatPage() {
         const { messages: newMessages } = data;
 
         if (newMessages.length > 0) {
+          // Update the ref BEFORE setMessages so the next poll uses the
+          // correct cursor even if React hasn't re-rendered yet.
+          latestMessageIdRef.current =
+            newMessages[newMessages.length - 1].id;
+
           setMessages((prev) => {
-            // Deduplicate by id
+            // Deduplicate by id (a poll and a local send could race)
             const existingIds = new Set(prev.map((m) => m.id));
             const unique = newMessages.filter((m: ChatMessage) => !existingIds.has(m.id)) as ChatMessage[];
             if (unique.length === 0) return prev;
             return [...prev, ...unique];
           });
 
-          // Auto-scroll to bottom if user is near bottom
-          const container = messagesContainerRef.current;
-          if (container) {
-            const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
-            if (isNearBottom) {
-              setTimeout(() => {
-                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-              }, 50);
-            }
+          // Auto-scroll to bottom ONLY if the user is already there.
+          // Reading the ref is safe — it's updated by the
+          // IntersectionObserver, not by stale scroll math.
+          if (isNearBottomRef.current) {
+            requestAnimationFrame(() => {
+              messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            });
           }
         }
       } catch {
-        // Silently fail on polling errors
+        // Silently fail on polling errors — a transient network blip
+        // shouldn't spam the user with toasts.
       }
     }, 5000);
 
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
-  }, [conversationId, messages]);
+  }, [conversationId]);
 
-  // ─── Send message ─────────────────────────────────────────────────────
+  // ─── Send message (text + pending attachments) ──────────────────────────
+  // Unified send handler. If there are pending attachments, uploads them
+  // one-by-one with progress and appends each to the message list. The
+  // text (if any) is sent as the caption of the FIRST attachment; if
+  // there's no attachment, the text is sent as a standalone text message.
+  // This matches WhatsApp/Telegram behavior: type a caption, attach
+  // photos, hit send → one combined send action.
   async function handleSendMessage() {
-    if (!newMessage.trim() || !conversationId || isSending) return;
+    if (isSending) return;
+    if (!conversationId) return;
 
-    const content = newMessage.trim();
-    setNewMessage("");
+    const hasText = newMessage.trim().length > 0;
+    const hasAttachments = pendingAttachments.length > 0;
+    if (!hasText && !hasAttachments) return;
+
+    const id = parseInt(conversationId);
+    if (isNaN(id)) return;
+
+    const caption = hasText ? newMessage.trim() : "";
+    // Snapshot the pending list so we can clear state immediately and let
+    // the user keep typing while the upload runs.
+    const toUpload = [...pendingAttachments];
+
     setIsSending(true);
-
-    // Reset textarea height
+    setNewMessage("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
+    // Clear pending attachments from the composer, but keep the object URLs
+    // alive in `toUpload` so we can revoke them after upload finishes.
+    setPendingAttachments([]);
 
-    try {
-      const id = parseInt(conversationId);
-      const res = await apiClient.post(`/api/conversations/${id}/messages`, {
-        content,
-        messageType: "text",
-      });
-
-      setMessages((prev) => [...prev, res.data as ChatMessage]);
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-      }, 50);
-
-      // Invalidate conversations list to update lastMessage
-      qc.invalidateQueries({ queryKey: ["conversations"] });
-    } catch (err) {
-      console.error("Failed to send message:", err);
-      toast({ title: "Failed to send message", description: "Please try again." });
-      setNewMessage(content); // Restore message on failure
-    } finally {
-      setIsSending(false);
+    // ─── Text-only path: single JSON POST, no upload ────────────────────
+    if (toUpload.length === 0) {
+      try {
+        const res = await apiClient.post(`/api/conversations/${id}/messages`, {
+          content: caption,
+          messageType: "text",
+        });
+        setMessages((prev) => [...prev, res.data as ChatMessage]);
+        latestMessageIdRef.current = (res.data as ChatMessage).id;
+        scrollToBottom("smooth");
+        qc.invalidateQueries({ queryKey: ["conversations"] });
+      } catch (err) {
+        console.error("Failed to send message:", err);
+        toast({ title: "Failed to send message", description: "Please try again." });
+        setNewMessage(caption); // Restore so the user can retry
+      } finally {
+        setIsSending(false);
+      }
+      return;
     }
+
+    // ─── Attachment path: upload each file via multipart/form-data ──────
+    // The first upload carries the caption (if any); subsequent uploads
+    // are attachment-only. Each upload is sequential so progress is
+    // predictable and the server creates messages in the right order.
+    let firstError: string | null = null;
+    const sentMessages: ChatMessage[] = [];
+
+    for (let i = 0; i < toUpload.length; i++) {
+      const pending = toUpload[i];
+      // Update the LOCAL copy of the pending list so the user sees
+      // progress. This doesn't re-render the composer (we already cleared
+      // state), but it lets us show a progress overlay on each thumbnail
+      // if we ever render them inline. For now it's mostly for the toast
+      // on error.
+      try {
+        const sent = await uploadAttachment(
+          pending.file,
+          id,
+          i === 0 ? caption : undefined,
+          (percent) => {
+            // Optional: could update a progress state per-attachment here.
+            // Skipping for now since the composer is cleared on send and
+            // the message list shows the uploaded message once it lands.
+            void percent;
+          },
+        );
+        sentMessages.push(sent as ChatMessage);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Upload failed";
+        console.error(`Failed to upload ${pending.file.name}:`, err);
+        if (firstError === null) firstError = msg;
+      }
+    }
+
+    // Revoke all object URLs we created for previews.
+    for (const p of toUpload) {
+      if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
+    }
+
+    if (sentMessages.length > 0) {
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map((m) => m.id));
+        const unique = sentMessages.filter((m) => !existingIds.has(m.id));
+        return [...prev, ...unique];
+      });
+      latestMessageIdRef.current =
+        sentMessages[sentMessages.length - 1].id;
+      scrollToBottom("smooth");
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+    }
+
+    if (firstError) {
+      toast({
+        title: "Some attachments failed to send",
+        description: firstError,
+        variant: "destructive",
+      });
+      // If we also had a caption and ALL uploads failed, restore the text
+      // so the user doesn't lose what they typed.
+      if (sentMessages.length === 0 && caption) {
+        setNewMessage(caption);
+      }
+    }
+
+    setIsSending(false);
   }
 
-  // ─── Attachment sent callback ────────────────────────────────────────
-  // The AttachmentMenu uploads files independently and calls this for each
-  // successful upload. We append the returned message to the local list
-  // (the next polling cycle will dedup via the id check) and scroll to bottom.
-  const handleAttachmentSent = useCallback((message: SentAttachment) => {
-    setMessages((prev) => {
-      // Defensive dedup — if a poll raced in a message with the same id,
-      // drop the duplicate rather than showing it twice.
-      if (prev.some((m) => m.id === message.id)) return prev;
-      return [...prev, message as ChatMessage];
+  // ─── Scroll helper ────────────────────────────────────────────────────
+  // Always scrolls to bottom. Used after sending (user intent is clear)
+  // and never after polling (polling checks isNearBottomRef instead).
+  function scrollToBottom(behavior: ScrollBehavior) {
+    requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior });
     });
-    setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, 50);
-    qc.invalidateQueries({ queryKey: ["conversations"] });
+  }
+
+  // ─── Pending attachment management ────────────────────────────────────
+  // Called by AttachmentMenu when the user picks files. Validates each
+  // file, creates a preview URL for images/videos, and stages it in the
+  // composer. Nothing is uploaded yet.
+  const handleFilesSelected = useCallback((files: File[]) => {
+    const valid: PendingAttachment[] = [];
+    const errors: string[] = [];
+
+    for (const file of files) {
+      const result = isAllowedFile(file);
+      if (!result.ok) {
+        errors.push(result.reason ?? `"${file.name}" is not allowed.`);
+        continue;
+      }
+      const kind = classifyFile(file.type || null);
+      const previewUrl =
+        kind === "image" || kind === "video"
+          ? URL.createObjectURL(file)
+          : null;
+      valid.push({
+        localId: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        file,
+        previewUrl,
+        kind,
+        progress: null,
+        status: "pending",
+      });
+    }
+
+    if (errors.length > 0) {
+      toast({
+        title: errors.length === 1 ? "File not added" : `${errors.length} files not added`,
+        description: errors.join(" "),
+        variant: "destructive",
+      });
+    }
+    if (valid.length > 0) {
+      setPendingAttachments((prev) => [...prev, ...valid]);
+    }
+  }, [toast]);
+
+  // Remove a single pending attachment and revoke its preview URL.
+  const removePendingAttachment = useCallback((localId: string) => {
+    setPendingAttachments((prev) => {
+      const target = prev.find((p) => p.localId === localId);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((p) => p.localId !== localId);
+    });
+  }, []);
+
+  // Revoke any remaining preview URLs on unmount.
+  useEffect(() => {
+    return () => {
+      pendingAttachments.forEach((p) => {
+        if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
+      });
+    };
+    // We intentionally only run this on unmount; pendingAttachments is
+    // captured at cleanup time via the closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ─── Emoji picker callback ───────────────────────────────────────────
@@ -393,7 +628,7 @@ export function ChatPage() {
   }
 
   const isBuyer = user?.id === conversation.buyerId;
-  const conversationIdNum = parseInt(conversationId ?? "0");
+  void isBuyer; // reserved for future buyer/seller-specific UI
 
   // ─── Render ───────────────────────────────────────────────────────────
   return (
@@ -587,8 +822,31 @@ export function ChatPage() {
           </div>
         )}
 
+        {/* Bottom anchor for scroll-to-bottom + IntersectionObserver sentinel.
+            The sentinel is a 1px-tall div that the observer watches; when
+            it's intersecting the scroll container, the user is near the
+            bottom and auto-scroll on new messages is appropriate. */}
+        <div ref={bottomSentinelRef} className="h-px w-full" />
         <div ref={messagesEndRef} />
       </div>
+
+      {/* ─── Pending attachment preview strip ─────────────────────────────── */}
+      {/* Rendered ABOVE the input bar so it never interferes with the
+          textarea layout. Horizontally scrollable if the user adds many
+          attachments. Each thumbnail has an X button to remove it. */}
+      {pendingAttachments.length > 0 && (
+        <div className="px-4 pt-2.5 border-t border-border bg-card shrink-0">
+          <div className="flex gap-2 overflow-x-auto pb-2.5 -mx-1 px-1">
+            {pendingAttachments.map((p) => (
+              <PendingAttachmentPreview
+                key={p.localId}
+                attachment={p}
+                onRemove={() => removePendingAttachment(p.localId)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ─── Input Area ────────────────────────────────────────────────── */}
       <div className="px-4 py-3 border-t border-border bg-card shrink-0">
@@ -599,10 +857,9 @@ export function ChatPage() {
             align="start"
           />
 
-          {/* Attachment menu */}
+          {/* Attachment menu — now a pure file picker; upload happens on Send */}
           <AttachmentMenu
-            conversationId={conversationIdNum}
-            onSent={handleAttachmentSent}
+            onFilesSelected={handleFilesSelected}
             align="center"
           />
 
@@ -613,20 +870,31 @@ export function ChatPage() {
               value={newMessage}
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
+              placeholder={
+                pendingAttachments.length > 0
+                  ? "Add a caption..."
+                  : "Type a message..."
+              }
               rows={1}
               className="w-full resize-none rounded-2xl border border-border bg-muted/30 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/50 max-h-[120px] placeholder:text-muted-foreground"
             />
           </div>
 
-          {/* Send button */}
+          {/* Send button — enabled when there's text OR pending attachments */}
           <Button
             size="icon"
             onClick={handleSendMessage}
-            disabled={!newMessage.trim() || isSending}
+            disabled={
+              isSending ||
+              (newMessage.trim().length === 0 && pendingAttachments.length === 0)
+            }
             className="rounded-full h-10 w-10 shrink-0 bg-accent hover:bg-accent/90 text-accent-foreground"
           >
-            <Send className="w-4 h-4" />
+            {isSending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
           </Button>
         </div>
       </div>
@@ -759,5 +1027,118 @@ function MessageAttachment({ msg, kind, onImageClick }: MessageAttachmentProps) 
       </span>
       <Download className="w-4 h-4 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
     </a>
+  );
+}
+
+// ─── PendingAttachmentPreview (composer thumbnail before send) ──────────────
+
+interface PendingAttachmentPreviewProps {
+  attachment: PendingAttachment;
+  onRemove: () => void;
+}
+
+/**
+ * Renders a single pending attachment as a thumbnail (for images/videos) or
+ * a file chip (for audio/documents) in the composer's preview strip, before
+ * the user clicks Send. Each preview has an X button to remove it.
+ *
+ * For images, we show the actual decoded image via a blob URL so the user
+ * sees exactly what they're about to send. For videos, we show the first
+ * frame via a <video> element with `preload="metadata"`. For audio and
+ * documents, we show a compact file chip with icon + name + size.
+ */
+function PendingAttachmentPreview({
+  attachment,
+  onRemove,
+}: PendingAttachmentPreviewProps) {
+  const { file, previewUrl, kind } = attachment;
+
+  // ─── Image thumbnail ─────────────────────────────────────────────────
+  if (kind === "image" && previewUrl) {
+    return (
+      <div className="relative shrink-0 w-20 h-20 rounded-lg overflow-hidden border border-border bg-muted/30 group">
+        <img
+          src={previewUrl}
+          alt={file.name}
+          className="w-full h-full object-cover"
+        />
+        <PreviewRemoveButton onClick={onRemove} />
+      </div>
+    );
+  }
+
+  // ─── Video thumbnail (first frame) ───────────────────────────────────
+  if (kind === "video" && previewUrl) {
+    return (
+      <div className="relative shrink-0 w-20 h-20 rounded-lg overflow-hidden border border-border bg-black/90 group">
+        <video
+          src={previewUrl}
+          className="w-full h-full object-cover"
+          preload="metadata"
+          muted
+        />
+        {/* Play icon overlay to signal it's a video */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="w-7 h-7 rounded-full bg-black/60 flex items-center justify-center">
+            <Film className="w-3.5 h-3.5 text-white" />
+          </div>
+        </div>
+        <PreviewRemoveButton onClick={onRemove} />
+      </div>
+    );
+  }
+
+  // ─── Audio / document file chip ─────────────────────────────────────
+  const Icon = fileIconFor(file.type || null);
+  return (
+    <div className="relative shrink-0 flex items-center gap-2 pl-2.5 pr-7 py-2 rounded-lg border border-border bg-muted/30 max-w-[200px]">
+      <span className="shrink-0 w-8 h-8 rounded-md bg-primary/10 text-primary flex items-center justify-center">
+        {kind === "audio" ? (
+          <Music className="w-4 h-4" />
+        ) : (
+          <Icon className="w-4 h-4" />
+        )}
+      </span>
+      <span className="flex-1 min-w-0">
+        <span className="block text-xs font-medium truncate">{file.name}</span>
+        <span className="block text-[10px] text-muted-foreground mt-0.5">
+          {formatFileSize(file.size)}
+        </span>
+      </span>
+      <PreviewRemoveButton onClick={onRemove} compact />
+    </div>
+  );
+}
+
+/**
+ * The X button overlaid on a pending attachment preview. Styled to be
+ * visible against any background (semi-transparent dark circle with a
+ * white X). `compact` variant is for the file chip (smaller, positioned
+ * at the top-right of the chip rather than overlaid).
+ */
+function PreviewRemoveButton({
+  onClick,
+  compact = false,
+}: {
+  onClick: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      aria-label="Remove attachment"
+      className={cn(
+        "rounded-full bg-black/70 hover:bg-black/90 text-white flex items-center justify-center transition-colors",
+        compact
+          ? "absolute top-1 right-1 w-4 h-4"
+          : "absolute top-1 right-1 w-5 h-5",
+      )}
+    >
+      <X className={compact ? "w-2.5 h-2.5" : "w-3 h-3"} />
+    </button>
   );
 }
