@@ -1075,8 +1075,18 @@ export function ChatPage() {
       {/* ─── Input Area ────────────────────────────────────────────────── */}
       {/* In edit mode, the composer switches: emoji/attachment buttons are
           hidden, an "Editing message" banner appears above the textarea,
-          and the Send button becomes Save (with a Cancel button next to it). */}
-      <div className="px-4 py-3 border-t border-border bg-card shrink-0">
+          and the Send button becomes Save (with a Cancel button next to it).
+          
+          pb-[env(safe-area-inset-bottom)] adds bottom padding on devices
+          with a home indicator (iPhone X+) so the send button isn't
+          covered by the system gesture bar. On Android with 3-button nav,
+          this evaluates to 0 — the system nav bar is below the viewport
+          and not our concern. The shadow-sm + border-t together create a
+          clear visual separator so the input bar doesn't visually merge
+          with the OS navigation bar (which often shares the same white
+          background and made the input bar look "floating" in user
+          testing). */}
+      <div className="px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] border-t border-border bg-card shadow-[0_-1px_3px_0_rgb(0_0_0/0.04)] shrink-0">
         {editingMessage && (
           <div className="flex items-center justify-between mb-2 px-1">
             <span className="text-xs text-muted-foreground flex items-center gap-1.5">
@@ -1381,7 +1391,7 @@ function MessageBubble({
               className={cn(
                 "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5 rounded-2xl",
                 isOwn
-                  ? "bg-accent/5 dark:bg-accent/10 rounded-br-md"
+                  ? "bg-accent/15 dark:bg-accent/25 rounded-br-md"
                   : "bg-muted/40 border border-border rounded-2xl rounded-bl-md",
               )}
             >
@@ -1389,7 +1399,7 @@ function MessageBubble({
                 <Ban className="w-3.5 h-3.5 shrink-0" />
                 This message was deleted
               </p>
-              <div className="flex items-center gap-1 mt-1">
+              <div className="flex items-center gap-1 mt-1 whitespace-nowrap">
                 <span className="text-[10px] text-muted-foreground">
                   {formatTime(msg.createdAt)}
                 </span>
@@ -1407,7 +1417,7 @@ function MessageBubble({
               className={cn(
                 "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5",
                 isOwn
-                  ? "bg-accent/10 dark:bg-accent/15 rounded-2xl rounded-br-md"
+                  ? "bg-accent/20 dark:bg-accent/30 rounded-2xl rounded-br-md"
                   : "bg-card border border-border rounded-2xl rounded-bl-md",
                 // Image messages: drop horizontal padding so the image
                 // can stretch edge-to-edge inside the bubble.
@@ -1440,8 +1450,11 @@ function MessageBubble({
                 <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
               )}
 
-              {/* Timestamp, edited label & read receipt */}
-              <div className={`flex items-center gap-1 mt-1 ${hasAttachment ? "px-1" : ""}`}>
+              {/* Timestamp, edited label & read receipt.
+                  whitespace-nowrap prevents the timestamp + "edited" label
+                  from wrapping onto two lines on narrow bubbles (the
+                  "09:42 PM" + "· edited" pair was wrapping awkwardly). */}
+              <div className={`flex items-center gap-1 mt-1 whitespace-nowrap ${hasAttachment ? "px-1" : ""}`}>
                 <span className="text-[10px] text-muted-foreground">{formatTime(msg.createdAt)}</span>
                 {msg.editedAt && (
                   <span className="text-[10px] text-muted-foreground italic">· edited</span>
