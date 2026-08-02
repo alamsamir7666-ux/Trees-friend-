@@ -60,7 +60,10 @@ export function FloatingCartIcon() {
   }, []);
 
   if (count === 0) return null;
-  if (location.startsWith('/cart') || location.startsWith('/checkout') || location.startsWith('/orders') || location.startsWith('/messages')) return null;
+  // Only hide inside an ACTIVE conversation (/messages/:id) where the
+  // floating icon would overlap the chat composer. On the /messages LIST
+  // page (no trailing slash, no conversationId) the icon is fine to show.
+  if (location.startsWith('/cart') || location.startsWith('/checkout') || location.startsWith('/orders') || location.startsWith('/messages/')) return null;
 
   function onPointerDown(e: React.PointerEvent) {
     isDragging.current = true;
