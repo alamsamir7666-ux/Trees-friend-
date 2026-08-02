@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/AttachmentMenu";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { usePresence, formatLastSeen } from "@/hooks/usePresence";
+import { useLongPress } from "@/hooks/useLongPress";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft,
@@ -972,261 +973,25 @@ export function ChatPage() {
 
         {messages.map((msg, i) => {
           const prevMsg = i > 0 ? messages[i - 1] : undefined;
-          const isOwn = msg.senderId === user?.id;
-          const showDate = shouldShowDateSeparator(prevMsg, msg);
-          const kind = classifyMessage(msg);
-          const hasAttachment = kind !== "text";
-          const hasCaption = msg.content && msg.content.trim().length > 0;
-          // Soft-deleted messages render as a tombstone bubble
-          const isDeleted = !!msg.isDeleted;
-          // Edit/delete are only available on the user's own messages,
-          // within the 15-minute window, and not on already-deleted ones.
-          const canEditDelete = isOwn && !isDeleted && isWithinEditWindow(msg);
-          // The action menu (Edit/Delete popover) is open for this message
-          const isMenuOpen = openMenuMessageId === msg.id;
-          // The delete-confirmation popover is open for this message
-          const isDeleteConfirmOpen = pendingDeleteId === msg.id;
-          // This message is currently being deleted (spinner state)
-          const isDeleting = deleteSavingId === msg.id;
-
-          // Check if this is the last message from the same sender in a sequence
           const nextMsg = i < messages.length - 1 ? messages[i + 1] : undefined;
-          const isLastInSequence = !nextMsg || nextMsg.senderId !== msg.senderId;
-
           return (
-            <div key={msg.id}>
-              {/* Date separator */}
-              {showDate && (
-                <div className="flex items-center justify-center py-3">
-                  <span className="text-[11px] text-muted-foreground bg-muted/60 px-3 py-1 rounded-full">
-                    {formatDate(msg.createdAt)}
-                  </span>
-                </div>
-              )}
-
-              {/* Message bubble */}
-              <div className={`flex ${isOwn ? "justify-end" : "justify-start"} ${isLastInSequence ? "mb-2" : "mb-0.5"}`}>
-                {/* Seller avatar (only for first in sequence) */}
-                {!isOwn && isLastInSequence && (
-                  <div className="w-7 h-7 rounded-full overflow-hidden border shrink-0 mr-2 mt-1 bg-muted/30">
-                    {conversation.sellerLogoUrl ? (
-                      <img src={conversation.sellerLogoUrl} alt="" className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <NoImagePlaceholder compact />
-                      </div>
-                    )}
-                  </div>
-                )}
-                {!isOwn && !isLastInSequence && <div className="w-7 mr-2 shrink-0" />}
-
-                <div className="relative group">
-                  {/* ─── Soft-deleted tombstone ─────────────────────────── */}
-                  {/* WhatsApp/Telegram-style: italic muted text, no attachment
-                      or content shown, no edit/delete menu. */}
-                  {isDeleted ? (
-                    <div
-                      className={cn(
-                        "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5 rounded-2xl",
-                        isOwn
-                          ? "bg-accent/5 dark:bg-accent/10 rounded-br-md"
-                          : "bg-muted/40 border border-border rounded-2xl rounded-bl-md",
-                      )}
-                    >
-                      <p className="text-sm italic text-muted-foreground flex items-center gap-1.5">
-                        <Ban className="w-3.5 h-3.5 shrink-0" />
-                        This message was deleted
-                      </p>
-                      <div className="flex items-center gap-1 mt-1">
-                        <span className="text-[10px] text-muted-foreground">
-                          {formatTime(msg.createdAt)}
-                        </span>
-                        {isOwn && (
-                          msg.readByBuyer && msg.readBySeller ? (
-                            <CheckCheck className="w-3 h-3 text-accent/70" />
-                          ) : (
-                            <Check className="w-3 h-3 text-muted-foreground/70" />
-                          )
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      className={cn(
-                        "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5",
-                        isOwn
-                          ? "bg-accent/10 dark:bg-accent/15 rounded-2xl rounded-br-md"
-                          : "bg-card border border-border rounded-2xl rounded-bl-md",
-                        // Image messages: drop horizontal padding so the image
-                        // can stretch edge-to-edge inside the bubble.
-                        kind === "image" && "p-1.5",
-                      )}
-                    >
-                      {/* ─── Attachment rendering ──────────────────────────── */}
-                      {hasAttachment && (
-                        <MessageAttachment
-                          msg={msg}
-                          kind={kind}
-                          isOwn={isOwn}
-                          onImageClick={(src) => setLightboxSrc(src)}
-                        />
-                      )}
-
-                      {/* Caption (for attachment messages with text) */}
-                      {hasAttachment && hasCaption && (
-                        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words mt-1.5 px-1">
-                          {msg.content}
-                        </p>
-                      )}
-
-                      {/* Text-only content (no attachment) */}
-                      {!hasAttachment && (
-                        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
-                      )}
-
-                      {/* Timestamp, edited label & read receipt */}
-                      <div className={`flex items-center gap-1 mt-1 ${hasAttachment ? "px-1" : ""}`}>
-                        <span className="text-[10px] text-muted-foreground">{formatTime(msg.createdAt)}</span>
-                        {msg.editedAt && (
-                          <span className="text-[10px] text-muted-foreground italic">· edited</span>
-                        )}
-                        {isOwn && (
-                          msg.readByBuyer && msg.readBySeller ? (
-                            <CheckCheck className="w-3 h-3 text-accent" />
-                          ) : (
-                            <Check className="w-3 h-3 text-muted-foreground" />
-                          )
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* ─── Hover/long-press action menu trigger ──────────────── */}
-                  {/* Small chevron-down button that appears on hover (desktop)
-                      or after long-press (mobile). Only shown on the user's
-                      own messages within the 15-min edit/delete window. */}
-                  {canEditDelete && !isDeleteConfirmOpen && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenMenuMessageId(isMenuOpen ? null : msg.id);
-                      }}
-                      className={cn(
-                        "absolute top-0 z-10 p-1 rounded-full bg-card border border-border shadow-sm hover:bg-muted/60 transition-opacity",
-                        isOwn ? "-left-7" : "-right-7",
-                        // On desktop: only show on hover. On mobile: always
-                        // visible (no hover) so the user can tap directly.
-                        isMenuOpen
-                          ? "opacity-100"
-                          : "opacity-0 group-hover:opacity-100 max-sm:opacity-100",
-                      )}
-                      aria-label="Message actions"
-                    >
-                      <MoreVertical className="w-3.5 h-3.5 text-muted-foreground" />
-                    </button>
-                  )}
-
-                  {/* ─── Action menu popover ───────────────────────────────── */}
-                  {isMenuOpen && canEditDelete && !isDeleteConfirmOpen && (
-                    <>
-                      {/* Click-away catcher */}
-                      <div
-                        className="fixed inset-0 z-20"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenMenuMessageId(null);
-                        }}
-                      />
-                      <div
-                        className={cn(
-                          "absolute top-0 z-30 min-w-[140px] bg-card border border-border rounded-lg shadow-lg py-1",
-                          isOwn ? "-left-7 -translate-x-full" : "-right-7 translate-x-full",
-                        )}
-                      >
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleStartEdit(msg);
-                          }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/60 transition-colors text-left"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setPendingDeleteId(msg.id);
-                          }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-destructive/10 text-destructive transition-colors text-left"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          Delete
-                        </button>
-                      </div>
-                    </>
-                  )}
-
-                  {/* ─── Delete confirmation popover ──────────────────────── */}
-                  {/* Inline confirmation — no native confirm() dialog. */}
-                  {isDeleteConfirmOpen && (
-                    <>
-                      <div
-                        className="fixed inset-0 z-20"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPendingDeleteId(null);
-                        }}
-                      />
-                      <div
-                        className={cn(
-                          "absolute top-0 z-30 min-w-[200px] bg-card border border-border rounded-lg shadow-lg p-3",
-                          isOwn ? "-left-7 -translate-x-full" : "-right-7 translate-x-full",
-                        )}
-                      >
-                        <p className="text-sm font-medium mb-1">Delete message?</p>
-                        <p className="text-xs text-muted-foreground mb-3">
-                          This can't be undone. The other person will see "This message was deleted".
-                        </p>
-                        <div className="flex gap-2 justify-end">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setPendingDeleteId(null);
-                            }}
-                            className="h-8 text-xs"
-                          >
-                            Cancel
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleConfirmDelete(msg.id);
-                            }}
-                            disabled={isDeleting}
-                            className="h-8 text-xs gap-1"
-                          >
-                            {isDeleting ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <Trash2 className="w-3 h-3" />
-                            )}
-                            Delete
-                          </Button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
+            <MessageBubble
+              key={msg.id}
+              msg={msg}
+              prevMsg={prevMsg}
+              nextMsg={nextMsg}
+              sellerLogoUrl={conversation.sellerLogoUrl}
+              currentUserId={user?.id}
+              isMenuOpen={openMenuMessageId === msg.id}
+              isDeleteConfirmOpen={pendingDeleteId === msg.id}
+              isDeleting={deleteSavingId === msg.id}
+              onToggleMenu={(id) => setOpenMenuMessageId(id)}
+              onOpenDeleteConfirm={(id) => setPendingDeleteId(id)}
+              onCloseDeleteConfirm={() => setPendingDeleteId(null)}
+              onConfirmDelete={(id) => void handleConfirmDelete(id)}
+              onStartEdit={handleStartEdit}
+              onImageClick={(src) => setLightboxSrc(src)}
+            />
           );
         })}
 
@@ -1419,6 +1184,459 @@ export function ChatPage() {
             onClick={(e) => e.stopPropagation()}
           />
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MessageBubble (per-message sub-component) ───────────────────────────────
+// Extracted from the inline .map() so each bubble can use the useLongPress
+// hook independently (React hooks can't be called inside .map() callbacks).
+//
+// This component is responsible for:
+//   - Rendering the date separator above the bubble (if needed)
+//   - Rendering the avatar (for the other party, last-in-sequence only)
+//   - Rendering the bubble itself (text / image / video / audio / document)
+//   - Rendering the soft-delete tombstone for deleted messages
+//   - Attaching long-press (mobile) + right-click (desktop) handlers that
+//     open the Edit/Delete action menu — the WhatsApp/Telegram standard
+//   - Rendering the action menu as a bottom sheet on mobile (large touch
+//     targets, easy to reach) and a popover on desktop (compact, anchored
+//     to the bubble)
+//   - Rendering the inline delete-confirmation dialog
+
+interface MessageBubbleProps {
+  msg: ChatMessage;
+  prevMsg: ChatMessage | undefined;
+  nextMsg: ChatMessage | undefined;
+  sellerLogoUrl: string | null;
+  currentUserId: string | undefined;
+  isMenuOpen: boolean;
+  isDeleteConfirmOpen: boolean;
+  isDeleting: boolean;
+  onToggleMenu: (id: number | null) => void;
+  onOpenDeleteConfirm: (id: number) => void;
+  onCloseDeleteConfirm: () => void;
+  onConfirmDelete: (id: number) => void;
+  onStartEdit: (msg: ChatMessage) => void;
+  onImageClick: (src: string) => void;
+}
+
+function MessageBubble({
+  msg,
+  prevMsg,
+  nextMsg,
+  sellerLogoUrl,
+  currentUserId,
+  isMenuOpen,
+  isDeleteConfirmOpen,
+  isDeleting,
+  onToggleMenu,
+  onOpenDeleteConfirm,
+  onCloseDeleteConfirm,
+  onConfirmDelete,
+  onStartEdit,
+  onImageClick,
+}: MessageBubbleProps) {
+  const isOwn = msg.senderId === currentUserId;
+  const showDate = shouldShowDateSeparator(prevMsg, msg);
+  const kind = classifyMessage(msg);
+  const hasAttachment = kind !== "text";
+  const hasCaption = !!(msg.content && msg.content.trim().length > 0);
+  const isDeleted = !!msg.isDeleted;
+  // Edit/delete are only available on the user's own messages, within
+  // the 15-minute window, and not on already-deleted ones.
+  const canEditDelete = isOwn && !isDeleted && isWithinEditWindow(msg);
+  const isLastInSequence = !nextMsg || nextMsg.senderId !== msg.senderId;
+
+  // Long-press handler — opens the action menu. This is the primary
+  // affordance on mobile (WhatsApp/Telegram/iMessage all use long-press).
+  // We also get free desktop parity via onContextMenu (right-click).
+  const { handlers: longPressHandlers, justFiredRef } = useLongPress(
+    () => {
+      onToggleMenu(isMenuOpen ? null : msg.id);
+    },
+    { threshold: 500 },
+  );
+
+  // Image click → lightbox, BUT suppress the synthetic click that fires
+  // right after a long-press (otherwise long-pressing an image would open
+  // the lightbox instead of the action menu).
+  const handleImageClick = (src: string) => {
+    if (justFiredRef.current) {
+      justFiredRef.current = false;
+      return;
+    }
+    onImageClick(src);
+  };
+
+  // When the menu/confirm is open, clicks on the bubble itself should
+  // close it (matches WhatsApp — tap anywhere on the bubble dismisses
+  // the menu).
+  const handleBubbleClick = () => {
+    if (justFiredRef.current) {
+      justFiredRef.current = false;
+      return;
+    }
+    if (isMenuOpen) {
+      onToggleMenu(null);
+    }
+  };
+
+  return (
+    <div>
+      {/* Date separator */}
+      {showDate && (
+        <div className="flex items-center justify-center py-3">
+          <span className="text-[11px] text-muted-foreground bg-muted/60 px-3 py-1 rounded-full">
+            {formatDate(msg.createdAt)}
+          </span>
+        </div>
+      )}
+
+      {/* Message bubble row */}
+      <div className={`flex ${isOwn ? "justify-end" : "justify-start"} ${isLastInSequence ? "mb-2" : "mb-0.5"}`}>
+        {/* Other party's avatar — only on last message of a sequence */}
+        {!isOwn && isLastInSequence && (
+          <div className="w-7 h-7 rounded-full overflow-hidden border shrink-0 mr-2 mt-1 bg-muted/30">
+            {sellerLogoUrl ? (
+              <img src={sellerLogoUrl} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center">
+                <NoImagePlaceholder compact />
+              </div>
+            )}
+          </div>
+        )}
+        {/* Spacer so consecutive messages from the other party align */}
+        {!isOwn && !isLastInSequence && <div className="w-7 mr-2 shrink-0" />}
+
+        {/* Bubble wrapper — long-press + context-menu target. */}
+        <div
+          className="relative group"
+          onClick={handleBubbleClick}
+          {...(canEditDelete ? longPressHandlers : {})}
+        >
+          {/* ─── Soft-deleted tombstone ─────────────────────────── */}
+          {isDeleted ? (
+            <div
+              className={cn(
+                "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5 rounded-2xl",
+                isOwn
+                  ? "bg-accent/5 dark:bg-accent/10 rounded-br-md"
+                  : "bg-muted/40 border border-border rounded-2xl rounded-bl-md",
+              )}
+            >
+              <p className="text-sm italic text-muted-foreground flex items-center gap-1.5">
+                <Ban className="w-3.5 h-3.5 shrink-0" />
+                This message was deleted
+              </p>
+              <div className="flex items-center gap-1 mt-1">
+                <span className="text-[10px] text-muted-foreground">
+                  {formatTime(msg.createdAt)}
+                </span>
+                {isOwn && (
+                  msg.readByBuyer && msg.readBySeller ? (
+                    <CheckCheck className="w-3 h-3 text-accent/70" />
+                  ) : (
+                    <Check className="w-3 h-3 text-muted-foreground/70" />
+                  )
+                )}
+              </div>
+            </div>
+          ) : (
+            <div
+              className={cn(
+                "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5",
+                isOwn
+                  ? "bg-accent/10 dark:bg-accent/15 rounded-2xl rounded-br-md"
+                  : "bg-card border border-border rounded-2xl rounded-bl-md",
+                // Image messages: drop horizontal padding so the image
+                // can stretch edge-to-edge inside the bubble.
+                kind === "image" && "p-1.5",
+                // Subtle selection-style highlight while the action menu
+                // is open, so the user can see WHICH message they're
+                // acting on (matches WhatsApp's blue tint).
+                isMenuOpen && "ring-2 ring-accent/40",
+              )}
+            >
+              {/* ─── Attachment rendering ──────────────────────────── */}
+              {hasAttachment && (
+                <MessageAttachment
+                  msg={msg}
+                  kind={kind}
+                  isOwn={isOwn}
+                  onImageClick={handleImageClick}
+                />
+              )}
+
+              {/* Caption (for attachment messages with text) */}
+              {hasAttachment && hasCaption && (
+                <p className="text-sm leading-relaxed whitespace-pre-wrap break-words mt-1.5 px-1">
+                  {msg.content}
+                </p>
+              )}
+
+              {/* Text-only content (no attachment) */}
+              {!hasAttachment && (
+                <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
+              )}
+
+              {/* Timestamp, edited label & read receipt */}
+              <div className={`flex items-center gap-1 mt-1 ${hasAttachment ? "px-1" : ""}`}>
+                <span className="text-[10px] text-muted-foreground">{formatTime(msg.createdAt)}</span>
+                {msg.editedAt && (
+                  <span className="text-[10px] text-muted-foreground italic">· edited</span>
+                )}
+                {isOwn && (
+                  msg.readByBuyer && msg.readBySeller ? (
+                    <CheckCheck className="w-3 h-3 text-accent" />
+                  ) : (
+                    <Check className="w-3 h-3 text-muted-foreground" />
+                  )
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ─── Desktop hover affordance ──────────────────────────── */}
+          {/* A small ... button INSIDE the bubble (top corner) that appears on
+              hover. This is a secondary affordance for desktop users who
+              don't know they can right-click. Mobile users use long-press.
+              Hidden on touch-only devices to avoid the "floating grey square"
+              bug from the previous implementation. */}
+          {canEditDelete && !isDeleted && !isDeleteConfirmOpen && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleMenu(isMenuOpen ? null : msg.id);
+              }}
+              className={cn(
+                "absolute top-1 z-10 p-1 rounded-full bg-card/80 backdrop-blur-sm border border-border shadow-sm hover:bg-card transition-opacity hidden sm:block",
+                isOwn ? "left-1" : "right-1",
+                isMenuOpen
+                  ? "opacity-100"
+                  : "opacity-0 group-hover:opacity-100 focus:opacity-100",
+              )}
+              aria-label="Message actions"
+            >
+              <MoreVertical className="w-3.5 h-3.5 text-muted-foreground" />
+            </button>
+          )}
+
+          {/* ─── Desktop: action menu popover ─────────────────────────── */}
+          {/* Rendered INSIDE the relative group wrapper so absolute
+              positioning is relative to the bubble itself. right:100%
+              means "right edge of popover at right edge of bubble" which
+              places the popover to the LEFT of the bubble (for own
+              messages). Vice versa for the other party's messages. */}
+          {isMenuOpen && canEditDelete && !isDeleteConfirmOpen && (
+            <div
+              className="hidden sm:block absolute top-0 z-50 min-w-[160px] bg-card border border-border rounded-lg shadow-lg py-1"
+              style={
+                isOwn
+                  ? { right: "100%", marginRight: "8px" }
+                  : { left: "100%", marginLeft: "8px" }
+              }
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStartEdit(msg);
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/60 transition-colors text-left"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenDeleteConfirm(msg.id);
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-destructive/10 text-destructive transition-colors text-left"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete
+              </button>
+            </div>
+          )}
+
+          {/* ─── Desktop: delete confirmation popover ──────────────────── */}
+          {isDeleteConfirmOpen && (
+            <div
+              className="hidden sm:block absolute top-0 z-50 min-w-[240px] bg-card border border-border rounded-lg shadow-lg p-3"
+              style={
+                isOwn
+                  ? { right: "100%", marginRight: "8px" }
+                  : { left: "100%", marginLeft: "8px" }
+              }
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="text-sm font-medium mb-1">Delete message?</p>
+              <p className="text-xs text-muted-foreground mb-3">
+                This can't be undone. The other person will see "This message was deleted".
+              </p>
+              <div className="flex gap-2 justify-end">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCloseDeleteConfirm();
+                  }}
+                  className="h-8 text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onConfirmDelete(msg.id);
+                  }}
+                  disabled={isDeleting}
+                  className="h-8 text-xs gap-1"
+                >
+                  {isDeleting ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3 h-3" />
+                  )}
+                  Delete
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ─── Action menu ──────────────────────────────────────────────── */}
+      {/* Mobile: bottom sheet (large touch targets, thumb-friendly).
+          Desktop: anchored popover. */}
+      {isMenuOpen && canEditDelete && !isDeleteConfirmOpen && (
+        <>
+          {/* Click-away catcher — covers the whole screen so tapping
+              outside the menu closes it. */}
+          <div
+            className="fixed inset-0 z-40"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleMenu(null);
+            }}
+          />
+
+          {/* Mobile: bottom sheet */}
+          <div
+            className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border rounded-t-2xl shadow-2xl pb-[env(safe-area-inset-bottom)] animate-in slide-in-from-bottom-4 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Drag handle indicator */}
+            <div className="flex justify-center pt-2 pb-1">
+              <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
+            </div>
+            <div className="px-2 pb-2">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStartEdit(msg);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-muted/60 active:bg-muted transition-colors text-left"
+              >
+                <Pencil className="w-5 h-5 shrink-0" />
+                <span className="text-base">Edit message</span>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenDeleteConfirm(msg.id);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-destructive/10 active:bg-destructive/15 text-destructive transition-colors text-left"
+              >
+                <Trash2 className="w-5 h-5 shrink-0" />
+                <span className="text-base">Delete message</span>
+              </button>
+            </div>
+            <div className="border-t border-border" />
+            <div className="px-2 py-2">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleMenu(null);
+                }}
+                className="w-full flex items-center justify-center px-4 py-3.5 rounded-xl hover:bg-muted/60 active:bg-muted transition-colors text-base font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+
+        </>
+      )}
+
+      {/* ─── Delete confirmation ──────────────────────────────────────── */}
+      {/* Same pattern: bottom sheet on mobile, popover on desktop. */}
+      {isDeleteConfirmOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/20"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCloseDeleteConfirm();
+            }}
+          />
+          {/* Mobile: bottom sheet */}
+          <div
+            className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border rounded-t-2xl shadow-2xl pb-[env(safe-area-inset-bottom)] animate-in slide-in-from-bottom-4 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-center pt-2 pb-1">
+              <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-base font-semibold mb-1">Delete message?</p>
+              <p className="text-sm text-muted-foreground mb-4">
+                This can't be undone. The other person will see "This message was deleted".
+              </p>
+              <div className="flex flex-col gap-2">
+                <Button
+                  variant="destructive"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onConfirmDelete(msg.id);
+                  }}
+                  disabled={isDeleting}
+                  className="h-11 gap-2"
+                >
+                  {isDeleting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                  Delete
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCloseDeleteConfirm();
+                  }}
+                  className="h-11"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
