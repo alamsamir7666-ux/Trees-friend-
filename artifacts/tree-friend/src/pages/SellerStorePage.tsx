@@ -130,7 +130,8 @@ export function SellerStorePage() {
       });
       setLocation(`/messages/${(res.data as { id: number }).id}`);
     } catch (err) {
-      console.error("Failed to create conversation:", err);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("Failed to create conversation:", message);
       toast({
         title: "Could not start chat",
         description: "Something went wrong. Please try again.",
