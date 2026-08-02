@@ -44,6 +44,8 @@ import { PreOrderDetailPage } from "./pages/PreOrderDetailPage";
 import { WishlistPage } from "./pages/WishlistPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { TrackOrderPage } from "./pages/TrackOrderPage";
+import { MessagesPage } from "./pages/MessagesPage";
+const ChatPage = lazy(() => import("@/pages/ChatPage").then(m => ({ default: m.ChatPage })));
 const AdminPage = lazy(() => import("./pages/AdminPage").then(m => ({ default: m.AdminPage })));
 const SubscriptionsPage = lazy(() => import("@/pages/SubscriptionsPage").then(m => ({ default: m.SubscriptionsPage })));
 const GiftCardsPage = lazy(() => import("@/pages/GiftCardsPage").then(m => ({ default: m.GiftCardsPage })));
@@ -400,6 +402,12 @@ function ClerkProviderWithRoutes() {
                 <Route path="/compare" component={ComparePage} />
                 <Route path="/track" component={TrackOrderPage} />
                 <Route path="/track/:trackingId" component={TrackOrderPage} />
+                <Route path="/messages">
+                  {() => <ProtectedRoute component={MessagesPage} />}
+                </Route>
+                <Route path="/messages/:conversationId">
+                  {() => <ProtectedRoute component={ChatPage as any} />}
+                </Route>
                 <Route path="/addresses" component={AddressesPage} />
                 <Route path="/become-seller">
                   {() => <ProtectedRoute component={BecomeSellerPage} />}

@@ -322,3 +322,46 @@ CREATE TABLE IF NOT EXISTS payouts (
 -- above; included here only for narrative-log continuity.
 ALTER TABLE payouts ADD COLUMN IF NOT EXISTS admin_note TEXT;
 ALTER TABLE payouts ADD COLUMN IF NOT EXISTS clawback_noted_amount NUMERIC(10,2);
+
+-- ─── Buyer-Seller Messaging ────────────────────────────────────────────────
+-- Marketplace messaging system: one conversation per buyer-seller pair,
+-- messages within each conversation. Follows the same user_id convention
+-- as follows/wishlist/cart (Clerk text ID, not users.id integer).
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id SERIAL PRIMARY KEY,
+  buyer_id TEXT NOT NULL,
+  seller_id INTEGER NOT NULL REFERENCES sellers(id) ON DELETE CASCADE,
+  seller_listing_id INTEGER,
+  last_message_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  buyer_archived BOOLEAN NOT NULL DEFAULT FALSE,
+  seller_archived BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- One conversation per buyer-seller pair
+CREATE UNIQUE INDEX IF NOT EXISTS conversations_buyer_seller_unique
+  ON conversations (buyer_id, seller_id);
+
+-- Efficient "my conversations sorted by latest" query
+CREATE INDEX IF NOT EXISTS conversations_buyer_last_msg_idx
+  ON conversations (buyer_id, last_message_at DESC);
+CREATE INDEX IF NOT EXISTS conversations_seller_last_msg_idx
+  ON conversations (seller_id, last_message_at DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id SERIAL PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id TEXT NOT NULL,
+  content TEXT NOT NULL,
+  message_type TEXT NOT NULL DEFAULT 'text',
+  image_url TEXT,
+  read_by_buyer BOOLEAN NOT NULL DEFAULT FALSE,
+  read_by_seller BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Efficient "messages for a conversation" query
+CREATE INDEX IF NOT EXISTS messages_conversation_id_idx
+  ON messages (conversation_id, created_at);

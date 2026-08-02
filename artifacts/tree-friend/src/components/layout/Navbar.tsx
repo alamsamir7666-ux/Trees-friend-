@@ -4,6 +4,7 @@ import { Show, useUser, useClerk } from "@clerk/react";
 import {
   ShoppingBag, User as UserIcon, Heart, Menu, LogOut,
   Settings, Package, X, Home, Star, Share2, Search, ChevronRight, ChevronDown, TreeDeciduous, Store, BookOpen,
+  MessageCircle,
   TreePalm, Trees, Sprout, Flower, Flower2, Apple, Citrus, Leaf, Carrot, Wheat, Shrub, LayoutDashboard, Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -248,6 +249,12 @@ export function Navbar() {
                     <Link href="/orders" className="cursor-pointer flex items-center">
                       <Package className="mr-2 h-4 w-4" />
                       Orders
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/messages" className="cursor-pointer flex items-center">
+                      <MessageCircle className="mr-2 h-4 w-4" />
+                      Messages
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuItem asChild>
@@ -560,6 +567,15 @@ export function Navbar() {
                   </Link>
                 </li>
                 <li>
+                  <Link href="/messages" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location.startsWith("/messages") ? "active" : ""}`}>
+                    <span className="flex items-center gap-3">
+                      <span className="tf-icon-box"><MessageCircle className="h-3.5 w-3.5" /></span>
+                      Messages
+                    </span>
+                    <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
+                  </Link>
+                </li>
+                <li>
                   <Link href="/wishlist" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/wishlist" ? "active" : ""}`}>
                     <span className="flex items-center gap-3">
                       <span className="tf-icon-box"><Heart className="h-3.5 w-3.5" /></span>
@@ -612,6 +628,11 @@ export function Navbar() {
                 <li>
                   <Link href="/orders" onClick={() => setMobileOpen(false)} className="tf-nav-item">
                     <span className="flex items-center gap-3"><span className="tf-icon-box"><Package className="h-3.5 w-3.5" /></span>My Orders</span>
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/messages" onClick={() => setMobileOpen(false)} className="tf-nav-item">
+                    <span className="flex items-center gap-3"><span className="tf-icon-box"><MessageCircle className="h-3.5 w-3.5" /></span>Messages</span>
                   </Link>
                 </li>
                 <li>

@@ -52,6 +52,12 @@ tags:
       authorizes on bKash's hosted page) deliberately is NOT — same
       precedent as courierWebhooks/smsWebhook, neither of which is in this
       spec either.
+  - name: conversations
+    description: >-
+      Buyer-seller messaging. One conversation per buyer-seller pair,
+      messages within each conversation. Conversations are created
+      implicitly when a buyer messages a seller (idempotent upsert).
+      Supports cursor-based pagination for messages and read receipts.
   - name: admin
     description: Admin operations
 paths:
@@ -1794,6 +1800,131 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SellerPayoutAccount"
+
+  /conversations:
+    get:
+      operationId: listConversations
+      tags: [conversations]
+      summary: List conversations for the authenticated user (as buyer or seller)
+      responses:
+        "200":
+          description: Conversations list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationList"
+    post:
+      operationId: createConversation
+      tags: [conversations]
+      summary: Create or retrieve a conversation with a seller (idempotent)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateConversationBody"
+      responses:
+        "200":
+          description: Existing or new conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+
+  /conversations/{id}:
+    get:
+      operationId: getConversation
+      tags: [conversations]
+      summary: Get a single conversation with full metadata
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Conversation details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationDetail"
+
+  /conversations/{id}/messages:
+    get:
+      operationId: listMessages
+      tags: [conversations]
+      summary: Get messages for a conversation with cursor-based pagination
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Message ID cursor for pagination
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+        - name: direction
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [before, after]
+            default: before
+      responses:
+        "200":
+          description: Messages list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageList"
+    post:
+      operationId: sendMessage
+      tags: [conversations]
+      summary: Send a message in a conversation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageBody"
+      responses:
+        "201":
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+
+  /conversations/{id}/read:
+    put:
+      operationId: markConversationRead
+      tags: [conversations]
+      summary: Mark all messages in a conversation as read
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Messages marked as read
 
   /seller/orders:
     get:
@@ -5092,4 +5223,199 @@ components:
       properties:
         reason:
           type: ["string", "null"]
+
+    # ─── Conversations & Messages ──────────────────────────────────────────
+
+    CreateConversationBody:
+      type: object
+      properties:
+        sellerId:
+          type: integer
+        sellerListingId:
+          type: integer
+      required:
+        - sellerId
+
+    Conversation:
+      type: object
+      properties:
+        id:
+          type: integer
+        sellerId:
+          type: integer
+        sellerName:
+          type: string
+        sellerLogoUrl:
+          type: ["string", "null"]
+        sellerIsVerified:
+          type: boolean
+        sellerListingId:
+          type: ["integer", "null"]
+        productName:
+          type: ["string", "null"]
+        productImage:
+          type: ["string", "null"]
+        productPrice:
+          type: ["number", "null"]
+        lastMessageAt:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - sellerId
+        - sellerName
+        - sellerIsVerified
+        - lastMessageAt
+        - createdAt
+
+    ConversationDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        buyerId:
+          type: string
+        sellerId:
+          type: integer
+        sellerName:
+          type: string
+        sellerLogoUrl:
+          type: ["string", "null"]
+        sellerIsVerified:
+          type: boolean
+        sellerListingId:
+          type: ["integer", "null"]
+        productName:
+          type: ["string", "null"]
+        productImage:
+          type: ["string", "null"]
+        productPrice:
+          type: ["number", "null"]
+        productSlug:
+          type: ["string", "null"]
+        lastMessageAt:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - buyerId
+        - sellerId
+        - sellerName
+        - sellerIsVerified
+        - lastMessageAt
+        - createdAt
+
+    ConversationListItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        sellerId:
+          type: integer
+        sellerName:
+          type: string
+        sellerLogoUrl:
+          type: ["string", "null"]
+        sellerIsVerified:
+          type: boolean
+        sellerListingId:
+          type: ["integer", "null"]
+        productName:
+          type: ["string", "null"]
+        productImage:
+          type: ["string", "null"]
+        productPrice:
+          type: ["number", "null"]
+        lastMessage:
+          type: ["string", "null"]
+        lastMessageAt:
+          type: string
+        unreadCount:
+          type: integer
+        createdAt:
+          type: string
+      required:
+        - id
+        - sellerId
+        - sellerName
+        - sellerIsVerified
+        - lastMessageAt
+        - unreadCount
+        - createdAt
+
+    ConversationList:
+      type: object
+      properties:
+        buyerConversations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationListItem"
+        sellerConversations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationListItem"
+      required:
+        - buyerConversations
+        - sellerConversations
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: integer
+        conversationId:
+          type: integer
+        senderId:
+          type: string
+        content:
+          type: string
+        messageType:
+          type: string
+        imageUrl:
+          type: ["string", "null"]
+        readByBuyer:
+          type: boolean
+        readBySeller:
+          type: boolean
+        createdAt:
+          type: string
+      required:
+        - id
+        - conversationId
+        - senderId
+        - content
+        - messageType
+        - readByBuyer
+        - readBySeller
+        - createdAt
+
+    MessageList:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        hasMore:
+          type: boolean
+        nextCursor:
+          type: ["integer", "null"]
+      required:
+        - messages
+        - hasMore
+
+    SendMessageBody:
+      type: object
+      properties:
+        content:
+          type: string
+        messageType:
+          type: string
+          default: text
+        imageUrl:
+          type: string
+      required:
+        - content
 

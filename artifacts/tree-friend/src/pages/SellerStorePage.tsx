@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, Link } from "wouter";
+import { useParams, Link, useLocation } from "wouter";
 import { useUser } from "@clerk/react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -20,6 +20,7 @@ import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { useCurrency } from "@/lib/currency";
 import { useToast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/apiClient";
 import {
   Star, MapPin, Package, Headset,
   ShieldCheck as ShieldIcon,
@@ -62,6 +63,7 @@ export function SellerStorePage() {
   const id = parseInt(sellerId ?? "", 10);
   const { user } = useUser();
   const qc = useQueryClient();
+  const [, setLocation] = useLocation();
   const { format } = useCurrency();
   const { toast } = useToast();
 
@@ -116,20 +118,24 @@ export function SellerStorePage() {
     }
   }
 
-  function handleMessageSeller() {
-    // Messaging backend isn't built yet — the original SellerStorePage
-    // spec explicitly deferred this. Surface a "coming soon" toast so the
-    // button does something visible instead of silently no-op'ing, and so
-    // we get product feedback on whether buyers actually try to use it
-    // before committing to building the full conversation system.
+  async function handleMessageSeller() {
     if (!user) {
       toast({ title: "Sign in to message this store", description: "Create a free account to chat with sellers." });
       return;
     }
-    toast({
-      title: "Messaging coming soon",
-      description: "You'll be able to chat with this seller directly here. For now, use the contact info on their listings.",
-    });
+    try {
+      // Create or retrieve conversation (idempotent) then navigate to it
+      const res = await apiClient.post("/conversations", {
+        sellerId: id,
+      });
+      setLocation(`/messages/${(res.data as { id: number }).id}`);
+    } catch (err) {
+      console.error("Failed to create conversation:", err);
+      toast({
+        title: "Could not start chat",
+        description: "Something went wrong. Please try again.",
+      });
+    }
   }
 
   if (sellerError) {

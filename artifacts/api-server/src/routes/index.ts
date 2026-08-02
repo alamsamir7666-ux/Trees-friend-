@@ -62,6 +62,7 @@ import sellerMonthlyHistoryRouter from "./sellerMonthlyHistory";
 import platformPaymentConfigRouter from "./platformPaymentConfig";
 import sellerPayoutAccountsRouter from "./sellerPayoutAccounts";
 import bkashPaymentRouter from "./bkashPayment";
+import conversationsRouter from "./conversations";
 
 const router: IRouter = Router();
 
@@ -115,5 +116,6 @@ router.use(sellerMonthlyHistoryRouter);
 router.use(platformPaymentConfigRouter);
 router.use(sellerPayoutAccountsRouter);
 router.use(bkashPaymentRouter);
+router.use(conversationsRouter);
 
 export default router;
