@@ -31,6 +31,10 @@ interface ConversationInfo {
   id: number;
   buyerId: string;
   sellerId: number;
+  viewerRole: "buyer" | "seller";
+  displayName: string;
+  displayAvatarUrl: string | null;
+  displayIsVerified: boolean;
   sellerName: string;
   sellerLogoUrl: string | null;
   sellerIsVerified: boolean;
@@ -329,8 +333,8 @@ export function ChatPage() {
 
         {/* Avatar */}
         <div className="w-10 h-10 rounded-full overflow-hidden border shrink-0 bg-muted/30">
-          {conversation.sellerLogoUrl ? (
-            <img src={conversation.sellerLogoUrl} alt="" className="w-full h-full object-cover" />
+          {conversation.displayAvatarUrl ? (
+            <img src={conversation.displayAvatarUrl} alt="" className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full flex items-center justify-center">
               <NoImagePlaceholder compact />
@@ -341,8 +345,8 @@ export function ChatPage() {
         {/* Name & status */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
-            <h1 className="font-semibold text-sm truncate">{conversation.sellerName}</h1>
-            {conversation.sellerIsVerified && (
+            <h1 className="font-semibold text-sm truncate">{conversation.displayName}</h1>
+            {conversation.displayIsVerified && (
               <img src={ICON_VERIFIED} alt="Verified" className="w-4 h-4 shrink-0" />
             )}
           </div>
@@ -483,7 +487,7 @@ export function ChatPage() {
             </div>
             <h2 className="font-serif text-lg font-medium mb-1">Start the conversation</h2>
             <p className="text-sm text-muted-foreground max-w-[240px]">
-              Say hello to {conversation.sellerName}! Ask about products, delivery, or anything else.
+              Say hello to {conversation.displayName}! Ask about products, delivery, or anything else.
             </p>
           </div>
         )}

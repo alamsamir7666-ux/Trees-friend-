@@ -441,6 +441,31 @@ router.get("/conversations/:id", requireAuth, async (req: any, res) => {
       .where(eq(sellersTable.id, conv.sellerId))
       .limit(1);
 
+    // The "other party" in this conversation depends on who's viewing it:
+    // a buyer sees the seller's store name; a seller sees the buyer's name.
+    // (See GET /conversations above, where buyerResults/sellerResults already
+    // split this correctly for the list view — this mirrors that here.)
+    let displayName: string;
+    let displayAvatarUrl: string | null;
+    let displayIsVerified: boolean;
+
+    if (isSellerParticipant) {
+      const [buyerInfo] = await db
+        .select()
+        .from(usersTable)
+        .where(eq(usersTable.clerkId, conv.buyerId))
+        .limit(1);
+      displayName = buyerInfo?.firstName
+        ? `${buyerInfo.firstName} ${buyerInfo.lastName ?? ""}`.trim()
+        : buyerInfo?.email ?? "Buyer";
+      displayAvatarUrl = null;
+      displayIsVerified = false;
+    } else {
+      displayName = sellerInfo?.nurseryName ?? "";
+      displayAvatarUrl = sellerInfo?.logoUrl ?? null;
+      displayIsVerified = sellerInfo?.isVerified ?? false;
+    }
+
     // Get product info if linked
     let productName: string | null = null;
     let productImage: string | null = null;
@@ -476,6 +501,10 @@ router.get("/conversations/:id", requireAuth, async (req: any, res) => {
       id: conv.id,
       buyerId: conv.buyerId,
       sellerId: conv.sellerId,
+      viewerRole: isSellerParticipant ? "seller" : "buyer",
+      displayName,
+      displayAvatarUrl,
+      displayIsVerified,
       sellerName: sellerInfo?.nurseryName ?? "",
       sellerLogoUrl: sellerInfo?.logoUrl ?? null,
       sellerIsVerified: sellerInfo?.isVerified ?? false,
