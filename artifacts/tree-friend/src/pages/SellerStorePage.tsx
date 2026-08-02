@@ -208,7 +208,15 @@ export function SellerStorePage() {
                   Member since {new Date(seller.createdAt).toLocaleDateString(undefined, { month: "short", year: "numeric" })}
                 </p>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-col gap-2 shrink-0">
+                <Button
+                  size="sm"
+                  variant={isFollowing ? "secondary" : "default"}
+                  disabled={followPending}
+                  onClick={handleFollowToggle}
+                >
+                  {isFollowing ? "Following" : "Follow"}
+                </Button>
                 <Button
                   size="sm"
                   variant="outline"
@@ -217,14 +225,6 @@ export function SellerStorePage() {
                 >
                   <MessageCircle className="w-3.5 h-3.5" />
                   Message
-                </Button>
-                <Button
-                  size="sm"
-                  variant={isFollowing ? "secondary" : "default"}
-                  disabled={followPending}
-                  onClick={handleFollowToggle}
-                >
-                  {isFollowing ? "Following" : "Follow"}
                 </Button>
               </div>
             </div>
