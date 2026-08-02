@@ -19,6 +19,26 @@ export const usersTable = pgTable("users", {
   isBlocked: boolean("is_blocked").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  /**
+   * Presence tracking — the timestamp of the user's most recent heartbeat.
+   *
+   * The frontend sends a heartbeat to POST /api/presence/heartbeat every
+   * 30 seconds while the user is actively using the app (and on
+   * visibilitychange/focus events). The backend treats the user as
+   * "online" if last_seen_at is within the last 60 seconds; otherwise
+   * "offline" with last_seen_at shown as "last seen at <time>".
+   *
+   * This matches the WhatsApp/Telegram/Messenger presence model: the
+   * server doesn't track WebSocket connections, just the latest
+   * heartbeat timestamp. Simpler to scale, simpler to reason about,
+   * and degrades gracefully (a missed heartbeat just means the user
+   * shows as "last seen at <time>").
+   *
+   * Nullable so existing rows don't need a default backfill — users
+   * who have never sent a heartbeat just show as "offline" with no
+   * "last seen" text.
+   */
+  lastSeenAt: timestamp("last_seen_at"),
 });
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({

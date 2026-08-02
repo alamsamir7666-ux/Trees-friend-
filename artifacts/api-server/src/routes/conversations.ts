@@ -566,6 +566,13 @@ router.get("/conversations/:id", requireAuth, async (req: any, res) => {
     let displayName: string;
     let displayAvatarUrl: string | null;
     let displayIsVerified: boolean;
+    // The Clerk user ID of the OTHER party — needed by the frontend to
+    // query their presence (online/offline/last-seen). For a seller
+    // viewing the chat, the other party is the buyer (whose Clerk ID is
+    // conv.buyerId). For a buyer viewing the chat, the other party is the
+    // seller — sellersTable.userId is the DB user id (integer), so we
+    // have to join back to usersTable to get the seller's Clerk ID.
+    let otherPartyClerkId: string;
 
     if (isSellerParticipant) {
       const [buyerInfo] = await db
@@ -578,10 +585,23 @@ router.get("/conversations/:id", requireAuth, async (req: any, res) => {
         : buyerInfo?.email ?? "Buyer";
       displayAvatarUrl = null;
       displayIsVerified = false;
+      otherPartyClerkId = conv.buyerId;
     } else {
       displayName = sellerInfo?.nurseryName ?? "";
       displayAvatarUrl = sellerInfo?.logoUrl ?? null;
       displayIsVerified = sellerInfo?.isVerified ?? false;
+      // Look up the seller's Clerk ID from usersTable via the integer
+      // userId foreign key on sellersTable.
+      let sellerClerkId = "";
+      if (sellerInfo?.userId) {
+        const [sellerUser] = await db
+          .select({ clerkId: usersTable.clerkId })
+          .from(usersTable)
+          .where(eq(usersTable.id, sellerInfo.userId))
+          .limit(1);
+        sellerClerkId = sellerUser?.clerkId ?? "";
+      }
+      otherPartyClerkId = sellerClerkId;
     }
 
     // Get product info if linked
@@ -623,6 +643,12 @@ router.get("/conversations/:id", requireAuth, async (req: any, res) => {
       displayName,
       displayAvatarUrl,
       displayIsVerified,
+      // Clerk user ID of the OTHER party (buyer's Clerk ID if viewer is
+      // seller, seller's Clerk ID if viewer is buyer). The frontend uses
+      // this to query GET /api/presence/:clerkUserId for the chat header.
+      // May be empty string if the seller's user row was somehow missing
+      // — the frontend treats empty as "no presence to show".
+      otherPartyClerkId,
       sellerName: sellerInfo?.nurseryName ?? "",
       sellerLogoUrl: sellerInfo?.logoUrl ?? null,
       sellerIsVerified: sellerInfo?.isVerified ?? false,

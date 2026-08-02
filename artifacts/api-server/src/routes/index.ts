@@ -63,6 +63,7 @@ import platformPaymentConfigRouter from "./platformPaymentConfig";
 import sellerPayoutAccountsRouter from "./sellerPayoutAccounts";
 import bkashPaymentRouter from "./bkashPayment";
 import conversationsRouter from "./conversations";
+import presenceRouter from "./presence";
 
 const router: IRouter = Router();
 
@@ -117,5 +118,6 @@ router.use(platformPaymentConfigRouter);
 router.use(sellerPayoutAccountsRouter);
 router.use(bkashPaymentRouter);
 router.use(conversationsRouter);
+router.use(presenceRouter);
 
 export default router;

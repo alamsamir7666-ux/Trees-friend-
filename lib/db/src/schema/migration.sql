@@ -389,3 +389,19 @@ UPDATE messages
 -- Index for sorting/pagination by conversation
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_created_at
   ON messages (conversation_id, created_at DESC);
+
+-- ─── Presence tracking (online/offline/last seen) ─────────────────────────
+-- Adds last_seen_at to the users table so the chat can show "Online" or
+-- "last seen at <time>" next to each participant's name. The frontend
+-- sends a heartbeat to POST /api/presence/heartbeat every 30 seconds
+-- while the user is active; the server treats last_seen_at within the
+-- last 60 seconds as "online". Idempotent (IF NOT EXISTS) so it's safe
+-- to run on every startup.
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP;
+
+-- Index for efficient "who is online" queries (e.g. admin dashboards,
+-- future "online sellers" filter). Without this, any query filtering
+-- on last_seen_at would scan the entire users table.
+CREATE INDEX IF NOT EXISTS idx_users_last_seen_at
+  ON users (last_seen_at DESC);

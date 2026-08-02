@@ -17,6 +17,7 @@ import {
   classifyFile,
 } from "@/components/ui/AttachmentMenu";
 import { uploadAttachment } from "@/lib/uploadAttachment";
+import { usePresence, formatLastSeen } from "@/hooks/usePresence";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft,
@@ -46,6 +47,14 @@ interface ConversationInfo {
   displayName: string;
   displayAvatarUrl: string | null;
   displayIsVerified: boolean;
+  /**
+   * Clerk user ID of the OTHER party in the conversation (the person the
+   * current user is chatting with). Used to query their presence status
+   * (online/offline/last-seen) via GET /api/presence/:clerkUserId.
+   * May be empty string if the seller's user row was missing on the
+   * backend — in that case we just don't show a presence status.
+   */
+  otherPartyClerkId: string;
   sellerName: string;
   sellerLogoUrl: string | null;
   sellerIsVerified: boolean;
@@ -168,6 +177,17 @@ export function ChatPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [hasMore, setHasMore] = useState(false);
+
+  // Presence tracking for the OTHER party in this conversation. The hook
+  // polls GET /api/presence/:clerkUserId every 15s and returns the current
+  // status. Pass null while the conversation hasn't loaded yet — the hook
+  // is a no-op in that case (no polling). Empty string is also treated as
+  // "no presence" (the backend returns "" for otherPartyClerkId if the
+  // seller's user row was missing).
+  const otherPartyClerkId = conversation?.otherPartyClerkId
+    ? conversation.otherPartyClerkId
+    : null;
+  const presence = usePresence(otherPartyClerkId);
   const [loadingMore, setLoadingMore] = useState(false);
   // Lightbox state — when set, the full image opens in a modal overlay.
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
@@ -683,7 +703,12 @@ export function ChatPage() {
               <img src={ICON_VERIFIED} alt="Verified" className="w-4 h-4 shrink-0" />
             )}
           </div>
-          <p className="text-[11px] text-green-600 font-medium">Online</p>
+          {/* Presence status: Online / Last seen at <time> / Offline
+              Industry-standard WhatsApp/Telegram-style. Driven by the
+              usePresence hook, which polls GET /api/presence/:id every 15s.
+              While the initial presence is loading we show a neutral
+              "loading…" text so the header doesn't flicker. */}
+          <PresenceStatus presence={presence} />
         </div>
 
         {/* More options */}
@@ -962,6 +987,55 @@ export function ChatPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// ─── PresenceStatus (chat header sub-component) ────────────────────────────
+// Renders the "Online" / "last seen at <time>" / "Offline" line under the
+// chat participant's name. Matches WhatsApp/Telegram conventions:
+//   - Online            → green dot + "Online" (bold green text)
+//   - Last seen today   → "last seen today at 5:42 PM" (muted text)
+//   - Last seen yest.   → "last seen yesterday at 9:30 AM" (muted text)
+//   - Last seen older   → "last seen Mon at 9:30 AM" or "last seen Aug 1"
+//   - Never seen        → "Offline" (muted text, no timestamp)
+//   - Loading / unknown → empty (don't flicker the header on mount)
+
+interface PresenceStatusProps {
+  presence: {
+    status: "online" | "offline" | "unknown";
+    lastSeenAt: string | null;
+    isLoading: boolean;
+  };
+}
+
+function PresenceStatus({ presence }: PresenceStatusProps) {
+  // While the first fetch is in flight, render an invisible placeholder
+  // to reserve vertical space (prevents the header from jumping when the
+  // status lands). 11px is the text-[11px] line height we use below.
+  if (presence.isLoading || presence.status === "unknown") {
+    return <p className="text-[11px] h-[16px]">&nbsp;</p>;
+  }
+
+  if (presence.status === "online") {
+    return (
+      <div className="flex items-center gap-1.5">
+        {/* Pulsing green dot — signals "live" online status */}
+        <span className="relative flex h-2 w-2 shrink-0">
+          <span className="absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75 animate-ping" />
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+        </span>
+        <p className="text-[11px] text-green-600 font-medium">Online</p>
+      </div>
+    );
+  }
+
+  // Offline — show "last seen at <time>" if we have a timestamp,
+  // otherwise just "Offline".
+  const lastSeenText = formatLastSeen(presence.lastSeenAt);
+  return (
+    <p className="text-[11px] text-muted-foreground">
+      {lastSeenText ?? "Offline"}
+    </p>
   );
 }
 

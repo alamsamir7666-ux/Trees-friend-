@@ -56,6 +56,7 @@ const ComparePage = lazy(() => import("@/pages/ComparePage"));
 import { useGetMe } from "@workspace/api-client-react";
 import { useUser } from "@clerk/react";
 import { useThemeColor } from "@/hooks/useThemeColor";
+import { useHeartbeat } from "@/hooks/usePresence";
 
 function TokenSync() {
   const { getToken, isSignedIn } = useAuth();
@@ -67,6 +68,19 @@ function TokenSync() {
   // never connected, so every apiClient request went out with no
   // Authorization header and silently got a 401 from the API.
   setLocalApiTokenGetter(isSignedIn ? () => getToken() : () => Promise.resolve(null));
+  return null;
+}
+
+/**
+ * App-wide presence heartbeat. Mounts the useHeartbeat hook so the signed-in
+ * user's `last_seen_at` is updated every 30s while they're active. This is
+ * what powers the "Online" / "last seen at <time>" status shown in the chat
+ * header. Must be inside ClerkProvider (for useAuth) and QueryClientProvider
+ * (not strictly required, but kept with the other top-level side-effects for
+ * consistency).
+ */
+function PresenceHeartbeat() {
+  useHeartbeat();
   return null;
 }
 
@@ -377,6 +391,7 @@ function ClerkProviderWithRoutes() {
     >
       <QueryClientProvider client={queryClient}>
         <TokenSync />
+        <PresenceHeartbeat />
         <GuestCartProvider>
         <GuestWishlistProvider>
           <WishlistProvider>
