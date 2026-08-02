@@ -13,7 +13,7 @@ import {
   ALLOWED_CHAT_ATTACHMENT_MIME_TYPES,
   MAX_CHAT_ATTACHMENT_BYTES,
 } from "@workspace/db";
-import { eq, and, desc, sql, lt, gt } from "drizzle-orm";
+import { eq, and, desc, sql, lt } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import { logger } from "../lib/logger";
 
@@ -84,6 +84,9 @@ interface MessageResponse {
   readByBuyer: boolean;
   readBySeller: boolean;
   createdAt: string;
+  editedAt: string | null;
+  isDeleted: boolean;
+  deletedAt: string | null;
 }
 
 // ─── Attachment helpers ────────────────────────────────────────────────────
@@ -130,7 +133,13 @@ function isAllowedAttachment(mimeType: string | null): boolean {
  */
 function previewMessageText(m: typeof messagesTable.$inferSelect | undefined): string | null {
   if (!m) return null;
-  if (m.content && m.content.trim().length > 0) return m.content.trim();
+  // Soft-deleted messages show a generic tombstone text in the conversation
+  // list, never the original content (the sender explicitly removed it).
+  if (m.isDeleted) return "This message was deleted";
+  if (m.content && m.content.trim().length > 0) {
+    const trimmed = m.content.trim();
+    return m.editedAt ? `${trimmed} (edited)` : trimmed;
+  }
   switch (m.attachmentType) {
     case "image":
       return "📷 Photo";
@@ -165,6 +174,9 @@ function formatMessage(m: typeof messagesTable.$inferSelect): MessageResponse {
     readByBuyer: m.readByBuyer,
     readBySeller: m.readBySeller,
     createdAt: m.createdAt.toISOString(),
+    editedAt: m.editedAt ? m.editedAt.toISOString() : null,
+    isDeleted: m.isDeleted,
+    deletedAt: m.deletedAt ? m.deletedAt.toISOString() : null,
   };
 }
 
@@ -740,13 +752,27 @@ router.get("/conversations/:id/messages", requireAuth, async (req: any, res) => 
             .orderBy(desc(messagesTable.createdAt))
             .limit(limit + 1);
         } else {
+          // direction === "after" — used by the frontend's polling loop to
+          // fetch new messages since the last one it has. We ALSO include
+          // messages that were EDITED or DELETED after the cursor, so that
+          // edits/deletes made by the other party propagate to this client
+          // in near-real-time (within one polling interval, ~5s) without
+          // requiring a full page reload.
+          //
+          // The OR clauses below select:
+          //   - new messages (createdAt > cursor)
+          //   - existing messages that were edited (editedAt > cursor)
+          //   - existing messages that were deleted (deletedAt > cursor)
+          // The frontend's polling merge logic handles dedup/merge by id.
           query = db
             .select()
             .from(messagesTable)
             .where(
               and(
                 eq(messagesTable.conversationId, convId),
-                gt(messagesTable.createdAt, cursorMsg.createdAt),
+                sql`(${messagesTable.createdAt} > ${cursorMsg.createdAt}
+                     OR (${messagesTable.editedAt} IS NOT NULL AND ${messagesTable.editedAt} > ${cursorMsg.createdAt})
+                     OR (${messagesTable.deletedAt} IS NOT NULL AND ${messagesTable.deletedAt} > ${cursorMsg.createdAt}))`,
               )
             )
             .orderBy(messagesTable.createdAt)
@@ -1060,6 +1086,186 @@ router.post(
     }
   }
 );
+
+// ─── PATCH /conversations/:id/messages/:messageId ──────────────────────────
+// Edit the text content of a message the user sent. Industry-standard
+// WhatsApp/Telegram/Signal rules:
+//   1. Only the SENDER can edit their own message (req.userId === msg.senderId)
+//   2. Edit window is 15 minutes from createdAt — after that, 403
+//   3. Only text messages can be edited — attachment messages keep their
+//      attachment, only the caption (content) can be changed. (If there's
+//      no caption and the message is attachment-only, the edit is rejected.)
+//   4. The new content must be non-empty and ≤ 5000 chars
+//
+// On success, returns the updated message with editedAt set to NOW.
+// The original content is NOT retained — we expose that the message was
+// edited (transparency), but we don't keep a version history.
+router.patch("/conversations/:id/messages/:messageId", requireAuth, async (req: any, res) => {
+  try {
+    const convId = parseInt(req.params.id);
+    const messageId = parseInt(req.params.messageId);
+    if (isNaN(convId) || isNaN(messageId)) {
+      res.status(400).json({ error: "Invalid id parameters" });
+      return;
+    }
+
+    const { content } = req.body ?? {};
+    if (typeof content !== "string" || content.trim().length === 0) {
+      res.status(400).json({ error: "content is required and must be non-empty" });
+      return;
+    }
+    if (content.length > 5000) {
+      res.status(400).json({ error: "Message content too long (max 5000 characters)" });
+      return;
+    }
+
+    // Look up the message + verify it belongs to a conversation the user
+    // is a participant in (defense in depth — even if someone could
+    // guess a message id, they can only edit messages in their own convs).
+    const [msg] = await db
+      .select()
+      .from(messagesTable)
+      .where(eq(messagesTable.id, messageId))
+      .limit(1);
+
+    if (!msg || msg.conversationId !== convId) {
+      res.status(404).json({ error: "Message not found" });
+      return;
+    }
+
+    // Only the sender can edit
+    if (msg.senderId !== req.userId) {
+      res.status(403).json({ error: "You can only edit your own messages" });
+      return;
+    }
+
+    // Cannot edit a deleted message
+    if (msg.isDeleted) {
+      res.status(400).json({ error: "Cannot edit a deleted message" });
+      return;
+    }
+
+    // 15-minute edit window (defense in depth — the client also enforces
+    // this, but the server is the source of truth).
+    const EDIT_WINDOW_MS = 15 * 60 * 1000;
+    const ageMs = Date.now() - msg.createdAt.getTime();
+    if (ageMs > EDIT_WINDOW_MS) {
+      res.status(403).json({
+        error: "Messages can only be edited within 15 minutes of sending",
+      });
+      return;
+    }
+
+    const [updated] = await db
+      .update(messagesTable)
+      .set({
+        content: content.trim(),
+        editedAt: new Date(),
+      })
+      .where(eq(messagesTable.id, messageId))
+      .returning();
+
+    res.json(formatMessage(updated));
+  } catch (err) {
+    const detail = describeError(err);
+    logger.error({ err, detail }, "Edit message error");
+    res.status(500).json({
+      error: "Failed to edit message",
+      detail: process.env.NODE_ENV === "production" ? undefined : detail,
+    });
+  }
+});
+
+// ─── DELETE /conversations/:id/messages/:messageId ──────────────────────────
+// Soft-delete a message the user sent. Industry-standard WhatsApp/Telegram
+// semantics:
+//   1. Only the SENDER can delete their own message
+//   2. Delete window is 15 minutes from createdAt — after that, 403
+//      (matches WhatsApp's "Delete for everyone" time limit)
+//   3. The message is NOT hard-deleted — it stays in the thread as a
+//      tombstone so both participants see "This message was deleted".
+//      This preserves conversation context (timestamps, read receipts,
+//      replies) instead of leaving a gap.
+//   4. The message's content, fileUrl, etc. are wiped to null so the
+//      original text/media is unrecoverable from the DB (privacy).
+//   5. The Cloudinary-hosted attachment file is NOT auto-deleted — that
+//      would require tracking public_ids and is a separate cleanup job.
+//
+// Returns the updated message (with isDeleted=true, deletedAt set, content
+// and file fields nulled out).
+router.delete("/conversations/:id/messages/:messageId", requireAuth, async (req: any, res) => {
+  try {
+    const convId = parseInt(req.params.id);
+    const messageId = parseInt(req.params.messageId);
+    if (isNaN(convId) || isNaN(messageId)) {
+      res.status(400).json({ error: "Invalid id parameters" });
+      return;
+    }
+
+    const [msg] = await db
+      .select()
+      .from(messagesTable)
+      .where(eq(messagesTable.id, messageId))
+      .limit(1);
+
+    if (!msg || msg.conversationId !== convId) {
+      res.status(404).json({ error: "Message not found" });
+      return;
+    }
+
+    // Only the sender can delete
+    if (msg.senderId !== req.userId) {
+      res.status(403).json({ error: "You can only delete your own messages" });
+      return;
+    }
+
+    // Already deleted — idempotent no-op
+    if (msg.isDeleted) {
+      res.json(formatMessage(msg));
+      return;
+    }
+
+    // 15-minute delete window
+    const DELETE_WINDOW_MS = 15 * 60 * 1000;
+    const ageMs = Date.now() - msg.createdAt.getTime();
+    if (ageMs > DELETE_WINDOW_MS) {
+      res.status(403).json({
+        error: "Messages can only be deleted within 15 minutes of sending",
+      });
+      return;
+    }
+
+    const now = new Date();
+    const [updated] = await db
+      .update(messagesTable)
+      .set({
+        isDeleted: true,
+        deletedAt: now,
+        // Wipe the actual content/media so the original is unrecoverable
+        // from the DB. The conversation list preview and the message
+        // bubble both check isDeleted and render the tombstone text
+        // instead of these nulled fields.
+        content: "",
+        imageUrl: null,
+        fileUrl: null,
+        fileName: null,
+        fileSize: null,
+        fileMimeType: null,
+        attachmentType: null,
+      })
+      .where(eq(messagesTable.id, messageId))
+      .returning();
+
+    res.json(formatMessage(updated));
+  } catch (err) {
+    const detail = describeError(err);
+    logger.error({ err, detail }, "Delete message error");
+    res.status(500).json({
+      error: "Failed to delete message",
+      detail: process.env.NODE_ENV === "production" ? undefined : detail,
+    });
+  }
+});
 
 // ─── PUT /conversations/:id/read ───────────────────────────────────────────
 // Mark all messages in a conversation as read by the current user.

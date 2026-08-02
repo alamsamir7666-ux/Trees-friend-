@@ -90,6 +90,22 @@ export const messagesTable = pgTable("messages", {
   readByBuyer: boolean("read_by_buyer").notNull().default(false),
   readBySeller: boolean("read_by_seller").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+
+  // ─── Edit tracking ──────────────────────────────────────────────────────
+  // Set to the timestamp of the most recent edit (null = never edited).
+  // The UI shows a small "edited" label next to the timestamp when this is
+  // non-null. WhatsApp/Telegram/Signal all do this — the existence of an
+  // edit is visible (transparency), but the previous content is not kept.
+  editedAt: timestamp("edited_at"),
+
+  // ─── Soft-delete tracking ───────────────────────────────────────────────
+  // We never hard-delete chat messages — instead, we mark them deleted so
+  // the other participant still sees "This message was deleted" in place.
+  // This matches WhatsApp/Telegram semantics: a deleted message stays in
+  // the conversation thread as a tombstone, preserving context (timestamps,
+  // read-receipt sequence, replies) instead of leaving a gap.
+  isDeleted: boolean("is_deleted").notNull().default(false),
+  deletedAt: timestamp("deleted_at"),
 });
 
 export const insertConversationSchema = createInsertSchema(conversationsTable).omit({

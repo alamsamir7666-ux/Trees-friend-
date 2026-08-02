@@ -32,6 +32,9 @@ import {
   Loader2,
   Film,
   Music,
+  Pencil,
+  Trash2,
+  Ban,
 } from "lucide-react";
 
 const ICON_VERIFIED =
@@ -83,6 +86,13 @@ interface ChatMessage {
   readByBuyer: boolean;
   readBySeller: boolean;
   createdAt: string;
+  // Edit tracking — ISO string or null. UI shows "edited" next to the
+  // timestamp when non-null. Matches WhatsApp/Telegram/Signal semantics.
+  editedAt?: string | null;
+  // Soft-delete tracking — when true, render the bubble as a tombstone
+  // ("This message was deleted") instead of the original content/media.
+  isDeleted?: boolean;
+  deletedAt?: string | null;
 }
 
 // ─── Pending attachment (staged in the composer, not yet uploaded) ──────────
@@ -105,6 +115,20 @@ interface PendingAttachment {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * 15-minute edit/delete window, matching WhatsApp's "Delete for everyone"
+ * and Telegram's edit window. The server enforces this independently
+ * (defense in depth), but the UI also checks so we can hide the Edit /
+ * Delete actions entirely on older messages — no point offering an action
+ * the user can't actually complete.
+ */
+const EDIT_DELETE_WINDOW_MS = 15 * 60 * 1000;
+
+function isWithinEditWindow(msg: ChatMessage): boolean {
+  const ageMs = Date.now() - new Date(msg.createdAt).getTime();
+  return ageMs <= EDIT_DELETE_WINDOW_MS;
+}
 
 function formatTime(isoString: string): string {
   const date = new Date(isoString);
@@ -194,6 +218,24 @@ export function ChatPage() {
   // Pending attachments staged in the composer (not yet uploaded).
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
 
+  // ─── Edit / Delete state ────────────────────────────────────────────────
+  // The message currently being edited (inline). When set, the composer
+  // switches to edit mode: the textarea is pre-filled with the message's
+  // content, Send becomes Save, and a Cancel button appears. Hitting Enter
+  // (or clicking Save) calls PATCH /messages/:id; Esc cancels.
+  const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
+  // The id of the message whose action menu (Edit / Delete) is open. Only
+  // one menu can be open at a time. Toggling it via long-press on mobile
+  // or hover-then-click on desktop.
+  const [openMenuMessageId, setOpenMenuMessageId] = useState<number | null>(null);
+  // Pending delete confirmation. We don't use a confirm() dialog — instead,
+  // clicking Delete in the menu opens a small inline confirm popover on the
+  // bubble itself ("Delete? This can't be undone. [Cancel] [Delete]").
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  // Track in-flight requests so we can disable buttons and show spinners.
+  const [editSaving, setEditSaving] = useState(false);
+  const [deleteSavingId, setDeleteSavingId] = useState<number | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -280,6 +322,21 @@ export function ChatPage() {
     fetchMessages();
   }, [fetchMessages]);
 
+  // ─── Reset edit/menu state on conversation change ───────────────────────
+  // If the user navigates to a different chat (or the same chat refreshes),
+  // bail out of any in-flight edit / open menu / delete-confirmation state.
+  // Otherwise the composer would stay in edit mode with the previous
+  // message's content, or a stale menu could appear over the wrong bubble.
+  useEffect(() => {
+    setEditingMessage(null);
+    setOpenMenuMessageId(null);
+    setPendingDeleteId(null);
+    setNewMessage("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
+  }, [conversationId]);
+
   // ─── Initial scroll-to-bottom ───────────────────────────────────────────
   // Runs after messages first render. We set scrollTop DIRECTLY on the
   // messages container instead of calling scrollIntoView() on the bottom
@@ -365,11 +422,38 @@ export function ChatPage() {
             newMessages[newMessages.length - 1].id;
 
           setMessages((prev) => {
-            // Deduplicate by id (a poll and a local send could race)
-            const existingIds = new Set(prev.map((m) => m.id));
-            const unique = newMessages.filter((m: ChatMessage) => !existingIds.has(m.id)) as ChatMessage[];
-            if (unique.length === 0) return prev;
-            return [...prev, ...unique];
+            // Merge by id: the polling endpoint can return BOTH brand-new
+            // messages AND updated versions of already-known messages
+            // (e.g. the other party edited or deleted an in-window message).
+            // For each message from the server: if we already have it, merge
+            // the fields (so edits/deletes propagate); otherwise append.
+            const byId = new Map(prev.map((m) => [m.id, m]));
+            let changed = false;
+            for (const m of newMessages as ChatMessage[]) {
+              const existing = byId.get(m.id);
+              if (existing) {
+                // Only update if something actually differs — avoids
+                // needless re-renders when the server returns the same
+                // message we already have.
+                if (
+                  existing.content !== m.content ||
+                  existing.editedAt !== m.editedAt ||
+                  existing.isDeleted !== m.isDeleted ||
+                  existing.readByBuyer !== m.readByBuyer ||
+                  existing.readBySeller !== m.readBySeller
+                ) {
+                  byId.set(m.id, { ...existing, ...m });
+                  changed = true;
+                }
+              } else {
+                byId.set(m.id, m);
+                changed = true;
+              }
+            }
+            if (!changed) return prev;
+            // Re-sort by id (proxy for createdAt, since ids are serial) to
+            // keep chronological order with new messages at the end.
+            return Array.from(byId.values()).sort((a, b) => a.id - b.id);
           });
 
           // Auto-scroll to bottom ONLY if the user is already there.
@@ -535,6 +619,112 @@ export function ChatPage() {
     });
   }
 
+  // ─── Edit message handlers ───────────────────────────────────────────
+  // Start editing: pre-fill the textarea with the current content,
+  // focus it, and switch the composer into edit mode (Send button
+  // becomes Save, a Cancel button appears, attachments are hidden).
+  function handleStartEdit(msg: ChatMessage) {
+    if (!isWithinEditWindow(msg)) {
+      toast({
+        title: "Can't edit",
+        description: "Messages can only be edited within 15 minutes of sending.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setEditingMessage(msg);
+    setNewMessage(msg.content);
+    setOpenMenuMessageId(null);
+    // Focus + select-all so the user can immediately start retyping
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.focus();
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+        // Trigger auto-resize for the new content
+        ta.style.height = "auto";
+        ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
+      }
+    });
+  }
+
+  function handleCancelEdit() {
+    setEditingMessage(null);
+    setNewMessage("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
+  }
+
+  async function handleSaveEdit() {
+    if (!editingMessage || !conversationId) return;
+    if (editSaving) return;
+
+    const trimmed = newMessage.trim();
+    if (trimmed.length === 0) {
+      toast({ title: "Message can't be empty", variant: "destructive" });
+      return;
+    }
+    if (trimmed === editingMessage.content) {
+      // No change — just cancel
+      handleCancelEdit();
+      return;
+    }
+
+    const id = parseInt(conversationId);
+    if (isNaN(id)) return;
+
+    setEditSaving(true);
+    try {
+      const res = await apiClient.patch(
+        `/api/conversations/${id}/messages/${editingMessage.id}`,
+        { content: trimmed },
+      );
+      const updated = res.data as ChatMessage;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)),
+      );
+      handleCancelEdit();
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to edit message";
+      toast({ title: "Edit failed", description: msg, variant: "destructive" });
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  // ─── Delete message handler ──────────────────────────────────────────
+  // Soft-deletes the message. The server nulls out the content/media and
+  // sets isDeleted=true; we update local state to match. The bubble then
+  // re-renders as a tombstone ("This message was deleted").
+  async function handleConfirmDelete(messageId: number) {
+    if (!conversationId) return;
+    if (deleteSavingId !== null) return;
+
+    const id = parseInt(conversationId);
+    if (isNaN(id)) return;
+
+    setDeleteSavingId(messageId);
+    try {
+      const res = await apiClient.delete(
+        `/api/conversations/${id}/messages/${messageId}`,
+      );
+      const updated = res.data as ChatMessage;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)),
+      );
+      setPendingDeleteId(null);
+      setOpenMenuMessageId(null);
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to delete message";
+      toast({ title: "Delete failed", description: msg, variant: "destructive" });
+    } finally {
+      setDeleteSavingId(null);
+    }
+  }
+
   // ─── Pending attachment management ────────────────────────────────────
   // Called by AttachmentMenu when the user picks files. Validates each
   // file, creates a preview URL for images/videos, and stages it in the
@@ -638,6 +828,19 @@ export function ChatPage() {
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // In edit mode: Enter saves (no shift), Esc cancels.
+    if (editingMessage) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        handleCancelEdit();
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSaveEdit();
+      }
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
@@ -774,6 +977,17 @@ export function ChatPage() {
           const kind = classifyMessage(msg);
           const hasAttachment = kind !== "text";
           const hasCaption = msg.content && msg.content.trim().length > 0;
+          // Soft-deleted messages render as a tombstone bubble
+          const isDeleted = !!msg.isDeleted;
+          // Edit/delete are only available on the user's own messages,
+          // within the 15-minute window, and not on already-deleted ones.
+          const canEditDelete = isOwn && !isDeleted && isWithinEditWindow(msg);
+          // The action menu (Edit/Delete popover) is open for this message
+          const isMenuOpen = openMenuMessageId === msg.id;
+          // The delete-confirmation popover is open for this message
+          const isDeleteConfirmOpen = pendingDeleteId === msg.id;
+          // This message is currently being deleted (spinner state)
+          const isDeleting = deleteSavingId === msg.id;
 
           // Check if this is the last message from the same sender in a sequence
           const nextMsg = i < messages.length - 1 ? messages[i + 1] : undefined;
@@ -806,50 +1020,210 @@ export function ChatPage() {
                 )}
                 {!isOwn && !isLastInSequence && <div className="w-7 mr-2 shrink-0" />}
 
-                <div
-                  className={cn(
-                    "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5",
-                    isOwn
-                      ? "bg-accent/10 dark:bg-accent/15 rounded-2xl rounded-br-md"
-                      : "bg-card border border-border rounded-2xl rounded-bl-md",
-                    // Image messages: drop horizontal padding so the image
-                    // can stretch edge-to-edge inside the bubble.
-                    kind === "image" && "p-1.5",
-                  )}
-                >
-                  {/* ─── Attachment rendering ──────────────────────────── */}
-                  {hasAttachment && (
-                    <MessageAttachment
-                      msg={msg}
-                      kind={kind}
-                      isOwn={isOwn}
-                      onImageClick={(src) => setLightboxSrc(src)}
-                    />
+                <div className="relative group">
+                  {/* ─── Soft-deleted tombstone ─────────────────────────── */}
+                  {/* WhatsApp/Telegram-style: italic muted text, no attachment
+                      or content shown, no edit/delete menu. */}
+                  {isDeleted ? (
+                    <div
+                      className={cn(
+                        "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5 rounded-2xl",
+                        isOwn
+                          ? "bg-accent/5 dark:bg-accent/10 rounded-br-md"
+                          : "bg-muted/40 border border-border rounded-2xl rounded-bl-md",
+                      )}
+                    >
+                      <p className="text-sm italic text-muted-foreground flex items-center gap-1.5">
+                        <Ban className="w-3.5 h-3.5 shrink-0" />
+                        This message was deleted
+                      </p>
+                      <div className="flex items-center gap-1 mt-1">
+                        <span className="text-[10px] text-muted-foreground">
+                          {formatTime(msg.createdAt)}
+                        </span>
+                        {isOwn && (
+                          msg.readByBuyer && msg.readBySeller ? (
+                            <CheckCheck className="w-3 h-3 text-accent/70" />
+                          ) : (
+                            <Check className="w-3 h-3 text-muted-foreground/70" />
+                          )
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className={cn(
+                        "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5",
+                        isOwn
+                          ? "bg-accent/10 dark:bg-accent/15 rounded-2xl rounded-br-md"
+                          : "bg-card border border-border rounded-2xl rounded-bl-md",
+                        // Image messages: drop horizontal padding so the image
+                        // can stretch edge-to-edge inside the bubble.
+                        kind === "image" && "p-1.5",
+                      )}
+                    >
+                      {/* ─── Attachment rendering ──────────────────────────── */}
+                      {hasAttachment && (
+                        <MessageAttachment
+                          msg={msg}
+                          kind={kind}
+                          isOwn={isOwn}
+                          onImageClick={(src) => setLightboxSrc(src)}
+                        />
+                      )}
+
+                      {/* Caption (for attachment messages with text) */}
+                      {hasAttachment && hasCaption && (
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words mt-1.5 px-1">
+                          {msg.content}
+                        </p>
+                      )}
+
+                      {/* Text-only content (no attachment) */}
+                      {!hasAttachment && (
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
+                      )}
+
+                      {/* Timestamp, edited label & read receipt */}
+                      <div className={`flex items-center gap-1 mt-1 ${hasAttachment ? "px-1" : ""}`}>
+                        <span className="text-[10px] text-muted-foreground">{formatTime(msg.createdAt)}</span>
+                        {msg.editedAt && (
+                          <span className="text-[10px] text-muted-foreground italic">· edited</span>
+                        )}
+                        {isOwn && (
+                          msg.readByBuyer && msg.readBySeller ? (
+                            <CheckCheck className="w-3 h-3 text-accent" />
+                          ) : (
+                            <Check className="w-3 h-3 text-muted-foreground" />
+                          )
+                        )}
+                      </div>
+                    </div>
                   )}
 
-                  {/* Caption (for attachment messages with text) */}
-                  {hasAttachment && hasCaption && (
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap break-words mt-1.5 px-1">
-                      {msg.content}
-                    </p>
+                  {/* ─── Hover/long-press action menu trigger ──────────────── */}
+                  {/* Small chevron-down button that appears on hover (desktop)
+                      or after long-press (mobile). Only shown on the user's
+                      own messages within the 15-min edit/delete window. */}
+                  {canEditDelete && !isDeleteConfirmOpen && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuMessageId(isMenuOpen ? null : msg.id);
+                      }}
+                      className={cn(
+                        "absolute top-0 z-10 p-1 rounded-full bg-card border border-border shadow-sm hover:bg-muted/60 transition-opacity",
+                        isOwn ? "-left-7" : "-right-7",
+                        // On desktop: only show on hover. On mobile: always
+                        // visible (no hover) so the user can tap directly.
+                        isMenuOpen
+                          ? "opacity-100"
+                          : "opacity-0 group-hover:opacity-100 max-sm:opacity-100",
+                      )}
+                      aria-label="Message actions"
+                    >
+                      <MoreVertical className="w-3.5 h-3.5 text-muted-foreground" />
+                    </button>
                   )}
 
-                  {/* Text-only content (no attachment) */}
-                  {!hasAttachment && (
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
+                  {/* ─── Action menu popover ───────────────────────────────── */}
+                  {isMenuOpen && canEditDelete && !isDeleteConfirmOpen && (
+                    <>
+                      {/* Click-away catcher */}
+                      <div
+                        className="fixed inset-0 z-20"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuMessageId(null);
+                        }}
+                      />
+                      <div
+                        className={cn(
+                          "absolute top-0 z-30 min-w-[140px] bg-card border border-border rounded-lg shadow-lg py-1",
+                          isOwn ? "-left-7 -translate-x-full" : "-right-7 translate-x-full",
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleStartEdit(msg);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/60 transition-colors text-left"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDeleteId(msg.id);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-destructive/10 text-destructive transition-colors text-left"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Delete
+                        </button>
+                      </div>
+                    </>
                   )}
 
-                  {/* Timestamp & read receipt */}
-                  <div className={`flex items-center gap-1 mt-1 ${hasAttachment ? "px-1" : ""}`}>
-                    <span className="text-[10px] text-muted-foreground">{formatTime(msg.createdAt)}</span>
-                    {isOwn && (
-                      msg.readByBuyer && msg.readBySeller ? (
-                        <CheckCheck className="w-3 h-3 text-accent" />
-                      ) : (
-                        <Check className="w-3 h-3 text-muted-foreground" />
-                      )
-                    )}
-                  </div>
+                  {/* ─── Delete confirmation popover ──────────────────────── */}
+                  {/* Inline confirmation — no native confirm() dialog. */}
+                  {isDeleteConfirmOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-20"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPendingDeleteId(null);
+                        }}
+                      />
+                      <div
+                        className={cn(
+                          "absolute top-0 z-30 min-w-[200px] bg-card border border-border rounded-lg shadow-lg p-3",
+                          isOwn ? "-left-7 -translate-x-full" : "-right-7 translate-x-full",
+                        )}
+                      >
+                        <p className="text-sm font-medium mb-1">Delete message?</p>
+                        <p className="text-xs text-muted-foreground mb-3">
+                          This can't be undone. The other person will see "This message was deleted".
+                        </p>
+                        <div className="flex gap-2 justify-end">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPendingDeleteId(null);
+                            }}
+                            className="h-8 text-xs"
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleConfirmDelete(msg.id);
+                            }}
+                            disabled={isDeleting}
+                            className="h-8 text-xs gap-1"
+                          >
+                            {isDeleting ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-3 h-3" />
+                            )}
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -896,19 +1270,42 @@ export function ChatPage() {
       )}
 
       {/* ─── Input Area ────────────────────────────────────────────────── */}
+      {/* In edit mode, the composer switches: emoji/attachment buttons are
+          hidden, an "Editing message" banner appears above the textarea,
+          and the Send button becomes Save (with a Cancel button next to it). */}
       <div className="px-4 py-3 border-t border-border bg-card shrink-0">
+        {editingMessage && (
+          <div className="flex items-center justify-between mb-2 px-1">
+            <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <Pencil className="w-3 h-3" />
+              Editing message
+              <span className="opacity-70">· Esc to cancel</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
         <div className="flex items-end gap-2">
-          {/* Emoji picker */}
-          <EmojiPicker
-            onSelect={handleEmojiSelect}
-            align="start"
-          />
+          {/* Emoji picker — hidden in edit mode (editing is text-only) */}
+          {!editingMessage && (
+            <EmojiPicker
+              onSelect={handleEmojiSelect}
+              align="start"
+            />
+          )}
 
-          {/* Attachment menu — now a pure file picker; upload happens on Send */}
-          <AttachmentMenu
-            onFilesSelected={handleFilesSelected}
-            align="center"
-          />
+          {/* Attachment menu — hidden in edit mode */}
+          {!editingMessage && (
+            <AttachmentMenu
+              onFilesSelected={handleFilesSelected}
+              align="center"
+            />
+          )}
 
           {/* Text input */}
           <div className="flex-1 relative">
@@ -918,31 +1315,68 @@ export function ChatPage() {
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
               placeholder={
-                pendingAttachments.length > 0
+                editingMessage
+                  ? "Edit your message..."
+                  : pendingAttachments.length > 0
                   ? "Add a caption..."
                   : "Type a message..."
               }
               rows={1}
-              className="w-full resize-none rounded-2xl border border-border bg-muted/30 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/50 max-h-[120px] placeholder:text-muted-foreground"
+              className={cn(
+                "w-full resize-none rounded-2xl border bg-muted/30 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:border-accent/50 max-h-[120px] placeholder:text-muted-foreground",
+                editingMessage
+                  ? "border-accent/50 focus:ring-accent/40"
+                  : "border-border focus:ring-accent/30",
+              )}
             />
           </div>
 
-          {/* Send button — enabled when there's text OR pending attachments */}
-          <Button
-            size="icon"
-            onClick={handleSendMessage}
-            disabled={
-              isSending ||
-              (newMessage.trim().length === 0 && pendingAttachments.length === 0)
-            }
-            className="rounded-full h-10 w-10 shrink-0 bg-accent hover:bg-accent/90 text-accent-foreground"
-          >
-            {isSending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Send className="w-4 h-4" />
-            )}
-          </Button>
+          {editingMessage ? (
+            <>
+              {/* Cancel edit button */}
+              <Button
+                size="icon"
+                variant="outline"
+                onClick={handleCancelEdit}
+                disabled={editSaving}
+                className="rounded-full h-10 w-10 shrink-0"
+                aria-label="Cancel edit"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+              {/* Save edit button */}
+              <Button
+                size="icon"
+                onClick={handleSaveEdit}
+                disabled={editSaving || newMessage.trim().length === 0}
+                className="rounded-full h-10 w-10 shrink-0 bg-accent hover:bg-accent/90 text-accent-foreground"
+                aria-label="Save edit"
+              >
+                {editSaving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
+              </Button>
+            </>
+          ) : (
+            /* Send button — enabled when there's text OR pending attachments */
+            <Button
+              size="icon"
+              onClick={handleSendMessage}
+              disabled={
+                isSending ||
+                (newMessage.trim().length === 0 && pendingAttachments.length === 0)
+              }
+              className="rounded-full h-10 w-10 shrink-0 bg-accent hover:bg-accent/90 text-accent-foreground"
+            >
+              {isSending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+            </Button>
+          )}
         </div>
       </div>
 

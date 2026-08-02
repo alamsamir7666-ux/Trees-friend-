@@ -83,6 +83,17 @@ UPDATE messages
 -- Index for efficient pagination/sorting by conversation.
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_created_at
   ON messages (conversation_id, created_at DESC);
+
+-- ─── Edit + delete tracking (industry-standard WhatsApp/Telegram semantics)
+-- edited_at   : timestamp of most recent edit (null = never edited)
+-- is_deleted  : soft-delete flag; the message stays in the thread as a
+--               tombstone so the other party sees "This message was deleted"
+-- deleted_at  : timestamp of deletion (null if not deleted)
+-- Idempotent (IF NOT EXISTS) so safe to run on every startup.
+ALTER TABLE messages
+  ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 `;
 
 export async function ensureConversationsTables(): Promise<void> {

@@ -405,3 +405,21 @@ ALTER TABLE users
 -- on last_seen_at would scan the entire users table.
 CREATE INDEX IF NOT EXISTS idx_users_last_seen_at
   ON users (last_seen_at DESC);
+
+-- ─── Message edit + delete tracking ──────────────────────────────────────
+-- Adds three columns to messages:
+--   edited_at   : timestamp of the most recent edit (null = never edited)
+--   is_deleted  : soft-delete flag (true after the sender deletes the msg)
+--   deleted_at  : timestamp of deletion (null if not deleted)
+--
+-- Soft-delete matches WhatsApp/Telegram semantics: a deleted message stays
+-- in the thread as a tombstone ("This message was deleted") so the
+-- conversation's read-receipt sequence and timestamps stay intact. We
+-- never hard-delete chat messages.
+--
+-- Idempotent (IF NOT EXISTS) so it's safe to run on every startup.
+ALTER TABLE messages
+  ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+
