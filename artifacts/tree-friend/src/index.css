@@ -361,14 +361,23 @@
 }
 
 /* ── Page transition ────────────────────────────────────────────────────── */
+/* ───────────────────────────────────────────────────────────────────────
+   IMPORTANT: This keyframe MUST only animate `opacity`, never `transform`.
+   A retained transform (even `translateY(0)` via animation-fill-mode:both)
+   creates a containing block for ALL `position: fixed` descendants per the
+   CSS spec. That breaks every `fixed inset-0` overlay inside any page:
+   the chat lightbox, the chat action-menu bottom sheet, the click-away
+   catcher, image lightboxes on product pages, etc. — they would all be
+   positioned relative to the PageTransition wrapper instead of the
+   viewport, so the Navbar would float on top of them and tapping the
+   Navbar wouldn't dismiss them. Animating opacity only avoids this.
+   ─────────────────────────────────────────────────────────────────── */
 @keyframes pageFadeIn {
   from {
     opacity: 0;
-    transform: translateY(6px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 

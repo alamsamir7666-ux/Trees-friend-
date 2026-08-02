@@ -36,6 +36,8 @@ import {
   Pencil,
   Trash2,
   Ban,
+  Copy,
+  Info,
 } from "lucide-react";
 
 const ICON_VERIFIED =
@@ -726,6 +728,41 @@ export function ChatPage() {
     }
   }
 
+  // ─── Copy message handler ────────────────────────────────────────────
+  // Always available on any message (own or other party's, any age).
+  // Uses the async Clipboard API with a fallback to a hidden textarea +
+  // document.execCommand('copy') for browsers/contexts where the async
+  // API is unavailable (older Safari, insecure contexts, etc.).
+  async function handleCopyMessage(msg: ChatMessage) {
+    const text = msg.content ?? "";
+    if (!text) {
+      toast({ title: "Nothing to copy", variant: "destructive" });
+      return;
+    }
+    setOpenMenuMessageId(null);
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // Fallback: hidden textarea + execCommand
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        ta.style.top = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      toast({ title: "Copied to clipboard" });
+    } catch (err) {
+      console.error("Copy failed:", err);
+      toast({ title: "Failed to copy", variant: "destructive" });
+    }
+  }
+
   // ─── Pending attachment management ────────────────────────────────────
   // Called by AttachmentMenu when the user picks files. Validates each
   // file, creates a preview URL for images/videos, and stages it in the
@@ -990,6 +1027,7 @@ export function ChatPage() {
               onCloseDeleteConfirm={() => setPendingDeleteId(null)}
               onConfirmDelete={(id) => void handleConfirmDelete(id)}
               onStartEdit={handleStartEdit}
+              onCopyMessage={handleCopyMessage}
               onImageClick={(src) => setLightboxSrc(src)}
             />
           );
@@ -1219,6 +1257,7 @@ interface MessageBubbleProps {
   onCloseDeleteConfirm: () => void;
   onConfirmDelete: (id: number) => void;
   onStartEdit: (msg: ChatMessage) => void;
+  onCopyMessage: (msg: ChatMessage) => void;
   onImageClick: (src: string) => void;
 }
 
@@ -1236,6 +1275,7 @@ function MessageBubble({
   onCloseDeleteConfirm,
   onConfirmDelete,
   onStartEdit,
+  onCopyMessage,
   onImageClick,
 }: MessageBubbleProps) {
   const isOwn = msg.senderId === currentUserId;
@@ -1247,13 +1287,31 @@ function MessageBubble({
   // Edit/delete are only available on the user's own messages, within
   // the 15-minute window, and not on already-deleted ones.
   const canEditDelete = isOwn && !isDeleted && isWithinEditWindow(msg);
+  // Copy is available on any non-deleted message that has text content.
+  // We allow copying the OTHER party's messages too — that's standard
+  // WhatsApp/Telegram behavior.
+  const canCopy = !isDeleted && hasCaption;
+  // Whether the action menu should show ANY actions at all. If neither
+  // edit/delete nor copy is available (e.g. a deleted tombstone or an
+  // attachment-only message with no caption), there's nothing to show,
+  // so we don't open the menu in the first place.
+  const hasAnyAction = canEditDelete || canCopy;
   const isLastInSequence = !nextMsg || nextMsg.senderId !== msg.senderId;
 
   // Long-press handler — opens the action menu. This is the primary
   // affordance on mobile (WhatsApp/Telegram/iMessage all use long-press).
   // We also get free desktop parity via onContextMenu (right-click).
+  //
+  // IMPORTANT: The long-press handlers are ALWAYS attached (as long as
+  // there's at least one action to show). Previously they were gated on
+  // `canEditDelete`, which meant long-pressing an old message or a
+  // message from the other party did NOTHING — the user got no feedback
+  // at all and reported "long press shows nothing". Now we always
+  // attach the handlers as long as the menu would have something to
+  // show, and the menu conditionally renders Edit/Delete vs just Copy.
   const { handlers: longPressHandlers, justFiredRef } = useLongPress(
     () => {
+      if (!hasAnyAction) return;
       onToggleMenu(isMenuOpen ? null : msg.id);
     },
     { threshold: 500 },
@@ -1315,7 +1373,7 @@ function MessageBubble({
         <div
           className="relative group"
           onClick={handleBubbleClick}
-          {...(canEditDelete ? longPressHandlers : {})}
+          {...(hasAnyAction ? longPressHandlers : {})}
         >
           {/* ─── Soft-deleted tombstone ─────────────────────────── */}
           {isDeleted ? (
@@ -1405,7 +1463,7 @@ function MessageBubble({
               don't know they can right-click. Mobile users use long-press.
               Hidden on touch-only devices to avoid the "floating grey square"
               bug from the previous implementation. */}
-          {canEditDelete && !isDeleted && !isDeleteConfirmOpen && (
+          {hasAnyAction && !isDeleted && !isDeleteConfirmOpen && (
             <button
               type="button"
               onClick={(e) => {
@@ -1431,9 +1489,9 @@ function MessageBubble({
               means "right edge of popover at right edge of bubble" which
               places the popover to the LEFT of the bubble (for own
               messages). Vice versa for the other party's messages. */}
-          {isMenuOpen && canEditDelete && !isDeleteConfirmOpen && (
+          {isMenuOpen && !isDeleteConfirmOpen && (
             <div
-              className="hidden sm:block absolute top-0 z-50 min-w-[160px] bg-card border border-border rounded-lg shadow-lg py-1"
+              className="hidden sm:block absolute top-0 z-50 min-w-[200px] bg-card border border-border rounded-lg shadow-lg py-1"
               style={
                 isOwn
                   ? { right: "100%", marginRight: "8px" }
@@ -1441,28 +1499,53 @@ function MessageBubble({
               }
               onClick={(e) => e.stopPropagation()}
             >
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onStartEdit(msg);
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/60 transition-colors text-left"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenDeleteConfirm(msg.id);
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-destructive/10 text-destructive transition-colors text-left"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Delete
-              </button>
+              {canEditDelete && (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStartEdit(msg);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/60 transition-colors text-left"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenDeleteConfirm(msg.id);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-destructive/10 text-destructive transition-colors text-left"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete
+                  </button>
+                </>
+              )}
+              {canCopy && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCopyMessage(msg);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/60 transition-colors text-left"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  Copy text
+                </button>
+              )}
+              {!canEditDelete && isOwn && !isDeleted && (
+                <div className="px-3 py-2 text-[11px] text-muted-foreground flex items-start gap-1.5 border-t border-border mt-1">
+                  <Info className="w-3 h-3 shrink-0 mt-0.5" />
+                  <span>
+                    Edit &amp; delete are only available within 15 minutes of sending.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -1518,8 +1601,8 @@ function MessageBubble({
 
       {/* ─── Action menu ──────────────────────────────────────────────── */}
       {/* Mobile: bottom sheet (large touch targets, thumb-friendly).
-          Desktop: anchored popover. */}
-      {isMenuOpen && canEditDelete && !isDeleteConfirmOpen && (
+          Desktop: anchored popover (rendered above inside the bubble wrapper). */}
+      {isMenuOpen && !isDeleteConfirmOpen && (
         <>
           {/* Click-away catcher — covers the whole screen so tapping
               outside the menu closes it. */}
@@ -1541,28 +1624,53 @@ function MessageBubble({
               <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
             </div>
             <div className="px-2 pb-2">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onStartEdit(msg);
-                }}
-                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-muted/60 active:bg-muted transition-colors text-left"
-              >
-                <Pencil className="w-5 h-5 shrink-0" />
-                <span className="text-base">Edit message</span>
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenDeleteConfirm(msg.id);
-                }}
-                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-destructive/10 active:bg-destructive/15 text-destructive transition-colors text-left"
-              >
-                <Trash2 className="w-5 h-5 shrink-0" />
-                <span className="text-base">Delete message</span>
-              </button>
+              {canEditDelete && (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStartEdit(msg);
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-muted/60 active:bg-muted transition-colors text-left"
+                  >
+                    <Pencil className="w-5 h-5 shrink-0" />
+                    <span className="text-base">Edit message</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenDeleteConfirm(msg.id);
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-destructive/10 active:bg-destructive/15 text-destructive transition-colors text-left"
+                  >
+                    <Trash2 className="w-5 h-5 shrink-0" />
+                    <span className="text-base">Delete message</span>
+                  </button>
+                </>
+              )}
+              {canCopy && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCopyMessage(msg);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-muted/60 active:bg-muted transition-colors text-left"
+                >
+                  <Copy className="w-5 h-5 shrink-0" />
+                  <span className="text-base">Copy text</span>
+                </button>
+              )}
+              {!canEditDelete && isOwn && !isDeleted && (
+                <div className="mx-2 my-2 px-3 py-2.5 rounded-xl bg-muted/50 text-[12px] text-muted-foreground flex items-start gap-2">
+                  <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    Edit &amp; delete are only available within 15 minutes of sending.
+                  </span>
+                </div>
+              )}
             </div>
             <div className="border-t border-border" />
             <div className="px-2 py-2">
