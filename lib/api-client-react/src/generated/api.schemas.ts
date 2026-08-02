@@ -1427,6 +1427,11 @@ export interface PublicSeller {
   isVerified: boolean;
   /** @nullable */
   logoUrl: string | null;
+  /** Gallery of nursery photos the seller has uploaded. The buyer-facing
+   * Seller Store Page uses the first entry as the hero cover image;
+   * when the array is empty the page falls back to a gradient.
+   *  */
+  nurseryImages: string[];
   createdAt: string;
   productCount: number;
   rating: number;

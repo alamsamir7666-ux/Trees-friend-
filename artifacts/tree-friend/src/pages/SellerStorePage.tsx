@@ -135,8 +135,26 @@ export function SellerStorePage() {
         className="mb-4"
       />
 
-      {/* Hero */}
-      <div className="h-40 sm:h-48 rounded-2xl bg-gradient-to-br from-accent/20 via-muted to-accent/10 mb-[-56px]" />
+      {/* Hero — seller's first nursery photo as cover image, falling back to
+          a branded gradient when the seller hasn't uploaded any nursery
+          photos. The card below overlaps the hero by 56px (mb-[-56px]) to
+          create the floating-card effect; that overlap is why the hero has
+          a defined height and the image is object-cover. */}
+      {seller?.nurseryImages && seller.nurseryImages.length > 0 ? (
+        <div className="h-40 sm:h-48 rounded-2xl overflow-hidden mb-[-56px] relative bg-muted">
+          <img
+            src={seller.nurseryImages[0]}
+            alt={`${seller.nurseryName} nursery`}
+            className="w-full h-full object-cover"
+            loading="lazy"
+          />
+          {/* Subtle gradient scrim so the floating card's white text doesn't
+              fight with bright spots in the photo. */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent" />
+        </div>
+      ) : (
+        <div className="h-40 sm:h-48 rounded-2xl bg-gradient-to-br from-accent/20 via-muted to-accent/10 mb-[-56px]" />
+      )}
 
       {/* Store card */}
       <div className="relative bg-card border border-border rounded-2xl shadow-sm p-4 sm:p-5">

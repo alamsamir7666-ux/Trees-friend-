@@ -488,6 +488,11 @@ router.get("/sellers/:id", async (req, res) => {
       description: seller.description,
       isVerified: seller.isVerified,
       logoUrl: seller.logoUrl,
+      // Expose nurseryImages so the buyer-facing Seller Store Page can render
+      // the first one as a cover image. Falls back to a gradient on the
+      // client when the array is empty (most sellers won't have uploaded
+      // nursery photos yet). See SellerStorePage.tsx hero block.
+      nurseryImages: seller.nurseryImages ?? [],
       createdAt: seller.createdAt.toISOString(),
       productCount: Number(productCountRow[0]?.count ?? 0),
       rating: Number(Number(reviewStatsRow[0]?.avg ?? 0).toFixed(1)),

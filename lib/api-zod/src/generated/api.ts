@@ -1680,6 +1680,7 @@ export const GetPublicSellerResponse = zod.object({
   "description": zod.string().nullable(),
   "isVerified": zod.boolean(),
   "logoUrl": zod.string().nullable(),
+  "nurseryImages": zod.array(zod.string()).describe('Gallery of nursery photos the seller has uploaded. The buyer-facing\nSeller Store Page uses the first entry as the hero cover image;\nwhen the array is empty the page falls back to a gradient.\n'),
   "createdAt": zod.string(),
   "productCount": zod.number(),
   "rating": zod.number(),
