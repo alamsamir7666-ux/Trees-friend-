@@ -1,4 +1,6 @@
 import { Router } from "express";
+import multerPkg from "multer";
+import { v2 as cloudinaryV2 } from "cloudinary";
 import { db } from "@workspace/db";
 import {
   conversationsTable,
@@ -8,9 +10,26 @@ import {
   productsTable,
   sellerListingVariantsTable,
   usersTable,
+  ALLOWED_CHAT_ATTACHMENT_MIME_TYPES,
+  MAX_CHAT_ATTACHMENT_BYTES,
 } from "@workspace/db";
 import { eq, and, desc, sql, lt, gt } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
+
+cloudinaryV2.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Memory storage so we can pipe straight to Cloudinary without touching disk.
+// 10MB hard cap matches MAX_CHAT_ATTACHMENT_BYTES; multer enforces it before
+// the request body is fully buffered, preventing memory-exhaustion attacks.
+const uploadStorage = multerPkg.memoryStorage();
+const uploadMiddleware = multerPkg({
+  storage: uploadStorage,
+  limits: { fileSize: MAX_CHAT_ATTACHMENT_BYTES },
+});
 
 const router = Router();
 
@@ -39,9 +58,75 @@ interface MessageResponse {
   content: string;
   messageType: string;
   imageUrl: string | null;
+  fileUrl: string | null;
+  fileName: string | null;
+  fileSize: number | null;
+  fileMimeType: string | null;
+  attachmentType: string | null;
   readByBuyer: boolean;
   readBySeller: boolean;
   createdAt: string;
+}
+
+// ─── Attachment helpers ────────────────────────────────────────────────────
+
+/**
+ * Normalize an arbitrary MIME type into one of the UI-branchable buckets:
+ *   "image" | "video" | "audio" | "document"
+ *
+ * The UI uses this to decide between an inline preview (image/video), a
+ * inline audio player, or a generic file chip with a download button.
+ * Anything we don't recognize is treated as a document download — never
+ * inline-rendered, so we never accidentally execute or stream unknown
+ * content.
+ */
+function classifyAttachment(mimeType: string | null): "image" | "video" | "audio" | "document" {
+  if (!mimeType) return "document";
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  return "document";
+}
+
+/**
+ * Map a MIME type to a Cloudinary resource_type so the upload pipeline
+ * picks the correct storage/optimization path. Cloudinary treats "image",
+ * "video" (covers video + audio), and "raw" (everything else: PDFs, docs).
+ */
+function cloudinaryResourceType(mimeType: string | null): "image" | "video" | "raw" {
+  const kind = classifyAttachment(mimeType);
+  if (kind === "image") return "image";
+  if (kind === "video" || kind === "audio") return "video";
+  return "raw";
+}
+
+function isAllowedAttachment(mimeType: string | null): boolean {
+  if (!mimeType) return false;
+  return (ALLOWED_CHAT_ATTACHMENT_MIME_TYPES as readonly string[]).includes(mimeType);
+}
+
+/**
+ * Produce a human-friendly preview string for the conversation list.
+ * Attachment-only messages ("📷 Photo", "📎 invoice.pdf") are far more
+ * useful in the list than an empty string or the raw URL.
+ */
+function previewMessageText(m: typeof messagesTable.$inferSelect | undefined): string | null {
+  if (!m) return null;
+  if (m.content && m.content.trim().length > 0) return m.content.trim();
+  switch (m.attachmentType) {
+    case "image":
+      return "📷 Photo";
+    case "video":
+      return "📹 Video";
+    case "audio":
+      return "🔊 Audio";
+    case "document":
+      return m.fileName ? `📎 ${m.fileName}` : "📎 File";
+    default:
+      // Legacy image messages without attachment_type backfill
+      if (m.messageType === "image" && m.imageUrl) return "📷 Photo";
+      return null;
+  }
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -54,6 +139,11 @@ function formatMessage(m: typeof messagesTable.$inferSelect): MessageResponse {
     content: m.content,
     messageType: m.messageType,
     imageUrl: m.imageUrl,
+    fileUrl: m.fileUrl,
+    fileName: m.fileName,
+    fileSize: m.fileSize ?? null,
+    fileMimeType: m.fileMimeType,
+    attachmentType: m.attachmentType,
     readByBuyer: m.readByBuyer,
     readBySeller: m.readBySeller,
     createdAt: m.createdAt.toISOString(),
@@ -173,7 +263,7 @@ router.get("/conversations", requireAuth, async (req: any, res) => {
           productName,
           productImage,
           productPrice,
-          lastMessage: lastMsg?.content ?? null,
+          lastMessage: previewMessageText(lastMsg),
           lastMessageAt: conv.lastMessageAt.toISOString(),
           unreadCount: Number(unreadRow?.count ?? 0),
           createdAt: conv.createdAt.toISOString(),
@@ -242,7 +332,7 @@ router.get("/conversations", requireAuth, async (req: any, res) => {
           productName,
           productImage,
           productPrice,
-          lastMessage: lastMsg?.content ?? null,
+          lastMessage: previewMessageText(lastMsg),
           lastMessageAt: conv.lastMessageAt.toISOString(),
           unreadCount: Number(unreadRow?.count ?? 0),
           createdAt: conv.createdAt.toISOString(),
@@ -649,7 +739,13 @@ router.get("/conversations/:id/messages", requireAuth, async (req: any, res) => 
 });
 
 // ─── POST /conversations/:id/messages ──────────────────────────────────────
-// Send a message in a conversation.
+// Send a text message (or an attachment-bearing message with an optional
+// caption) in a conversation. For raw file uploads, use the dedicated
+// `/conversations/:id/upload` endpoint below — it accepts multipart/form-data,
+// uploads the file to Cloudinary, and creates the message in one transaction.
+//
+// This JSON endpoint is used by the emoji/text input path and by clients
+// that already have a file URL (e.g. re-using an existing upload).
 router.post("/conversations/:id/messages", requireAuth, async (req: any, res) => {
   try {
     const convId = parseInt(req.params.id);
@@ -658,14 +754,28 @@ router.post("/conversations/:id/messages", requireAuth, async (req: any, res) =>
       return;
     }
 
-    const { content, messageType, imageUrl } = req.body;
+    const {
+      content,
+      messageType,
+      imageUrl,
+      fileUrl,
+      fileName,
+      fileSize,
+      fileMimeType,
+    } = req.body ?? {};
 
-    if (!content || typeof content !== "string" || content.trim().length === 0) {
-      res.status(400).json({ error: "content is required" });
+    const hasContent = typeof content === "string" && content.trim().length > 0;
+    const hasAttachment = typeof fileUrl === "string" && fileUrl.length > 0 || typeof imageUrl === "string" && imageUrl.length > 0;
+
+    // Either text content OR an attachment must be present. This allows
+    // sending attachment-only messages (no caption) without failing the
+    // "content required" check.
+    if (!hasContent && !hasAttachment) {
+      res.status(400).json({ error: "content or an attachment is required" });
       return;
     }
 
-    if (content.length > 5000) {
+    if (hasContent && content.length > 5000) {
       res.status(400).json({ error: "Message content too long (max 5000 characters)" });
       return;
     }
@@ -696,15 +806,26 @@ router.post("/conversations/:id/messages", requireAuth, async (req: any, res) =>
       return;
     }
 
+    // Derive attachment_type from the supplied MIME so the UI can branch
+    // without re-classifying on the client.
+    const resolvedMimeType = typeof fileMimeType === "string" ? fileMimeType : (typeof imageUrl === "string" ? "image/jpeg" : null);
+    const attachmentType = hasAttachment ? classifyAttachment(resolvedMimeType) : null;
+    const resolvedMessageType = messageType || (hasAttachment ? (attachmentType === "image" ? "image" : "file") : "text");
+
     // Insert the message
     const [message] = await db
       .insert(messagesTable)
       .values({
         conversationId: convId,
         senderId: req.userId,
-        content: content.trim(),
-        messageType: messageType || "text",
+        content: hasContent ? content.trim() : "",
+        messageType: resolvedMessageType,
         imageUrl: imageUrl || null,
+        fileUrl: fileUrl || imageUrl || null,
+        fileName: typeof fileName === "string" ? fileName : null,
+        fileSize: typeof fileSize === "number" && Number.isFinite(fileSize) ? fileSize : null,
+        fileMimeType: resolvedMimeType,
+        attachmentType,
         // Mark as read by the sender
         readByBuyer: isBuyer,
         readBySeller: isSellerParticipant,
@@ -726,6 +847,149 @@ router.post("/conversations/:id/messages", requireAuth, async (req: any, res) =>
     res.status(500).json({ error: "Failed to send message" });
   }
 });
+
+// ─── POST /conversations/:id/upload ────────────────────────────────────────
+// Upload a file attachment to a conversation.
+//
+// Multipart/form-data:
+//   - field "file"        : the attachment (required)
+//   - field "caption"     : optional text caption sent alongside the file
+//
+// Pipeline:
+//   1. requireAuth + participant check (same as POST /messages)
+//   2. multer memory-storage with 10MB hard cap
+//   3. MIME allow-list check (reject before Cloudinary call to save bandwidth)
+//   4. Upload to Cloudinary with the correct resource_type ("image" | "video" | "raw")
+//      → images get quality:75 + webp for size; documents stay raw
+//   5. Insert message row with fileUrl / fileName / fileSize / fileMimeType / attachmentType
+//   6. Bump conversations.lastMessageAt
+//
+// Returns: the created message (same shape as POST /messages).
+router.post(
+  "/conversations/:id/upload",
+  requireAuth,
+  uploadMiddleware.single("file"),
+  async (req: any, res) => {
+    try {
+      const convId = parseInt(req.params.id);
+      if (isNaN(convId)) {
+        res.status(400).json({ error: "Invalid conversation id" });
+        return;
+      }
+
+      const file = req.file as Express.Multer.File | undefined;
+      if (!file) {
+        res.status(400).json({ error: "No file uploaded" });
+        return;
+      }
+
+      // 1) MIME allow-list — reject anything not in the safe set.
+      if (!isAllowedAttachment(file.mimetype)) {
+        res.status(415).json({
+          error: `File type ${file.mimetype || "unknown"} is not supported`,
+          allowedTypes: ALLOWED_CHAT_ATTACHMENT_MIME_TYPES,
+        });
+        return;
+      }
+
+      // 2) Look up conversation + verify participation.
+      const [conv] = await db
+        .select()
+        .from(conversationsTable)
+        .where(eq(conversationsTable.id, convId))
+        .limit(1);
+
+      if (!conv) {
+        res.status(404).json({ error: "Conversation not found" });
+        return;
+      }
+
+      const [seller] = await db
+        .select({ id: sellersTable.id })
+        .from(sellersTable)
+        .where(eq(sellersTable.userId, req.dbUser.id))
+        .limit(1);
+
+      const isBuyer = conv.buyerId === req.userId;
+      const isSellerParticipant = seller?.id === conv.sellerId;
+
+      if (!isBuyer && !isSellerParticipant) {
+        res.status(403).json({ error: "Not a participant in this conversation" });
+        return;
+      }
+
+      // 3) Upload to Cloudinary with the right resource_type.
+      const resourceType = cloudinaryResourceType(file.mimetype);
+      const isImage = resourceType === "image";
+      const folder = `treefriend/chat/${convId}`;
+      const publicId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+      const uploadOptions: Record<string, unknown> = {
+        folder,
+        public_id: publicId,
+        resource_type: resourceType,
+      };
+      // Images: apply quality/format transform to keep payload small.
+      // Documents (PDFs, DOCX, etc.): upload raw — no transform, or
+      // Cloudinary would try to re-encode them and corrupt the file.
+      if (isImage) {
+        uploadOptions.quality = 75;
+        uploadOptions.format = "webp";
+      }
+
+      const uploadResult = await new Promise<{ secure_url: string }>((resolve, reject) => {
+        const stream = cloudinaryV2.uploader.upload_stream(
+          uploadOptions,
+          (err, result) => {
+            if (err || !result) {
+              console.error("Cloudinary chat upload error:", err);
+              return reject(err ?? new Error("Upload failed"));
+            }
+            resolve(result as { secure_url: string });
+          }
+        );
+        stream.end(file.buffer);
+      });
+
+      // 4) Insert the message row.
+      const caption = typeof req.body?.caption === "string" ? req.body.caption.trim() : "";
+      const attachmentType = classifyAttachment(file.mimetype);
+      const resolvedMessageType = attachmentType === "image" ? "image" : "file";
+
+      const [message] = await db
+        .insert(messagesTable)
+        .values({
+          conversationId: convId,
+          senderId: req.userId,
+          content: caption,
+          messageType: resolvedMessageType,
+          imageUrl: isImage ? uploadResult.secure_url : null,
+          fileUrl: uploadResult.secure_url,
+          fileName: file.originalname || null,
+          fileSize: file.size || null,
+          fileMimeType: file.mimetype || null,
+          attachmentType,
+          readByBuyer: isBuyer,
+          readBySeller: isSellerParticipant,
+        })
+        .returning();
+
+      // 5) Bump conversation's lastMessageAt.
+      await db
+        .update(conversationsTable)
+        .set({
+          lastMessageAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(conversationsTable.id, convId));
+
+      res.status(201).json(formatMessage(message));
+    } catch (err) {
+      console.error("Chat file upload error:", err);
+      res.status(500).json({ error: "Failed to upload file" });
+    }
+  }
+);
 
 // ─── PUT /conversations/:id/read ───────────────────────────────────────────
 // Mark all messages in a conversation as read by the current user.

@@ -365,3 +365,27 @@ CREATE TABLE IF NOT EXISTS messages (
 -- Efficient "messages for a conversation" query
 CREATE INDEX IF NOT EXISTS messages_conversation_id_idx
   ON messages (conversation_id, created_at);
+
+-- migrations/add_chat_attachments.sql
+-- Add file attachment support to messages: images, files, video, audio.
+-- Backward compatible — imageUrl stays for old clients, fileUrl is canonical.
+
+ALTER TABLE messages
+  ADD COLUMN IF NOT EXISTS file_url TEXT,
+  ADD COLUMN IF NOT EXISTS file_name TEXT,
+  ADD COLUMN IF NOT EXISTS file_size BIGINT,
+  ADD COLUMN IF NOT EXISTS file_mime_type TEXT,
+  ADD COLUMN IF NOT EXISTS attachment_type TEXT;
+
+-- Backfill attachment_type for existing image messages so the new UI
+-- renders them as inline images instead of text bubbles.
+UPDATE messages
+  SET attachment_type = 'image',
+      file_url = image_url
+  WHERE message_type = 'image'
+    AND image_url IS NOT NULL
+    AND attachment_type IS NULL;
+
+-- Index for sorting/pagination by conversation
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_created_at
+  ON messages (conversation_id, created_at DESC);

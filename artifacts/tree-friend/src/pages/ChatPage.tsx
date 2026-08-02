@@ -7,19 +7,20 @@ import { useCurrency } from "@/lib/currency";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
+import { EmojiPicker } from "@/components/ui/EmojiPicker";
+import { AttachmentMenu, fileIconFor, formatFileSize, type SentAttachment } from "@/components/ui/AttachmentMenu";
+import { cn } from "@/lib/utils";
 import {
   ArrowLeft,
   MessageCircle,
   Send,
-  Paperclip,
-  Smile,
   Check,
   CheckCheck,
   MoreVertical,
-  ShieldCheck,
   ExternalLink,
+  Download,
+  Paperclip,
 } from "lucide-react";
 
 const ICON_VERIFIED =
@@ -54,6 +55,12 @@ interface ChatMessage {
   content: string;
   messageType: string;
   imageUrl: string | null;
+  // New attachment fields (may be missing on older messages; treat as null)
+  fileUrl?: string | null;
+  fileName?: string | null;
+  fileSize?: number | null;
+  fileMimeType?: string | null;
+  attachmentType?: string | null;
   readByBuyer: boolean;
   readBySeller: boolean;
   createdAt: string;
@@ -91,6 +98,31 @@ function shouldShowDateSeparator(prev: ChatMessage | undefined, curr: ChatMessag
   return new Date(prev.createdAt).toDateString() !== new Date(curr.createdAt).toDateString();
 }
 
+/**
+ * Resolve which URL to use for an attachment message. fileUrl is the
+ * canonical field; imageUrl is the legacy one. We prefer fileUrl, then
+ * fall back to imageUrl for older messages that only set the legacy field.
+ */
+function attachmentUrl(msg: ChatMessage): string | null {
+  return msg.fileUrl ?? msg.imageUrl ?? null;
+}
+
+/**
+ * Classify a message for rendering. The server populates
+ * `attachmentType` on new messages, but old messages (and messages
+ * created via the legacy JSON endpoint without fileMimeType) may not
+ * have it. We fall back to inferring from `messageType` + `imageUrl`.
+ */
+function classifyMessage(msg: ChatMessage): "text" | "image" | "video" | "audio" | "document" {
+  const a = msg.attachmentType;
+  if (a === "image" || a === "video" || a === "audio" || a === "document") return a;
+  // Legacy message: type=image with imageUrl, no attachmentType
+  if (msg.messageType === "image" && attachmentUrl(msg)) return "image";
+  // Otherwise: text (even if it's an unknown attachment type, treat as text
+  // and let the message body show the content string)
+  return "text";
+}
+
 // ─── Component ─────────────────────────────────────────────────────────────
 
 export function ChatPage() {
@@ -109,6 +141,8 @@ export function ChatPage() {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  // Lightbox state — when set, the full image opens in a modal overlay.
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -269,6 +303,47 @@ export function ChatPage() {
     }
   }
 
+  // ─── Attachment sent callback ────────────────────────────────────────
+  // The AttachmentMenu uploads files independently and calls this for each
+  // successful upload. We append the returned message to the local list
+  // (the next polling cycle will dedup via the id check) and scroll to bottom.
+  const handleAttachmentSent = useCallback((message: SentAttachment) => {
+    setMessages((prev) => {
+      // Defensive dedup — if a poll raced in a message with the same id,
+      // drop the duplicate rather than showing it twice.
+      if (prev.some((m) => m.id === message.id)) return prev;
+      return [...prev, message as ChatMessage];
+    });
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 50);
+    qc.invalidateQueries({ queryKey: ["conversations"] });
+  }, []);
+
+  // ─── Emoji picker callback ───────────────────────────────────────────
+  // Insert the picked emoji at the caret position inside the textarea
+  // rather than just appending to the end — that matches what every
+  // other chat app does and lets users place an emoji mid-message.
+  const handleEmojiSelect = useCallback((emoji: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      setNewMessage((prev) => prev + emoji);
+      return;
+    }
+    const start = textarea.selectionStart ?? newMessage.length;
+    const end = textarea.selectionEnd ?? newMessage.length;
+    const next = newMessage.slice(0, start) + emoji + newMessage.slice(end);
+    setNewMessage(next);
+
+    // Restore caret to just after the inserted emoji, on the next tick
+    // (React hasn't re-rendered with the new value yet).
+    requestAnimationFrame(() => {
+      textarea.focus();
+      const pos = start + emoji.length;
+      textarea.setSelectionRange(pos, pos);
+    });
+  }, [newMessage]);
+
   // ─── Load more messages (scroll up) ───────────────────────────────────
   function handleLoadMore() {
     if (hasMore && !loadingMore && messages.length > 0) {
@@ -318,6 +393,7 @@ export function ChatPage() {
   }
 
   const isBuyer = user?.id === conversation.buyerId;
+  const conversationIdNum = parseInt(conversationId ?? "0");
 
   // ─── Render ───────────────────────────────────────────────────────────
   return (
@@ -413,6 +489,9 @@ export function ChatPage() {
           const prevMsg = i > 0 ? messages[i - 1] : undefined;
           const isOwn = msg.senderId === user?.id;
           const showDate = shouldShowDateSeparator(prevMsg, msg);
+          const kind = classifyMessage(msg);
+          const hasAttachment = kind !== "text";
+          const hasCaption = msg.content && msg.content.trim().length > 0;
 
           // Check if this is the last message from the same sender in a sequence
           const nextMsg = i < messages.length - 1 ? messages[i + 1] : undefined;
@@ -446,24 +525,40 @@ export function ChatPage() {
                 {!isOwn && !isLastInSequence && <div className="w-7 mr-2 shrink-0" />}
 
                 <div
-                  className={`max-w-[75%] sm:max-w-[65%] ${
+                  className={cn(
+                    "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5",
                     isOwn
                       ? "bg-accent/10 dark:bg-accent/15 rounded-2xl rounded-br-md"
-                      : "bg-card border border-border rounded-2xl rounded-bl-md"
-                  } px-3.5 py-2.5`}
+                      : "bg-card border border-border rounded-2xl rounded-bl-md",
+                    // Image messages: drop horizontal padding so the image
+                    // can stretch edge-to-edge inside the bubble.
+                    kind === "image" && "p-1.5",
+                  )}
                 >
-                  {/* Image message */}
-                  {msg.messageType === "image" && msg.imageUrl && (
-                    <div className="mb-2 rounded-lg overflow-hidden">
-                      <img src={msg.imageUrl} alt="" className="w-full max-w-[240px] object-cover" loading="lazy" />
-                    </div>
+                  {/* ─── Attachment rendering ──────────────────────────── */}
+                  {hasAttachment && (
+                    <MessageAttachment
+                      msg={msg}
+                      kind={kind}
+                      isOwn={isOwn}
+                      onImageClick={(src) => setLightboxSrc(src)}
+                    />
                   )}
 
-                  {/* Text content */}
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
+                  {/* Caption (for attachment messages with text) */}
+                  {hasAttachment && hasCaption && (
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap break-words mt-1.5 px-1">
+                      {msg.content}
+                    </p>
+                  )}
+
+                  {/* Text-only content (no attachment) */}
+                  {!hasAttachment && (
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
+                  )}
 
                   {/* Timestamp & read receipt */}
-                  <div className={`flex items-center gap-1 mt-1 ${isOwn ? "justify-end" : "justify-end"}`}>
+                  <div className={`flex items-center gap-1 mt-1 ${hasAttachment ? "px-1" : ""}`}>
                     <span className="text-[10px] text-muted-foreground">{formatTime(msg.createdAt)}</span>
                     {isOwn && (
                       msg.readByBuyer && msg.readBySeller ? (
@@ -498,15 +593,18 @@ export function ChatPage() {
       {/* ─── Input Area ────────────────────────────────────────────────── */}
       <div className="px-4 py-3 border-t border-border bg-card shrink-0">
         <div className="flex items-end gap-2">
-          {/* Emoji button (placeholder) */}
-          <button className="p-2 rounded-full hover:bg-muted/50 transition-colors shrink-0 text-muted-foreground">
-            <Smile className="w-5 h-5" />
-          </button>
+          {/* Emoji picker */}
+          <EmojiPicker
+            onSelect={handleEmojiSelect}
+            align="start"
+          />
 
-          {/* Attachment button (placeholder) */}
-          <button className="p-2 rounded-full hover:bg-muted/50 transition-colors shrink-0 text-muted-foreground">
-            <Paperclip className="w-5 h-5" />
-          </button>
+          {/* Attachment menu */}
+          <AttachmentMenu
+            conversationId={conversationIdNum}
+            onSent={handleAttachmentSent}
+            align="center"
+          />
 
           {/* Text input */}
           <div className="flex-1 relative">
@@ -532,6 +630,134 @@ export function ChatPage() {
           </Button>
         </div>
       </div>
+
+      {/* ─── Image lightbox ────────────────────────────────────────────── */}
+      {lightboxSrc && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 animate-in fade-in-0"
+          onClick={() => setLightboxSrc(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Image preview"
+        >
+          <button
+            type="button"
+            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white"
+            onClick={() => setLightboxSrc(null)}
+            aria-label="Close"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+          <a
+            href={lightboxSrc}
+            target="_blank"
+            rel="noopener noreferrer"
+            download
+            className="absolute top-4 left-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white"
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Download"
+            title="Download"
+          >
+            <Download className="w-5 h-5" />
+          </a>
+          <img
+            src={lightboxSrc}
+            alt="Attachment preview"
+            className="max-w-[92vw] max-h-[88vh] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
+  );
+}
+
+// ─── MessageAttachment (inline sub-component) ──────────────────────────────
+
+interface MessageAttachmentProps {
+  msg: ChatMessage;
+  kind: "image" | "video" | "audio" | "document";
+  isOwn: boolean;
+  onImageClick: (src: string) => void;
+}
+
+function MessageAttachment({ msg, kind, onImageClick }: MessageAttachmentProps) {
+  const url = attachmentUrl(msg);
+  if (!url) return null;
+
+  // ─── Image: inline preview, click to open lightbox ──────────────────
+  if (kind === "image") {
+    return (
+      <div
+        className="rounded-xl overflow-hidden cursor-zoom-in bg-muted/30"
+        onClick={() => onImageClick(url)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onImageClick(url);
+          }
+        }}
+      >
+        <img
+          src={url}
+          alt={msg.fileName ?? "Image attachment"}
+          className="w-full max-w-[280px] max-h-[360px] object-cover"
+          loading="lazy"
+        />
+      </div>
+    );
+  }
+
+  // ─── Video: native <video> element with controls ────────────────────
+  if (kind === "video") {
+    return (
+      <div className="rounded-xl overflow-hidden bg-black/90 max-w-[280px]">
+        <video
+          src={url}
+          controls
+          playsInline
+          className="w-full max-h-[360px]"
+          preload="metadata"
+        />
+      </div>
+    );
+  }
+
+  // ─── Audio: native <audio> element with download fallback ──────────
+  if (kind === "audio") {
+    return (
+      <div className="flex items-center gap-2 min-w-[200px]">
+        <audio src={url} controls preload="metadata" className="flex-1 min-w-0" />
+      </div>
+    );
+  }
+
+  // ─── Document: file chip with icon, name, size, download button ────
+  const Icon = fileIconFor(msg.fileMimeType ?? null);
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      download={msg.fileName ?? undefined}
+      className="flex items-center gap-3 px-3 py-2.5 min-w-[220px] max-w-full rounded-lg bg-muted/40 hover:bg-muted/70 transition-colors group"
+    >
+      <span className="shrink-0 w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+        <Icon className="w-4 h-4" />
+      </span>
+      <span className="flex-1 min-w-0">
+        <span className="block text-sm font-medium truncate">{msg.fileName ?? "Document"}</span>
+        <span className="block text-[11px] text-muted-foreground mt-0.5">
+          {msg.fileSize ? formatFileSize(msg.fileSize) : "Download"}
+          {msg.fileMimeType && <span className="opacity-70"> · {msg.fileMimeType.split("/")[1]?.toUpperCase()}</span>}
+        </span>
+      </span>
+      <Download className="w-4 h-4 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
+    </a>
   );
 }

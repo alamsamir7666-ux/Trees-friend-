@@ -5,6 +5,7 @@ import {
   integer,
   boolean,
   timestamp,
+  bigint,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -44,6 +45,22 @@ export const conversationsTable = pgTable("conversations", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+/**
+ * Messages in a conversation.
+ *
+ * messageType controls how the payload is interpreted:
+ *   - "text"      : `content` is the message body. No attachments.
+ *   - "image"     : `imageUrl` (legacy) / `fileUrl` points to the image. `content` may hold a caption.
+ *   - "file"      : `fileUrl` + `fileName` + `fileSize` + `fileMimeType` describe a downloadable file.
+ *   - "product_card" : Reserved for future inline product cards (no schema changes needed).
+ *
+ * `imageUrl` is preserved for backward compatibility with existing image
+ * messages; new image uploads populate `fileUrl` and `imageUrl` in tandem
+ * (fileUrl is canonical, imageUrl is mirrored for older clients).
+ *
+ * `attachmentType` is a normalized view of the attachment for quick UI
+ * branching: "image" | "video" | "audio" | "document" | null.
+ */
 export const messagesTable = pgTable("messages", {
   id: serial("id").primaryKey(),
   conversationId: integer("conversation_id")
@@ -51,10 +68,24 @@ export const messagesTable = pgTable("messages", {
     .references(() => conversationsTable.id, { onDelete: "cascade" }),
   senderId: text("sender_id").notNull(), // Clerk user ID — identifies who sent the message
   content: text("content").notNull(),
-  // "text" | "image" | "product_card" — extensible for future media types
+  // "text" | "image" | "file" | "product_card" — extensible for future media types
   messageType: text("message_type").notNull().default("text"),
-  // Optional image URL for image messages
+
+  // ─── Attachment fields (Phase: emoji + file attachments) ───────────────
+  // Legacy image URL — preserved for backward compat. New image uploads
+  // populate BOTH imageUrl and fileUrl so old clients keep working.
   imageUrl: text("image_url"),
+  // Canonical attachment URL for any message type (image, file, video, audio).
+  fileUrl: text("file_url"),
+  // Original file name as uploaded by the sender (e.g. "invoice-2026.pdf").
+  fileName: text("file_name"),
+  // File size in bytes (number). bigint because media files can exceed 2GB.
+  fileSize: bigint("file_size", { mode: "number" }),
+  // MIME type (e.g. "application/pdf", "image/jpeg"). Used for icon + preview logic.
+  fileMimeType: text("file_mime_type"),
+  // Normalized attachment type for UI branching: "image" | "video" | "audio" | "document" | null.
+  attachmentType: text("attachment_type"),
+
   // Read receipts
   readByBuyer: boolean("read_by_buyer").notNull().default(false),
   readBySeller: boolean("read_by_seller").notNull().default(false),
@@ -78,3 +109,45 @@ export const insertMessageSchema = createInsertSchema(messagesTable).omit({
 });
 export type InsertMessage = z.infer<typeof insertMessageSchema>;
 export type Message = typeof messagesTable.$inferSelect;
+
+/**
+ * Allowed MIME types for chat attachments. Kept here so both the API
+ * route and any future admin/test script can share the same allow-list.
+ *
+ * Images and videos are rendered inline; everything else is rendered as
+ * a file chip with a download button. Executables, scripts, and archives
+ * (zip/rar) are intentionally excluded to reduce malware risk — the
+ * marketplace does not need to ship binaries through chat.
+ */
+export const ALLOWED_CHAT_ATTACHMENT_MIME_TYPES = [
+  // Images
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/heic",
+  "image/heif",
+  // Video
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  // Audio
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/ogg",
+  "audio/wav",
+  "audio/webm",
+  // Documents
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "text/plain",
+  "text/csv",
+  "application/json",
+] as const;
+
+export const MAX_CHAT_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
