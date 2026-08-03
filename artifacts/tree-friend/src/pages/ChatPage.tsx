@@ -2333,9 +2333,23 @@ function ConversationsSidebar({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
+      {/* side="left" produces a panel pinned to inset-y-0 left-0 h-full by
+          default (see sheet.tsx sheetVariants). We override:
+          - top-16: start BELOW the 64px (h-16) sticky navbar instead of
+            covering it. Combined with the bottom:0 from inset-y-0, the
+            panel runs from top:4rem to bottom:0.
+          - h-auto: override the variant's h-full so the browser computes
+            height from top+bottom (calc(100dvh - 4rem)) instead of forcing
+            100% (which would push the panel 4rem past the bottom edge).
+          - w-72 sm:max-w-xs: narrower than the previous w-80 sm:max-w-sm
+            (288px / 320px max vs 320px / 384px max) for a more compact,
+            standard-looking drawer.
+          - rounded-r-xl: subtle rounding on the right edge for a polished look.
+          The overlay (scrim) stays full-screen so tapping the navbar area
+          still dismisses the sidebar. */}
       <SheetContent
         side="left"
-        className="w-80 sm:max-w-sm p-0 flex flex-col"
+        className="w-72 sm:max-w-xs p-0 flex flex-col top-16 h-auto rounded-r-xl"
       >
         {/* Visually-hidden title/description for screen readers (Radix Dialog
             requires a title for accessibility). */}
