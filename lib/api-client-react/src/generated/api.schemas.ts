@@ -232,6 +232,7 @@ export interface CartItemListing {
   availableQuantity: number;
   /** @nullable */
   deliveryTimeDays?: number | null;
+  deliveryCharge: number;
   paymentMethod: string;
 }
 

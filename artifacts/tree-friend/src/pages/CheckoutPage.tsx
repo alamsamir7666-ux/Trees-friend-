@@ -92,6 +92,7 @@ export function CheckoutPage() {
         discountPrice: i.discountPrice,
         sellerId: null as number | null,
         sellerName: null as string | null,
+        codDeliveryCharge: 0,
       }))
     : (cart?.items ?? []).map(i => {
         const isListing = i.kind === "seller_listing";
@@ -104,6 +105,10 @@ export function CheckoutPage() {
           discountPrice: isListing ? (i.listing!.discountPrice ?? null) : (i.variant!.discountPrice ?? null),
           sellerId: isListing ? i.sellerId : null,
           sellerName: isListing ? (i.seller?.nurseryName ?? null) : null,
+          // Only present (and non-zero delivery-relevant) on seller_listing
+          // lines -- see the codDeliveryTotal comment below for why this
+          // isn't part of shipping/total.
+          codDeliveryCharge: isListing ? (i.listing!.deliveryCharge ?? 0) : 0,
         };
       });
 
@@ -151,6 +156,11 @@ export function CheckoutPage() {
   const giftWrapCost = giftWrap ? 50 : 0;
   const loyaltyDiscount = usePoints ? maxPointsDiscount : 0;
   const total = Math.max(0, subtotal + shipping + giftWrapCost - discount - loyaltyDiscount);
+  // Marketplace (seller_listing) lines' courier fee is paid by the buyer
+  // directly to the seller on delivery -- never part of shipping/total
+  // above (see routes/cart.ts). Shown separately so the buyer isn't
+  // surprised by a COD charge that never appeared in the order total.
+  const codDeliveryTotal = items.reduce((s, i) => s + i.codDeliveryCharge * i.quantity, 0);
 
   function methodFor(sellerKey: string): PaymentMethod {
     return sellerPaymentMethod[sellerKey] ?? paymentMethod;
@@ -658,7 +668,12 @@ export function CheckoutPage() {
                       <div className="space-y-1.5">
                         {g.items.map((item, i) => (
                           <div key={`${item.productId}-${i}`} className="flex justify-between text-sm">
-                            <span className="text-muted-foreground line-clamp-1 flex-1 pr-2">{item.name} × {item.quantity}</span>
+                            <span className="text-muted-foreground line-clamp-1 flex-1 pr-2">
+                              {item.name} × {item.quantity}
+                              {item.codDeliveryCharge > 0 && (
+                                <span className="block text-xs">Pay on delivery: Tk{(item.codDeliveryCharge * item.quantity).toLocaleString()}</span>
+                              )}
+                            </span>
                             <span>Tk{((item.discountPrice ?? item.price) * item.quantity).toLocaleString()}</span>
                           </div>
                         ))}
@@ -698,6 +713,11 @@ export function CheckoutPage() {
                     <span>Total</span>
                     <span>Tk{total.toLocaleString()}</span>
                   </div>
+                  {codDeliveryTotal > 0 && (
+                    <p className="text-xs text-muted-foreground pt-1">
+                      Plus Tk{codDeliveryTotal.toLocaleString()} pay on delivery for marketplace items
+                    </p>
+                  )}
                 </div>
 
                 {submitError && (

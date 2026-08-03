@@ -512,6 +512,7 @@ export const GetCartResponse = zod.object({
   "stock": zod.number(),
   "availableQuantity": zod.number(),
   "deliveryTimeDays": zod.number().nullish(),
+  "deliveryCharge": zod.number(),
   "paymentMethod": zod.string()
 }).optional().describe('Present only on seller_listing-kind cart lines.'),
   "product": zod.object({
@@ -594,6 +595,7 @@ export const AddToCartResponse = zod.object({
   "stock": zod.number(),
   "availableQuantity": zod.number(),
   "deliveryTimeDays": zod.number().nullish(),
+  "deliveryCharge": zod.number(),
   "paymentMethod": zod.string()
 }).optional().describe('Present only on seller_listing-kind cart lines.'),
   "product": zod.object({
@@ -669,6 +671,7 @@ export const UpdateCartItemResponse = zod.object({
   "stock": zod.number(),
   "availableQuantity": zod.number(),
   "deliveryTimeDays": zod.number().nullish(),
+  "deliveryCharge": zod.number(),
   "paymentMethod": zod.string()
 }).optional().describe('Present only on seller_listing-kind cart lines.'),
   "product": zod.object({
@@ -740,6 +743,7 @@ export const RemoveFromCartResponse = zod.object({
   "stock": zod.number(),
   "availableQuantity": zod.number(),
   "deliveryTimeDays": zod.number().nullish(),
+  "deliveryCharge": zod.number(),
   "paymentMethod": zod.string()
 }).optional().describe('Present only on seller_listing-kind cart lines.'),
   "product": zod.object({

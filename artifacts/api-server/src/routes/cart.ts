@@ -174,6 +174,7 @@ async function buildCart(userId: string) {
         stock: variant.stock,
         availableQuantity: variant.availableQuantity,
         deliveryTimeDays: listing.deliveryTimeDays ?? null,
+        deliveryCharge,
         paymentMethod: listing.paymentMethod,
       },
       product: {

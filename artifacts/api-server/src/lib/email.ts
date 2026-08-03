@@ -26,13 +26,23 @@ export async function sendOrderConfirmation({
   name: string;
   orderId: number;
   trackingId: string;
-  items: Array<{ productName: string; quantity: number; price: number }>;
+  items: Array<{ productName: string; quantity: number; price: number; deliveryCharge?: number; sellerId?: number | null }>;
   total: number;
   shippingAddress: any;
   paymentMethod: string;
 }) {
   const resend = getClient();
   if (!resend) return;
+
+  // Marketplace (seller_listing) line items snapshot their own
+  // deliveryCharge, which is paid by the buyer directly to the seller's
+  // courier on delivery -- it's never part of `total` (see routes/cart.ts
+  // / routes/orders.ts). Surface it here so the confirmation email doesn't
+  // silently omit money the buyer will actually owe.
+  const codDeliveryTotal = items.reduce(
+    (s, item) => s + (item.sellerId != null ? Number(item.deliveryCharge ?? 0) * item.quantity : 0),
+    0,
+  );
 
   const itemsHtml = items
     .map(
@@ -92,6 +102,12 @@ export async function sendOrderConfirmation({
           <td colspan="2" style="padding:12px 0 0;font-family:sans-serif;font-size:13px;color:#6b7280;">Total (${paymentMethod === "cod" ? "Cash on Delivery" : paymentMethod})</td>
           <td style="padding:12px 0 0;text-align:right;font-weight:bold;color:#be185d;font-size:18px;">৳${total.toLocaleString()}</td>
         </tr>
+        ${codDeliveryTotal > 0 ? `
+        <tr>
+          <td colspan="3" style="padding:6px 0 0;font-family:sans-serif;font-size:12px;color:#9ca3af;text-align:right;">
+            Plus ৳${codDeliveryTotal.toLocaleString()} pay on delivery for marketplace items
+          </td>
+        </tr>` : ""}
       </table>
       ${addrHtml}
       <div style="margin-top:28px;text-align:center;">

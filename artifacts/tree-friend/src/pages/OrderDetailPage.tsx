@@ -326,6 +326,11 @@ export function OrderDetailPage() {
                     <div>
                       <p className="font-medium text-sm">{item.productName}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">Qty: {item.quantity}</p>
+                      {item.sellerId != null && Number(item.deliveryCharge) > 0 && (
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Pay on delivery: Tk{(Number(item.deliveryCharge) * item.quantity).toLocaleString()}
+                        </p>
+                      )}
                     </div>
                     <p className="font-medium text-sm">Tk{(item.price * item.quantity).toLocaleString()}</p>
                   </div>
@@ -411,6 +416,22 @@ export function OrderDetailPage() {
                 <span>Total</span>
                 <span>Tk{order.totalAmount.toLocaleString()}</span>
               </div>
+              {(() => {
+                // Marketplace lines' courier fee was never part of
+                // totalAmount (see routes/cart.ts / routes/orders.ts) --
+                // it's snapshotted per-item as deliveryCharge and owed to
+                // the seller's courier directly. Surface the order-wide
+                // sum here so it isn't lost once the order is placed.
+                const codDeliveryTotal = (order.items ?? []).reduce(
+                  (s: number, i: any) => s + (i.sellerId != null ? Number(i.deliveryCharge ?? 0) * i.quantity : 0),
+                  0,
+                );
+                return codDeliveryTotal > 0 ? (
+                  <p className="text-xs text-muted-foreground text-right mt-1">
+                    Plus Tk{codDeliveryTotal.toLocaleString()} pay on delivery for marketplace items
+                  </p>
+                ) : null;
+              })()}
             </div>
           </div>
 

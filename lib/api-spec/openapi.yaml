@@ -3073,6 +3073,8 @@ components:
           type: integer
         deliveryTimeDays:
           type: ["integer", "null"]
+        deliveryCharge:
+          type: number
         paymentMethod:
           type: string
       required:
@@ -3080,6 +3082,7 @@ components:
         - price
         - stock
         - availableQuantity
+        - deliveryCharge
         - paymentMethod
 
     CartItem:
