@@ -268,13 +268,13 @@ export function HomePage() {
               Discover trees that enhance life and a greener tomorrow.
             </p>
             <div className="mt-6">
-              <a
-                href="/products"
+              <Link
+                href="/browse"
                 className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-8 py-3.5 rounded-full text-sm font-medium tracking-wide hover:bg-accent hover:text-accent-foreground transition-colors duration-200"
               >
                 Browse All Trees
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-              </a>
+              </Link>
             </div>
           </div>
         </div>
