@@ -19,6 +19,7 @@ import {
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { usePresence, formatLastSeen } from "@/hooks/usePresence";
 import { useLongPress } from "@/hooks/useLongPress";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft,
@@ -38,6 +39,8 @@ import {
   Ban,
   Copy,
   Info,
+  Store,
+  Package,
 } from "lucide-react";
 
 const ICON_VERIFIED =
@@ -911,7 +914,6 @@ export function ChatPage() {
   }
 
   const isBuyer = user?.id === conversation.buyerId;
-  void isBuyer; // reserved for future buyer/seller-specific UI
 
   // ─── Render ───────────────────────────────────────────────────────────
   return (
@@ -925,32 +927,115 @@ export function ChatPage() {
           <ArrowLeft className="w-5 h-5" />
         </button>
 
-        {/* Avatar */}
-        <div className="w-10 h-10 rounded-full overflow-hidden border shrink-0 bg-muted/30">
-          {conversation.displayAvatarUrl ? (
-            <img src={conversation.displayAvatarUrl} alt="" className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center">
-              <NoImagePlaceholder compact />
-            </div>
-          )}
-        </div>
+        {/* Avatar + Name + Status — wrapped in a Popover so tapping the
+            nursery/seller name opens a Messenger-style "profile" popup with
+            a "View Store" action. Buyers see "View Store" (links to
+            /store/:sellerId); sellers see "View Product" only if a product
+            is attached. The whole avatar+name+status block is the trigger
+            so users have a generous tap target (WhatsApp/Messenger put the
+            whole header area as the tap zone). */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="flex items-center gap-3 flex-1 min-w-0 text-left rounded-lg -mx-1 px-1 py-1 hover:bg-muted/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              aria-label={`View ${conversation.displayName} profile`}
+            >
+              {/* Avatar */}
+              <div className="w-10 h-10 rounded-full overflow-hidden border shrink-0 bg-muted/30">
+                {conversation.displayAvatarUrl ? (
+                  <img src={conversation.displayAvatarUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center">
+                    <NoImagePlaceholder compact />
+                  </div>
+                )}
+              </div>
 
-        {/* Name & status */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <h1 className="font-semibold text-sm truncate">{conversation.displayName}</h1>
-            {conversation.displayIsVerified && (
-              <img src={ICON_VERIFIED} alt="Verified" className="w-4 h-4 shrink-0" />
-            )}
-          </div>
-          {/* Presence status: Online / Last seen at <time> / Offline
-              Industry-standard WhatsApp/Telegram-style. Driven by the
-              usePresence hook, which polls GET /api/presence/:id every 15s.
-              While the initial presence is loading we show a neutral
-              "loading…" text so the header doesn't flicker. */}
-          <PresenceStatus presence={presence} />
-        </div>
+              {/* Name & status */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <h1 className="font-semibold text-sm truncate">{conversation.displayName}</h1>
+                  {conversation.displayIsVerified && (
+                    <img src={ICON_VERIFIED} alt="Verified" className="w-4 h-4 shrink-0" />
+                  )}
+                </div>
+                {/* Presence status: Online / Last seen at <time> / Offline
+                    Industry-standard WhatsApp/Telegram-style. Driven by the
+                    usePresence hook, which polls GET /api/presence/:id every 15s.
+                    While the initial presence is loading we show a neutral
+                    "loading…" text so the header doesn't flicker. */}
+                <PresenceStatus presence={presence} />
+              </div>
+            </button>
+          </PopoverTrigger>
+
+          {/* ─── Profile popup ─────────────────────────────────────────
+              Messenger-style "See profile" sheet. Renders a larger avatar,
+              the nursery/seller name + verified badge, the live presence
+              status, and a vertical list of action rows. "View Store" is
+              the primary action and only shows for buyers (sellers don't
+              need a link to their own store from inside a customer chat). */}
+          <PopoverContent
+            align="start"
+            sideOffset={8}
+            className="w-72 p-0 overflow-hidden"
+          >
+            {/* Header — large avatar + name + presence */}
+            <div className="flex flex-col items-center text-center px-4 pt-5 pb-4 gap-2 border-b border-border">
+              <div className="w-20 h-20 rounded-full overflow-hidden border-2 border-border shrink-0 bg-muted/30">
+                {conversation.displayAvatarUrl ? (
+                  <img
+                    src={conversation.displayAvatarUrl}
+                    alt=""
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center">
+                    <NoImagePlaceholder compact />
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 justify-center">
+                <h2 className="font-semibold text-base truncate">{conversation.displayName}</h2>
+                {conversation.displayIsVerified && (
+                  <img src={ICON_VERIFIED} alt="Verified" className="w-4 h-4 shrink-0" />
+                )}
+              </div>
+              <PresenceStatus presence={presence} />
+            </div>
+
+            {/* Action list */}
+            <div className="py-1">
+              {/* View Store — primary action. Only buyers see this, since
+                  sellers chatting with a customer don't need a link to
+                  their own storefront. */}
+              {isBuyer && (
+                <Link
+                  href={`/store/${conversation.sellerId}`}
+                  className="flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-muted/60 transition-colors"
+                >
+                  <Store className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <span className="flex-1">View Store</span>
+                  <ExternalLink className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                </Link>
+              )}
+
+              {/* View Product — only if the conversation is tied to a
+                  specific seller listing (product inquiry). */}
+              {conversation.productName && conversation.sellerListingId && (
+                <Link
+                  href={`/products/${conversation.productSlug ?? conversation.sellerListingId}/listings/${conversation.sellerListingId}`}
+                  className="flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-muted/60 transition-colors"
+                >
+                  <Package className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <span className="flex-1 truncate">View Product</span>
+                  <ExternalLink className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                </Link>
+              )}
+            </div>
+          </PopoverContent>
+        </Popover>
 
         {/* More options */}
         <button className="p-1.5 rounded-full hover:bg-muted/50 transition-colors">
