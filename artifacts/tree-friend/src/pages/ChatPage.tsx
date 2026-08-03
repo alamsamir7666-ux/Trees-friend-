@@ -1362,8 +1362,10 @@ function MessageBubble({
         </div>
       )}
 
-      {/* Message bubble row */}
-      <div className={`flex ${isOwn ? "justify-end" : "justify-start"} ${isLastInSequence ? "mb-2" : "mb-0.5"}`}>
+      {/* Message bubble row — full width so justify-end/justify-start can push the
+          bubble to the correct edge. Without w-full, the flex row collapses to
+          its content and alignment has no effect. */}
+      <div className={`flex w-full ${isOwn ? "justify-end" : "justify-start"} ${isLastInSequence ? "mb-2" : "mb-0.5"}`}>
         {/* Other party's avatar — only on last message of a sequence */}
         {!isOwn && isLastInSequence && (
           <div className="w-7 h-7 rounded-full overflow-hidden border shrink-0 mr-2 mt-1 bg-muted/30">
@@ -1379,9 +1381,17 @@ function MessageBubble({
         {/* Spacer so consecutive messages from the other party align */}
         {!isOwn && !isLastInSequence && <div className="w-7 mr-2 shrink-0" />}
 
-        {/* Bubble wrapper — long-press + context-menu target. */}
+        {/* Bubble wrapper — long-press + context-menu target.
+            max-w is anchored HERE (on the flex item) so it references the
+            flex row's width (= 100% of container), NOT the bubble's own
+            content width. Putting max-w on the inner bubble instead creates
+            a circular sizing dependency: the wrapper sizes to the bubble,
+            the bubble's max-width is 75% of the wrapper, which makes the
+            browser collapse both to ~75% of the bubble's natural width —
+            that was the "bubbles look vertical / Hello splits into Hel/lo"
+            bug. */}
         <div
-          className="relative group"
+          className="relative group max-w-[75%] sm:max-w-[65%] min-w-0"
           onClick={handleBubbleClick}
           {...(hasAnyAction ? longPressHandlers : {})}
         >
@@ -1389,7 +1399,7 @@ function MessageBubble({
           {isDeleted ? (
             <div
               className={cn(
-                "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5 rounded-2xl",
+                "w-fit px-3.5 py-2.5 rounded-2xl",
                 isOwn
                   ? "bg-accent/15 dark:bg-accent/25 rounded-br-md"
                   : "bg-muted/40 border border-border rounded-2xl rounded-bl-md",
@@ -1415,7 +1425,7 @@ function MessageBubble({
           ) : (
             <div
               className={cn(
-                "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5 overflow-hidden",
+                "w-fit px-3.5 py-2.5 overflow-hidden",
                 isOwn
                   ? "bg-accent/20 dark:bg-accent/30 rounded-2xl rounded-br-md"
                   : "bg-card border border-border rounded-2xl rounded-bl-md",
