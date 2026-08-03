@@ -20,6 +20,13 @@ import { uploadAttachment } from "@/lib/uploadAttachment";
 import { usePresence, formatLastSeen } from "@/hooks/usePresence";
 import { useLongPress } from "@/hooks/useLongPress";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft,
@@ -41,6 +48,11 @@ import {
   Info,
   Store,
   Package,
+  Settings,
+  Search,
+  RefreshCw,
+  AlertCircle,
+  ShoppingBag,
 } from "lucide-react";
 
 const ICON_VERIFIED =
@@ -74,6 +86,32 @@ interface ConversationInfo {
   productSlug: string | null;
   lastMessageAt: string;
   createdAt: string;
+}
+
+// ─── Conversation list (sidebar) types ────────────────────────────────────
+// Mirrors the shape returned by GET /api/conversations. The same shape is
+// used for both buyer-side and seller-side conversations; the backend fills
+// `sellerName` with the other party's display name (nursery name for buyer
+// conversations, buyer's first/last name for seller conversations).
+interface ConversationListItem {
+  id: number;
+  sellerId: number;
+  sellerName: string;
+  sellerLogoUrl: string | null;
+  sellerIsVerified: boolean;
+  sellerListingId: number | null;
+  productName: string | null;
+  productImage: string | null;
+  productPrice: number | null;
+  lastMessage: string | null;
+  lastMessageAt: string;
+  unreadCount: number;
+  createdAt: string;
+}
+
+interface ConversationListResponse {
+  buyerConversations: ConversationListItem[];
+  sellerConversations: ConversationListItem[];
 }
 
 interface ChatMessage {
@@ -241,6 +279,59 @@ export function ChatPage() {
   // Track in-flight requests so we can disable buttons and show spinners.
   const [editSaving, setEditSaving] = useState(false);
   const [deleteSavingId, setDeleteSavingId] = useState<number | null>(null);
+
+  // ─── Left sidebar (3-dot menu) state ────────────────────────────────────
+  // Tapping the header ⋮ button opens a left-side Sheet showing the list of
+  // conversations the current user has had in their CURRENT role:
+  //   - viewerRole === "buyer"  → buyerConversations (sellers they've chatted with)
+  //   - viewerRole === "seller" → sellerConversations (users/buyers they've chatted with)
+  // The list is fetched on first open and cached. We refetch on manual retry
+  // (error state) but not on every open — that would be wasteful and would
+  // cause the sidebar to flash a loading spinner every time.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [conversationList, setConversationList] = useState<ConversationListResponse | null>(null);
+  const [sidebarLoading, setSidebarLoading] = useState(false);
+  const [sidebarError, setSidebarError] = useState<string | null>(null);
+  const [sidebarSearch, setSidebarSearch] = useState("");
+
+  const loadConversationList = useCallback(() => {
+    if (!user) return;
+    setSidebarLoading(true);
+    setSidebarError(null);
+    apiClient
+      .get("/api/conversations")
+      .then((res) => {
+        setConversationList(res.data as ConversationListResponse);
+      })
+      .catch((err: unknown) => {
+        const serverDetail =
+          (err as { response?: { data?: { detail?: string; error?: string } } })
+            ?.response?.data?.detail ??
+          (err as { response?: { data?: { error?: string } } })
+            ?.response?.data?.error;
+        const fallback = (err as { message?: string })?.message ?? "Unknown error";
+        setSidebarError(serverDetail ?? fallback);
+        // eslint-disable-next-line no-console
+        console.error("Failed to fetch conversation list:", err);
+      })
+      .finally(() => setSidebarLoading(false));
+  }, [user]);
+
+  // Fetch on first sidebar open (and only when user is available).
+  // Subsequent opens reuse the cached list — user can pull-to-refresh via
+  // the retry button in the error state, or by closing & reopening after
+  // some time. We deliberately don't refetch on every open to avoid spam.
+  useEffect(() => {
+    if (sidebarOpen && user && !conversationList && !sidebarLoading) {
+      loadConversationList();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidebarOpen, user]);
+
+  // Reset search when sidebar closes so the next open starts fresh.
+  useEffect(() => {
+    if (!sidebarOpen) setSidebarSearch("");
+  }, [sidebarOpen]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -1037,8 +1128,16 @@ export function ChatPage() {
           </PopoverContent>
         </Popover>
 
-        {/* More options */}
-        <button className="p-1.5 rounded-full hover:bg-muted/50 transition-colors">
+        {/* More options — opens the left-side conversation sidebar.
+            Buyers see sellers they've chatted with; sellers see users (buyers)
+            they've chatted with. Sellers additionally see a Settings entry at
+            the bottom of the sidebar. */}
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          className="p-1.5 rounded-full hover:bg-muted/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          aria-label="Open conversation list"
+        >
           <MoreVertical className="w-5 h-5 text-muted-foreground" />
         </button>
       </div>
@@ -1277,6 +1376,36 @@ export function ChatPage() {
           )}
         </div>
       </div>
+
+      {/* ─── Left sidebar: conversation list ─────────────────────────────
+          Opened via the header ⋮ button. Shows the list of conversations
+          the current user has had IN THEIR CURRENT ROLE in this chat:
+            - viewerRole === "buyer"  → buyerConversations (sellers list)
+            - viewerRole === "seller" → sellerConversations (users/buyers list)
+          Sellers also see a "Settings" entry at the bottom — placeholder
+          only, no functionality yet (to be discussed later).
+          Tapping a conversation navigates to /messages/:id and closes the
+          sidebar. */}
+      <ConversationsSidebar
+        open={sidebarOpen}
+        onOpenChange={setSidebarOpen}
+        viewerRole={conversation.viewerRole}
+        conversationList={conversationList}
+        isLoading={sidebarLoading}
+        error={sidebarError}
+        onRetry={loadConversationList}
+        searchQuery={sidebarSearch}
+        onSearchChange={setSidebarSearch}
+        currentConversationId={conversation.id}
+        isSellerUser={
+          // A user is "a seller" if they have ANY seller-side conversations
+          // in the API response. This determines whether the Settings entry
+          // shows up at the bottom of the sidebar (per the user's request:
+          // "Only seller see a setting option").
+          !!conversationList && conversationList.sellerConversations.length > 0
+        }
+        onNavigate={setLocation}
+      />
 
       {/* ─── Image lightbox ────────────────────────────────────────────── */}
       {lightboxSrc && (
@@ -2104,5 +2233,294 @@ function PreviewRemoveButton({
     >
       <X className={compact ? "w-2.5 h-2.5" : "w-3 h-3"} />
     </button>
+  );
+}
+
+// ─── Conversations sidebar (left Sheet) ────────────────────────────────────
+// Extracted as its own component for clarity. Renders a Radix Sheet sliding
+// in from the LEFT, containing:
+//   1. A header with a context-aware title ("Sellers" / "Users")
+//   2. A search input (filters by name / last message / product name)
+//   3. The list of conversations for the current viewer role
+//   4. A "Settings" entry pinned to the bottom — ONLY for users who are
+//      sellers (detected via sellerConversations.length > 0). Placeholder
+//      only; no onClick handler yet (to be discussed later per user's note).
+//
+// The conversation list mirrors MessagesPage's row layout (avatar, name,
+// verified badge, last message preview, time, unread badge) so users get a
+// familiar mental model between the two surfaces.
+
+interface ConversationsSidebarProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  viewerRole: "buyer" | "seller";
+  conversationList: ConversationListResponse | null;
+  isLoading: boolean;
+  error: string | null;
+  onRetry: () => void;
+  searchQuery: string;
+  onSearchChange: (q: string) => void;
+  currentConversationId: number;
+  isSellerUser: boolean;
+  /** wouter's setLocation — used to navigate to a conversation when its row
+      is tapped. Passed down from ChatPage so this component doesn't need
+      its own useLocation hook (which would create a second router
+      subscription). */
+  onNavigate: (path: string) => void;
+}
+
+function formatRelativeTime(isoString: string): string {
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m`;
+  if (diffHours < 24) return `${diffHours}h`;
+  if (diffDays < 7) return `${diffDays}d`;
+
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function ConversationsSidebar({
+  open,
+  onOpenChange,
+  viewerRole,
+  conversationList,
+  isLoading,
+  error,
+  onRetry,
+  searchQuery,
+  onSearchChange,
+  currentConversationId,
+  isSellerUser,
+  onNavigate,
+}: ConversationsSidebarProps) {
+  // Which list to show depends on the user's role in the CURRENT conversation:
+  //   - buyer  → they've been chatting WITH sellers → buyerConversations
+  //   - seller → they've been chatting WITH buyers  → sellerConversations
+  // The backend fills `sellerName` with the OTHER party's display name in
+  // both cases (nursery name for buyer-side, buyer's name for seller-side),
+  // so we can render the rows identically regardless of role.
+  const list =
+    viewerRole === "buyer"
+      ? conversationList?.buyerConversations ?? []
+      : conversationList?.sellerConversations ?? [];
+
+  const filtered = searchQuery
+    ? list.filter(
+        (c) =>
+          c.sellerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          c.lastMessage?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          c.productName?.toLowerCase().includes(searchQuery.toLowerCase()),
+      )
+    : list;
+
+  // Context-aware labels: buyers see "Sellers" (the nurseries they've chatted
+  // with); sellers see "Users" (the buyers who've messaged them).
+  const listLabel = viewerRole === "buyer" ? "Sellers" : "Users";
+  const headerTitle = viewerRole === "buyer" ? "Your Sellers" : "Your Customers";
+  const headerSubtitle =
+    viewerRole === "buyer"
+      ? "Nurseries you've messaged"
+      : "Buyers who've messaged you";
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="left"
+        className="w-80 sm:max-w-sm p-0 flex flex-col"
+      >
+        {/* Visually-hidden title/description for screen readers (Radix Dialog
+            requires a title for accessibility). */}
+        <SheetHeader className="sr-only">
+          <SheetTitle>{headerTitle}</SheetTitle>
+          <SheetDescription>{headerSubtitle}</SheetDescription>
+        </SheetHeader>
+
+        {/* ─── Header ─────────────────────────────────────────────────── */}
+        <div className="px-4 pt-5 pb-3 border-b border-border shrink-0">
+          <div className="flex items-center gap-2 mb-3">
+            {viewerRole === "buyer" ? (
+              <ShoppingBag className="w-4 h-4 text-accent shrink-0" />
+            ) : (
+              <Store className="w-4 h-4 text-accent shrink-0" />
+            )}
+            <h2 className="font-semibold text-base flex-1">{headerTitle}</h2>
+          </div>
+
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              placeholder={`Search ${listLabel.toLowerCase()}...`}
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="w-full rounded-xl border border-border bg-muted/30 pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/50 placeholder:text-muted-foreground"
+            />
+          </div>
+        </div>
+
+        {/* ─── Conversation list (scrollable) ────────────────────────── */}
+        <div className="flex-1 overflow-y-auto">
+          {/* Loading state */}
+          {isLoading && (
+            <div className="p-4 space-y-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <Skeleton className="w-11 h-11 rounded-full shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-3 w-48" />
+                  </div>
+                  <Skeleton className="h-3 w-8" />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Error state */}
+          {!isLoading && error && (
+            <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+              <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center mb-3">
+                <AlertCircle className="w-6 h-6 text-destructive" />
+              </div>
+              <p className="text-sm font-medium mb-1">Couldn&apos;t load {listLabel.toLowerCase()}</p>
+              <p className="text-xs text-muted-foreground max-w-[240px] mb-3 break-words">
+                {error}
+              </p>
+              <Button onClick={onRetry} variant="outline" size="sm" className="gap-2">
+                <RefreshCw className="w-3.5 h-3.5" />
+                Try again
+              </Button>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!isLoading && !error && filtered.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+              <div className="w-12 h-12 rounded-full bg-accent/10 flex items-center justify-center mb-3">
+                <MessageCircle className="w-6 h-6 text-accent" />
+              </div>
+              <p className="text-sm font-medium mb-1">
+                {searchQuery ? `No ${listLabel.toLowerCase()} found` : `No ${listLabel.toLowerCase()} yet`}
+              </p>
+              <p className="text-xs text-muted-foreground max-w-[220px]">
+                {searchQuery
+                  ? "Try a different search term."
+                  : viewerRole === "buyer"
+                    ? "When you message a nursery, they'll appear here."
+                    : "When a buyer messages you, they'll appear here."}
+              </p>
+            </div>
+          )}
+
+          {/* Conversation rows */}
+          {!isLoading && !error && filtered.length > 0 && (
+            <div className="py-1">
+              {filtered.map((conv) => {
+                const isActive = conv.id === currentConversationId;
+                return (
+                  <button
+                    key={conv.id}
+                    type="button"
+                    onClick={() => {
+                      onOpenChange(false);
+                      onNavigate(`/messages/${conv.id}`);
+                    }}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors",
+                      isActive
+                        ? "bg-accent/10"
+                        : "hover:bg-muted/40",
+                    )}
+                  >
+                    {/* Avatar (with unread badge) */}
+                    <div className="relative shrink-0">
+                      <div className="w-11 h-11 rounded-full overflow-hidden border bg-muted/30">
+                        {conv.sellerLogoUrl ? (
+                          <img src={conv.sellerLogoUrl} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <NoImagePlaceholder compact />
+                          </div>
+                        )}
+                      </div>
+                      {conv.unreadCount > 0 && (
+                        <div className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 bg-accent text-accent-foreground rounded-full flex items-center justify-center text-[10px] font-bold">
+                          {conv.unreadCount > 9 ? "9+" : conv.unreadCount}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Name + preview + product */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className={cn("text-sm truncate", conv.unreadCount > 0 ? "font-semibold" : "font-medium")}>
+                          {conv.sellerName}
+                        </span>
+                        {conv.sellerIsVerified && (
+                          <img src={ICON_VERIFIED} alt="Verified" className="w-3.5 h-3.5 shrink-0" />
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">
+                        {conv.lastMessage ?? "No messages yet"}
+                      </p>
+                      {conv.productName && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <div className="w-3.5 h-3.5 rounded overflow-hidden bg-muted/30 shrink-0">
+                            {conv.productImage ? (
+                              <img src={conv.productImage} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <NoImagePlaceholder compact />
+                            )}
+                          </div>
+                          <span className="text-[10px] text-muted-foreground truncate">{conv.productName}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Time */}
+                    <span className="text-[10px] text-muted-foreground shrink-0 self-start mt-1">
+                      {formatRelativeTime(conv.lastMessageAt)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* ─── Footer: Settings (sellers only) ────────────────────────
+            Per user's request: "Only seller see a setting option bottom of
+            side bar but dont add anything in the setting option. We will
+            discuss later about setting option." So we render the entry
+            (visible + tappable-looking) but it's a no-op for now. */}
+        {isSellerUser && (
+          <div className="border-t border-border shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                // Intentionally a no-op for now — per user's note, the
+                // settings panel contents will be discussed and added later.
+                // We keep the button visible & accessible so the layout is
+                // finalized; wiring comes in a follow-up commit.
+              }}
+              className="w-full flex items-center gap-3 px-4 py-3 text-sm hover:bg-muted/50 transition-colors text-left"
+            >
+              <Settings className="w-4 h-4 text-muted-foreground shrink-0" />
+              <span className="flex-1">Settings</span>
+            </button>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
