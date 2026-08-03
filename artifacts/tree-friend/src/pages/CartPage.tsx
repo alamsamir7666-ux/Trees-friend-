@@ -190,6 +190,15 @@ function AuthenticatedCartPage() {
   const shipping = cart?.deliveryTotal ?? 0;
   const total = subtotal + shipping;
   const sellerGroups = groupBySeller(items);
+  // Marketplace (seller_listing) lines charge their courier fee separately,
+  // collected by the seller on delivery -- it's never summed into
+  // deliveryTotal/total above (see routes/cart.ts). Surface that as a
+  // total across the whole cart so "Delivery: Free" in the summary below
+  // doesn't read as "nothing more to pay" when it isn't.
+  const codDeliveryTotal = items.reduce(
+    (sum, item) => sum + (item.kind === "seller_listing" ? (item.listing?.deliveryCharge ?? 0) * item.quantity : 0),
+    0,
+  );
 
   function handleUpdate(id: number, quantity: number) {
     if (quantity < 1) return;
@@ -294,6 +303,11 @@ function AuthenticatedCartPage() {
                             {price < originalPrice && (
                               <p className="text-xs text-muted-foreground line-through">Tk{(originalPrice * item.quantity).toLocaleString()}</p>
                             )}
+                            {isListing && item.listing!.deliveryCharge > 0 && (
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                Pay on delivery: Tk{(item.listing!.deliveryCharge * item.quantity).toLocaleString()}
+                              </p>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -326,6 +340,11 @@ function AuthenticatedCartPage() {
                   <span>Total</span>
                   <span>Tk{total.toLocaleString()}</span>
                 </div>
+                {codDeliveryTotal > 0 && (
+                  <p className="text-xs text-muted-foreground pt-1">
+                    Plus Tk{codDeliveryTotal.toLocaleString()} pay on delivery for marketplace items
+                  </p>
+                )}
               </div>
               <Button className="w-full rounded-full" size="lg" onClick={() => setLocation("/checkout")}>
                 Proceed to Checkout <ArrowRight className="ml-2 h-4 w-4" />
