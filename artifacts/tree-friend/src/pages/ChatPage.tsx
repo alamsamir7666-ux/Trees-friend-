@@ -19,6 +19,7 @@ import {
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { usePresence, formatLastSeen } from "@/hooks/usePresence";
 import { useLongPress } from "@/hooks/useLongPress";
+import { useSwipeToReply } from "@/hooks/useSwipeToReply";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import {
   Sheet,
@@ -53,6 +54,8 @@ import {
   RefreshCw,
   AlertCircle,
   ShoppingBag,
+  CornerUpLeft,
+  Reply,
 } from "lucide-react";
 
 const ICON_VERIFIED =
@@ -137,6 +140,11 @@ interface ChatMessage {
   // ("This message was deleted") instead of the original content/media.
   isDeleted?: boolean;
   deletedAt?: string | null;
+  // ─── Reply tracking (swipe-to-reply) ──────────────────────────────────
+  // When non-null, this message is a reply to the message with this id.
+  // The UI looks up the parent message in the messages array to render
+  // a reply-context bar above the bubble (sender name + content snippet).
+  replyToId?: number | null;
 }
 
 // ─── Pending attachment (staged in the composer, not yet uploaded) ──────────
@@ -279,6 +287,12 @@ export function ChatPage() {
   // Track in-flight requests so we can disable buttons and show spinners.
   const [editSaving, setEditSaving] = useState(false);
   const [deleteSavingId, setDeleteSavingId] = useState<number | null>(null);
+
+  // ─── Reply state (swipe-to-reply + action-menu Reply) ───────────────────
+  // When non-null, the composer shows a reply-preview bar above the textarea
+  // and the next sent message will include `replyToId` pointing at this msg.
+  // Cleared on send, on cancel (X button), and when navigating away.
+  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
 
   // ─── Left sidebar (3-dot menu) state ────────────────────────────────────
   // Tapping the header ⋮ button opens a left-side Sheet showing the list of
@@ -603,6 +617,10 @@ export function ChatPage() {
     // Snapshot the pending list so we can clear state immediately and let
     // the user keep typing while the upload runs.
     const toUpload = [...pendingAttachments];
+    // Snapshot the reply target so we can clear state immediately and
+    // include replyToId in the POST body even if the user starts a new
+    // reply before this send completes.
+    const replyTarget = replyingTo;
 
     setIsSending(true);
     setNewMessage("");
@@ -612,6 +630,11 @@ export function ChatPage() {
     // Clear pending attachments from the composer, but keep the object URLs
     // alive in `toUpload` so we can revoke them after upload finishes.
     setPendingAttachments([]);
+    // Clear the reply preview immediately — the user is committed to this
+    // send now. If the send fails we restore the text (below) but we don't
+    // restore the reply target, since the parent message is still in the
+    // thread and the user can swipe again. This matches WhatsApp.
+    setReplyingTo(null);
 
     // ─── Text-only path: single JSON POST, no upload ────────────────────
     if (toUpload.length === 0) {
@@ -619,6 +642,11 @@ export function ChatPage() {
         const res = await apiClient.post(`/api/conversations/${id}/messages`, {
           content: caption,
           messageType: "text",
+          // Include replyToId when replying to a specific message. The
+          // API validates it (must point to a real message in the same
+          // conversation) and 400s if invalid — in which case the catch
+          // block restores the text so the user can retry.
+          ...(replyTarget ? { replyToId: replyTarget.id } : {}),
         });
         setMessages((prev) => [...prev, res.data as ChatMessage]);
         latestMessageIdRef.current = (res.data as ChatMessage).id;
@@ -628,6 +656,11 @@ export function ChatPage() {
         console.error("Failed to send message:", err);
         toast({ title: "Failed to send message", description: "Please try again." });
         setNewMessage(caption); // Restore so the user can retry
+        // Restore the reply target too so the user doesn't lose context.
+        // If the send failed because replyToId was invalid (400), the
+        // retry will fail again with the same error — but that's rare
+        // and the user can manually dismiss the reply preview if needed.
+        if (replyTarget) setReplyingTo(replyTarget);
       } finally {
         setIsSending(false);
       }
@@ -659,6 +692,11 @@ export function ChatPage() {
             // the message list shows the uploaded message once it lands.
             void percent;
           },
+          // Only the first upload in the batch carries the replyToId.
+          // If the user is replying with multiple attachments, the reply
+          // context attaches to the first one; subsequent attachments are
+          // standalone (matches WhatsApp behavior for multi-attach replies).
+          i === 0 && replyTarget ? replyTarget.id : undefined,
         );
         sentMessages.push(sent as ChatMessage);
       } catch (err) {
@@ -973,6 +1011,12 @@ export function ChatPage() {
       }
       return;
     }
+    // Reply mode: Esc cancels the reply (matches WhatsApp desktop).
+    if (replyingTo && e.key === "Escape") {
+      e.preventDefault();
+      setReplyingTo(null);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
@@ -1195,6 +1239,17 @@ export function ChatPage() {
         {messages.map((msg, i) => {
           const prevMsg = i > 0 ? messages[i - 1] : undefined;
           const nextMsg = i < messages.length - 1 ? messages[i + 1] : undefined;
+          // Look up the parent message for the reply-context bar. If the
+          // parent isn't in the loaded window (e.g. user scrolled back past
+          // it), we pass null and the bar simply doesn't render.
+          const parentMessage = msg.replyToId
+            ? messages.find((m) => m.id === msg.replyToId) ?? null
+            : null;
+          const parentSenderName = parentMessage
+            ? parentMessage.senderId === user?.id
+              ? "You"
+              : conversation.displayName
+            : "";
           return (
             <MessageBubble
               key={msg.id}
@@ -1202,6 +1257,9 @@ export function ChatPage() {
               prevMsg={prevMsg}
               nextMsg={nextMsg}
               sellerLogoUrl={conversation.sellerLogoUrl}
+              otherPartyName={conversation.displayName}
+              parentMessage={parentMessage}
+              parentSenderName={parentSenderName}
               currentUserId={user?.id}
               isMenuOpen={openMenuMessageId === msg.id}
               isDeleteConfirmOpen={pendingDeleteId === msg.id}
@@ -1213,6 +1271,14 @@ export function ChatPage() {
               onStartEdit={handleStartEdit}
               onCopyMessage={handleCopyMessage}
               onImageClick={(src) => setLightboxSrc(src)}
+              onReply={(m) => {
+                setReplyingTo(m);
+                // Focus the textarea so the user can immediately start
+                // typing their reply. Wrapped in setTimeout to ensure
+                // the ReplyPreview has rendered (which can affect layout)
+                // before we focus.
+                setTimeout(() => textareaRef.current?.focus(), 0);
+              }}
             />
           );
         })}
@@ -1284,6 +1350,51 @@ export function ChatPage() {
               className="text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               Cancel
+            </button>
+          </div>
+        )}
+        {/* ─── Reply preview bar ─────────────────────────────────────────
+            Shown when the user has activated reply mode (via swipe or the
+            Reply action in the long-press menu). Displays a quote-style
+            preview of the message being replied to, with a cancel (X)
+            button. Matches WhatsApp/Telegram/iMessage conventions.
+            Hidden in edit mode (editing and replying are mutually exclusive
+            — you can't edit a message AND reply to another at the same
+            time; the composer is single-purpose). */}
+        {replyingTo && !editingMessage && (
+          <div className="flex items-stretch gap-2 mb-2.5 px-1">
+            <div
+              className={cn(
+                "w-0.5 rounded-full shrink-0",
+                replyingTo.senderId === user?.id ? "bg-accent" : "bg-primary",
+              )}
+            />
+            <div className="min-w-0 flex-1 py-0.5">
+              <p
+                className={cn(
+                  "text-[11px] font-semibold truncate",
+                  replyingTo.senderId === user?.id ? "text-accent" : "text-primary",
+                )}
+              >
+                {replyingTo.senderId === user?.id ? "You" : conversation.displayName}
+              </p>
+              <p className="text-[11px] text-muted-foreground truncate">
+                {replyingTo.isDeleted
+                  ? "This message was deleted"
+                  : replyingTo.content?.trim()
+                    ? replyingTo.content
+                    : classifyMessage(replyingTo) !== "text"
+                      ? `${classifyMessage(replyingTo)[0].toUpperCase()}${classifyMessage(replyingTo).slice(1)}`
+                      : "No content"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReplyingTo(null)}
+              className="p-1 -mr-1 rounded-full hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors self-center shrink-0"
+              aria-label="Cancel reply"
+            >
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
@@ -1472,6 +1583,17 @@ interface MessageBubbleProps {
   prevMsg: ChatMessage | undefined;
   nextMsg: ChatMessage | undefined;
   sellerLogoUrl: string | null;
+  /** Display name of the OTHER party (used in reply-context header).
+      For buyer-side: the seller's nursery name. For seller-side: the
+      buyer's name. */
+  otherPartyName: string;
+  /** The message this message is replying to (looked up from the parent
+      ChatPage's messages array via msg.replyToId). Null when the message
+      is not a reply, or when the parent isn't in the loaded window. */
+  parentMessage: ChatMessage | null;
+  /** Display name of the sender of `parentMessage` ("You" if the current
+      user sent the parent, otherwise `otherPartyName`). */
+  parentSenderName: string;
   currentUserId: string | undefined;
   isMenuOpen: boolean;
   isDeleteConfirmOpen: boolean;
@@ -1483,6 +1605,10 @@ interface MessageBubbleProps {
   onStartEdit: (msg: ChatMessage) => void;
   onCopyMessage: (msg: ChatMessage) => void;
   onImageClick: (src: string) => void;
+  /** Called when the user completes a swipe-to-reply gesture on this
+      bubble OR taps "Reply" in the action menu. ChatPage uses this to
+      set `replyingTo` state and show the reply preview above the composer. */
+  onReply: (msg: ChatMessage) => void;
 }
 
 function MessageBubble({
@@ -1490,6 +1616,9 @@ function MessageBubble({
   prevMsg,
   nextMsg,
   sellerLogoUrl,
+  otherPartyName,
+  parentMessage,
+  parentSenderName,
   currentUserId,
   isMenuOpen,
   isDeleteConfirmOpen,
@@ -1501,6 +1630,7 @@ function MessageBubble({
   onStartEdit,
   onCopyMessage,
   onImageClick,
+  onReply,
 }: MessageBubbleProps) {
   const isOwn = msg.senderId === currentUserId;
   const showDate = shouldShowDateSeparator(prevMsg, msg);
@@ -1515,11 +1645,14 @@ function MessageBubble({
   // We allow copying the OTHER party's messages too — that's standard
   // WhatsApp/Telegram behavior.
   const canCopy = !isDeleted && hasCaption;
-  // Whether the action menu should show ANY actions at all. If neither
-  // edit/delete nor copy is available (e.g. a deleted tombstone or an
-  // attachment-only message with no caption), there's nothing to show,
-  // so we don't open the menu in the first place.
-  const hasAnyAction = canEditDelete || canCopy;
+  // Reply is available on any non-deleted message (you can't reply to a
+  // tombstone — there's nothing to quote). WhatsApp allows replying to
+  // attachment-only messages too, so we don't require hasCaption.
+  const canReply = !isDeleted;
+  // Whether the action menu should show ANY actions at all. Reply is always
+  // available on non-deleted messages, so the menu essentially always has
+  // something to show except for tombstones.
+  const hasAnyAction = canEditDelete || canCopy || canReply;
   const isLastInSequence = !nextMsg || nextMsg.senderId !== msg.senderId;
 
   // Long-press handler — opens the action menu. This is the primary
@@ -1539,6 +1672,30 @@ function MessageBubble({
       onToggleMenu(isMenuOpen ? null : msg.id);
     },
     { threshold: 500 },
+  );
+
+  // ─── Swipe-to-reply ──────────────────────────────────────────────────────
+  // Industry-standard gesture: incoming messages swipe right, outgoing
+  // swipe left. The hook exposes `dragX` (current translation) and
+  // `progress` (0..1) for visual feedback, and fires `onReply` when the
+  // user releases past threshold.
+  //
+  // We pass a stable `onReply` wrapper that calls the parent's onReply
+  // with the current message. The hook handles haptics, threshold, and
+  // snap-back animation.
+  //
+  // Disabled when the message is a deleted tombstone (nothing to reply
+  // to) — passing a no-op onReply effectively disables the gesture
+  // because the hook still tracks movement but never fires.
+  const swipe = useSwipeToReply(
+    () => {
+      if (canReply) onReply(msg);
+    },
+    {
+      direction: isOwn ? "left" : "right",
+      threshold: 50,
+      maxDistance: 80,
+    },
   );
 
   // Image click → lightbox, BUT suppress the synthetic click that fires
@@ -1595,7 +1752,7 @@ function MessageBubble({
         {/* Spacer so consecutive messages from the other party align */}
         {!isOwn && !isLastInSequence && <div className="w-7 mr-2 shrink-0" />}
 
-        {/* Bubble wrapper — long-press + context-menu target.
+        {/* Bubble wrapper — long-press + context-menu target + swipe-to-reply.
             max-w is anchored HERE (on the flex item) so it references the
             flex row's width (= 100% of container), NOT the bubble's own
             content width. Putting max-w on the inner bubble instead creates
@@ -1603,12 +1760,71 @@ function MessageBubble({
             the bubble's max-width is 75% of the wrapper, which makes the
             browser collapse both to ~75% of the bubble's natural width —
             that was the "bubbles look vertical / Hello splits into Hel/lo"
-            bug. */}
+            bug.
+
+            Swipe handlers are merged with long-press handlers — they
+            coexist because useLongPress auto-cancels on >10px movement,
+            so a swipe naturally suppresses the long-press menu. */}
         <div
           className="relative group max-w-[75%] sm:max-w-[65%] min-w-0"
           onClick={handleBubbleClick}
-          {...(hasAnyAction ? longPressHandlers : {})}
+          onTouchStart={(e) => {
+            longPressHandlers.onTouchStart?.(e);
+            swipe.handlers.onTouchStart(e);
+          }}
+          onTouchMove={(e) => {
+            longPressHandlers.onTouchMove?.(e);
+            swipe.handlers.onTouchMove(e);
+          }}
+          onTouchEnd={(e) => {
+            longPressHandlers.onTouchEnd?.(e);
+            swipe.handlers.onTouchEnd(e);
+          }}
+          onTouchCancel={swipe.handlers.onTouchCancel}
+          onContextMenu={longPressHandlers.onContextMenu}
         >
+          {/* ─── Swipe-to-reply icon background ──────────────────────────
+              Renders BEHIND the bubble (z-0) on the side being revealed
+              by the swipe. Fades + scales in with swipe.progress. When
+              the user crosses the threshold (isReplyActive), the icon
+              gets the accent color to signal "release to reply".
+              Only rendered when reply is available (i.e. not a tombstone). */}
+          {canReply && swipe.progress > 0 && (
+            <div
+              className={cn(
+                "absolute inset-y-0 z-0 flex items-center pointer-events-none transition-colors",
+                isOwn ? "right-0 pr-1" : "left-0 pl-1",
+              )}
+              style={{
+                opacity: swipe.progress,
+                transform: `scale(${0.6 + 0.4 * swipe.progress})`,
+              }}
+            >
+              <div
+                className={cn(
+                  "rounded-full p-1.5 transition-colors",
+                  swipe.isReplyActive
+                    ? "bg-accent text-accent-foreground"
+                    : "bg-muted text-muted-foreground",
+                )}
+              >
+                <CornerUpLeft className="w-4 h-4" />
+              </div>
+            </div>
+          )}
+
+          {/* ─── Bubble content (gets the swipe transform) ──────────────
+              The transform translates the bubble horizontally following
+              the finger. When not swiping, a CSS transition handles the
+              snap-back animation. The z-10 ensures the bubble renders
+              above the reply-icon background. */}
+          <div
+            className="relative z-10"
+            style={{
+              transform: `translateX(${swipe.dragX}px)`,
+              transition: swipe.isSwiping ? "none" : "transform 200ms cubic-bezier(0.2, 0, 0, 1)",
+            }}
+          >
           {/* ─── Soft-deleted tombstone ─────────────────────────── */}
           {isDeleted ? (
             <div
@@ -1652,6 +1868,53 @@ function MessageBubble({
                 isMenuOpen && "ring-2 ring-accent/40",
               )}
             >
+              {/* ─── Reply context bar ──────────────────────────────────
+                  Shown when this message is a reply to another. Renders
+                  a small quote-style bar with:
+                  - A colored vertical accent bar (accent color for the
+                    OTHER party, primary for own messages — standard
+                    WhatsApp/iMessage convention)
+                  - The sender name of the replied-to message (bold,
+                    colored to match the accent bar)
+                  - A truncated snippet of the replied-to message content
+                    (or "This message was deleted" if the parent is a
+                    tombstone, or "Attachment" if it's a media message
+                    with no caption)
+                  Tap-to-scroll-to-parent is a nice-to-have; skipping for
+                  now to keep the first cut focused. */}
+              {parentMessage && (
+                <div className="flex items-stretch gap-2 mb-1.5 -mx-1 px-1 max-w-[260px]">
+                  <div
+                    className={cn(
+                      "w-0.5 rounded-full shrink-0",
+                      parentMessage.senderId === currentUserId
+                        ? "bg-accent"
+                        : "bg-primary",
+                    )}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p
+                      className={cn(
+                        "text-[11px] font-semibold truncate",
+                        parentMessage.senderId === currentUserId
+                          ? "text-accent"
+                          : "text-primary",
+                      )}
+                    >
+                      {parentSenderName}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground truncate">
+                      {parentMessage.isDeleted
+                        ? "This message was deleted"
+                        : parentMessage.content?.trim()
+                          ? parentMessage.content
+                          : classifyMessage(parentMessage) !== "text"
+                            ? `${classifyMessage(parentMessage)[0].toUpperCase()}${classifyMessage(parentMessage).slice(1)}`
+                            : "No content"}
+                    </p>
+                  </div>
+                </div>
+              )}
               {/* ─── Attachment rendering ──────────────────────────── */}
               {hasAttachment && (
                 <MessageAttachment
@@ -1693,6 +1956,8 @@ function MessageBubble({
               </div>
             </div>
           )}
+          </div>
+          {/* ─── End of swipe-transform wrapper ───────────────────────── */}
 
           {/* ─── Desktop hover affordance ──────────────────────────── */}
           {/* A small ... button INSIDE the bubble (top corner) that appears on
@@ -1736,6 +2001,20 @@ function MessageBubble({
               }
               onClick={(e) => e.stopPropagation()}
             >
+              {canReply && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleMenu(null);
+                    onReply(msg);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/60 transition-colors text-left"
+                >
+                  <Reply className="w-3.5 h-3.5" />
+                  Reply
+                </button>
+              )}
               {canEditDelete && (
                 <>
                   <button
@@ -1861,6 +2140,20 @@ function MessageBubble({
               <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
             </div>
             <div className="px-2 pb-2">
+              {canReply && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleMenu(null);
+                    onReply(msg);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-muted/60 active:bg-muted transition-colors text-left"
+                >
+                  <Reply className="w-5 h-5 shrink-0" />
+                  <span className="text-base">Reply</span>
+                </button>
+              )}
               {canEditDelete && (
                 <>
                   <button

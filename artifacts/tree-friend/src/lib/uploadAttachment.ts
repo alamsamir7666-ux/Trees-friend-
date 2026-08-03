@@ -13,8 +13,9 @@ import type { SentAttachment } from "@/components/ui/AttachmentMenu";
  * optional onProgress callback.
  *
  * The server endpoint POST /api/conversations/:id/upload accepts:
- *   - field "file"    : the attachment (required)
- *   - field "caption" : optional text caption sent alongside the file
+ *   - field "file"      : the attachment (required)
+ *   - field "caption"   : optional text caption sent alongside the file
+ *   - field "replyToId" : optional id of the message this upload replies to
  *
  * Returns the created message object on success; throws an Error with a
  * server-provided message (or generic "Upload failed") on failure.
@@ -24,12 +25,18 @@ export function uploadAttachment(
   conversationId: number,
   caption?: string,
   onProgress?: (percent: number) => void,
+  replyToId?: number,
 ): Promise<SentAttachment> {
   return new Promise<SentAttachment>((resolve, reject) => {
     const formData = new FormData();
     formData.append("file", file);
     if (caption && caption.trim().length > 0) {
       formData.append("caption", caption.trim());
+    }
+    // Only append replyToId when it's a valid finite number — FormData
+    // coerces everything to strings, so absent vs. "undefined" matters.
+    if (typeof replyToId === "number" && Number.isFinite(replyToId)) {
+      formData.append("replyToId", String(Math.floor(replyToId)));
     }
 
     const xhr = new XMLHttpRequest();

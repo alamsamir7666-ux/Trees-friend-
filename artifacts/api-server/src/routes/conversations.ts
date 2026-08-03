@@ -87,6 +87,10 @@ interface MessageResponse {
   editedAt: string | null;
   isDeleted: boolean;
   deletedAt: string | null;
+  // When non-null, this message is a reply to the message with this id.
+  // The frontend looks up the parent message from its already-loaded
+  // messages array — no hydration needed on the server side.
+  replyToId: number | null;
 }
 
 // ─── Attachment helpers ────────────────────────────────────────────────────
@@ -177,6 +181,7 @@ function formatMessage(m: typeof messagesTable.$inferSelect): MessageResponse {
     editedAt: m.editedAt ? m.editedAt.toISOString() : null,
     isDeleted: m.isDeleted,
     deletedAt: m.deletedAt ? m.deletedAt.toISOString() : null,
+    replyToId: m.replyToId ?? null,
   };
 }
 
@@ -850,6 +855,7 @@ router.post("/conversations/:id/messages", requireAuth, async (req: any, res) =>
       fileName,
       fileSize,
       fileMimeType,
+      replyToId,
     } = req.body ?? {};
 
     const hasContent = typeof content === "string" && content.trim().length > 0;
@@ -866,6 +872,40 @@ router.post("/conversations/:id/messages", requireAuth, async (req: any, res) =>
     if (hasContent && content.length > 5000) {
       res.status(400).json({ error: "Message content too long (max 5000 characters)" });
       return;
+    }
+
+    // ─── Reply validation ────────────────────────────────────────────────
+    // If the client sent a replyToId, it must:
+    //   1. be a finite integer
+    //   2. point to a real message in the SAME conversation
+    // We don't require the parent to be non-deleted — replying to a
+    // soft-deleted tombstone is allowed (the UI will show "This message
+    // was deleted" as the reply context, matching WhatsApp).
+    // If validation fails we 400 — better to fail loudly than silently
+    // drop the reply relationship.
+    let validatedReplyToId: number | null = null;
+    if (replyToId !== undefined && replyToId !== null) {
+      const parsed = typeof replyToId === "number" && Number.isFinite(replyToId)
+        ? Math.floor(replyToId)
+        : NaN;
+      if (Number.isNaN(parsed)) {
+        res.status(400).json({ error: "replyToId must be a number" });
+        return;
+      }
+      const [parent] = await db
+        .select({ id: messagesTable.id, conversationId: messagesTable.conversationId })
+        .from(messagesTable)
+        .where(eq(messagesTable.id, parsed))
+        .limit(1);
+      if (!parent) {
+        res.status(400).json({ error: "replyToId does not refer to an existing message" });
+        return;
+      }
+      if (parent.conversationId !== convId) {
+        res.status(400).json({ error: "replyToId must refer to a message in the same conversation" });
+        return;
+      }
+      validatedReplyToId = parsed;
     }
 
     const [conv] = await db
@@ -917,6 +957,7 @@ router.post("/conversations/:id/messages", requireAuth, async (req: any, res) =>
         // Mark as read by the sender
         readByBuyer: isBuyer,
         readBySeller: isSellerParticipant,
+        replyToId: validatedReplyToId,
       })
       .returning();
 
@@ -1048,6 +1089,36 @@ router.post(
       const attachmentType = classifyAttachment(file.mimetype);
       const resolvedMessageType = attachmentType === "image" ? "image" : "file";
 
+      // ─── Reply validation (same logic as POST /messages) ──────────────
+      // The multipart field "replyToId" may be a string (FormData coerces
+      // everything to strings) or absent. Parse + validate against the
+      // same rules as the JSON route.
+      let validatedReplyToId: number | null = null;
+      const rawReplyToId = req.body?.replyToId;
+      if (rawReplyToId !== undefined && rawReplyToId !== null && rawReplyToId !== "") {
+        const parsed = Number.isFinite(Number(rawReplyToId))
+          ? Math.floor(Number(rawReplyToId))
+          : NaN;
+        if (Number.isNaN(parsed)) {
+          res.status(400).json({ error: "replyToId must be a number" });
+          return;
+        }
+        const [parent] = await db
+          .select({ id: messagesTable.id, conversationId: messagesTable.conversationId })
+          .from(messagesTable)
+          .where(eq(messagesTable.id, parsed))
+          .limit(1);
+        if (!parent) {
+          res.status(400).json({ error: "replyToId does not refer to an existing message" });
+          return;
+        }
+        if (parent.conversationId !== convId) {
+          res.status(400).json({ error: "replyToId must refer to a message in the same conversation" });
+          return;
+        }
+        validatedReplyToId = parsed;
+      }
+
       const [message] = await db
         .insert(messagesTable)
         .values({
@@ -1063,6 +1134,7 @@ router.post(
           attachmentType,
           readByBuyer: isBuyer,
           readBySeller: isSellerParticipant,
+          replyToId: validatedReplyToId,
         })
         .returning();
 

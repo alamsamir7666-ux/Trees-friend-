@@ -106,6 +106,15 @@ export const messagesTable = pgTable("messages", {
   // read-receipt sequence, replies) instead of leaving a gap.
   isDeleted: boolean("is_deleted").notNull().default(false),
   deletedAt: timestamp("deleted_at"),
+
+  // ─── Reply tracking (swipe-to-reply) ────────────────────────────────────
+  // When non-null, this message is a reply to the message with this id.
+  // The referenced message must be in the same conversation (enforced at
+  // the API layer, not via DB FK, so that soft-deleting the parent doesn't
+  // cascade-block replies). The frontend looks up the parent message from
+  // its already-loaded messages array — no N+1 query needed on GET.
+  // Nullable so existing rows and non-reply messages default to null.
+  replyToId: integer("reply_to_id"),
 });
 
 export const insertConversationSchema = createInsertSchema(conversationsTable).omit({

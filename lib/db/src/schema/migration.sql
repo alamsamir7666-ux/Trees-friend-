@@ -423,3 +423,26 @@ ALTER TABLE messages
   ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 
+-- ─── Message reply tracking (swipe-to-reply) ─────────────────────────────
+-- Adds a nullable reply_to_id column to messages. When non-null, the row
+-- is a reply to the message with that id (same conversation).
+--
+-- No foreign-key constraint is added deliberately: we want replies to
+-- survive even if the parent message is soft-deleted (the parent row
+-- stays in the table as a tombstone, so the FK would technically still
+-- resolve, but skipping the FK keeps the schema flexible for future
+-- hard-purge scenarios). The API layer validates that replyToId points
+-- to a real message in the same conversation before inserting.
+--
+-- Idempotent (IF NOT EXISTS) so it's safe to run on every startup.
+ALTER TABLE messages
+  ADD COLUMN IF NOT EXISTS reply_to_id INTEGER;
+
+-- Index for efficient "fetch parent messages for these replies" lookups
+-- (used by future admin tools / analytics; the chat UI itself looks up
+-- parents from its already-loaded messages array, so this index is
+-- mostly a forward-looking nicety).
+CREATE INDEX IF NOT EXISTS idx_messages_reply_to_id
+  ON messages (reply_to_id)
+  WHERE reply_to_id IS NOT NULL;
+
