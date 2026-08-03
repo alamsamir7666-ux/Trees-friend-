@@ -135,7 +135,19 @@ export function CheckoutPage() {
     ? guestCart.items.reduce((s, i) => s + (i.discountPrice ?? i.price) * i.quantity, 0)
     : (cart?.subtotal ?? 0);
   const maxPointsDiscount = Math.min(loyaltyData?.takaValue ?? 0, subtotal * 0.2); // max 20% of order
-  const shipping = subtotal > 2000 ? 0 : 120;
+  // Delivery = real per-variant deliveryCharge total. Authenticated carts
+  // get this from GET /api/cart (cart.deliveryTotal = sum of
+  // variant.deliveryCharge × quantity for admin-direct lines). Guest carts
+  // mirror deliveryCharge on each item so the preview matches.
+  //
+  // The old `subtotal > 2000 ? 0 : 120` was wrong on two counts:
+  //   1. It showed 120 for every order regardless of the variant's actual
+  //      deliveryCharge (e.g. a variant with deliveryCharge=80 showed 120)
+  //   2. The "free over 2000" rule has been removed per product decision —
+  //      delivery is always the real per-variant charge now.
+  const shipping = isGuest
+    ? guestCart.items.reduce((s, i) => s + (i.deliveryCharge ?? 0) * i.quantity, 0)
+    : (cart?.deliveryTotal ?? 0);
   const giftWrapCost = giftWrap ? 50 : 0;
   const loyaltyDiscount = usePoints ? maxPointsDiscount : 0;
   const total = Math.max(0, subtotal + shipping + giftWrapCost - discount - loyaltyDiscount);
@@ -662,7 +674,7 @@ export function CheckoutPage() {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Delivery</span>
-                    <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping}`}</span>
+                    <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping.toLocaleString()}`}</span>
                   </div>
                   {giftWrap && (
                     <div className="flex justify-between">

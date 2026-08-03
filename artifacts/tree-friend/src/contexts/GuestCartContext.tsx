@@ -10,6 +10,18 @@ export type GuestCartItem = {
   price: number;
   discountPrice: number | null;
   image: string;
+  /**
+   * Per-item delivery charge in taka. Optional for backward compat with
+   * older localStorage entries that were created before this field existed
+   * — those default to 0 (free), which is the safest fallback since the
+   * real charge is always re-computed server-side at checkout.
+   *
+   * The authenticated cart surfaces this from the variant's
+   * `deliveryCharge` column via GET /api/cart; the guest cart mirrors
+   * the same field so the bag preview matches what the user will
+   * actually be charged.
+   */
+  deliveryCharge?: number;
 };
 
 const STORAGE_KEY = "treefriend_guest_cart";

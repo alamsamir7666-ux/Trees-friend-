@@ -33,7 +33,16 @@ function GuestCartPage() {
     const price = item.discountPrice ?? item.price;
     return sum + price * item.quantity;
   }, 0);
-  const shipping = subtotal > 2000 ? 0 : 120;
+  // Delivery charge = sum of each variant's real deliveryCharge × quantity.
+  // The old hardcoded `subtotal > 2000 ? 0 : 120` was wrong: it ignored the
+  // actual per-variant deliveryCharge stored on productVariants /
+  // sellerListingVariants. The authenticated cart gets the real sum from
+  // GET /api/cart (cart.deliveryTotal); the guest cart mirrors the same
+  // field on each item so the preview matches.
+  const shipping = items.reduce(
+    (sum, item) => sum + (item.deliveryCharge ?? 0) * item.quantity,
+    0,
+  );
   const total = subtotal + shipping;
 
   if (items.length === 0) return <EmptyCart />;
@@ -117,11 +126,8 @@ function GuestCartPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Delivery</span>
-                  <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping}`}</span>
+                  <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping.toLocaleString()}`}</span>
                 </div>
-                {shipping > 0 && (
-                  <p className="text-xs text-muted-foreground">Free delivery on orders over Tk2,000</p>
-                )}
                 <div className="border-t pt-3 flex justify-between font-semibold text-base">
                   <span>Total</span>
                   <span>Tk{total.toLocaleString()}</span>
@@ -174,7 +180,14 @@ function AuthenticatedCartPage() {
 
   const items = cart?.items ?? [];
   const subtotal = cart?.subtotal ?? 0;
-  const shipping = subtotal > 2000 ? 0 : 120;
+  // Use the REAL per-variant delivery total computed by the API
+  // (cart.deliveryTotal = sum of variant.deliveryCharge × quantity for
+  // admin-direct lines). The old hardcoded `subtotal > 2000 ? 0 : 120`
+  // was wrong: it showed 120 for every cart regardless of what the
+  // variant actually charged (e.g. a variant with deliveryCharge=80
+  // showed 120 in the bag). Also removed the "free over 2000" rule
+  // entirely — delivery is always the real per-variant charge now.
+  const shipping = cart?.deliveryTotal ?? 0;
   const total = subtotal + shipping;
   const sellerGroups = groupBySeller(items);
 
@@ -307,11 +320,8 @@ function AuthenticatedCartPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Delivery</span>
-                  <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping}`}</span>
+                  <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping.toLocaleString()}`}</span>
                 </div>
-                {shipping > 0 && (
-                  <p className="text-xs text-muted-foreground">Free delivery on orders over Tk2,000</p>
-                )}
                 <div className="border-t pt-3 flex justify-between font-semibold text-base">
                   <span>Total</span>
                   <span>Tk{total.toLocaleString()}</span>
