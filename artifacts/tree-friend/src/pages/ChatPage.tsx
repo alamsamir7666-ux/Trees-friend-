@@ -1415,7 +1415,7 @@ function MessageBubble({
           ) : (
             <div
               className={cn(
-                "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5",
+                "max-w-[75%] sm:max-w-[65%] px-3.5 py-2.5 overflow-hidden",
                 isOwn
                   ? "bg-accent/20 dark:bg-accent/30 rounded-2xl rounded-br-md"
                   : "bg-card border border-border rounded-2xl rounded-bl-md",
