@@ -1,19 +1,19 @@
-import { useRef, useEffect, useMemo } from "react";
+import { useRef, useEffect, useMemo, useState, useCallback } from "react";
 import { Link } from "wouter";
-import { ChevronLeft, ChevronRight, ArrowRight, Trees } from "lucide-react";
+import { ChevronLeft, ChevronRight, ArrowRight, Trees, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ProductCard } from "@/components/ui/ProductCard";
-import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import {
   useListCategories,
-  useListProducts,
+  listProducts,
   getListCategoriesQueryKey,
-  getListProductsQueryKey,
   type Category,
   type Product,
 } from "@workspace/api-client-react";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { updateSEO } from "@/lib/seo";
 
 // Same fallback image used on the homepage's CollectionSlider — keeps the
@@ -23,10 +23,13 @@ const DEFAULT_CATEGORY_IMAGE =
   "https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=600&q=80&fm=webp";
 const DEFAULT_CATEGORY_BG = "hsl(var(--secondary))";
 
-// Max products to fetch per top-level category (when it has no subcategories
-// and we show products directly). 10 is plenty for a "browse" preview — the
-// user can click through to /products?category=... for the full list.
-const PRODUCTS_PER_CATEGORY = 10;
+// ─── Infinite scroll batch sizes ──────────────────────────────────────────
+// Per the user's request: load 10 cards at a time, then load 10 more when
+// the user swipes near the end. These constants control both the subcategory
+// client-side pagination (BATCH_SIZE_SUBS) and the product server-side
+// pagination (BATCH_SIZE_PRODUCTS).
+const BATCH_SIZE_SUBS = 10;
+const BATCH_SIZE_PRODUCTS = 10;
 
 // How far the chevron buttons scroll the horizontal card strip. Tuned to
 // roughly one card width + gap (220 + 16 = 236, rounded up to 280 to match
@@ -74,8 +77,6 @@ function buildCategoryTree(allCats: CategoryWithMeta[]) {
  * Builds the comma-joined slug string the products API expects when you want
  * to filter by "all subcategories under this parent". If the parent is itself
  * a leaf (no subcategories), returns just the parent's slug.
- *
- * Matches the linking pattern in ProductsPage.tsx:367-369 and Navbar.tsx:97.
  */
 function buildCategorySlugParam(parent: CategoryWithMeta, subs: CategoryWithMeta[]): string {
   if (subs.length === 0) return parent.slug;
@@ -119,14 +120,49 @@ function SubcategoryCard({ cat }: { cat: CategoryWithMeta }) {
   );
 }
 
-// ─── Horizontal slider with chevron buttons ───────────────────────────────
-// Reuses the exact pattern from HomePage.CollectionSlider: a ref + scrollBy
-// + scrollbar-hide + snap-x. The shadcn Embla Carousel component exists but
-// isn't used anywhere in production code, so we stick with the established
-// hand-rolled pattern for consistency.
+// ─── Loading sentinel card (shown at the end of a carousel while fetching) ─
 
-function HorizontalSlider({ children }: { children: React.ReactNode }) {
+function LoadingSentinelCard() {
+  return (
+    <div className="shrink-0 w-[200px] h-[260px] rounded-2xl bg-muted/40 flex items-center justify-center snap-start">
+      <Loader2 className="w-6 h-6 text-muted-foreground animate-spin" />
+    </div>
+  );
+}
+
+// ─── Horizontal slider with chevron buttons + infinite scroll ─────────────
+// Reuses the pattern from HomePage.CollectionSlider (ref + scrollBy +
+// scrollbar-hide + snap-x) and adds an optional infinite-scroll sentinel.
+// The sentinel is rendered as the LAST child of the scrollable row; when it
+// scrolls into view (i.e. the user has swiped near the end), `onLoadMore`
+// fires. The caller is responsible for guarding against duplicate fires
+// (e.g. checking hasNextPage + isFetching before issuing the request).
+
+interface HorizontalSliderProps {
+  children: React.ReactNode;
+  /** Whether to show the loading sentinel at the end. True when more data
+      is being fetched OR when there's more data to load (so the sentinel
+      is present and observable). */
+  showSentinel?: boolean;
+  /** Called when the sentinel scrolls into view. */
+  onLoadMore?: () => void;
+}
+
+function HorizontalSlider({ children, showSentinel, onLoadMore }: HorizontalSliderProps) {
   const sliderRef = useRef<HTMLDivElement>(null);
+
+  // Wire up the infinite scroll sentinel. The root MUST be the slider's
+  // scroll container (sliderRef) — otherwise the IntersectionObserver uses
+  // the viewport as root and fires immediately for off-screen sentinels.
+  const { sentinelRef } = useInfiniteScroll(
+    () => onLoadMore?.(),
+    {
+      enabled: !!showSentinel && !!onLoadMore,
+      root: sliderRef,
+      rootMargin: "300px",
+    },
+  );
+
   return (
     <div className="relative">
       <div className="flex gap-2 justify-end mb-3">
@@ -151,6 +187,11 @@ function HorizontalSlider({ children }: { children: React.ReactNode }) {
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
         {children}
+        {showSentinel && (
+          <div ref={sentinelRef} className="shrink-0">
+            <LoadingSentinelCard />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -167,47 +208,71 @@ function CategorySection({
 }) {
   const hasSubs = subcategories.length > 0;
 
-  // ─── Fetch products for this category ──────────────────────────────────
-  // Only fetched when the category has NO subcategories — in that case we
-  // show product cards directly under the category name (per the user's
-  // spec: "for the category that does not have subcategories, there will
-  // be products in the form of cards below the category name").
-  //
-  // When the category DOES have subcategories, we skip the product fetch
-  // entirely (the subcategory cards are the content).
-  //
-  // The slug param is the comma-joined slugs of all subcategories — this
-  // is the same multi-slug pattern ProductsPage.tsx uses for its "All"
-  // pill, and the API supports it natively (inArray lookup on slug).
+  // ─── Subcategories: client-side incremental rendering ─────────────────
+  // All subcategories are already loaded (from useListCategories in the
+  // parent), so there's no API pagination here. But rendering 100 cards
+  // at once would be slow (100 image requests + 100 DOM nodes). Instead
+  // we render BATCH_SIZE_SUBS at a time and load more when the user
+  // swipes near the end.
+  const [visibleSubCount, setVisibleSubCount] = useState(BATCH_SIZE_SUBS);
+  const visibleSubs = useMemo(
+    () => subcategories.slice(0, visibleSubCount),
+    [subcategories, visibleSubCount],
+  );
+  const hasMoreSubs = visibleSubCount < subcategories.length;
+  const loadMoreSubs = useCallback(() => {
+    setVisibleSubCount((prev) => prev + BATCH_SIZE_SUBS);
+  }, []);
+
+  // Reset visible count if the subcategory list changes (e.g. when the
+  // parent useListCategories refetches and returns different data).
+  useEffect(() => {
+    setVisibleSubCount(BATCH_SIZE_SUBS);
+  }, [subcategories]);
+
+  // ─── Products: server-side pagination with useInfiniteQuery ──────────
+  // Only fetched when the category has NO subcategories. Fetches
+  // BATCH_SIZE_PRODUCTS at a time; the next page is loaded automatically
+  // when the user swipes near the end of the carousel.
   const slugParam = useMemo(
     () => buildCategorySlugParam(category, subcategories),
     [category, subcategories],
   );
 
-  const { data: productsData, isLoading: productsLoading } = useListProducts(
-    // Only query when no subcategories. Passing undefined as params when
-    // disabled would still fire the query, so we use the `enabled` option
-    // via the query config object.
-    { category: hasSubs ? undefined : slugParam, limit: PRODUCTS_PER_CATEGORY },
-    {
-      query: {
-        enabled: !hasSubs,
-        staleTime: 60_000,
-        queryKey: getListProductsQueryKey({
-          category: hasSubs ? undefined : slugParam,
-          limit: PRODUCTS_PER_CATEGORY,
-        }),
-      },
-    },
+  const {
+    data: productsData,
+    fetchNextPage: fetchNextProducts,
+    hasNextPage: hasNextProductPage,
+    isFetchingNextPage: isFetchingNextProducts,
+    isLoading: productsLoading,
+  } = useInfiniteQuery({
+    queryKey: ["products", "browse-infinite", slugParam],
+    queryFn: ({ pageParam = 1 }) =>
+      listProducts({
+        category: slugParam,
+        limit: BATCH_SIZE_PRODUCTS,
+        page: pageParam,
+      }),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) =>
+      lastPage.totalPages > lastPage.page ? lastPage.page + 1 : undefined,
+    enabled: !hasSubs,
+    staleTime: 60_000,
+  });
+
+  // Flatten all loaded pages into a single product array.
+  const products = useMemo(
+    () => (productsData?.pages ?? []).flatMap((p) => p.products),
+    [productsData],
   );
 
-  const products = (productsData?.products ?? []) as Product[];
+  const loadMoreProducts = useCallback(() => {
+    if (hasNextProductPage && !isFetchingNextProducts) {
+      fetchNextProducts();
+    }
+  }, [fetchNextProducts, hasNextProductPage, isFetchingNextProducts]);
 
   // ─── "View all" link ───────────────────────────────────────────────────
-  // Points to the existing /products page with the category filter applied.
-  // For a parent with subs, the slug param is the comma-joined subcategory
-  // slugs (shows all products across all subs). For a leaf parent, it's
-  // just the parent's own slug.
   const viewAllHref = `/products?category=${slugParam}`;
 
   return (
@@ -235,25 +300,27 @@ function CategorySection({
       </div>
 
       {hasSubs ? (
-        <HorizontalSlider>
-          {subcategories.map((sub) => (
+        <HorizontalSlider
+          showSentinel={hasMoreSubs}
+          onLoadMore={loadMoreSubs}
+        >
+          {visibleSubs.map((sub) => (
             <SubcategoryCard key={sub.id} cat={sub} />
           ))}
         </HorizontalSlider>
       ) : (
-        // ─── Products grid (no subcategories) ────────────────────────────
-        // Uses a horizontal slider too, to match the user's spec ("products
-        // in the form of cards below the category name") and keep the page
-        // visually consistent — every section scrolls horizontally. The
-        // ProductCard component is the same one used on the homepage and
-        // products page.
+        // ─── Products carousel (no subcategories) ───────────────────────
+        // Uses server-side paginated fetching: first 10 products load on
+        // mount, subsequent pages load automatically when the user swipes
+        // near the end. The sentinel card at the end doubles as both the
+        // IntersectionObserver target AND a visual loading spinner.
         <>
           {productsLoading ? (
             <HorizontalSlider>
               {Array.from({ length: 6 }).map((_, i) => (
                 <div
                   key={i}
-                  className="shrink-0 w-[220px] h-[300px] rounded-2xl bg-muted/40 animate-pulse"
+                  className="shrink-0 w-[220px] h-[340px] rounded-2xl bg-muted/40 animate-pulse snap-start"
                 />
               ))}
             </HorizontalSlider>
@@ -268,7 +335,10 @@ function CategorySection({
               </p>
             </div>
           ) : (
-            <HorizontalSlider>
+            <HorizontalSlider
+              showSentinel={hasNextProductPage || isFetchingNextProducts}
+              onLoadMore={loadMoreProducts}
+            >
               {products.map((product) => (
                 <div
                   key={product.id}
