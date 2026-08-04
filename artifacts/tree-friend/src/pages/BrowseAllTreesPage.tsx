@@ -89,7 +89,7 @@ function SubcategoryCard({ cat }: { cat: CategoryWithMeta }) {
   const img = cat.image || DEFAULT_CATEGORY_IMAGE;
   return (
     <Link
-      href={`/products?category=${cat.slug}`}
+      href={`/category/${cat.slug}`}
       className="group relative shrink-0 w-[200px] h-[260px] rounded-2xl overflow-hidden cursor-pointer snap-start shadow-md hover:shadow-xl transition-shadow duration-300 block"
       style={{ background: DEFAULT_CATEGORY_BG }}
     >
