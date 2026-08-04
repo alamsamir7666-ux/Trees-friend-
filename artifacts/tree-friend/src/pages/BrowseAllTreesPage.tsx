@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { ChevronLeft, ChevronRight, ArrowRight, Trees, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ProductCard } from "@/components/ui/ProductCard";
+import { HomepageProductCard } from "@/components/ui/HomepageProductCard";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import {
   useListCategories,
@@ -322,14 +322,14 @@ function CategorySection({
         // IntersectionObserver target AND a visual loading spinner.
         <>
           {productsLoading ? (
-            <HorizontalSlider>
-              {Array.from({ length: 6 }).map((_, i) => (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              {Array.from({ length: 4 }).map((_, i) => (
                 <div
                   key={i}
-                  className="shrink-0 w-[220px] h-[340px] rounded-2xl bg-muted/40 animate-pulse snap-start"
+                  className="h-[160px] rounded-[20px] bg-muted/40 animate-pulse"
                 />
               ))}
-            </HorizontalSlider>
+            </div>
           ) : products.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10 text-center bg-muted/20 rounded-2xl">
               <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-3">
@@ -341,19 +341,34 @@ function CategorySection({
               </p>
             </div>
           ) : (
-            <HorizontalSlider
-              showSentinel={hasNextProductPage || isFetchingNextProducts}
-              onLoadMore={loadMoreProducts}
-            >
-              {products.map((product) => (
-                <div
-                  key={product.id}
-                  className="shrink-0 w-[220px] h-[340px] snap-start"
-                >
-                  <ProductCard product={product} backContext="browse" />
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                {products.map((product) => (
+                  <HomepageProductCard
+                    key={product.id}
+                    product={product}
+                    categoryName={category.name}
+                    backContext="browse"
+                  />
+                ))}
+              </div>
+
+              {/* Load more button for paginated product fetching */}
+              {hasNextProductPage && (
+                <div className="flex justify-center mt-6">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={loadMoreProducts}
+                    disabled={isFetchingNextProducts}
+                    className="rounded-full gap-2"
+                  >
+                    {isFetchingNextProducts && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    Load more products
+                  </Button>
                 </div>
-              ))}
-            </HorizontalSlider>
+              )}
+            </>
           )}
         </>
       )}
