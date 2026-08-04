@@ -3,7 +3,7 @@ import { Link, useParams } from "wouter";
 import { Trees, Loader2, ArrowRight, Package, Sprout } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { HomepageProductCard } from "@/components/ui/HomepageProductCard";
+import { ProductCard } from "@/components/ui/ProductCard";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import {
   useListCategories,
@@ -143,14 +143,6 @@ export function CategoryProductsPage() {
   );
   const isParentCategory = subcategories.length > 0;
 
-  // Build a categoryId → name map for the green category badge on each card
-  // (HomepageProductCard takes a `categoryName` prop — the Product type only
-  // carries `categoryId`, so we need to join names here, same as HomePage).
-  const categoryNameById = useMemo(
-    () => new Map<number, string>(allCats.map((c: { id: number; name: string }) => [c.id, c.name])),
-    [allCats],
-  );
-
   // ─── Infinite-query the products for this subcategory ──────────────────
   // Server-side pagination via useInfiniteQuery + listProducts. The API
   // supports `page` + `limit` params and returns `totalPages`, which we use
@@ -233,9 +225,9 @@ export function CategoryProductsPage() {
           </div>
         </div>
         <div className="container mx-auto px-4 py-8">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-44 rounded-[20px]" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="aspect-square rounded-2xl" />
             ))}
           </div>
         </div>
@@ -344,10 +336,10 @@ export function CategoryProductsPage() {
             </div>
           </>
         ) : productsLoading ? (
-          /* Initial loading state — show skeleton cards in the same 2-col grid */
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-44 rounded-[20px]" />
+          /* Initial loading state — skeleton cards matching the 4-col grid */
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="aspect-square rounded-2xl" />
             ))}
           </div>
         ) : productsError ? (
@@ -383,20 +375,22 @@ export function CategoryProductsPage() {
             </Link>
           </div>
         ) : (
-          // ─── Product grid (HomepageProductCard design) ──────────────────
-          // Same container classes as the homepage's "Trending / New
-          // Arrivals" section: grid-cols-1 on mobile, 2 columns from sm up.
-          // The HomepageProductCard component handles image transforms,
-          // wishlist, rating, category badge, description, and the
-          // growth/care footer — we just pass product + categoryName +
-          // backContext.
+          // ─── Product grid (vertical ProductCard design) ───────────────────
+          // Uses the regular ProductCard component (vertical card: image on
+          // top, wishlist heart, 5-star rating, price range / "Not
+          // currently available"). Same card design as the homepage's
+          // "Best Plants & Trees" section and the /products page.
+          //
+          // Grid: 2 cols on mobile, 3 from sm, 4 from lg — matches the
+          // homepage's ProductCard grid density. This is the design the
+          // user requested for leaf category pages (e.g. "Medicinal
+          // Plants" showing all products vertically).
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
               {products.map((product: Product) => (
-                <HomepageProductCard
+                <ProductCard
                   key={product.id}
                   product={product}
-                  categoryName={categoryNameById.get(product.categoryId)}
                   backContext="category"
                 />
               ))}
