@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { ChevronLeft, ChevronRight, ArrowRight, Trees, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { HomepageProductCard } from "@/components/ui/HomepageProductCard";
+import { ProductCard } from "@/components/ui/ProductCard";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import {
   useListCategories,
@@ -315,19 +315,15 @@ function CategorySection({
           ))}
         </HorizontalSlider>
       ) : (
-        // ─── Products carousel (no subcategories) ───────────────────────
-        // Uses server-side paginated fetching: first 10 products load on
-        // mount, subsequent pages load automatically when the user swipes
-        // near the end. The sentinel card at the end doubles as both the
-        // IntersectionObserver target AND a visual loading spinner.
+        // ─── Products grid (no subcategories) ────────────────────────
+        // Vertical ProductCard in a 2-col grid (same card design as
+        // the /products page and CategoryProductsPage). Replaces the
+        // old horizontal carousel per user request.
         <>
           {productsLoading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="h-[160px] rounded-[20px] bg-muted/40 animate-pulse"
-                />
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} className="aspect-square rounded-2xl" />
               ))}
             </div>
           ) : products.length === 0 ? (
@@ -342,12 +338,11 @@ function CategorySection({
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                 {products.map((product) => (
-                  <HomepageProductCard
+                  <ProductCard
                     key={product.id}
                     product={product}
-                    categoryName={category.name}
                     backContext="browse"
                   />
                 ))}
