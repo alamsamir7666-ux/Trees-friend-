@@ -3,7 +3,7 @@ import { Link, useParams } from "wouter";
 import { Trees, Loader2, ArrowRight, Package, Sprout } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ProductCard } from "@/components/ui/ProductCard";
+import { HomepageProductCard } from "@/components/ui/HomepageProductCard";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import {
   useListCategories,
@@ -225,9 +225,9 @@ export function CategoryProductsPage() {
           </div>
         </div>
         <div className="container mx-auto px-4 py-8">
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <Skeleton key={i} className="aspect-square rounded-2xl" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-[160px] rounded-[20px]" />
             ))}
           </div>
         </div>
@@ -336,10 +336,10 @@ export function CategoryProductsPage() {
             </div>
           </>
         ) : productsLoading ? (
-          /* Initial loading state — skeleton cards matching the 4-col grid */
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <Skeleton key={i} className="aspect-square rounded-2xl" />
+          /* Initial loading state — skeleton cards matching the 2-col grid */
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-[160px] rounded-[20px]" />
             ))}
           </div>
         ) : productsError ? (
@@ -375,22 +375,21 @@ export function CategoryProductsPage() {
             </Link>
           </div>
         ) : (
-          // ─── Product grid (vertical ProductCard design) ───────────────────
-          // Uses the regular ProductCard component (vertical card: image on
-          // top, wishlist heart, 5-star rating, price range / "Not
-          // currently available"). Same card design as the homepage's
-          // "Best Plants & Trees" section and the /products page.
+          // ─── Product grid (horizontal HomepageProductCard design) ──────────
+          // Uses the HomepageProductCard component (horizontal card: image
+          // on left, name + scientific name + category badge + rating +
+          // description + growth/care metrics on right). Same card design
+          // as the homepage's "Trending / New Arrivals" section.
           //
-          // Grid: 2 cols on mobile, 3 from sm, 4 from lg — matches the
-          // homepage's ProductCard grid density. This is the design the
-          // user requested for leaf category pages (e.g. "Medicinal
-          // Plants" showing all products vertically).
+          // Grid: 1 col on mobile, 2 from sm — matches the homepage's
+          // HomepageProductCard grid density.
           <>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               {products.map((product: Product) => (
-                <ProductCard
+                <HomepageProductCard
                   key={product.id}
                   product={product}
+                  categoryName={currentCat?.name}
                   backContext="category"
                 />
               ))}
