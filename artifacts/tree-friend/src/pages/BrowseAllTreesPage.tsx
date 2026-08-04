@@ -273,7 +273,13 @@ function CategorySection({
   }, [fetchNextProducts, hasNextProductPage, isFetchingNextProducts]);
 
   // ─── "View all" link ───────────────────────────────────────────────────
-  const viewAllHref = `/products?category=${slugParam}`;
+  // Points to /category/<slug> — the dedicated category page. For parent
+  // categories (with subcategories), that page shows subcategory cards
+  // vertically. For leaf categories (no subcategories), it shows products
+  // in a grid with infinite scroll. Either way, /category/<slug> is the
+  // right destination — the old /products?category=<csv-slugs> link is
+  // retired for the browse page's "View all" CTA.
+  const viewAllHref = `/category/${category.slug}`;
 
   return (
     <section className="py-8">
