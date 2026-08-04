@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useCallback, useRef } from "react";
+import { useEffect, useMemo, useCallback } from "react";
 import { Link, useParams } from "wouter";
-import { Trees, Loader2, ArrowRight, Package } from "lucide-react";
+import { Trees, Loader2, ArrowRight, Package, Sprout } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { HomepageProductCard } from "@/components/ui/HomepageProductCard";
@@ -21,6 +21,11 @@ import { updateSEO } from "@/lib/seo";
 // load more on demand.
 const PAGE_SIZE = 12;
 
+// Same fallback image used on the browse page and homepage — keeps the
+// category cards visually consistent when a category has no custom image.
+const DEFAULT_CATEGORY_IMAGE =
+  "https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=600&q=80&fm=webp";
+
 /**
  * The generated `Category` type omits `parentId`, `image`, `iconImage`,
  * `description` (the OpenAPI spec is stale), but the API returns them at
@@ -34,6 +39,67 @@ type CategoryWithMeta = Category & {
   icon?: string | null;
   description?: string | null;
 };
+
+// ─── Wide subcategory card (vertical 1-column layout) ─────────────────────
+// When the user lands on a PARENT category (e.g. "Fruit Trees" which has
+// Mango + Banana as subcategories), we show subcategory cards instead of
+// products. This card is a horizontal layout (image left, info right) —
+// wider than the browse page's portrait carousel cards, suitable for a
+// 1-column vertical stack. Visual style matches the HomepageProductCard
+// aesthetic so the page feels cohesive if the user navigates from a
+// subcategory (products view) to a parent (subcategories view).
+
+function SubcategoryCardWide({ cat }: { cat: CategoryWithMeta }) {
+  const img = cat.image || DEFAULT_CATEGORY_IMAGE;
+  return (
+    <Link
+      href={`/category/${cat.slug}`}
+      className="group block bg-card border border-border rounded-[20px] p-4 sm:p-5 shadow-[0_4px_20px_rgba(0,0,0,0.08)] hover:shadow-lg transition-shadow cursor-pointer overflow-hidden"
+    >
+      <div className="flex gap-4 items-center">
+        {/* Image — 96px square, rounded, shrink-0 */}
+        <div className="shrink-0 h-24 w-24 sm:h-28 sm:w-28 rounded-xl overflow-hidden bg-muted/30">
+          <img
+            src={img}
+            alt={cat.name}
+            loading="lazy"
+            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+          />
+        </div>
+
+        {/* Info — flex-1, min-w-0 for truncation */}
+        <div className="flex-1 min-w-0">
+          <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground mb-1">
+            Subcategory
+          </p>
+          <h3 className="font-serif text-lg sm:text-xl font-medium leading-snug truncate mb-1">
+            {cat.name}
+          </h3>
+          {cat.description && (
+            <p className="text-[13px] text-muted-foreground line-clamp-2 mb-2">
+              {cat.description}
+            </p>
+          )}
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-accent">
+            Shop now
+            <ArrowRight className="h-3 w-3 group-hover:translate-x-1 transition-transform" />
+          </span>
+        </div>
+
+        {/* Icon badge (emoji or uploaded iconImage) — top-right of the info area */}
+        {(cat.icon || cat.iconImage) && (
+          <div className="shrink-0 h-10 w-10 rounded-full flex items-center justify-center text-lg bg-success/10 border border-success/20 overflow-hidden">
+            {cat.iconImage ? (
+              <img src={cat.iconImage} alt="" className="h-full w-full object-cover" />
+            ) : (
+              cat.icon
+            )}
+          </div>
+        )}
+      </div>
+    </Link>
+  );
+}
 
 export function CategoryProductsPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -56,6 +122,26 @@ export function CategoryProductsPage() {
     () => (currentCat?.parentId != null ? allCats.find((c) => c.id === currentCat.parentId) : null),
     [allCats, currentCat],
   );
+
+  // ─── Subcategory detection ──────────────────────────────────────────────
+  // If the current category is a PARENT (i.e. it has subcategories — e.g.
+  // "Fruit Trees" with Mango + Banana as children), we show subcategory
+  // cards instead of trying to fetch products. Products are attached to
+  // subcategories, not parents, so querying products with the parent's
+  // slug would always return 0 results (the bug the user reported).
+  //
+  // This mirrors the buildCategoryTree logic in BrowseAllTreesPage: a
+  // category is a "parent" if any other category has parentId === its id.
+  const subcategories = useMemo(
+    () =>
+      currentCat
+        ? allCats
+            .filter((c) => c.parentId === currentCat.id)
+            .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name))
+        : [],
+    [allCats, currentCat],
+  );
+  const isParentCategory = subcategories.length > 0;
 
   // Build a categoryId → name map for the green category badge on each card
   // (HomepageProductCard takes a `categoryName` prop — the Product type only
@@ -89,10 +175,13 @@ export function CategoryProductsPage() {
     initialPageParam: 1,
     getNextPageParam: (lastPage) =>
       lastPage.totalPages > lastPage.page ? lastPage.page + 1 : undefined,
-    // Don't fire the query until we've confirmed the slug exists. This
-    // avoids a wasted request for a 404 category and also defers until the
-    // categories list has loaded (so the queryKey is stable).
-    enabled: !!slug && !categoriesLoading,
+    // Don't fire the query until we've confirmed the slug exists AND the
+    // current category is a leaf (no subcategories). Parent categories
+    // have no products directly attached — querying them would always
+    // return 0 results (the bug the user reported on the Fruit Trees
+    // page). We also defer until categories have loaded so `isParentCategory`
+    // is computed correctly before the enabled check.
+    enabled: !!slug && !categoriesLoading && !isParentCategory,
     staleTime: 60_000,
   });
 
@@ -212,21 +301,50 @@ export function CategoryProductsPage() {
                   {currentCat.description}
                 </p>
               )}
-              {/* Product count — shown once the first page loads */}
-              {!productsLoading && (
+              {/* Count — subcategory count for parents, product count for leaves */}
+              {isParentCategory ? (
                 <p className="text-xs text-muted-foreground mt-2">
-                  {totalProducts} product{totalProducts !== 1 ? "s" : ""} available
+                  {subcategories.length} subcategor{subcategories.length === 1 ? "y" : "ies"}
                 </p>
+              ) : (
+                !productsLoading && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    {totalProducts} product{totalProducts !== 1 ? "s" : ""} available
+                  </p>
+                )
               )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* ─── Products grid ───────────────────────────────────────────────── */}
+      {/* ─── Body: subcategories (parent category) OR products (leaf) ─────── */}
       <div className="container mx-auto px-4 py-8">
-        {/* Initial loading state — show skeleton cards in the same 2-col grid */}
-        {productsLoading ? (
+        {isParentCategory ? (
+          // ─── Parent category: show subcategory cards vertically ──────────
+          // Per the user's request: "show subcategories card vertically 1
+          // column 2 cards". This renders the subcategories of the current
+          // parent category as wide horizontal cards in a single-column
+          // grid. Each card links to /category/:slug (which will then show
+          // products since the subcategory is a leaf).
+          //
+          // The max-w-2xl keeps the column readable on desktop — without
+          // it, a single card would stretch too wide on large screens.
+          <>
+            <div className="mb-6 flex items-center gap-2">
+              <Sprout className="w-4 h-4 text-accent shrink-0" />
+              <p className="text-sm text-muted-foreground">
+                {subcategories.length} subcategor{subcategories.length === 1 ? "y" : "ies"} in {currentCat.name}
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-5 max-w-2xl">
+              {subcategories.map((sub) => (
+                <SubcategoryCardWide key={sub.id} cat={sub} />
+              ))}
+            </div>
+          </>
+        ) : productsLoading ? (
+          /* Initial loading state — show skeleton cards in the same 2-col grid */
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             {Array.from({ length: 6 }).map((_, i) => (
               <Skeleton key={i} className="h-44 rounded-[20px]" />
