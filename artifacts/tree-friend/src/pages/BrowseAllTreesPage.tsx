@@ -321,8 +321,8 @@ function CategorySection({
         // old horizontal carousel per user request.
         <>
           {productsLoading ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              {Array.from({ length: 8 }).map((_, i) => (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              {Array.from({ length: 6 }).map((_, i) => (
                 <Skeleton key={i} className="aspect-square rounded-2xl" />
               ))}
             </div>
@@ -338,7 +338,7 @@ function CategorySection({
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                 {products.map((product) => (
                   <ProductCard
                     key={product.id}
