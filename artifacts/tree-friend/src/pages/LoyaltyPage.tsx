@@ -62,7 +62,7 @@ export default function LoyaltyPage() {
   const transactions = data?.transactions ?? [];
 
   return (
-    <div className="max-w-4xl xl:max-w-6xl mx-auto px-4 md:px-6 lg:px-8 py-10">
+    <div className="max-w-2xl mx-auto px-4 py-10">
       <PageBreadcrumb crumbs={[{ label: "Loyalty Points", icon: <Star className="h-3 w-3" /> }]} className="mb-4" />
       <h1 className="font-serif text-3xl mb-2">Loyalty Points</h1>
       <p className="text-muted-foreground text-sm mb-8">Earn 1 point for every Tk100 spent. Redeem at checkout.</p>
@@ -76,7 +76,7 @@ export default function LoyaltyPage() {
       )}
 
       {/* How it works */}
-      <div className="grid grid-cols-3 lg:grid-cols-3 gap-4 lg:gap-6 mb-10">
+      <div className="grid grid-cols-3 gap-4 mb-10">
         {[
           { icon: ShoppingBag, label: "Shop", desc: "Place any order" },
           { icon: Star, label: "Earn", desc: "1 pt per Tk100" },
@@ -101,7 +101,7 @@ export default function LoyaltyPage() {
           </Link>
         </div>
       ) : (
-        <div className="space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
+        <div className="space-y-2">
           {transactions.map((t: any) => (
             <div
               key={t.id}

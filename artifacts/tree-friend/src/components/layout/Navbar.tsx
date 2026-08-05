@@ -161,43 +161,37 @@ export function Navbar() {
 
   return (
     <>
-      {/* Announcement bar – desktop only, hidden on mobile */}
-      <div className="hidden lg:flex items-center justify-center bg-primary text-primary-foreground text-xs font-medium tracking-wide py-1.5">
-        <Truck className="h-3.5 w-3.5 mr-2" />
-        <span>Free delivery on orders over ৳2,000 &nbsp;|&nbsp; Plant care tips &amp; expert advice at our <Link href="/blog" className="underline underline-offset-2 hover:opacity-80 transition-opacity">Blog</Link></span>
-      </div>
-
       <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto px-4 md:px-6 lg:px-8 xl:px-10 h-16 lg:h-20 flex items-center justify-between max-w-6xl xl:max-w-7xl">
-          <div className="flex items-center gap-4 md:gap-6 lg:gap-8">
-            <Link href="/" className="flex items-center gap-2 shrink-0">
-              <img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783743859/IMG_20260710_151144-removebg-preview_11zon_ck95ax.png" alt="Tree Friend" className="h-9 w-9 md:h-10 md:w-10 lg:h-11 lg:w-11 object-contain" /><span className="font-serif text-lg md:text-xl lg:text-2xl font-medium tracking-wide">Tree Friend</span>
+        <div className="container mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-6">
+            <Link href="/" className="flex items-center gap-2">
+              <img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783743859/IMG_20260710_151144-removebg-preview_11zon_ck95ax.png" alt="Tree Friend" className="h-10 w-10 object-contain" /><span className="font-serif text-xl font-medium tracking-wide">Tree Friend</span>
             </Link>
 
-            <nav className="hidden md:flex items-center gap-4 lg:gap-7 xl:gap-8 text-sm lg:text-base font-medium">
+            <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
               <Link
                 href="/products"
-                className={`relative transition-colors hover:text-primary after:absolute after:bottom-[-4px] after:left-0 after:h-[2px] after:w-0 after:bg-primary after:transition-all after:duration-300 hover:after:w-full ${location === "/products" && !activeCategory ? "text-primary after:w-full" : "text-muted-foreground"}`}
+                className={`transition-colors hover:text-primary ${location === "/products" && !activeCategory ? "text-primary" : "text-muted-foreground"}`}
               >
                 All Products
               </Link>
-              {categories.slice(0, 5).map((cat, idx) => (
+              {categories.slice(0, 3).map((cat) => (
                 <Link
                   key={cat.slug}
                   href={`/products?category=${cat.slug}`}
-                  className={`relative transition-colors hover:text-primary after:absolute after:bottom-[-4px] after:left-0 after:h-[2px] after:w-0 after:bg-primary after:transition-all after:duration-300 hover:after:w-full ${idx >= 3 ? "hidden lg:flex" : ""} ${activeCategory === cat.slug ? "text-primary after:w-full" : "text-muted-foreground"}`}
+                  className={`transition-colors hover:text-primary ${activeCategory === cat.slug ? "text-primary" : "text-muted-foreground"}`}
                 >
                   {cat.name}
                 </Link>
               ))}
-              <Link href="/track" className={`relative transition-colors hover:text-primary after:absolute after:bottom-[-4px] after:left-0 after:h-[2px] after:w-0 after:bg-primary after:transition-all after:duration-300 hover:after:w-full ${location === "/track" ? "text-primary after:w-full" : "text-muted-foreground"}`}>
+              <Link href="/track" className="transition-colors hover:text-primary text-muted-foreground">
                 Track Order
               </Link>
             </nav>
           </div>
 
-          <div className="flex items-center gap-2 md:gap-3 lg:gap-5">
-            <div className="hidden sm:block w-52 md:w-56 lg:w-80 xl:w-96">
+          <div className="flex items-center gap-2 md:gap-4">
+            <div className="hidden sm:block w-56 lg:w-72">
               <SearchAutocomplete />
             </div>
 
@@ -212,7 +206,7 @@ export function Navbar() {
 
             <Show when="signed-in">
               <Link href="/wishlist">
-                <Button variant="ghost" size="icon" className="hidden sm:flex hover:text-primary transition-colors">
+                <Button variant="ghost" size="icon" className="hidden sm:flex">
                   <Heart className="h-5 w-5" />
                   <span className="sr-only">Wishlist</span>
                 </Button>
@@ -220,7 +214,7 @@ export function Navbar() {
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="rounded-full hidden sm:flex hover:text-primary transition-colors">
+                  <Button variant="ghost" size="icon" className="rounded-full hidden sm:flex">
                     {user?.imageUrl ? (
                       <img src={user.imageUrl} alt="Profile" className="h-7 w-7 rounded-full object-cover" />
                     ) : (
@@ -288,7 +282,7 @@ export function Navbar() {
             </Show>
 
             {/* Dark mode toggle -- Sun/Moon quick toggle, long-press for System menu */}
-            <ThemeToggle className="hidden sm:flex hover:text-primary transition-colors" />
+            <ThemeToggle className="hidden sm:flex" />
 
             {/* Mobile search icon */}
             <Button
@@ -302,7 +296,7 @@ export function Navbar() {
             </Button>
 
             <Link href="/cart">
-              <Button variant="ghost" size="icon" className="relative hover:text-primary transition-colors">
+              <Button variant="ghost" size="icon" className="relative">
                 <ShoppingBag className="h-5 w-5" />
                 {cartItemCount > 0 && (
                   <Badge className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 rounded-full bg-accent text-accent-foreground text-xs">

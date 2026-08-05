@@ -368,7 +368,7 @@ export function CheckoutPage() {
   }
 
   if (isLoading) {
-    return <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 max-w-5xl xl:max-w-7xl"><Skeleton className="h-96 rounded-xl" /></div>;
+    return <div className="container mx-auto px-4 py-10"><Skeleton className="h-96 rounded-xl" /></div>;
   }
 
   if (items.length === 0) {
@@ -382,8 +382,8 @@ export function CheckoutPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="bg-muted/30 border-b py-6 md:py-8 lg:py-10">
-        <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-5xl xl:max-w-7xl">
+      <div className="bg-muted/30 border-b py-10">
+        <div className="container mx-auto px-4">
           <PageBreadcrumb
             crumbs={[
               { label: "Cart", href: "/cart", icon: <ShoppingBag className="h-3 w-3" /> },
@@ -400,14 +400,14 @@ export function CheckoutPage() {
         </div>
       </div>
 
-      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-6 md:py-8 lg:py-10 max-w-5xl xl:max-w-7xl">
+      <div className="container mx-auto px-4 py-8">
         <form onSubmit={handleSubmit}>
-          <div className="grid grid-cols-1 lg:grid-cols-5 gap-8 lg:gap-10">
-            <div className="lg:col-span-3 space-y-8">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+            <div className="lg:col-span-2 space-y-8">
               {/* Delivery address */}
-              <div className="bg-card border rounded-xl p-6 lg:p-8">
+              <div className="bg-card border rounded-xl p-6">
                 <div className="flex items-center justify-between mb-5">
-                  <h2 className="font-medium text-lg lg:text-xl">Delivery Address</h2>
+                  <h2 className="font-medium text-lg">Delivery Address</h2>
                   {(savedAddresses as any[]).length > 0 && (
                     <button
                       type="button"
@@ -448,7 +448,7 @@ export function CheckoutPage() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 lg:gap-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="sm:col-span-2">
                     <Label htmlFor="fullName">Full Name *</Label>
                     <Input id="fullName" value={address.fullName} onChange={e => setAddress(a => ({ ...a, fullName: e.target.value }))} required className="mt-1.5" />
@@ -478,7 +478,7 @@ export function CheckoutPage() {
 
               {/* Loyalty Points Redemption */}
               {loyaltyData && loyaltyData.points > 0 && (
-                <div className="bg-card border rounded-xl p-4 lg:p-6">
+                <div className="bg-card border rounded-xl p-4">
                   <div className="flex items-start gap-3">
                     <input
                       type="checkbox"
@@ -501,7 +501,7 @@ export function CheckoutPage() {
               )}
 
               {/* 🎁 Gift Wrapping */}
-              <div className="bg-card border rounded-xl p-6 lg:p-8">
+              <div className="bg-card border rounded-xl p-6">
                 <div className="flex items-start gap-3">
                   <input
                     type="checkbox"
@@ -549,7 +549,7 @@ export function CheckoutPage() {
                     const current = methodFor(key);
 
                     return (
-                      <div key={key} className="bg-card border rounded-xl p-6 lg:p-8">
+                      <div key={key} className="bg-card border rounded-xl p-6">
                         <h3 className="font-medium text-sm mb-4 flex items-center gap-1.5">
                           {g.sellerName ? (
                             <><Sprout className="h-3.5 w-3.5 text-accent" /> {g.sellerName}</>
@@ -595,8 +595,8 @@ export function CheckoutPage() {
                   })}
                 </div>
               ) : (
-                <div className="bg-card border rounded-xl p-6 lg:p-8">
-                  <h2 className="font-medium text-lg lg:text-xl mb-5">Payment Method</h2>
+                <div className="bg-card border rounded-xl p-6">
+                  <h2 className="font-medium text-lg mb-5">Payment Method</h2>
                   <div className="grid grid-cols-2 gap-3 mb-5">
                     {(["bkash", "cod"] as PaymentMethod[]).map((method) => (
                       <button
@@ -629,9 +629,9 @@ export function CheckoutPage() {
             </div>
 
             {/* Order summary */}
-            <div className="lg:col-span-2">
-              <div className="bg-card border rounded-xl p-6 lg:shadow-lg sticky top-24 space-y-5">
-                <h2 className="font-medium text-lg lg:text-xl">Order Summary</h2>
+            <div>
+              <div className="bg-card border rounded-xl p-6 sticky top-24 space-y-5">
+                <h2 className="font-medium text-lg">Order Summary</h2>
 
                 {/* Coupon */}
                 {!couponApplied ? (
@@ -657,7 +657,7 @@ export function CheckoutPage() {
                 )}
 
                 {/* Items, grouped by seller when the cart spans more than one */}
-                <div className="space-y-3 max-h-72 lg:max-h-96 overflow-y-auto">
+                <div className="space-y-3 max-h-72 overflow-y-auto">
                   {sellerGroups.map((g) => (
                     <div key={g.sellerId ?? "admin-direct"}>
                       {isMultiSeller && (

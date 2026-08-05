@@ -96,7 +96,7 @@ export default function ComparePage() {
   }, []);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 md:px-6 lg:px-8 xl:px-12 py-10">
+    <div className="max-w-7xl mx-auto px-4 py-10">
       <div className="flex items-center gap-3 mb-8">
         <Scale className="h-6 w-6 text-accent" />
         <h1 className="font-serif text-3xl">Compare Products</h1>
@@ -118,11 +118,11 @@ export default function ComparePage() {
           <table className="w-full border-collapse">
             <thead>
               <tr>
-                <th className="text-left p-4 w-36 lg:w-44 text-sm text-muted-foreground font-medium">
+                <th className="text-left p-4 w-36 text-sm text-muted-foreground font-medium">
                   Attribute
                 </th>
                 {compareProducts.map((p) => (
-                  <th key={p.id} className="p-4 lg:p-6 min-w-[200px] lg:min-w-[240px] align-top">
+                  <th key={p.id} className="p-4 min-w-[200px] align-top">
                     <div className="relative">
                       <button
                         onClick={() => removeProduct(p.id)}
@@ -146,7 +146,7 @@ export default function ComparePage() {
                   </th>
                 ))}
                 {compareProducts.length < 3 && (
-                  <th className="p-4 lg:p-6 min-w-[200px]">
+                  <th className="p-4 min-w-[200px]">
                     <Link href="/products">
                       <div className="aspect-square rounded-xl border-2 border-dashed border-border flex items-center justify-center text-muted-foreground hover:border-accent hover:text-accent transition-colors cursor-pointer">
                         <div className="text-center">
@@ -162,11 +162,11 @@ export default function ComparePage() {
             <tbody>
               {COMPARE_ROWS.map(({ key, label }) => (
                 <tr key={key} className="border-t border-border">
-                  <td className="p-4 lg:p-6 text-sm font-medium text-muted-foreground whitespace-nowrap">
+                  <td className="p-4 text-sm font-medium text-muted-foreground whitespace-nowrap">
                     {label}
                   </td>
                   {compareProducts.map((p) => (
-                    <td key={p.id} className="p-4 lg:p-6 align-top">
+                    <td key={p.id} className="p-4 align-top">
                       {renderCell(key, p)}
                     </td>
                   ))}

@@ -36,15 +36,15 @@ export function TrackOrderPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="bg-muted/30 border-b py-6 md:py-8 lg:py-10">
-        <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-2xl lg:max-w-2xl">
+      <div className="bg-muted/30 border-b py-10">
+        <div className="container mx-auto px-4">
           <PageBreadcrumb crumbs={[{ label: "Track Order", icon: <Truck className="h-3 w-3" /> }]} className="mb-3" />
           <p className="text-xs uppercase tracking-[0.15em] text-accent-text mb-2 font-medium">Order Tracking</p>
           <h1 className="font-serif text-4xl font-medium">Track Your Order</h1>
         </div>
       </div>
 
-      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 md:py-12 max-w-2xl lg:max-w-2xl">
+      <div className="container mx-auto px-4 py-12 max-w-lg">
         <div className="bg-card border rounded-xl p-6 mb-6">
           <p className="text-sm text-muted-foreground mb-4">Enter your tracking ID to see your delivery status.</p>
           <div className="flex gap-3">

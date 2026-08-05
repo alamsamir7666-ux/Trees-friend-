@@ -148,7 +148,7 @@ export function BecomeSellerContent() {
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4 lg:space-y-5 bg-card border rounded-2xl p-6 lg:p-8">
+      <form onSubmit={handleSubmit} className="space-y-4 bg-card border rounded-2xl p-6">
         <div>
           <Label htmlFor="businessName">Business Name *</Label>
           <Input id="businessName" value={form.businessName} onChange={set("businessName")} placeholder="e.g. Green Haven Enterprises" className="mt-1.5" />
@@ -189,7 +189,7 @@ export function BecomeSellerContent() {
 
 export function BecomeSellerPage() {
   return (
-    <div className="container mx-auto px-4 py-10 max-w-lg lg:max-w-3xl">
+    <div className="container mx-auto px-4 py-10 max-w-lg">
       <PageBreadcrumb crumbs={[{ label: "Become a Seller", icon: <Sprout className="h-3 w-3" /> }]} className="mb-4" />
       <BecomeSellerContent />
     </div>

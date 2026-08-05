@@ -69,10 +69,10 @@ function ProductCardInner({
   return (
     <Link href={href}>
       <article
-        className="group relative bg-card border border-border rounded-2xl overflow-hidden transition-all duration-300 hover:shadow-lg md:hover:-translate-y-1 lg:hover:shadow-xl lg:hover:-translate-y-1.5 cursor-pointer flex flex-col h-full"
+        className="group relative bg-card border border-border rounded-2xl overflow-hidden transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5 cursor-pointer flex flex-col h-full"
         aria-label={product.name + (hasListings ? " - from Tk" + product.listingMinPrice!.toLocaleString() : "")}
       >
-        <div className="relative aspect-square lg:aspect-[4/5] overflow-hidden bg-muted/30">
+        <div className="relative aspect-square overflow-hidden bg-muted/30">
           {img ? (
             <img
               src={img}
@@ -86,7 +86,7 @@ function ProductCardInner({
           ) : (
             <NoImagePlaceholder />
           )}
-          <div className="absolute top-3 left-3 lg:top-4 lg:left-4 flex flex-col gap-1">
+          <div className="absolute top-3 left-3 flex flex-col gap-1">
             {!hasListings && (
               <Badge className="bg-muted text-muted-foreground text-xs font-medium shadow-sm">
                 Currently Unavailable
@@ -95,28 +95,28 @@ function ProductCardInner({
           </div>
           <button
             onClick={(e) => { e.preventDefault(); inCompare ? removeFromCompare(product.id) : addToCompare(product.id); }}
-            className={"absolute bottom-3 left-3 lg:bottom-4 lg:left-4 p-2 lg:p-2.5 rounded-full bg-background/85 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110 " + (inCompare ? "text-accent opacity-100" : "text-muted-foreground opacity-0 group-hover:opacity-100")}
+            className={"absolute bottom-3 left-3 p-2 rounded-full bg-background/85 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110 " + (inCompare ? "text-accent opacity-100" : "text-muted-foreground opacity-0 group-hover:opacity-100")}
             aria-label={inCompare ? "Remove from comparison" : "Add to comparison"}
           >
             <BarChart2 className={"h-4 w-4 " + (inCompare ? "fill-current" : "")} />
           </button>
           <button
             onClick={handleWishlist}
-            className={"absolute top-3 right-3 lg:top-4 lg:right-4 p-2 lg:p-2.5 rounded-full bg-background/85 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110 " + (isWishlisted ? "text-destructive opacity-100" : "text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive")}
+            className={"absolute top-3 right-3 p-2 rounded-full bg-background/85 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110 " + (isWishlisted ? "text-destructive opacity-100" : "text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive")}
             aria-label={isWishlisted ? "Remove from wishlist" : "Add to wishlist"}
           >
             <Heart className={"h-4 w-4 " + (isWishlisted ? "fill-current" : "")} />
           </button>
         </div>
-        <div className="p-4 lg:p-5 flex flex-col flex-1 gap-2 lg:gap-3">
-          <h3 className="font-medium text-sm lg:text-base leading-snug line-clamp-2 flex-1">
+        <div className="p-4 flex flex-col flex-1 gap-2">
+          <h3 className="font-medium text-sm leading-snug line-clamp-2 flex-1">
             {product.name}
           </h3>
           <div className="flex items-center gap-1">
             {Array.from({ length: 5 }).map((_, i) => (
               <Star
                 key={i}
-                className={"h-3 w-3 lg:h-3.5 lg:w-3.5 " + (i < Math.round(product.averageRating) ? "fill-accent text-accent" : "text-muted")}
+                className={"h-3 w-3 " + (i < Math.round(product.averageRating) ? "fill-accent text-accent" : "text-muted")}
                 aria-hidden="true"
               />
             ))}
@@ -127,7 +127,7 @@ function ProductCardInner({
             )}
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span className="font-semibold text-sm lg:text-base">
+            <span className="font-semibold text-sm">
               {hasListings ? (
                 priceRange
                   ? <>{"Tk"}{product.listingMinPrice!.toLocaleString()}{" – Tk"}{product.listingMaxPrice!.toLocaleString()}</>

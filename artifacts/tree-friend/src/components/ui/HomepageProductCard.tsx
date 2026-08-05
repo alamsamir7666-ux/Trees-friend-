@@ -95,30 +95,69 @@ function HomepageProductCardInner({
   return (
     <Link href={href}>
       <article
-        className="group block bg-card border border-border rounded-2xl overflow-hidden shadow-sm hover:shadow-lg md:hover:-translate-y-1 lg:hover:shadow-xl lg:hover:-translate-y-1.5 transition-all duration-300 cursor-pointer"
+        className="group block bg-card border border-border rounded-[20px] p-4 sm:p-5 shadow-[0_4px_20px_rgba(0,0,0,0.08)] hover:shadow-lg transition-shadow cursor-pointer overflow-hidden"
         aria-label={product.name}
       >
-        {/* Image */}
-        <div className="relative aspect-[4/3] lg:aspect-[3/2] overflow-hidden bg-muted/30">
-          {img ? (
-            <img
-              src={rawImg && rawImg.includes("res.cloudinary.com")
-                ? rawImg.replace("/upload/", "/upload/w_400,h_300,c_fill,f_webp,q_75/")
-                : rawImg}
-              alt={product.name}
-              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-              loading={priority ? "eager" : "lazy"}
-              decoding="async"
-              width={400}
-              height={300}
-            />
-          ) : (
-            <NoImagePlaceholder />
-          )}
-          {/* Favorite button */}
+        {/* Header: image + info + favorite (favorite is absolutely positioned) */}
+        <div className="flex gap-3.5 items-start relative min-w-0">
+          {/* Image */}
+          <div className="shrink-0 h-[72px] w-[72px] sm:h-[88px] sm:w-[88px] rounded-xl overflow-hidden bg-muted/30">
+            {img ? (
+              <img
+                src={img}
+                alt={product.name}
+                className="w-full h-full object-cover"
+                loading={priority ? "eager" : "lazy"}
+                decoding="async"
+                width={144}
+                height={144}
+              />
+            ) : (
+              <NoImagePlaceholder />
+            )}
+          </div>
+
+          {/* Info: title + subtitle + meta (tag + rating on same row) */}
+          {/* pr-7 reserves space so the absolute-positioned favorite button
+              never overlaps the title text on narrow cards. */}
+          <div className="flex-1 min-w-0 pr-8 flex flex-col">
+            <h3 className="text-[15px] sm:text-[19px] font-bold leading-tight text-foreground truncate mb-1">
+              {product.name}
+            </h3>
+            {product.scientificName && (
+              <p className="text-xs italic text-muted-foreground truncate mb-2">
+                {product.scientificName}
+              </p>
+            )}
+
+            {/* Tag + rating on a single row (previously stacked) */}
+            <div className="flex items-center gap-2.5 min-w-0">
+              {categoryName && (
+                <span className="inline-flex items-center gap-1.5 bg-success text-success-foreground px-2.5 py-[5px] rounded-full text-[11px] font-semibold leading-none whitespace-nowrap max-w-[120px]">
+                  <img src={CATEGORY_ICON} alt="" aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{categoryName}</span>
+                </span>
+              )}
+
+              <span
+                className="inline-flex items-center gap-[3px] text-xs text-muted-foreground whitespace-nowrap"
+                aria-label={`Rating ${product.averageRating} out of 5${product.reviewCount ? ` based on ${product.reviewCount} reviews` : ""}`}
+              >
+                <svg viewBox="0 0 24 24" className="h-3 w-3 fill-amber-500" aria-hidden="true">
+                  <path d="M12 17.3l-6.2 3.7 1.6-7L2 9.3l7.2-.6L12 2l2.8 6.7 7.2.6-5.4 4.7 1.6 7z" />
+                </svg>
+                <strong className="font-bold text-foreground">{product.averageRating.toFixed(1)}</strong>
+                {product.reviewCount > 0 && (
+                  <span>({product.reviewCount})</span>
+                )}
+              </span>
+            </div>
+          </div>
+
+          {/* Favorite button — absolute top-right of the header */}
           <button
             onClick={handleWishlist}
-            className="absolute top-2.5 right-2.5 lg:top-3 lg:right-3 h-8 w-8 lg:h-9 lg:w-9 rounded-full bg-background/85 backdrop-blur-sm border border-border flex items-center justify-center transition-all hover:scale-110"
+            className="absolute top-0 right-0 h-8 w-8 rounded-full bg-background border border-border flex items-center justify-center transition-colors hover:bg-muted/30"
             aria-label={isWishlisted ? "Remove from wishlist" : "Add to wishlist"}
           >
             <svg
@@ -132,65 +171,42 @@ function HomepageProductCardInner({
               <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z" />
             </svg>
           </button>
-          {/* Category badge */}
-          {categoryName && (
-            <span className="absolute bottom-2.5 left-2.5 lg:bottom-3 lg:left-3 inline-flex items-center gap-1.5 bg-success text-success-foreground px-2.5 py-1 lg:px-3 lg:py-1.5 rounded-full text-[10px] lg:text-xs font-semibold leading-none shadow-sm">
-              <img src={CATEGORY_ICON} alt="" aria-hidden="true" className="h-3 w-3 shrink-0" />
-              <span className="truncate max-w-[80px]">{categoryName}</span>
-            </span>
-          )}
         </div>
 
-        {/* Content */}
-        <div className="p-3.5 sm:p-4 lg:p-5">
-          <h3 className="text-sm lg:text-base font-semibold leading-snug text-foreground line-clamp-1 mb-1 lg:mb-1.5">
-            {product.name}
-          </h3>
-          {product.scientificName && (
-            <p className="text-xs lg:text-sm italic text-muted-foreground truncate mb-1.5">
-              {product.scientificName}
-            </p>
-          )}
+        {/* Description */}
+        {product.description && (
+          <p className="mt-3.5 text-[13px] leading-[1.55] text-muted-foreground line-clamp-2">
+            {product.description}
+          </p>
+        )}
 
-          {/* Rating + Price row */}
-          <div className="flex items-center justify-between gap-2 mb-2 lg:mb-3">
-            <span
-              className="inline-flex items-center gap-1 text-xs lg:text-sm text-muted-foreground"
-              aria-label={`Rating ${product.averageRating} out of 5${product.reviewCount ? ` based on ${product.reviewCount} reviews` : ""}`}
-            >
-              <svg viewBox="0 0 24 24" className="h-3 w-3 lg:h-3.5 lg:w-3.5 fill-amber-500" aria-hidden="true">
-                <path d="M12 17.3l-6.2 3.7 1.6-7L2 9.3l7.2-.6L12 2l2.8 6.7 7.2.6-5.4 4.7 1.6 7z" />
-              </svg>
-              <strong className="font-bold text-foreground">{product.averageRating.toFixed(1)}</strong>
-              {product.reviewCount > 0 && (
-                <span>({product.reviewCount})</span>
-              )}
-            </span>
-            {product.listingMinPrice != null && product.listingCount > 0 && (
-              <span className="text-sm lg:text-base font-semibold lg:font-bold text-foreground">
-                {"Tk"}{product.listingMinPrice!.toLocaleString()}
-                {product.listingMaxPrice !== product.listingMinPrice && <span>+</span>}
-              </span>
-            )}
-          </div>
-
-          {/* Footer: growth | care */}
-          {(growth || care) && (
-            <div className="flex items-center border-t border-border pt-2.5 lg:pt-3 gap-2 lg:gap-3">
-              {growth && (
-                <div className="flex items-center gap-1 text-[11px] lg:text-xs font-medium text-muted-foreground leading-tight min-w-0">
-                  <img src={GROWTH_ICON} alt="" aria-hidden="true" className="h-3.5 w-3.5 lg:h-4 lg:w-4 shrink-0" />
-                  <span className="truncate">{growth}</span>
-                </div>
-              )}
-              {care && (
-                <div className={"flex items-center gap-1 text-[11px] lg:text-xs font-medium text-muted-foreground leading-tight min-w-0 " + (growth ? "border-l border-border pl-2 lg:pl-3" : "")}>
-                  <img src={CARE_ICON} alt="" aria-hidden="true" className="h-3.5 w-3.5 lg:h-4 lg:w-4 shrink-0" />
-                  <span className="truncate">{care}</span>
-                </div>
-              )}
+        {/* Footer: growth | care | view-details, with vertical dividers
+            between adjacent items. Items are conditional — the divider is
+            only added when a previous item exists, so we never get a
+            leading divider or two dividers in a row. */}
+        <div className="mt-3.5 flex items-center border-t border-border pt-3">
+          {growth && (
+            <div className="flex-1 flex items-center gap-1.5 text-[11px] font-semibold text-foreground leading-tight min-w-0">
+              <img src={GROWTH_ICON} alt="" aria-hidden="true" className="h-4 w-4 shrink-0" />
+              <span className="truncate">{growth}</span>
             </div>
           )}
+
+          {care && (
+            <div className={"flex-1 flex items-center gap-1.5 text-[11px] font-semibold text-foreground leading-tight min-w-0 " + (growth ? "border-l border-border pl-3" : "")}>
+              <img src={CARE_ICON} alt="" aria-hidden="true" className="h-4 w-4 shrink-0" />
+              <span className="truncate">{care}</span>
+            </div>
+          )}
+
+          <span
+            className={"flex items-center gap-1 text-[11px] font-semibold text-muted-foreground whitespace-nowrap " + ((growth || care) ? "border-l border-border pl-3" : "")}
+          >
+            <span className="whitespace-nowrap group-hover:text-foreground transition-colors">View details</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 shrink-0" aria-hidden="true">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </span>
         </div>
       </article>
     </Link>

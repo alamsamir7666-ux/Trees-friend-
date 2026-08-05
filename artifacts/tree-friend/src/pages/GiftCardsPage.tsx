@@ -94,14 +94,14 @@ export function GiftCardsPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 md:px-6 lg:px-8 py-12 max-w-4xl xl:max-w-6xl">
+    <div className="container mx-auto px-4 py-12 max-w-4xl">
       <PageBreadcrumb crumbs={[{ label: "Gift Cards", icon: <Gift className="h-3 w-3" /> }]} className="mb-4" />
       <div className="mb-10">
         <p className="text-xs uppercase tracking-widest text-accent mb-1 font-medium">Give a Gift</p>
         <h1 className="font-serif text-3xl font-medium">Gift Cards</h1>
       </div>
 
-      <div className="grid md:grid-cols-2 lg:grid-cols-2 gap-10 lg:gap-12">
+      <div className="grid md:grid-cols-2 gap-10">
         {/* Purchase form */}
         <div className="space-y-6">
           <div className="bg-gradient-to-br from-destructive/10 to-destructive/5 border border-destructive/20 rounded-2xl p-6 flex items-center gap-4">

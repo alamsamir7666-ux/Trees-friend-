@@ -86,6 +86,21 @@ const socials = [
   { label: "WhatsApp", href: "https://wa.me/01636575741", icon: WhatsAppIcon },
 ];
 
+function SectionTitle({ iconSrc, children }: { iconSrc: string; children: React.ReactNode }) {
+  return (
+    <h2 className="tf-section-title">
+      <img src={iconSrc} alt="" className="tf-title-icon" />
+      <span className="tf-title-text">{children}</span>
+      <span className="tf-title-line" />
+      <img
+        src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783777695/f5466fe3-bd88-43ad-a8be-389ad10465e3_11zon-removebg-preview_11zon_nmqk0e.png"
+        alt=""
+        className="tf-title-leaf"
+      />
+    </h2>
+  );
+}
+
 export function Footer() {
   return (
     <footer className="tf-footer">
@@ -97,8 +112,8 @@ export function Footer() {
           --tf-accent: hsl(var(--primary));
           --tf-border: hsl(var(--border));
           --tf-input-bg: hsl(var(--card));
-          --tf-font-serif: 'DM Serif Display', 'Georgia', serif;
-          --tf-font-sans: 'DM Sans', 'Inter', sans-serif;
+          --tf-font-serif: 'Lora', serif;
+          --tf-font-sans: 'Jost', sans-serif;
 
           position: relative;
           overflow: hidden;
@@ -106,91 +121,98 @@ export function Footer() {
           font-family: var(--tf-font-sans);
           color: var(--tf-text);
           line-height: 1.65;
-          padding: 30px 16px 0 16px;
-        }
-
-        @media (min-width: 768px) {
-          .tf-footer { padding: 40px 32px 0 32px; }
-        }
-        @media (min-width: 1280px) {
-          .tf-footer { padding: 48px 48px 0 48px; }
+          padding: 30px 20px 0 20px;
         }
 
         .tf-inner {
-          max-width: 1152px;
+          max-width: 460px;
           width: 100%;
           position: relative;
           margin: 0 auto;
         }
 
-        /* ── Desktop grid layout ── */
-        .tf-grid {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 32px;
-          padding-bottom: 40px;
-          border-bottom: 1px solid var(--tf-border);
-        }
-
-        @media (min-width: 768px) {
-          .tf-grid {
-            grid-template-columns: 1.2fr 1fr 1fr 1.1fr;
-            gap: 40px;
-          }
-        }
-
-        @media (min-width: 1280px) {
-          .tf-grid {
-            gap: 56px;
-          }
-        }
-
-        /* ── Brand column ── */
         .tf-brand-header {
           display: flex;
           align-items: center;
           gap: 14px;
-          margin-bottom: 20px;
+          margin-bottom: 16px;
           position: relative;
           z-index: 1;
         }
 
         .tf-brand-logo {
-          width: 72px;
+          width: 85px;
           height: auto;
           object-fit: contain;
           flex-shrink: 0;
         }
 
-        @media (min-width: 768px) {
-          .tf-brand-logo { width: 80px; }
-        }
-
         .tf-brand-title {
           font-family: var(--tf-font-serif);
-          font-size: 1.9rem;
+          font-size: 2.15rem;
           color: hsl(var(--primary));
-          margin-left: -8px;
+          margin-left: -10px;
           font-weight: 700;
           letter-spacing: -0.5px;
           line-height: 1.1;
           display: inline-block;
         }
 
-        @media (min-width: 768px) {
-          .tf-brand-title { font-size: 2.15rem; margin-left: -10px; }
+        .tf-section-title {
+          font-family: var(--tf-font-serif);
+          color: var(--tf-accent);
+          font-weight: 700;
+          font-size: 1.1rem;
+          display: flex;
+          align-items: center;
+          margin: 24px 0 14px 0;
+          white-space: nowrap;
+          position: relative;
+          z-index: 1;
+        }
+
+        .tf-title-icon {
+          width: 25px;
+          height: 25px;
+          object-fit: contain;
+          flex-shrink: 0;
+          margin-right: 10px;
+        }
+
+        .tf-title-text {
+          margin-right: 12px;
+          color: hsl(var(--primary));
+        }
+
+        .tf-title-line {
+          flex: 1;
+          height: 1px;
+          background-color: var(--tf-border);
+          min-width: 20px;
+          margin: 0;
+        }
+
+        .tf-title-leaf {
+          width: 50px;
+          height: auto;
+          object-fit: contain;
+          flex-shrink: 0;
+          opacity: 0.9;
+          margin-left: -4px;
+        }
+
+        .tf-text-block {
+          max-width: 285px;
+          width: 100%;
+          position: relative;
+          z-index: 1;
         }
 
         .tf-text-block p {
-          font-size: 0.84rem;
+          font-size: 0.81rem;
           color: var(--tf-text);
           margin-bottom: 12px;
           font-weight: 400;
-          line-height: 1.7;
-        }
-
-        @media (min-width: 768px) {
-          .tf-text-block p { font-size: 0.875rem; }
         }
 
         .tf-tagline {
@@ -201,58 +223,6 @@ export function Footer() {
           margin-bottom: 0;
         }
 
-        /* ── Section titles ── */
-        .tf-section-title {
-          font-family: var(--tf-font-serif);
-          color: var(--tf-accent);
-          font-weight: 700;
-          font-size: 1.05rem;
-          margin: 0 0 18px 0;
-          white-space: nowrap;
-          position: relative;
-          z-index: 1;
-          display: flex;
-          align-items: center;
-          gap: 10px;
-        }
-
-        @media (min-width: 768px) {
-          .tf-section-title { font-size: 1.1rem; margin-bottom: 20px; }
-        }
-
-        .tf-title-icon {
-          width: 24px;
-          height: 24px;
-          object-fit: contain;
-          flex-shrink: 0;
-        }
-
-        .tf-title-line {
-          flex: 1;
-          height: 1px;
-          background-color: var(--tf-border);
-          min-width: 20px;
-          display: none;
-        }
-
-        @media (min-width: 768px) {
-          .tf-title-line { display: block; }
-        }
-
-        .tf-title-leaf {
-          width: 40px;
-          height: auto;
-          object-fit: contain;
-          flex-shrink: 0;
-          opacity: 0.9;
-          display: none;
-        }
-
-        @media (min-width: 768px) {
-          .tf-title-leaf { display: block; width: 46px; }
-        }
-
-        /* ── Support list ── */
         .tf-support-list {
           list-style: none;
           position: relative;
@@ -272,8 +242,8 @@ export function Footer() {
         .tf-support-list a {
           display: flex;
           align-items: center;
-          gap: 12px;
-          padding: 11px 0;
+          gap: 14px;
+          padding: 12px 0;
           text-decoration: none;
           color: var(--tf-text);
           font-size: 0.84rem;
@@ -294,10 +264,9 @@ export function Footer() {
           flex-shrink: 0;
         }
 
-        /* ── Newsletter ── */
         .tf-newsletter-form {
           display: flex;
-          gap: 8px;
+          gap: 10px;
           margin-top: 14px;
           width: 100%;
           position: relative;
@@ -311,7 +280,7 @@ export function Footer() {
           border-radius: 8px;
           background-color: var(--tf-input-bg);
           font-family: var(--tf-font-sans);
-          font-size: 0.84rem;
+          font-size: 0.81rem;
           color: var(--tf-text);
           outline: none;
           transition: border-color 0.2s;
@@ -332,7 +301,7 @@ export function Footer() {
           border-radius: 8px;
           padding: 0 22px;
           font-family: var(--tf-font-sans);
-          font-size: 0.84rem;
+          font-size: 0.81rem;
           font-weight: 500;
           cursor: pointer;
           transition: background-color 0.2s, transform 0.1s;
@@ -346,20 +315,30 @@ export function Footer() {
           transform: scale(0.98);
         }
 
-        /* ── Social links (inline, not in landscape image area on desktop) ── */
+        .tf-landscape-wrapper {
+          position: relative;
+          width: calc(100% + 40px);
+          margin-left: -20px;
+          margin-right: -20px;
+          margin-top: -135px;
+        }
+
         .tf-social-links {
           display: flex;
           justify-content: start;
-          gap: 10px;
+          gap: 12px;
+          position: absolute;
+          bottom: 30%;
+          left: 20px;
           z-index: 2;
-          margin-top: 16px;
+          width: 100%;
         }
 
         .tf-social-btn {
-          width: 40px;
-          height: 40px;
+          width: 42px;
+          height: 42px;
           border-radius: 50%;
-          border: 1px solid var(--tf-border);
+          border: 1px solid var(--tf-accent);
           background-color: transparent;
           display: flex;
           align-items: center;
@@ -376,31 +355,8 @@ export function Footer() {
         }
 
         .tf-social-btn svg {
-          width: 17px;
-          height: 17px;
-        }
-
-        /* ── Landscape image (mobile only) ── */
-        .tf-landscape-wrapper {
-          position: relative;
-          width: calc(100% + 32px);
-          margin-left: -16px;
-          margin-right: -16px;
-          margin-top: 32px;
-        }
-
-        @media (min-width: 768px) {
-          .tf-landscape-wrapper { display: none; }
-        }
-
-        .tf-landscape-social-links {
-          display: flex;
-          justify-content: start;
-          gap: 10px;
-          position: absolute;
-          bottom: 30%;
-          left: 16px;
-          z-index: 2;
+          width: 18px;
+          height: 18px;
         }
 
         .tf-trees {
@@ -412,261 +368,96 @@ export function Footer() {
           z-index: 1;
         }
 
-        /* ── Bottom bar ── */
         .tf-bottom {
           text-align: center;
           font-size: 0.75rem;
           color: hsl(var(--accent-foreground));
           background-color: var(--tf-accent);
-          padding: 14px 0;
-          width: calc(100% + 32px);
-          margin-left: -16px;
-          margin-right: -16px;
+          padding: 15px 0;
+          width: calc(100% + 40px);
+          margin-left: -20px;
+          margin-right: -20px;
           position: relative;
           z-index: 2;
-        }
-
-        .tf-bottom-inner {
-          /* On mobile: simple centered block */
-        }
-
-        .tf-bottom-right {
-          display: none;
-        }
-
-        @media (min-width: 768px) {
-          .tf-bottom {
-            width: calc(100% + 64px);
-            margin-left: -32px;
-            margin-right: -32px;
-          }
-        }
-
-        @media (min-width: 1280px) {
-          .tf-bottom {
-            width: calc(100% + 96px);
-            margin-left: -48px;
-            margin-right: -48px;
-          }
-        }
-
-        /* ══════════════════════════════════════════════════════════════
-           DESKTOP ENHANCEMENTS – industry-standard e-commerce footer
-           ══════════════════════════════════════════════════════════════ */
-
-        @media (min-width: 768px) {
-          /* ── Newsletter: wider input, more prominent button ── */
-          .tf-newsletter-form { gap: 12px; }
-          .tf-newsletter-input { padding: 12px 16px; font-size: 0.9rem; }
-          .tf-btn-join { padding: 0 28px; font-size: 0.9rem; font-weight: 600; }
-
-          /* ── Social icons: slightly larger on md+ ── */
-          .tf-social-btn { width: 44px; height: 44px; }
-          .tf-social-btn svg { width: 19px; height: 19px; }
-
-          /* ── Support links: refined hover animation ── */
-          .tf-support-list a { padding: 12px 0; font-size: 0.9rem; }
-          .tf-support-list a:hover { transform: translateX(6px); }
-          .tf-support-list svg { width: 20px; height: 20px; }
-
-          /* ── Section title: slightly larger on desktop ── */
-          .tf-section-title { font-size: 1.15rem; margin-bottom: 22px; }
-
-          /* ── Bottom bar: flex layout with left/right sections ── */
-          .tf-bottom { text-align: left; }
-          .tf-bottom-inner {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            max-width: 1152px;
-            margin: 0 auto;
-            padding: 0 16px;
-          }
-          .tf-bottom-right {
-            display: flex;
-            gap: 20px;
-          }
-          .tf-bottom-right a {
-            color: hsl(var(--accent-foreground));
-            text-decoration: none;
-            opacity: 0.85;
-            transition: opacity 0.2s;
-            font-size: 0.75rem;
-            white-space: nowrap;
-          }
-          .tf-bottom-right a:hover {
-            opacity: 1;
-            text-decoration: underline;
-          }
-        }
-
-        @media (min-width: 1280px) {
-          /* ── Grid: refined column ratios for xl ── */
-          .tf-grid {
-            grid-template-columns: 1.3fr 1fr 1fr 1.2fr;
-            gap: 64px;
-          }
-
-          /* ── Footer: generous padding on xl ── */
-          .tf-footer { padding: 56px 64px 0 64px; }
-
-          /* ── Brand: larger logo and tagline on xl ── */
-          .tf-brand-logo { width: 96px; }
-          .tf-brand-title { font-size: 2.5rem; }
-          .tf-tagline { font-size: 0.95rem; margin-top: 18px; }
-          .tf-text-block p { font-size: 0.92rem; line-height: 1.8; }
-
-          /* ── Newsletter: even more prominent on xl ── */
-          .tf-newsletter-input { padding: 14px 18px; font-size: 0.95rem; border-radius: 10px; }
-          .tf-btn-join { padding: 0 36px; font-size: 0.95rem; border-radius: 10px; letter-spacing: 0.3px; }
-
-          /* ── Social icons: larger with enhanced hover on xl ── */
-          .tf-social-btn { width: 50px; height: 50px; }
-          .tf-social-btn svg { width: 22px; height: 22px; }
-          .tf-social-links { gap: 14px; margin-top: 22px; }
-          .tf-social-btn:hover {
-            transform: translateY(-3px) scale(1.05);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-          }
-
-          /* ── Support links: refined hover animation on xl ── */
-          .tf-support-list a { padding: 14px 0; font-size: 0.95rem; }
-          .tf-support-list a:hover { transform: translateX(8px); }
-          .tf-support-list svg { width: 22px; height: 22px; }
-
-          /* ── Section titles on xl ── */
-          .tf-section-title { font-size: 1.2rem; margin-bottom: 24px; }
-
-          /* ── Bottom bar on xl ── */
-          .tf-bottom-inner { padding: 0 32px; }
-          .tf-bottom-right { gap: 28px; }
-          .tf-bottom-right a { font-size: 0.8rem; }
         }
       `}</style>
 
       <div className="tf-inner">
-        {/* ── Desktop: 4-column grid; Mobile: stacked ── */}
-        <div className="tf-grid">
-          {/* Column 1: Brand + About */}
-          <div>
-            <div className="tf-brand-header">
-              <img
-                src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784019532/IMG_20260710_151144-removebg-preview_11zon_ck95ax_rfpcoi.png"
-                alt="Tree Friend Logo"
-                className="tf-brand-logo"
-              />
-              <span className="tf-brand-title">Tree Friend</span>
-            </div>
-            <div className="tf-text-block">
-              <p>
-                Tree Friend brings you a wide variety of premium trees and plants to green your space and enrich your life. From fruit trees to ornamental plants, we ensure healthy quality, expert care, and a seamless shopping experience &ndash; helping you grow a greener tomorrow.
-              </p>
-              <p className="tf-tagline">Grow with nature. Live with purpose.</p>
-            </div>
-          </div>
-
-          {/* Column 2: Support Links */}
-          <div>
-            <h2 className="tf-section-title">
-              <img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784018711/IMG_20260714_144403-removebg-preview_irav6y.png" alt="" className="tf-title-icon" />
-              Support
-              <span className="tf-title-line" />
-              <img
-                src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783777695/f5466fe3-bd88-43ad-a8be-389ad10465e3_11zon-removebg-preview_11zon_nmqk0e.png"
-                alt=""
-                className="tf-title-leaf"
-              />
-            </h2>
-            <ul className="tf-support-list">
-              {supportLinks.map(({ label, href, icon: Icon }) => (
-                <li key={label}>
-                  <Link href={href}>
-                    <Icon />
-                    {label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* Column 3: Newsletter */}
-          <div>
-            <h2 className="tf-section-title">
-              <img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783925868/IMG_20260713_125618-removebg-preview_vjieyy.png" alt="" className="tf-title-icon" />
-              Stay Updated
-              <span className="tf-title-line" />
-              <img
-                src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783777695/f5466fe3-bd88-43ad-a8be-389ad10465e3_11zon-removebg-preview_11zon_nmqk0e.png"
-                alt=""
-                className="tf-title-leaf"
-              />
-            </h2>
-            <div className="tf-text-block">
-              <p>Subscribe for exclusive deals and new arrivals.</p>
-            </div>
-            <form
-              className="tf-newsletter-form"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const form = e.currentTarget;
-                const input = form.elements.namedItem("email") as HTMLInputElement;
-                if (!input?.value || !input.checkValidity()) return;
-                const email = input.value.trim();
-                try {
-                  await apiClient.post("/api/newsletter/subscribe", { email });
-                  input.value = "";
-                  alert("Thank you for subscribing! 🌱");
-                } catch {}
-              }}
-            >
-              <input
-                type="email"
-                name="email"
-                placeholder="Your email address"
-                required
-                className="tf-newsletter-input"
-                aria-label="Email address for newsletter"
-              />
-              <button type="submit" className="tf-btn-join">Join</button>
-            </form>
-          </div>
-
-          {/* Column 4: Connect + Social */}
-          <div>
-            <h2 className="tf-section-title">
-              <img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783928352/Adobe_Express_-_file_p8qzoy.png" alt="" className="tf-title-icon" />
-              Connect With Us
-              <span className="tf-title-line" />
-              <img
-                src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783777695/f5466fe3-bd88-43ad-a8be-389ad10465e3_11zon-removebg-preview_11zon_nmqk0e.png"
-                alt=""
-                className="tf-title-leaf"
-              />
-            </h2>
-            <div className="tf-text-block">
-              <p>Follow us on social media for daily plant care tips, inspiration, and updates.</p>
-            </div>
-            {/* Desktop: inline social buttons (no landscape image) */}
-            <div className="tf-social-links">
-              {socials.map(({ label, href, icon: Icon }) => (
-                <a
-                  key={label}
-                  href={href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="tf-social-btn"
-                  aria-label={label}
-                >
-                  <Icon />
-                </a>
-              ))}
-            </div>
-          </div>
+        {/* Brand */}
+        <div className="tf-brand-header">
+          <img
+            src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784019532/IMG_20260710_151144-removebg-preview_11zon_ck95ax_rfpcoi.png"
+            alt="Tree Friend Logo"
+            className="tf-brand-logo"
+          />
+          <span className="tf-brand-title">Tree Friend</span>
         </div>
 
-        {/* Mobile-only: landscape image with socials overlay */}
+        <div className="tf-text-block">
+          <p>
+            Tree Friend brings you a wide variety of premium trees and plants to green your space and enrich your life. From fruit trees to ornamental plants, we ensure healthy quality, expert care, and a seamless shopping experience &ndash; helping you grow a greener tomorrow.
+          </p>
+          <p className="tf-tagline">Grow with nature. Live with purpose.</p>
+        </div>
+
+        {/* Support */}
+        <SectionTitle iconSrc="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1784018711/IMG_20260714_144403-removebg-preview_irav6y.png">
+          Support
+        </SectionTitle>
+        <ul className="tf-support-list">
+          {supportLinks.map(({ label, href, icon: Icon }) => (
+            <li key={label}>
+              <Link href={href}>
+                <Icon />
+                {label}
+              </Link>
+            </li>
+          ))}
+        </ul>
+
+        {/* Newsletter */}
+        <SectionTitle iconSrc="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783925868/IMG_20260713_125618-removebg-preview_vjieyy.png">
+          Stay Updated
+        </SectionTitle>
+        <div className="tf-text-block">
+          <p>Subscribe for exclusive deals and new arrivals.</p>
+        </div>
+        <form
+          className="tf-newsletter-form"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            const form = e.currentTarget;
+            const input = form.elements.namedItem("email") as HTMLInputElement;
+            if (!input?.value || !input.checkValidity()) return;
+            const email = input.value.trim();
+            try {
+              await apiClient.post("/api/newsletter/subscribe", { email });
+              input.value = "";
+              alert("Thank you for subscribing! 🌱");
+            } catch {}
+          }}
+        >
+          <input
+            type="email"
+            name="email"
+            placeholder="Your email address"
+            required
+            className="tf-newsletter-input"
+            aria-label="Email address for newsletter"
+          />
+          <button type="submit" className="tf-btn-join">Join</button>
+        </form>
+
+        {/* Connect With Us */}
+        <SectionTitle iconSrc="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783928352/Adobe_Express_-_file_p8qzoy.png">
+          Connect With Us
+        </SectionTitle>
+        <div className="tf-text-block">
+          <p>Follow us on social media for daily plant care tips, inspiration, and updates.</p>
+        </div>
+
         <div className="tf-landscape-wrapper">
-          <div className="tf-landscape-social-links">
+          <div className="tf-social-links">
             {socials.map(({ label, href, icon: Icon }) => (
               <a
                 key={label}
@@ -680,6 +471,7 @@ export function Footer() {
               </a>
             ))}
           </div>
+
           <img
             src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783750997/Jul_11_2026_12_01_03_PM_11zon_hmll3w.png"
             alt="Tree Landscape"
@@ -688,14 +480,7 @@ export function Footer() {
         </div>
 
         <div className="tf-bottom">
-          <div className="tf-bottom-inner">
-            <span>&copy; {new Date().getFullYear()} Tree Friend. All rights reserved.</span>
-            <div className="tf-bottom-right">
-              <a href="/privacy">Privacy Policy</a>
-              <a href="/terms">Terms of Service</a>
-              <a href="/shipping">Shipping Info</a>
-            </div>
-          </div>
+          &copy; {new Date().getFullYear()} Tree Friend. All rights reserved.
         </div>
       </div>
     </footer>

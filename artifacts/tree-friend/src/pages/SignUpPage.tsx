@@ -19,7 +19,7 @@ function AuthSkeleton() {
 
 export function SignUpPage() {
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-gradient-to-br from-background to-secondary px-4 py-12 lg:py-16">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-gradient-to-br from-background to-secondary px-4 py-12">
       <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallback={<AuthSkeleton />} />
     </div>
   );

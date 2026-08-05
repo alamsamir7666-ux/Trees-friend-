@@ -321,7 +321,7 @@ function CategorySection({
         // old horizontal carousel per user request.
         <>
           {productsLoading ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
               {Array.from({ length: 8 }).map((_, i) => (
                 <Skeleton key={i} className="aspect-square rounded-2xl" />
               ))}
@@ -338,7 +338,7 @@ function CategorySection({
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                 {products.map((product) => (
                   <ProductCard
                     key={product.id}
@@ -416,8 +416,8 @@ export function BrowseAllTreesPage() {
   return (
     <div className="min-h-screen bg-background">
       {/* ─── Page header ─────────────────────────────────────────────────── */}
-      <div className="bg-muted/30 border-b py-6 md:py-8 lg:py-10">
-        <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-6xl xl:max-w-7xl">
+      <div className="bg-muted/30 border-b py-10">
+        <div className="container mx-auto px-4">
           <PageBreadcrumb
             crumbs={[
               { label: "Home", href: "/" },
@@ -436,7 +436,7 @@ export function BrowseAllTreesPage() {
       </div>
 
       {/* ─── Category sections ───────────────────────────────────────────── */}
-      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-4 md:py-6 lg:py-8 max-w-6xl xl:max-w-7xl">
+      <div className="container mx-auto px-4 py-6">
         {categoriesLoading ? (
           <>
             <CategorySectionSkeleton />

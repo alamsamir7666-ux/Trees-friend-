@@ -68,7 +68,7 @@ export default function ReferralPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-4 md:px-6 lg:px-8 py-10">
+    <div className="max-w-2xl mx-auto px-4 py-10">
       <PageBreadcrumb crumbs={[{ label: "Refer & Earn", icon: <Users className="h-3 w-3" /> }]} className="mb-4" />
       <h1 className="font-serif text-3xl mb-2">Refer & Earn</h1>
       <p className="text-muted-foreground text-sm mb-8">
@@ -76,7 +76,7 @@ export default function ReferralPage() {
       </p>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-2 gap-4 lg:gap-6 mb-8">
+      <div className="grid grid-cols-2 gap-4 mb-8">
         <div className="bg-card border border-border rounded-2xl p-5 text-center">
           <p className="text-3xl font-bold text-accent">{data?.totalReferrals ?? 0}</p>
           <p className="text-sm text-muted-foreground mt-1">Friends Referred</p>

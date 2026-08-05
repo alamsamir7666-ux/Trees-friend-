@@ -42,7 +42,7 @@ export function BlogArticlePage() {
 
   if (loading) {
     return (
-      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 max-w-4xl">
+      <div className="container mx-auto px-4 py-10 max-w-3xl">
         <PageBreadcrumb crumbs={[{ label: "Blog", href: "/blog", icon: <BookOpen className="h-3 w-3" /> }, { label: "Loading..." }]} className="mb-6" />
         <div className="flex justify-center py-24">
           <FileText className="h-8 w-8 animate-pulse text-muted-foreground" />
@@ -53,7 +53,7 @@ export function BlogArticlePage() {
 
   if (!article) {
     return (
-      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-24 max-w-4xl text-center">
+      <div className="container mx-auto px-4 py-24 max-w-3xl text-center">
         <BookOpen className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
         <h1 className="font-serif text-2xl font-medium mb-2">Article Not Found</h1>
         <p className="text-muted-foreground mb-6">This article doesn't exist or may have been removed.</p>
@@ -77,7 +77,7 @@ export function BlogArticlePage() {
   };
 
   return (
-    <div className="container mx-auto px-4 py-10 max-w-3xl lg:max-w-3xl">
+    <div className="container mx-auto px-4 py-10 max-w-3xl">
       <PageBreadcrumb
         crumbs={[
           { label: "Blog", href: "/blog", icon: <BookOpen className="h-3 w-3" /> },
@@ -102,8 +102,8 @@ export function BlogArticlePage() {
         <span className="text-muted-foreground text-xs">{article.date}</span>
       </div>
 
-      <h1 className="font-serif text-3xl md:text-4xl lg:text-5xl font-medium mb-4">{article.title}</h1>
-      <p className="text-muted-foreground text-lg lg:text-xl lg:leading-relaxed mb-8">{article.excerpt}</p>
+      <h1 className="font-serif text-3xl md:text-4xl font-medium mb-4">{article.title}</h1>
+      <p className="text-muted-foreground text-lg mb-8">{article.excerpt}</p>
 
       {article.image && (
         <img
@@ -113,16 +113,16 @@ export function BlogArticlePage() {
         />
       )}
 
-      <div className="prose prose-sm md:prose-base lg:prose-lg max-w-none prose-headings:font-serif">
+      <div className="prose prose-sm md:prose-base max-w-none prose-headings:font-serif">
         {Array.isArray(article.content) ? (
           article.content.map((block: any, i: number) => {
             if (block.type === "h2") return <h2 key={i} className="font-serif text-xl md:text-2xl font-medium mt-8 mb-3">{block.text}</h2>;
             if (block.type === "h3") return <h3 key={i} className="font-serif text-lg font-medium mt-6 mb-2">{block.text}</h3>;
-            if (block.type === "p") return <p key={i} className="text-sm md:text-base lg:text-lg leading-relaxed lg:leading-loose mb-4 text-foreground/90">{block.text}</p>;
+            if (block.type === "p") return <p key={i} className="text-sm md:text-base leading-relaxed mb-4 text-foreground/90">{block.text}</p>;
             if (block.type === "ul") return (
               <ul key={i} className="list-disc pl-5 mb-4 space-y-1.5">
                 {block.items?.map((item: string, j: number) => (
-                  <li key={j} className="text-sm md:text-base lg:text-lg text-foreground/90">{item}</li>
+                  <li key={j} className="text-sm md:text-base text-foreground/90">{item}</li>
                 ))}
               </ul>
             );
@@ -140,7 +140,7 @@ export function BlogArticlePage() {
 
       <BlogProductCarousel products={article.linkedProducts || []} />
 
-      <div className="flex items-center justify-between mt-12 pt-6 border-t lg:mt-16 lg:pt-8">
+      <div className="flex items-center justify-between mt-12 pt-6 border-t">
         <Link href="/blog">
           <span className="inline-flex items-center gap-1.5 text-accent text-sm font-medium cursor-pointer">
             <ArrowLeft className="h-4 w-4" /> More Articles

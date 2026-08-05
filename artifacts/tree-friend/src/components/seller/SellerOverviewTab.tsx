@@ -183,7 +183,7 @@ function KpiCard({
     trendUp ? chart.trendUp : trendDown ? chart.trendDown : chart.primary;
 
   return (
-    <div className="group rounded-2xl border border-border bg-card p-5 lg:p-6 transition-all duration-200 hover:shadow-md hover:border-foreground/10">
+    <div className="group rounded-2xl border border-border bg-card p-5 transition-all duration-200 hover:shadow-md hover:border-foreground/10">
       <div className="flex items-start justify-between mb-4">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -196,7 +196,7 @@ function KpiCard({
       </div>
 
       <div className="flex items-end justify-between gap-3 mb-3">
-        <p className="text-2xl lg:text-3xl font-bold tracking-tight text-foreground tabular-nums">
+        <p className="text-2xl font-bold tracking-tight text-foreground tabular-nums">
           {value}
         </p>
         {change !== null && (
@@ -466,14 +466,14 @@ function Section({
 }) {
   return (
     <section className={cn("rounded-2xl border border-border bg-card", className)}>
-      <header className="flex items-center justify-between gap-3 px-5 lg:px-6 py-4 border-b border-border/60">
+      <header className="flex items-center justify-between gap-3 px-5 py-4 border-b border-border/60">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-foreground">{title}</h3>
           {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
         </div>
         {action && <div className="shrink-0">{action}</div>}
       </header>
-      <div className="p-5 lg:p-6">{children}</div>
+      <div className="p-5">{children}</div>
     </section>
   );
 }
@@ -743,9 +743,9 @@ export function SellerOverviewTab({
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-2 lg:grid-cols-4 xl:gap-6 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="rounded-2xl border border-border bg-card p-5 lg:p-6">
+            <div key={i} className="rounded-2xl border border-border bg-card p-5">
               <div className="flex items-center justify-between mb-4">
                 <Skeleton className="h-3 w-20 rounded-full" />
                 <Skeleton className="h-9 w-9 rounded-xl" />
@@ -755,12 +755,12 @@ export function SellerOverviewTab({
             </div>
           ))}
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 xl:gap-6 gap-4">
-          <div className="lg:col-span-2 rounded-2xl border border-border bg-card p-5 lg:p-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2 rounded-2xl border border-border bg-card p-5">
             <Skeleton className="h-5 w-40 mb-5" />
-            <div className="h-64 xl:h-80"><Skeleton className="h-full w-full rounded-xl" /></div>
+            <div className="h-64"><Skeleton className="h-full w-full rounded-xl" /></div>
           </div>
-          <div className="rounded-2xl border border-border bg-card p-5 lg:p-6">
+          <div className="rounded-2xl border border-border bg-card p-5">
             <Skeleton className="h-5 w-32 mb-5" />
             <Skeleton className="h-32 w-32 mx-auto rounded-full" />
           </div>
@@ -927,7 +927,7 @@ export function SellerOverviewTab({
       {/* ─────────────────────────────────────────────────────────────────────
           KPI Cards (4)
       ───────────────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 xl:gap-6 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
           label="Revenue"
           value={formatTk(currentRevenue)}
@@ -973,7 +973,7 @@ export function SellerOverviewTab({
       {/* ─────────────────────────────────────────────────────────────────────
           Main chart + Order status donut
       ───────────────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 xl:gap-6 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <Section
           title="Sales Overview"
           subtitle={`Last ${range.label.toLowerCase()} · non-cancelled orders`}
@@ -997,7 +997,7 @@ export function SellerOverviewTab({
             </div>
           }
         >
-          <div className="h-64 xl:h-80">
+          <div className="h-64">
             {chartData.some((d) => (chartMetric === "revenue" ? d.revenue : d.orders) > 0) ? (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData} margin={{ top: 10, right: 8, left: -8, bottom: 0 }}>
@@ -1074,7 +1074,7 @@ export function SellerOverviewTab({
       {/* ─────────────────────────────────────────────────────────────────────
           Top listings + Store health
       ───────────────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:gap-6 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <Section
           title="Top Performing Listings"
           subtitle="By delivered revenue"
@@ -1358,7 +1358,7 @@ export function SellerOverviewTab({
       {/* ─────────────────────────────────────────────────────────────────────
           Lifetime stats footer
       ───────────────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 xl:gap-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { label: "Lifetime Revenue", value: formatTk(lifetimeRevenue), icon: DollarSign, color: "bg-success text-success-foreground" },
           { label: "Delivered Orders", value: lifetimeDelivered.toLocaleString(), icon: PackageCheck, color: "bg-info text-info-foreground" },

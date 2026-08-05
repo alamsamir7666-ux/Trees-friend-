@@ -58,7 +58,7 @@ export function AddressesPage() {
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
   return (
-    <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 max-w-4xl xl:max-w-5xl">
+    <div className="container mx-auto px-4 py-10 max-w-2xl">
       <PageBreadcrumb crumbs={[{ label: "My Addresses", icon: <MapPin className="h-3 w-3" /> }]} className="mb-4" />
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -85,7 +85,7 @@ export function AddressesPage() {
           <Button className="mt-4 rounded-full" onClick={openAdd}>Add Address</Button>
         </div>
       ) : (
-        <div className="grid lg:grid-cols-2 lg:gap-3 space-y-3 lg:space-y-0">
+        <div className="space-y-3">
           {addresses.map((a: any) => (
             <div key={a.id} className="bg-card border rounded-2xl p-5 flex items-start justify-between gap-4">
               <div className="flex items-start gap-3">

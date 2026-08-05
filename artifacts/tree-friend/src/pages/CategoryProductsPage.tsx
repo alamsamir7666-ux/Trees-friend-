@@ -150,14 +150,14 @@ export function CategoryProductsPage() {
   if (categoriesLoading) {
     return (
       <div className="min-h-screen bg-background">
-        <div className="bg-muted/30 border-b py-6 md:py-8 lg:py-10">
-          <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-6xl">
+        <div className="bg-muted/30 border-b py-10">
+          <div className="container mx-auto px-4">
             <Skeleton className="h-3 w-48 rounded-full mb-3" />
             <Skeleton className="h-10 w-64 mb-2" />
             <Skeleton className="h-4 w-96" />
           </div>
         </div>
-        <div className="container mx-auto px-4 md:px-6 lg:px-8 py-6 md:py-8 lg:py-10 max-w-6xl">
+        <div className="container mx-auto px-4 py-8">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             {Array.from({ length: 4 }).map((_, i) => (
               <Skeleton key={i} className="h-[160px] rounded-[20px]" />
@@ -194,8 +194,8 @@ export function CategoryProductsPage() {
   return (
     <div className="min-h-screen bg-background">
       {/* Page header */}
-      <div className="bg-muted/30 border-b py-6 md:py-8 lg:py-10">
-        <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-6xl">
+      <div className="bg-muted/30 border-b py-10">
+        <div className="container mx-auto px-4">
           <PageBreadcrumb crumbs={crumbs} className="mb-3" />
           <div className="flex items-start gap-4">
             {(currentCat.icon || currentCat.iconImage) && (
@@ -221,7 +221,7 @@ export function CategoryProductsPage() {
       </div>
 
       {/* Body */}
-      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-6 md:py-8 lg:py-10 max-w-6xl">
+      <div className="container mx-auto px-4 py-8">
         {isParentCategory ? (
           // ── Parent category: subcategory cards ─────────────────────────
           <>

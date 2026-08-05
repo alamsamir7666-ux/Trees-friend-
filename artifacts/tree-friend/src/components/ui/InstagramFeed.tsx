@@ -62,17 +62,17 @@ export function InstagramFeed() {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   return (
-    <section className="py-10 md:py-14 lg:py-16 xl:py-20">
-      <div className="container mx-auto px-4 md:px-6 lg:px-8 lg:max-w-6xl xl:max-w-7xl">
+    <section className="py-14">
+      <div className="container mx-auto px-4">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6 lg:mb-8">
+        <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 lg:h-10 lg:w-10 rounded-full bg-gradient-to-br from-pink-500 via-rose-500 to-orange-400 flex items-center justify-center">
-              <Instagram className="h-4.5 w-4.5 lg:h-5 lg:w-5 text-white" />
+            <div className="h-9 w-9 rounded-full bg-gradient-to-br from-pink-500 via-rose-500 to-orange-400 flex items-center justify-center">
+              <Instagram className="h-4.5 w-4.5 text-white" />
             </div>
             <div>
-              <h2 className="font-serif text-lg lg:text-xl font-medium">Follow Our Journey</h2>
-              <p className="text-xs lg:text-sm text-muted-foreground">{INSTAGRAM_HANDLE} on Instagram</p>
+              <h2 className="font-serif text-lg font-medium">Follow Our Journey</h2>
+              <p className="text-xs text-muted-foreground">{INSTAGRAM_HANDLE} on Instagram</p>
             </div>
           </div>
           <a
@@ -87,7 +87,7 @@ export function InstagramFeed() {
         </div>
 
         {/* Grid */}
-        <div className="grid grid-cols-3 md:grid-cols-6 gap-1.5 md:gap-2 lg:gap-3 xl:gap-4">
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-1.5 md:gap-2">
           {PLACEHOLDER_POSTS.map((post) => (
             <a
               key={post.id}
@@ -108,8 +108,8 @@ export function InstagramFeed() {
               />
               {/* Overlay on hover */}
               <div className={`absolute inset-0 bg-black/50 flex items-center justify-center transition-opacity duration-300 ${hoveredId === post.id ? "opacity-100" : "opacity-0"}`}>
-                <div className="text-center px-2 lg:px-3">
-                  <Instagram className="h-5 w-5 lg:h-6 lg:w-6 text-white mx-auto mb-1" />
+                <div className="text-center px-2">
+                  <Instagram className="h-5 w-5 text-white mx-auto mb-1" />
                   <p className="text-white text-xs leading-tight line-clamp-3">{post.caption}</p>
                 </div>
               </div>

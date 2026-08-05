@@ -21,7 +21,7 @@ export function PageBreadcrumb({ crumbs, className }: PageBreadcrumbProps) {
     <nav
       aria-label="Breadcrumb"
       className={cn(
-        "flex items-center gap-1 lg:gap-2 text-xs lg:text-sm text-muted-foreground flex-wrap",
+        "flex items-center gap-1 text-xs text-muted-foreground flex-wrap",
         className,
       )}
     >
@@ -31,7 +31,7 @@ export function PageBreadcrumb({ crumbs, className }: PageBreadcrumbProps) {
         className="flex items-center gap-1 hover:text-accent transition-colors font-medium"
         aria-label="Home"
       >
-        <Home className="h-3.5 w-3.5 lg:h-4 lg:w-4 shrink-0" />
+        <Home className="h-3.5 w-3.5 shrink-0" />
         <span className="sr-only">Home</span>
       </Link>
 
@@ -39,7 +39,7 @@ export function PageBreadcrumb({ crumbs, className }: PageBreadcrumbProps) {
         const isLast = i === crumbs.length - 1;
         return (
           <span key={i} className="flex items-center gap-1">
-            <ChevronRight className="h-3 w-3 lg:h-3.5 lg:w-3.5 text-muted-foreground/50 shrink-0" />
+            <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
             {crumb.href && !isLast ? (
               <Link
                 href={crumb.href}
