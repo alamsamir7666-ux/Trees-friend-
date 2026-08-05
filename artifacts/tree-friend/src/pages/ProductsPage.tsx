@@ -682,7 +682,7 @@ export function ProductsPage() {
                         {group.name}
                       </h2>
                     </div>
-                    <Link href={`/category/${group.slug}?view=listings`} className="shrink-0 ml-3">
+                    <Link href={`/category/${group.slug}/listings`} className="shrink-0 ml-3">
                       <Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm gap-1">
                         View all
                         <ArrowRight className="h-3.5 w-3.5" />
