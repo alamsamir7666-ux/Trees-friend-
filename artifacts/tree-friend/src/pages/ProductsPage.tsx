@@ -106,7 +106,7 @@ function LazyProductCard({ product, backContext }: { product: any; backContext?:
 
 interface SwipeableCardProps {
   card: ShopAllCard;
-  onAddToBag: (listingId: number, nurseryName: string, qualifying: SellerListingVariant[]) => void;
+  onAddToBag: (productId: number, listingId: number, nurseryName: string, qualifying: SellerListingVariant[]) => void;
   adding: boolean;
   isLoggedIn: boolean;
 }
@@ -206,7 +206,7 @@ function SwipeableSellerListingCard({ card, onAddToBag, adding, isLoggedIn }: Sw
           size="sm"
           className="flex-1 rounded-lg border-primary text-primary hover:bg-primary/5 hover:text-primary gap-1.5"
           disabled={outOfStock || adding}
-          onClick={() => onAddToBag(card.listing.id, card.seller.nurseryName, qualifying)}
+          onClick={() => onAddToBag(card.product.id, card.listing.id, card.seller.nurseryName, qualifying)}
         >
           {!isLoggedIn ? (
             <><LogIn className="h-3.5 w-3.5" /> Sign in</>
@@ -327,10 +327,10 @@ export function ProductsPage() {
   const [addingId, setAddingId] = useState<number | null>(null);
   const [pickerListingId, setPickerListingId] = useState<number | null>(null);
 
-  function addVariantToBag(variant: SellerListingVariant, listingId: number, nurseryName: string) {
+  function addVariantToBag(productId: number, variant: SellerListingVariant, listingId: number, nurseryName: string) {
     setAddingId(listingId);
     addToCart.mutate(
-      { data: { productId: variant.sellerListingId, sellerListingVariantId: variant.id, quantity: 1 } },
+      { data: { productId, sellerListingVariantId: variant.id, quantity: 1 } },
       {
         onSuccess: () => {
           qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
@@ -344,14 +344,14 @@ export function ProductsPage() {
     );
   }
 
-  function handleAddToBag(listingId: number, nurseryName: string, qualifyingVariants: SellerListingVariant[]) {
+  function handleAddToBag(productId: number, listingId: number, nurseryName: string, qualifyingVariants: SellerListingVariant[]) {
     if (!user) {
       toast({ title: "Sign in required", description: "Please sign in to buy from marketplace sellers.", variant: "destructive" });
       setLocation("/sign-in");
       return;
     }
     if (qualifyingVariants.length === 1) {
-      addVariantToBag(qualifyingVariants[0], listingId, nurseryName);
+      addVariantToBag(productId, qualifyingVariants[0], listingId, nurseryName);
       return;
     }
     setPickerListingId(listingId);
@@ -805,7 +805,7 @@ export function ProductsPage() {
         onOpenChange={(o) => { if (!o) setPickerListingId(null); }}
         sellerName={pickerCard.seller.nurseryName}
         variants={pickerQualifying}
-        onConfirm={(variant) => addVariantToBag(variant, pickerCard.listing.id, pickerCard.seller.nurseryName)}
+        onConfirm={(variant) => addVariantToBag(pickerCard.product.id, variant, pickerCard.listing.id, pickerCard.seller.nurseryName)}
       />
     )}
     </>
