@@ -35,6 +35,10 @@ const SORT_OPTIONS = [
 
 const PER_PAGE_OPTIONS = ["12", "24", "36", "48"];
 
+// ── Shop-All progressive loading constants ────────────────────────────────
+const SHOP_ALL_INITIAL = 6;   // cards per group on first load
+const SHOP_ALL_BATCH = 8;     // cards to load when swiping near the edge
+
 // ── Shop-All API types ─────────────────────────────────────────────────────
 /** One seller listing card as returned by the shop-all endpoint */
 interface ShopAllCard {
@@ -52,19 +56,38 @@ interface ShopAllGroup {
   slug: string;
   parentId: number | null;
   parentName: string | null;
+  totalCount: number;  // total available cards in this group (for progressive loading)
   cards: ShopAllCard[];
 }
 
-/** Response shape from GET /api/seller-listings/shop-all */
+/** Response shape from GET /api/seller-listings/shop-all (mode 1) */
 interface ShopAllResponse {
   groups: ShopAllGroup[];
 }
 
-// ── Fetcher for the shop-all endpoint ──────────────────────────────────────
+/** Response shape from GET /api/seller-listings/shop-all (mode 2 — load more) */
+interface ShopAllLoadMoreResponse {
+  groupId: number;
+  cards: ShopAllCard[];
+  hasMore: boolean;
+}
+
+// ── Fetcher for the shop-all endpoint (mode 1 — initial load) ──────────────
 async function fetchShopAll(category?: string): Promise<ShopAllResponse> {
-  const params: Record<string, string> = { limit: "20" };
+  const params: Record<string, string> = { limit: String(SHOP_ALL_INITIAL) };
   if (category) params.category = category;
   const { data } = await apiClient.get<ShopAllResponse>("/seller-listings/shop-all", { params });
+  return data;
+}
+
+// ── Fetcher for the shop-all endpoint (mode 2 — load more for one group) ───
+async function fetchShopAllMore(groupId: number, offset: number, batchSize: number = SHOP_ALL_BATCH): Promise<ShopAllLoadMoreResponse> {
+  const params: Record<string, string> = {
+    groupId: String(groupId),
+    offset: String(offset),
+    batchSize: String(batchSize),
+  };
+  const { data } = await apiClient.get<ShopAllLoadMoreResponse>("/seller-listings/shop-all", { params });
   return data;
 }
 
@@ -227,13 +250,41 @@ function SwipeableSellerListingCard({ card, onAddToBag, adding, isLoggedIn }: Sw
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Swipeable row with chevron buttons
+//  Swipeable row with chevron buttons + infinite-swipe detection
 // ══════════════════════════════════════════════════════════════════════════
 
 const SCROLL_STEP = 340;
 
-function SwipeableRow({ children }: { children: React.ReactNode }) {
+interface SwipeableRowProps {
+  /** Called when user swipes near the right edge (within ~2 card widths of the end) */
+  onLoadMore?: () => void;
+  /** True while a load-more fetch is in-flight (shows trailing skeleton) */
+  loadingMore?: boolean;
+  /** If true, there are no more cards to load — never call onLoadMore */
+  hasMore?: boolean;
+  children: React.ReactNode;
+}
+
+function SwipeableRow({ children, onLoadMore, loadingMore, hasMore }: SwipeableRowProps) {
   const sliderRef = useRef<HTMLDivElement>(null);
+  const loadingTriggered = useRef(false);  // debounce: only trigger once per swipe-to-edge
+
+  const handleScroll = useCallback(() => {
+    const el = sliderRef.current;
+    if (!el || !onLoadMore || !hasMore || loadingMore) return;
+
+    // How far the user has scrolled from the right edge.
+    // scrollLeft + clientWidth ≈ total scrollable width when at the far right.
+    const distanceFromRight = el.scrollWidth - (el.scrollLeft + el.clientWidth);
+
+    // Trigger load-more when within ~2 card widths (700px) of the right edge
+    if (distanceFromRight < 700 && !loadingTriggered.current) {
+      loadingTriggered.current = true;
+      onLoadMore();
+      // Reset after a short delay so subsequent swipes can trigger again
+      setTimeout(() => { loadingTriggered.current = false; }, 1500);
+    }
+  }, [onLoadMore, hasMore, loadingMore]);
 
   return (
     <div className="relative">
@@ -246,7 +297,11 @@ function SwipeableRow({ children }: { children: React.ReactNode }) {
           <ChevronLeft className="h-4 w-4" />
         </button>
         <button
-          onClick={() => sliderRef.current?.scrollBy({ left: SCROLL_STEP, behavior: "smooth" })}
+          onClick={() => {
+            sliderRef.current?.scrollBy({ left: SCROLL_STEP, behavior: "smooth" });
+            // Also check if we need to load more after clicking the right chevron
+            setTimeout(handleScroll, 400);
+          }}
           aria-label="Scroll right"
           className="h-8 w-8 rounded-full border border-border bg-card flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
         >
@@ -255,10 +310,17 @@ function SwipeableRow({ children }: { children: React.ReactNode }) {
       </div>
       <div
         ref={sliderRef}
+        onScroll={handleScroll}
         className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide snap-x snap-mandatory"
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
         {children}
+        {/* Trailing skeleton while loading more */}
+        {loadingMore && (
+          <div className="shrink-0 w-[300px] sm:w-[340px] flex items-center justify-center snap-start">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -314,7 +376,7 @@ export function ProductsPage() {
   // ── Shop-All data: seller listings grouped by subcategory/category ───────
   //    Only fetched when no category filter is active (the "Shop All" view)
   const {
-    data: shopAllData,
+    data: shopAllDataRaw,
     isLoading: shopAllLoading,
   } = useQuery<ShopAllResponse>({
     queryKey: ["shop-all-seller-listings", activeCategory],
@@ -322,6 +384,48 @@ export function ProductsPage() {
     staleTime: 60_000,
     enabled: !debouncedSearch, // only use shop-all when no search is active
   });
+
+  // ── Progressive loading state per group ─────────────────────────────────
+  // shopAllGroups: mutable copy of groups where we append cards as they load
+  const [shopAllGroups, setShopAllGroups] = useState<ShopAllGroup[]>([]);
+  // loadingMoreGroups: set of group IDs currently fetching more cards
+  const [loadingMoreGroups, setLoadingMoreGroups] = useState<Set<number>>(new Set());
+
+  // Sync from raw query data → local state (only on fresh fetch)
+  useEffect(() => {
+    if (shopAllDataRaw?.groups) {
+      setShopAllGroups(shopAllDataRaw.groups);
+    }
+  }, [shopAllDataRaw]);
+
+  /** Load more cards for a specific group (called by SwipeableRow on edge detection) */
+  const handleLoadMore = useCallback(async (groupId: number) => {
+    const group = shopAllGroups.find((g) => g.id === groupId);
+    if (!group) return;
+    const currentCount = group.cards.length;
+    // Don't fetch if already all loaded or already loading
+    if (currentCount >= group.totalCount || loadingMoreGroups.has(groupId)) return;
+
+    setLoadingMoreGroups((prev) => new Set(prev).add(groupId));
+    try {
+      const result = await fetchShopAllMore(groupId, currentCount, SHOP_ALL_BATCH);
+      setShopAllGroups((prev) =>
+        prev.map((g) =>
+          g.id === groupId
+            ? { ...g, cards: [...g.cards, ...result.cards] }
+            : g,
+        ),
+      );
+    } catch (err) {
+      console.error("Failed to load more seller listings:", err);
+    } finally {
+      setLoadingMoreGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(groupId);
+        return next;
+      });
+    }
+  }, [shopAllGroups, loadingMoreGroups]);
 
   // ── Cart / auth for Add to Bag ──────────────────────────────────────────
   const { user } = useUser();
@@ -458,7 +562,7 @@ export function ProductsPage() {
   const { compareIds, addToCompare, removeFromCompare, isInCompare, clearCompare } = useComparison();
 
   // ── Picker for variant selection (seller listings) ──────────────────────
-  const pickerCard = shopAllData?.groups
+  const pickerCard = shopAllGroups
     .flatMap(g => g.cards)
     .find(c => c.listing.id === pickerListingId);
   const pickerQualifying = pickerCard ? pickerCard.listing.variants.filter(v => v.availableQuantity > 0) : [];
@@ -513,7 +617,7 @@ export function ProductsPage() {
                 <ShopAllGroupSkeleton />
                 <ShopAllGroupSkeleton />
               </>
-            ) : !shopAllData?.groups || shopAllData.groups.length === 0 ? (
+            ) : shopAllGroups.length === 0 ? (
               /* ── Empty state ─────────────────────────────────────────── */
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
@@ -529,7 +633,7 @@ export function ProductsPage() {
               </div>
             ) : (
               /* ── Groups with swipeable rows ──────────────────────────── */
-              shopAllData.groups.map((group) => (
+              shopAllGroups.map((group) => (
                 <section key={group.id} className="py-6">
                   {/* Section header */}
                   <div className="flex items-end justify-between mb-5">
@@ -551,8 +655,12 @@ export function ProductsPage() {
                     </Link>
                   </div>
 
-                  {/* Swipeable row of seller listing cards */}
-                  <SwipeableRow>
+                  {/* Swipeable row with infinite-swipe progressive loading */}
+                  <SwipeableRow
+                    onLoadMore={() => handleLoadMore(group.id)}
+                    loadingMore={loadingMoreGroups.has(group.id)}
+                    hasMore={group.cards.length < group.totalCount}
+                  >
                     {group.cards.map((card) => (
                       <SwipeableSellerListingCard
                         key={card.listing.id}

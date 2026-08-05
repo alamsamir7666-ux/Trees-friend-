@@ -210,23 +210,172 @@ const PAYMENT_METHOD_ERROR =
  */
 /**
  * GET /seller-listings/shop-all
- * Buyer-facing endpoint for the "Shop All" page. Returns seller listings
- * grouped by subcategory (L2) or category (L1 if no subcategories exist).
+ * Buyer-facing endpoint for the "Shop All" page.
  *
- * Each group has:
- *   - id, name, slug (the subcategory or category)
- *   - parentId / parentName (the parent category, if this is a subcategory)
- *   - cards[] — the seller listing cards in this group
+ * MODE 1 — Initial load (no groupId):
+ *   Returns seller listings grouped by subcategory (L2) or category (L1).
+ *   Each group includes: id, name, slug, parentId, parentName, totalCount, cards[]
+ *   Only the first `limit` cards per group are returned (default 6).
+ *
+ * MODE 2 — Load more (groupId + offset provided):
+ *   Returns the next `batchSize` cards for a single group.
+ *   Response: { groupId, cards, hasMore }
  *
  * Query params:
- *   - limit (default 10, max 50) — max cards per group
- *   - category (optional) — filter to a specific category slug
+ *   - limit      (default 6, max 50) — initial cards per group (mode 1)
+ *   - category   (optional) — filter to a specific category slug
+ *   - groupId    (optional) — category ID to load more cards for (mode 2)
+ *   - offset     (default 0) — skip this many cards (mode 2)
+ *   - batchSize  (default 8, max 50) — how many cards to fetch (mode 2)
  */
+
+/** Shared helper: build a SellerListingCard from a raw listing row */
+function buildCardsFromRows(
+  rows: { listing: any; seller: any; productCategoryId: number; productId: number; productName: string; productSlug: string }[],
+  variantsByListing: Map<number, SellerListingVariantRow[]>,
+  statsMap: Map<number, { avg: number; count: number }>,
+) {
+  return rows
+    .map(({ listing, seller, productCategoryId, productId, productName, productSlug }) => {
+      const variants = variantsByListing.get(listing.id) ?? [];
+      const qualifyingVariants = variants.filter((v) => v.availableQuantity > 0);
+      const stats = statsMap.get(listing.id) ?? { avg: 0, count: 0 };
+      return {
+        listing: toListingWithVariants(listing, variants),
+        qualifyingVariants,
+        productCategoryId,
+        productId,
+        productName,
+        productSlug,
+        seller: {
+          id: seller.id,
+          businessName: seller.businessName,
+          nurseryName: seller.nurseryName,
+          location: seller.location,
+          isVerified: seller.isVerified,
+          logoUrl: seller.logoUrl,
+        },
+        rating: stats.avg,
+        reviewCount: stats.count,
+      };
+    })
+    .filter((card) => card.qualifyingVariants.length > 0);
+}
+
+/** Shared helper: strip internal fields to produce the public card shape */
+function toPublicCard(card: any) {
+  const { qualifyingVariants, productCategoryId, productId, productName, productSlug, ...rest } = card;
+  return {
+    ...rest,
+    product: { id: productId, name: productName, slug: productSlug },
+  };
+}
+
+/** Shared helper: fetch variants + review stats for a set of listing IDs */
+async function fetchVariantsAndStats(listingIds: number[]) {
+  const [variantRows, statsRows] = await Promise.all([
+    listingIds.length > 0
+      ? db
+          .select()
+          .from(sellerListingVariantsTable)
+          .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
+      : Promise.resolve([] as SellerListingVariantRow[]),
+    listingIds.length > 0
+      ? db
+          .select({
+            sellerListingId: reviewsTable.sellerListingId,
+            avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
+            count: sql<string>`COUNT(*)`,
+          })
+          .from(reviewsTable)
+          .where(inArray(reviewsTable.sellerListingId, listingIds))
+          .groupBy(reviewsTable.sellerListingId)
+      : Promise.resolve([]),
+  ]);
+
+  const variantsByListing = new Map<number, SellerListingVariantRow[]>();
+  for (const v of variantRows) {
+    const list = variantsByListing.get(v.sellerListingId) ?? [];
+    list.push(v);
+    variantsByListing.set(v.sellerListingId, list);
+  }
+
+  const statsMap = new Map<number, { avg: number; count: number }>();
+  for (const s of statsRows) {
+    if (s.sellerListingId != null) {
+      statsMap.set(s.sellerListingId, { avg: Number(Number(s.avg).toFixed(1)), count: Number(s.count) });
+    }
+  }
+
+  return { variantsByListing, statsMap };
+}
+
 router.get("/seller-listings/shop-all", async (req, res) => {
   try {
-    const { limit = "10", category } = req.query as Record<string, string>;
-    const limitNum = Math.min(50, Math.max(1, parseInt(limit)));
+    const {
+      limit = "6",
+      category,
+      groupId,
+      offset = "0",
+      batchSize = "8",
+    } = req.query as Record<string, string>;
 
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit)));
+    const offsetNum = Math.max(0, parseInt(offset));
+    const batchNum = Math.min(50, Math.max(1, parseInt(batchSize)));
+
+    // ── MODE 2: Load more cards for a specific group ──────────────────
+    if (groupId) {
+      const gid = parseInt(groupId);
+      if (isNaN(gid)) return res.status(400).json({ error: "Invalid groupId" });
+
+      // Find the category IDs this group covers
+      const groupCat = await db
+        .select({ id: categoriesTable.id, parentId: categoriesTable.parentId })
+        .from(categoriesTable)
+        .where(eq(categoriesTable.id, gid))
+        .limit(1);
+
+      if (groupCat.length === 0) return res.status(404).json({ error: "Group not found" });
+
+      // If this is a subcategory, its catIds = [gid]; if parent with no subcats, catIds = [gid]
+      const catIds = [gid];
+
+      // Fetch listings for this group
+      const listingRows = await db
+        .select({
+          listing: sellerListingsTable,
+          seller: sellersTable,
+          productCategoryId: productsTable.categoryId,
+          productId: productsTable.id,
+          productName: productsTable.name,
+          productSlug: productsTable.slug,
+        })
+        .from(sellerListingsTable)
+        .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+        .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
+        .where(
+          and(
+            eq(sellerListingsTable.visibility, "public"),
+            eq(sellerListingsTable.approvalStatus, "approved"),
+            eq(sellersTable.status, "active"),
+            inArray(productsTable.categoryId, catIds),
+          ),
+        );
+
+      const allListingIds = listingRows.map((r) => r.listing.id);
+      const { variantsByListing, statsMap } = await fetchVariantsAndStats(allListingIds);
+      const allCards = buildCardsFromRows(listingRows, variantsByListing, statsMap);
+      const groupCards = allCards.filter((c) => catIds.includes(c.productCategoryId));
+
+      // Apply offset + batchSize
+      const paged = groupCards.slice(offsetNum, offsetNum + batchNum).map(toPublicCard);
+      const hasMore = offsetNum + batchNum < groupCards.length;
+
+      return res.json({ groupId: gid, cards: paged, hasMore });
+    }
+
+    // ── MODE 1: Initial load — all groups with limited cards ───────────
     // 1. Fetch all categories and build a tree
     const allCats = await db
       .select()
@@ -235,7 +384,6 @@ router.get("/seller-listings/shop-all", async (req, res) => {
 
     const parents = allCats.filter((c) => c.parentId == null);
     const childrenOf = (pid: number) => allCats.filter((c) => c.parentId === pid);
-    const catById = new Map(allCats.map((c) => [c.id, c]));
 
     // If a specific category filter is requested, narrow the parents
     let filteredParents = parents;
@@ -259,33 +407,21 @@ router.get("/seller-listings/shop-all", async (req, res) => {
     for (const parent of filteredParents) {
       const subs = childrenOf(parent.id);
       if (subs.length > 0) {
-        // One group per subcategory
         for (const sub of subs) {
           groups.push({
-            id: sub.id,
-            name: sub.name,
-            slug: sub.slug,
-            parentId: parent.id,
-            parentName: parent.name,
-            catIds: [sub.id],
+            id: sub.id, name: sub.name, slug: sub.slug,
+            parentId: parent.id, parentName: parent.name, catIds: [sub.id],
           });
         }
       } else {
-        // No subcategories — one group for the parent category itself
         groups.push({
-          id: parent.id,
-          name: parent.name,
-          slug: parent.slug,
-          parentId: null,
-          parentName: null,
-          catIds: [parent.id],
+          id: parent.id, name: parent.name, slug: parent.slug,
+          parentId: null, parentName: null, catIds: [parent.id],
         });
       }
     }
 
-    // 3. Fetch all public+approved seller listings with active sellers,
-    //    joined with product to get categoryId, then filter by group catIds
-    //    This single query is far more efficient than N queries per group.
+    // 3. Fetch all public+approved seller listings with active sellers
     const listingRows = await db
       .select({
         listing: sellerListingsTable,
@@ -306,79 +442,21 @@ router.get("/seller-listings/shop-all", async (req, res) => {
         ),
       );
 
-    // 4. Fetch variants and review stats for all listings at once
+    // 4. Fetch variants and review stats
     const allListingIds = listingRows.map((r) => r.listing.id);
-    const [variantRows, statsRows] = await Promise.all([
-      allListingIds.length > 0
-        ? db
-            .select()
-            .from(sellerListingVariantsTable)
-            .where(inArray(sellerListingVariantsTable.sellerListingId, allListingIds))
-        : Promise.resolve([] as SellerListingVariantRow[]),
-      allListingIds.length > 0
-        ? db
-            .select({
-              sellerListingId: reviewsTable.sellerListingId,
-              avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
-              count: sql<string>`COUNT(*)`,
-            })
-            .from(reviewsTable)
-            .where(inArray(reviewsTable.sellerListingId, allListingIds))
-            .groupBy(reviewsTable.sellerListingId)
-        : Promise.resolve([]),
-    ]);
+    const { variantsByListing, statsMap } = await fetchVariantsAndStats(allListingIds);
 
-    const variantsByListing = new Map<number, SellerListingVariantRow[]>();
-    for (const v of variantRows) {
-      const list = variantsByListing.get(v.sellerListingId) ?? [];
-      list.push(v);
-      variantsByListing.set(v.sellerListingId, list);
-    }
+    // 5. Build SellerListingCard objects
+    const allCards = buildCardsFromRows(listingRows, variantsByListing, statsMap);
 
-    const statsMap = new Map<number, { avg: number; count: number }>();
-    for (const s of statsRows) {
-      if (s.sellerListingId != null) {
-        statsMap.set(s.sellerListingId, { avg: Number(Number(s.avg).toFixed(1)), count: Number(s.count) });
-      }
-    }
-
-    // 5. Build SellerListingCard objects and assign to groups
-    const allCards = listingRows
-      .map(({ listing, seller, productCategoryId, productId, productName, productSlug }) => {
-        const variants = variantsByListing.get(listing.id) ?? [];
-        const qualifyingVariants = variants.filter((v) => v.availableQuantity > 0);
-        const stats = statsMap.get(listing.id) ?? { avg: 0, count: 0 };
-        return {
-          listing: toListingWithVariants(listing, variants),
-          qualifyingVariants,
-          productCategoryId,
-          productId,
-          productName,
-          productSlug,
-          seller: {
-            id: seller.id,
-            businessName: seller.businessName,
-            nurseryName: seller.nurseryName,
-            location: seller.location,
-            isVerified: seller.isVerified,
-            logoUrl: seller.logoUrl,
-          },
-          rating: stats.avg,
-          reviewCount: stats.count,
-        };
-      })
-      .filter((card) => card.qualifyingVariants.length > 0);
-
-    // 6. Build the response: groups with their cards (limited per group)
+    // 6. Build the response: groups with their cards (limited per group) + totalCount
     const result = groups
       .map((group) => {
-        const groupCards = allCards
-          .filter((c) => group.catIds.includes(c.productCategoryId))
+        const groupAllCards = allCards.filter((c) => group.catIds.includes(c.productCategoryId));
+        const totalCount = groupAllCards.length;
+        const groupCards = groupAllCards
           .slice(0, limitNum)
-          .map(({ qualifyingVariants, productCategoryId, productId, productName, productSlug, ...card }) => ({
-            ...card,
-            product: { id: productId, name: productName, slug: productSlug },
-          }));
+          .map(toPublicCard);
 
         return {
           id: group.id,
@@ -386,10 +464,11 @@ router.get("/seller-listings/shop-all", async (req, res) => {
           slug: group.slug,
           parentId: group.parentId,
           parentName: group.parentName,
+          totalCount,
           cards: groupCards,
         };
       })
-      .filter((group) => group.cards.length > 0); // Only include groups that have listings
+      .filter((group) => group.cards.length > 0);
 
     res.json({ groups: result });
   } catch (err) {
