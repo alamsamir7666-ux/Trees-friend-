@@ -477,6 +477,145 @@ router.get("/seller-listings/shop-all", async (req, res) => {
   }
 });
 
+/**
+ * GET /seller-listings/by-category
+ * Returns seller listings for a specific category, grouped by product.
+ * Used on the CategoryProductsPage ("View all" from Shop All).
+ *
+ * MODE 1 — Initial load (no productId offset):
+ *   Returns groups, each with a product name + its seller listing cards.
+ *   { groups: [{ product: {id,name,slug}, totalCount, cards[] }] }
+ *
+ * MODE 2 — Load more (productId + offset provided):
+ *   Returns next batch of cards for one product.
+ *   { productId, cards, hasMore }
+ *
+ * Query params:
+ *   - categoryId  (required) — the subcategory/category ID
+ *   - limit       (default 6, max 50) — initial cards per product group
+ *   - productId   (optional) — product ID to load more cards for (mode 2)
+ *   - offset      (default 0) — skip this many cards (mode 2)
+ *   - batchSize   (default 8, max 50) — cards per batch (mode 2)
+ */
+router.get("/seller-listings/by-category", async (req, res) => {
+  try {
+    const {
+      categoryId,
+      limit = "6",
+      productId,
+      offset = "0",
+      batchSize = "8",
+    } = req.query as Record<string, string>;
+
+    if (!categoryId) return res.status(400).json({ error: "categoryId is required" });
+    const catId = parseInt(categoryId);
+    if (isNaN(catId)) return res.status(400).json({ error: "Invalid categoryId" });
+
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit)));
+    const offsetNum = Math.max(0, parseInt(offset));
+    const batchNum = Math.min(50, Math.max(1, parseInt(batchSize)));
+
+    // ── MODE 2: Load more cards for a specific product ──────────────────
+    if (productId) {
+      const pid = parseInt(productId);
+      if (isNaN(pid)) return res.status(400).json({ error: "Invalid productId" });
+
+      const listingRows = await db
+        .select({
+          listing: sellerListingsTable,
+          seller: sellersTable,
+          productId: productsTable.id,
+          productName: productsTable.name,
+          productSlug: productsTable.slug,
+        })
+        .from(sellerListingsTable)
+        .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+        .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
+        .where(
+          and(
+            eq(sellerListingsTable.visibility, "public"),
+            eq(sellerListingsTable.approvalStatus, "approved"),
+            eq(sellersTable.status, "active"),
+            eq(productsTable.id, pid),
+          ),
+        );
+
+      const allListingIds = listingRows.map((r) => r.listing.id);
+      const { variantsByListing, statsMap } = await fetchVariantsAndStats(allListingIds);
+      const allCards = buildCardsFromRows(
+        listingRows.map((r) => ({ ...r, productCategoryId: catId })),
+        variantsByListing,
+        statsMap,
+      );
+
+      const paged = allCards.slice(offsetNum, offsetNum + batchNum).map(toPublicCard);
+      const hasMore = offsetNum + batchNum < allCards.length;
+
+      return res.json({ productId: pid, cards: paged, hasMore });
+    }
+
+    // ── MODE 1: Initial load — all products with limited cards ───────────
+    // Fetch all public+approved seller listings in this category
+    const listingRows = await db
+      .select({
+        listing: sellerListingsTable,
+        seller: sellersTable,
+        productId: productsTable.id,
+        productName: productsTable.name,
+        productSlug: productsTable.slug,
+      })
+      .from(sellerListingsTable)
+      .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+      .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
+      .where(
+        and(
+          eq(sellerListingsTable.visibility, "public"),
+          eq(sellerListingsTable.approvalStatus, "approved"),
+          eq(sellersTable.status, "active"),
+          eq(productsTable.categoryId, catId),
+        ),
+      );
+
+    const allListingIds = listingRows.map((r) => r.listing.id);
+    const { variantsByListing, statsMap } = await fetchVariantsAndStats(allListingIds);
+    const allCards = buildCardsFromRows(
+      listingRows.map((r) => ({ ...r, productCategoryId: catId })),
+      variantsByListing,
+      statsMap,
+    );
+
+    // Group by product
+    const productMap = new Map<number, { name: string; slug: string; cards: any[] }>();
+    for (const card of allCards) {
+      const existing = productMap.get(card.productId);
+      if (existing) {
+        existing.cards.push(card);
+      } else {
+        productMap.set(card.productId, {
+          name: card.productName,
+          slug: card.productSlug,
+          cards: [card],
+        });
+      }
+    }
+
+    // Build response with limited cards per product + totalCount
+    const groups = Array.from(productMap.entries())
+      .map(([pid, { name, slug, cards }]) => ({
+        product: { id: pid, name, slug },
+        totalCount: cards.length,
+        cards: cards.slice(0, limitNum).map(toPublicCard),
+      }))
+      .filter((g) => g.cards.length > 0)
+      .sort((a, b) => a.product.name.localeCompare(b.product.name));
+
+    res.json({ groups });
+  } catch (err) {
+    console.error("By-category seller listings error:", err);
+    res.status(500).json({ error: "Failed to fetch seller listings by category" });
+  }
+});
+
 router.get("/seller-listings/mine", requireSeller, async (req, res) => {
   try {
     const listings = await db
