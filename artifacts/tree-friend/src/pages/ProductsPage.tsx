@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
-import { useListProducts, useListCategories, getListCategoriesQueryKey, type Product, useAddToCart, getGetCartQueryKey, type SellerListing, type SellerListingCardSellerInfo, type SellerListingVariant } from "@workspace/api-client-react";
+import { useListProducts, type Product, useAddToCart, getGetCartQueryKey, type SellerListing, type SellerListingCardSellerInfo, type SellerListingVariant } from "@workspace/api-client-react";
 import { ProductCard } from "@/components/ui/ProductCard";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -73,9 +73,8 @@ interface ShopAllLoadMoreResponse {
 }
 
 // ── Fetcher for the shop-all endpoint (mode 1 — initial load) ──────────────
-async function fetchShopAll(category?: string): Promise<ShopAllResponse> {
+async function fetchShopAll(): Promise<ShopAllResponse> {
   const params: Record<string, string> = { limit: String(SHOP_ALL_INITIAL) };
-  if (category) params.category = category;
   const { data } = await apiClient.get<ShopAllResponse>("/seller-listings/shop-all", { params });
   return data;
 }
@@ -393,7 +392,6 @@ export function ProductsPage() {
   const [minRating, setMinRating] = useState(0);
   const [perPage, setPerPage] = useState(24);
   const [showFilterPanel, setShowFilterPanel] = useState(false);
-  const [activeParentIdx, setActiveParentIdx] = useState(0);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [totalFromAPI, setTotalFromAPI] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
@@ -401,21 +399,35 @@ export function ProductsPage() {
 
   const [, navigate] = useLocation();
   const searchStr = useSearch();
-  const activeCategory = new URLSearchParams(searchStr).get("category") ?? "";
 
-  // ── Categories (shared cache with nav/browse/home) ──────────────────────
-  const { data: dbCategories } = useListCategories({
-    query: { staleTime: 60_000, queryKey: getListCategoriesQueryKey() },
-  });
+  // ── Defensive redirect: any inbound /products?category=<slug> is sent to
+  //    the dedicated /category/<slug> page, since the filtered view has been
+  //    removed. This protects bookmarks and external links.
+  useEffect(() => {
+    const p = new URLSearchParams(searchStr);
+    const cat = p.get("category");
+    if (cat) {
+      // CSV slugs (e.g. "mango-tree,banana") were used to mean "all subs of a
+      // parent". The simplest equivalent is /browse, which lists every
+      // category. Single slugs go straight to the category page.
+      const first = cat.split(",")[0]?.trim();
+      if (first) {
+        navigate(`/category/${first}`, { replace: true });
+      } else {
+        p.delete("category");
+        const qs = p.toString();
+        navigate(`/products${qs ? "?" + qs : ""}`, { replace: true });
+      }
+    }
+  }, [searchStr, navigate]);
 
   // ── Shop-All data: seller listings grouped by subcategory/category ───────
-  //    Only fetched when no category filter is active (the "Shop All" view)
   const {
     data: shopAllDataRaw,
     isLoading: shopAllLoading,
   } = useQuery<ShopAllResponse>({
-    queryKey: ["shop-all-seller-listings", activeCategory],
-    queryFn: () => fetchShopAll(activeCategory || undefined),
+    queryKey: ["shop-all-seller-listings"],
+    queryFn: () => fetchShopAll(),
     staleTime: 60_000,
     enabled: !debouncedSearch, // only use shop-all when no search is active
   });
@@ -503,37 +515,19 @@ export function ProductsPage() {
 
   // ── Determine view mode ─────────────────────────────────────────────────
   // "shop-all" = seller listings grouped by category (swipeable)
-  // "products" = traditional product grid (when searching or category-filtered with search)
-  const isShopAllView = !debouncedSearch && !activeCategory;
-
-  // ── Legacy product grid (used when search is active or category + search) ─
-  useEffect(() => {
-    const p = new URLSearchParams(searchStr);
-    const cat = p.get("category") ?? "";
-    if (cat !== activeCategory) {
-      p.delete("page");
-      if (cat) p.set("category", cat);
-      const qs = p.toString();
-      navigate(`/products${qs ? "?" + qs : ""}`, { replace: true });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // "products" = traditional product grid (when searching)
+  const isShopAllView = !debouncedSearch;
 
   const updateURL = (patch: Record<string, string | null>) => {
     const p = new URLSearchParams(searchStr);
+    // category is no longer a valid filter here — strip it if somehow present
+    p.delete("category");
     for (const [k, v] of Object.entries(patch)) {
       if (v == null || v === "") p.delete(k); else p.set(k, v);
     }
     const qs = p.toString();
     navigate(`/products${qs ? "?" + qs : ""}`, { replace: true });
   };
-
-  const didMountCategory = useRef(false);
-  useEffect(() => {
-    if (!didMountCategory.current) { didMountCategory.current = true; return; }
-    resetPage(); setAllProducts([]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCategory]);
 
   const didMountFilters = useRef(false);
   useEffect(() => {
@@ -543,16 +537,13 @@ export function ProductsPage() {
   }, [debouncedSearch, minRating, perPage]);
 
   useEffect(() => {
-    const catTitle = activeCategory
-      ? activeCategory.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()) : "";
     updateSEO({
-      title: activeCategory ? `${catTitle} - Trees & Plants` : "Shop All Trees & Plants",
+      title: "Shop All Trees & Plants",
       description: "Browse healthy, nursery-grown trees and plants for your home and garden.",
     });
-  }, [activeCategory]);
+  }, []);
 
   const { data, isLoading, isFetching } = useListProducts({
-    category: activeCategory || undefined,
     search: debouncedSearch || undefined,
     minRating: minRating > 0 ? minRating : undefined,
     page: currentPage,
@@ -576,22 +567,11 @@ export function ProductsPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const activeCategoryObj = dbCategories?.find(c => c.slug === activeCategory);
-  const isMultiCategory = activeCategory.includes(",");
-  const matchedParentForAll = isMultiCategory
-    ? (dbCategories ?? []).find((cat: any) => !cat.parentId &&
-        (dbCategories ?? []).filter((c: any) => c.parentId === cat.id).map((c: any) => c.slug).join(",") === activeCategory)
-    : undefined;
-  const displayTitle = activeCategoryObj?.name
-    ?? matchedParentForAll?.name
-    ?? (activeCategory && !isMultiCategory ? activeCategory.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()) : "Shop All");
-
   const breadcrumbs = [
     { label: "Products", href: "/products", icon: <ShoppingBag className="h-3 w-3" /> },
-    ...(activeCategory ? [{ label: activeCategoryObj?.name ?? displayTitle, icon: <Package className="h-3 w-3" /> }] : []),
   ];
 
-  const activeFiltersCount = (minRating > 0 ? 1 : 0) + (activeCategory ? 1 : 0) + (search.trim() ? 1 : 0);
+  const activeFiltersCount = (minRating > 0 ? 1 : 0) + (search.trim() ? 1 : 0);
 
   // ── Comparison (legacy product grid) ────────────────────────────────────
   const { compareIds, addToCompare, removeFromCompare, isInCompare, clearCompare } = useComparison();
@@ -712,7 +692,7 @@ export function ProductsPage() {
           </>
         ) : (
           /* ════════════════════════════════════════════════════════════
-              PRODUCT GRID VIEW (when searching or category-filtered)
+              PRODUCT GRID VIEW (when searching)
               ════════════════════════════════════════════════════════════ */
           <>
             {/* Filter bar */}
@@ -772,100 +752,6 @@ export function ProductsPage() {
               {/* Expandable filter panel */}
               {showFilterPanel && (
                 <div className="mt-4 pt-4 border-t border-border grid grid-cols-1 sm:grid-cols-3 gap-6">
-                  {/* Category carousel */}
-                  <div className="sm:col-span-3">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Category</p>
-                    {(() => {
-                      const allCats = dbCategories ?? [];
-                      const parents = allCats.filter((cat: any) => !cat.parentId);
-                      const currentParent = parents[activeParentIdx];
-                      const subs = currentParent ? allCats.filter((cat: any) => cat.parentId === currentParent.id) : [];
-                      return (
-                        <div>
-                          <div className="flex justify-center gap-1.5 mb-3">
-                            {parents.map((_: any, i: number) => (
-                              <button key={i} onClick={() => setActiveParentIdx(i)}
-                                className={`h-1.5 rounded-full transition-all ${i === activeParentIdx ? "w-6 bg-accent" : "w-1.5 bg-border"}`} />
-                            ))}
-                          </div>
-                          <div className="border border-border rounded-2xl p-4 bg-card"
-                            onTouchStart={(e) => {
-                              const touch = e.touches[0];
-                              (e.currentTarget as any)._touchStartX = touch.clientX;
-                            }}
-                            onTouchEnd={(e) => {
-                              const startX = (e.currentTarget as any)._touchStartX ?? 0;
-                              const endX = e.changedTouches[0].clientX;
-                              const diff = startX - endX;
-                              if (Math.abs(diff) > 40) {
-                                if (diff > 0) setActiveParentIdx(i => Math.min(i + 1, parents.length - 1));
-                                else setActiveParentIdx(i => Math.max(i - 1, 0));
-                              }
-                            }}
-                          >
-                            <div className="flex items-center justify-between mb-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-2xl">{currentParent?.icon ?? "✨"}</span>
-                                <span className="font-semibold text-[15px]">{currentParent?.name}</span>
-                              </div>
-                              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{subs.length} types</span>
-                            </div>
-
-                            {subs.length > 0 ? (
-                              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide" style={{ scrollbarWidth: "none" }}>
-                                {subs.map((sub: any) => {
-                                  const isActive = activeCategory === sub.slug;
-                                  const allSubSlugs = subs.map((s: any) => s.slug).join(",");
-                                  const isParentActive = activeCategory === allSubSlugs;
-                                  return (
-                                    <button key={sub.id}
-                                      onClick={() => {
-                                        const target = isActive ? null : sub.slug;
-                                        updateURL({ category: target, page: null });
-                                        setActiveParentIdx(activeParentIdx);
-                                      }}
-                                      className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                                        isActive
-                                          ? "bg-accent text-accent-foreground border-accent"
-                                          : isParentActive
-                                            ? "bg-accent/20 text-accent border-accent/40"
-                                            : "bg-muted/50 text-foreground border-border hover:border-accent/50"
-                                      }`}
-                                    >
-                                      {sub.icon && <span className="mr-1">{sub.icon}</span>}
-                                      {sub.name}
-                                    </button>
-                                  );
-                                })}
-                                <button
-                                  onClick={() => updateURL({ category: subs.map((s: any) => s.slug).join(","), page: null })}
-                                  className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                                    activeCategory === subs.map((s: any) => s.slug).join(",")
-                                      ? "bg-accent text-accent-foreground border-accent"
-                                      : "bg-muted/50 text-foreground border-border hover:border-accent/50"
-                                  }`}
-                                >
-                                  All {currentParent?.name}
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => updateURL({ category: currentParent?.slug ?? null, page: null })}
-                                className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                                  activeCategory === currentParent?.slug
-                                    ? "bg-accent text-accent-foreground border-accent"
-                                    : "bg-muted/50 text-foreground border-border hover:border-accent/50"
-                                }`}
-                              >
-                                Browse {currentParent?.name}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-
                   {/* Rating filter */}
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Min Rating</p>
@@ -886,7 +772,7 @@ export function ProductsPage() {
                   {/* Clear filters */}
                   <div className="flex items-end">
                     <Button variant="ghost" size="sm"
-                      onClick={() => { setMinRating(0); updateURL({ category: null, page: null }); }}
+                      onClick={() => { setMinRating(0); updateURL({ page: null }); }}
                       className="text-muted-foreground"
                     >
                       <X className="h-3.5 w-3.5 mr-1" /> Clear filters
@@ -910,7 +796,7 @@ export function ProductsPage() {
                 <p className="text-sm text-muted-foreground max-w-[320px] mb-6">
                   Try adjusting your search or filters.
                 </p>
-                <Button variant="outline" onClick={() => { setSearch(""); setMinRating(0); updateURL({ category: null, page: null }); }} className="rounded-full">
+                <Button variant="outline" onClick={() => { setSearch(""); setMinRating(0); updateURL({ page: null }); }} className="rounded-full">
                   Clear all filters
                 </Button>
               </div>

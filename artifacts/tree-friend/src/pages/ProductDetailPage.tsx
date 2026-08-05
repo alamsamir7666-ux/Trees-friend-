@@ -31,17 +31,20 @@ export function ProductDetailPage() {
   const searchStr = useSearch();
   const { user } = useUser();
 
-  // Preserve the filter context the user came from so "Back to shop" returns to the right list
+  // Preserve the filter context the user came from so "Back to shop" returns to the right list.
+  // `from` carries a label ("browse", "products", "featured", "category"),
+  // not a category slug — so we map known labels to their pages and fall back
+  // to /products (Shop All) for anything else.
   const fromParam = new URLSearchParams(searchStr).get("from") ?? "";
   const backHref = fromParam === "featured"
     ? "/"
-    : fromParam
-    ? `/products?category=${encodeURIComponent(fromParam)}`
+    : fromParam === "browse"
+    ? "/browse"
     : "/products";
   const backLabel = fromParam === "featured"
     ? "Back to featured"
-    : fromParam
-    ? `Back to ${fromParam}`
+    : fromParam === "browse"
+    ? "Back to browse"
     : "Back to shop";
   const qc = useQueryClient();
 
@@ -218,7 +221,7 @@ export function ProductDetailPage() {
         <PageBreadcrumb
           crumbs={[
             { label: "Products", href: "/products", icon: <ShoppingBag className="h-3 w-3" /> },
-            ...(category ? [{ label: category.name, href: `/products?category=${category.slug}`, icon: <Package className="h-3 w-3" /> }] : []),
+            ...(category ? [{ label: category.name, href: `/category/${category.slug}`, icon: <Package className="h-3 w-3" /> }] : []),
             { label: product.name.length > 35 ? product.name.slice(0, 35) + "…" : product.name },
           ]}
           className="mb-4"
@@ -537,7 +540,7 @@ export function ProductDetailPage() {
                 <h2 className="font-serif text-3xl font-medium">Related Products</h2>
               </div>
               {category ? (
-                <Link href={`/products?category=${category.slug}`}><Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm">View all {category.name} <ArrowRight className="ml-1 h-4 w-4" /></Button></Link>
+                <Link href={`/category/${category.slug}`}><Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm">View all {category.name} <ArrowRight className="ml-1 h-4 w-4" /></Button></Link>
               ) : (
                 <Link href="/products"><Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm">View all <ArrowRight className="ml-1 h-4 w-4" /></Button></Link>
               )}

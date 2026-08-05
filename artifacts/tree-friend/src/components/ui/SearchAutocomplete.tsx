@@ -114,8 +114,8 @@ export function SearchAutocomplete({ onClose }: { onClose?: () => void }) {
               <p style={{ padding: '8px 16px 4px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'hsl(var(--muted-foreground))' }}>Categories</p>
               {results.categories.map(cat => (
                 <div key={cat.slug}
-                  onTouchStart={handleTouchStart} onTouchEnd={e => handleTouchEnd(e, `/products?category=${cat.slug}`)}
-                  onClick={() => go(`/products?category=${cat.slug}`)}
+                  onTouchStart={handleTouchStart} onTouchEnd={e => handleTouchEnd(e, `/category/${cat.slug}`)}
+                  onClick={() => go(`/category/${cat.slug}`)}
                   style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer' }}
                 >
                   <div style={{ height: 28, width: 28, borderRadius: '50%', backgroundColor: 'hsl(var(--secondary))', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>

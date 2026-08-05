@@ -94,7 +94,7 @@ function DrillCategoryProducts({ slug, onNavigate }: { slug: string; onNavigate:
       ))}
       <li>
         <Link
-          href={`/products?category=${slug}`}
+          href={`/category/${slug}`}
           onClick={onNavigate}
           className="tf-nav-item w-full text-left flex items-center gap-2 text-[13px]"
           style={{ color: "var(--tf-text-muted)" }}
@@ -138,8 +138,6 @@ export function Navbar() {
   const parentCategories = categories.filter((cat: any) => !cat.parentId);
   const [drillCategory, setDrillCategory] = useState<any>(null);
 
-  const activeCategory = new URLSearchParams(searchStr).get("category") ?? "";
-
   useEffect(() => {
     if (mobileOpen) {
       document.body.style.overflow = "hidden";
@@ -154,7 +152,7 @@ export function Navbar() {
   }, [location, searchStr]);
 
   function handleMobileCategory(slug: string) {
-    navigate(`/products?category=${slug}`);
+    navigate(`/category/${slug}`);
     setMobileOpen(false);
     setDrillCategory(null);
   }
@@ -171,15 +169,15 @@ export function Navbar() {
             <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
               <Link
                 href="/products"
-                className={`transition-colors hover:text-primary ${location === "/products" && !activeCategory ? "text-primary" : "text-muted-foreground"}`}
+                className={`transition-colors hover:text-primary ${location === "/products" ? "text-primary" : "text-muted-foreground"}`}
               >
                 All Products
               </Link>
               {categories.slice(0, 3).map((cat) => (
                 <Link
                   key={cat.slug}
-                  href={`/products?category=${cat.slug}`}
-                  className={`transition-colors hover:text-primary ${activeCategory === cat.slug ? "text-primary" : "text-muted-foreground"}`}
+                  href={`/category/${cat.slug}`}
+                  className={`transition-colors hover:text-primary ${location === `/category/${cat.slug}` ? "text-primary" : "text-muted-foreground"}`}
                 >
                   {cat.name}
                 </Link>
@@ -443,7 +441,7 @@ export function Navbar() {
               </Link>
             </li>
             <li>
-              <Link href="/products" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/products" && !activeCategory ? "active" : ""}`}>
+              <Link href="/products" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/products" ? "active" : ""}`}>
                 <span className="flex items-center gap-3">
                   <span className="tf-icon-box"><Store className="h-3.5 w-3.5" /></span>
                   Shop All

@@ -123,7 +123,7 @@ function CollectionSlider() {
             const img = (cat as any).image || DEFAULT_CATEGORY_IMAGE;
             const bg = DEFAULT_CATEGORY_BG;
             return (
-              <Link key={cat.slug} href={`/products?category=${cat.slug}`}>
+              <Link key={cat.slug} href={`/category/${cat.slug}`}>
                 <div
                   className="group relative shrink-0 w-[220px] h-[300px] rounded-2xl overflow-hidden cursor-pointer snap-start shadow-md hover:shadow-xl transition-shadow duration-300"
                   style={{ background: bg }}
