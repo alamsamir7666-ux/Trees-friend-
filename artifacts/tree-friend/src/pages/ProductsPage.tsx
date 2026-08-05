@@ -163,6 +163,11 @@ function SwipeableSellerListingCard({ card, onAddToBag, adding, isLoggedIn }: Sw
         </div>
       </div>
 
+      {/* ── Product name ──────────────────────────────────────── */}
+      <p className="font-serif text-base font-semibold text-foreground leading-snug line-clamp-2">
+        {card.product.name}
+      </p>
+
       {/* ── Middle: Pricing ──────────────────────────────────────── */}
       <div>
         <div className="flex items-baseline gap-2 flex-wrap">
