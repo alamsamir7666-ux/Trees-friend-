@@ -1,11 +1,9 @@
 import { memo } from "react";
 import { Link } from "wouter";
-import { Heart, Star } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Heart, Star, Users, ArrowRight, BarChart2 } from "lucide-react";
 import { type Product } from "@workspace/api-client-react";
 import { useComparison } from "@/components/ui/ProductComparison";
 import { useWishlist } from "@/contexts/WishlistContext";
-import { BarChart2 } from "lucide-react";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 
 /**
@@ -21,6 +19,15 @@ import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
  * genuinely product-level actions (you wishlist "a Money Plant", not "a
  * Money Plant from this one seller"), so they're unaffected by the
  * marketplace migration.
+ *
+ * Card visual (per 2026-08-06 redesign):
+ *  - Image with "Available seller" pill badge top-right (white bg, dark
+ *    green text #2d5016, Users icon + count) when hasListings.
+ *  - Title (line-clamp-2).
+ *  - Star rating (5 stars + review count).
+ *  - Full-width dark-green "View details ->" button (CTA).
+ *  - The old "Currently Unavailable" badge and "Not currently available"
+ *    price-row text are both removed.
  */
 function ProductCardInner({
   product,
@@ -42,7 +49,6 @@ function ProductCardInner({
   // in-stock listing variants (see PHASE3A_HANDOFF.md). Both null means no
   // seller currently has this product listed with any in-stock variant.
   const hasListings = product.listingCount > 0 && product.listingMinPrice != null;
-  const priceRange = hasListings && product.listingMinPrice !== product.listingMaxPrice;
 
   function handleWishlist(e: React.MouseEvent) {
     e.preventDefault();
@@ -70,7 +76,7 @@ function ProductCardInner({
     <Link href={href}>
       <article
         className="group relative bg-card border border-border rounded-2xl overflow-hidden transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5 cursor-pointer flex flex-col h-full"
-        aria-label={product.name + (hasListings ? " - from Tk" + product.listingMinPrice!.toLocaleString() : "")}
+        aria-label={product.name + (hasListings ? ` - ${product.listingCount} seller${product.listingCount > 1 ? "s" : ""}` : "")}
       >
         <div className="relative aspect-square overflow-hidden bg-muted/30">
           {img ? (
@@ -86,13 +92,17 @@ function ProductCardInner({
           ) : (
             <NoImagePlaceholder />
           )}
-          <div className="absolute top-3 left-3 flex flex-col gap-1">
-            {!hasListings && (
-              <Badge className="bg-muted text-muted-foreground text-xs font-medium shadow-sm">
-                Currently Unavailable
-              </Badge>
-            )}
-          </div>
+          {/* "Available seller" pill badge -- top-right, white bg, dark green text */}
+          {hasListings && (
+            <div
+              className="absolute top-3 right-3 flex items-center gap-1 bg-white shadow-sm rounded-full px-2.5 py-1 text-[#2d5016]"
+            >
+              <Users className="h-3 w-3" />
+              <span className="text-xs font-semibold leading-none">
+                {product.listingCount} seller{product.listingCount > 1 ? "s" : ""}
+              </span>
+            </div>
+          )}
           <button
             onClick={(e) => { e.preventDefault(); inCompare ? removeFromCompare(product.id) : addToCompare(product.id); }}
             className={"absolute bottom-3 left-3 p-2 rounded-full bg-background/85 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110 " + (inCompare ? "text-accent opacity-100" : "text-muted-foreground opacity-0 group-hover:opacity-100")}
@@ -102,7 +112,7 @@ function ProductCardInner({
           </button>
           <button
             onClick={handleWishlist}
-            className={"absolute top-3 right-3 p-2 rounded-full bg-background/85 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110 " + (isWishlisted ? "text-destructive opacity-100" : "text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive")}
+            className={"absolute bottom-3 right-3 p-2 rounded-full bg-background/85 backdrop-blur-sm shadow-sm transition-all duration-200 hover:scale-110 " + (isWishlisted ? "text-destructive opacity-100" : "text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive")}
             aria-label={isWishlisted ? "Remove from wishlist" : "Add to wishlist"}
           >
             <Heart className={"h-4 w-4 " + (isWishlisted ? "fill-current" : "")} />
@@ -126,16 +136,14 @@ function ProductCardInner({
               </span>
             )}
           </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-semibold text-sm">
-              {hasListings ? (
-                priceRange
-                  ? <>{"Tk"}{product.listingMinPrice!.toLocaleString()}{" – Tk"}{product.listingMaxPrice!.toLocaleString()}</>
-                  : <>{"Tk"}{product.listingMinPrice!.toLocaleString()}</>
-              ) : (
-                <span className="text-muted-foreground font-normal">Not currently available</span>
-              )}
-            </span>
+          {/* Full-width dark-green "View details" CTA — the whole card is a link,
+              so this is a visual affordance, not a separate action. */}
+          <div
+            className="w-full flex items-center justify-center gap-1.5 text-white text-sm font-medium py-2.5 px-4 rounded-3xl bg-[#2d5016]"
+            aria-hidden="true"
+          >
+            View details
+            <ArrowRight className="h-4 w-4" />
           </div>
         </div>
       </article>
