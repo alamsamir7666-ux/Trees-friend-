@@ -250,40 +250,73 @@ function SwipeableSellerListingCard({ card, onAddToBag, adding, isLoggedIn }: Sw
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Swipeable row with chevron buttons + infinite-swipe detection
+//  Swipeable row with chevron buttons + IntersectionObserver sentinel
+//  (Industry-standard: IO instead of onScroll, skeleton cards, CSS animation)
 // ══════════════════════════════════════════════════════════════════════════
 
 const SCROLL_STEP = 340;
 
 interface SwipeableRowProps {
-  /** Called when user swipes near the right edge (within ~2 card widths of the end) */
+  /** Called when the sentinel element becomes visible (user near the right edge) */
   onLoadMore?: () => void;
-  /** True while a load-more fetch is in-flight (shows trailing skeleton) */
+  /** True while a load-more fetch is in-flight (shows trailing skeleton cards) */
   loadingMore?: boolean;
-  /** If true, there are no more cards to load — never call onLoadMore */
+  /** If true, there are no more cards to load — hide sentinel, never call onLoadMore */
   hasMore?: boolean;
   children: React.ReactNode;
 }
 
+/** Skeleton card matching the real card dimensions — maintains visual rhythm during load */
+function CardSkeleton() {
+  return (
+    <div className="shrink-0 w-[300px] sm:w-[340px] border rounded-2xl p-4 bg-card snap-start animate-in fade-in duration-300">
+      <div className="flex gap-3">
+        <Skeleton className="h-20 w-20 sm:h-24 sm:w-24 rounded-xl" />
+        <div className="flex-1 space-y-2">
+          <Skeleton className="h-4 w-28" />
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-3 w-24" />
+        </div>
+      </div>
+      <Skeleton className="h-5 w-32 mt-3" />
+      <div className="flex items-baseline gap-2 mt-3">
+        <Skeleton className="h-7 w-16" />
+        <Skeleton className="h-4 w-12" />
+      </div>
+      <div className="flex gap-2 mt-3">
+        <Skeleton className="h-9 flex-1 rounded-lg" />
+        <Skeleton className="h-9 flex-1 rounded-lg" />
+      </div>
+    </div>
+  );
+}
+
 function SwipeableRow({ children, onLoadMore, loadingMore, hasMore }: SwipeableRowProps) {
   const sliderRef = useRef<HTMLDivElement>(null);
-  const loadingTriggered = useRef(false);  // debounce: only trigger once per swipe-to-edge
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
-  const handleScroll = useCallback(() => {
-    const el = sliderRef.current;
-    if (!el || !onLoadMore || !hasMore || loadingMore) return;
+  // IntersectionObserver on the sentinel element — fires when user scrolls
+  // near the right edge. rootMargin "700px" pre-triggers before reaching the end.
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const slider = sliderRef.current;
+    if (!sentinel || !slider || !onLoadMore || !hasMore) return;
 
-    // How far the user has scrolled from the right edge.
-    // scrollLeft + clientWidth ≈ total scrollable width when at the far right.
-    const distanceFromRight = el.scrollWidth - (el.scrollLeft + el.clientWidth);
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !loadingMore) {
+          onLoadMore();
+        }
+      },
+      {
+        root: slider,
+        threshold: 0,
+        rootMargin: "0px 700px 0px 0px", // trigger 700px before sentinel enters viewport
+      },
+    );
 
-    // Trigger load-more when within ~2 card widths (700px) of the right edge
-    if (distanceFromRight < 700 && !loadingTriggered.current) {
-      loadingTriggered.current = true;
-      onLoadMore();
-      // Reset after a short delay so subsequent swipes can trigger again
-      setTimeout(() => { loadingTriggered.current = false; }, 1500);
-    }
+    observer.observe(sentinel);
+    return () => observer.disconnect();
   }, [onLoadMore, hasMore, loadingMore]);
 
   return (
@@ -297,11 +330,7 @@ function SwipeableRow({ children, onLoadMore, loadingMore, hasMore }: SwipeableR
           <ChevronLeft className="h-4 w-4" />
         </button>
         <button
-          onClick={() => {
-            sliderRef.current?.scrollBy({ left: SCROLL_STEP, behavior: "smooth" });
-            // Also check if we need to load more after clicking the right chevron
-            setTimeout(handleScroll, 400);
-          }}
+          onClick={() => sliderRef.current?.scrollBy({ left: SCROLL_STEP, behavior: "smooth" })}
           aria-label="Scroll right"
           className="h-8 w-8 rounded-full border border-border bg-card flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
         >
@@ -310,16 +339,22 @@ function SwipeableRow({ children, onLoadMore, loadingMore, hasMore }: SwipeableR
       </div>
       <div
         ref={sliderRef}
-        onScroll={handleScroll}
         className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide snap-x snap-mandatory"
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
         {children}
-        {/* Trailing skeleton while loading more */}
+
+        {/* Skeleton cards while loading more — matches real card layout for visual rhythm */}
         {loadingMore && (
-          <div className="shrink-0 w-[300px] sm:w-[340px] flex items-center justify-center snap-start">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
+          <>
+            <CardSkeleton />
+            <CardSkeleton />
+          </>
+        )}
+
+        {/* Invisible sentinel — IntersectionObserver watches this to trigger preload */}
+        {hasMore && !loadingMore && (
+          <div ref={sentinelRef} className="shrink-0 w-1" aria-hidden="true" />
         )}
       </div>
     </div>
