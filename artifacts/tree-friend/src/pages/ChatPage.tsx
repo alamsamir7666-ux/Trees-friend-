@@ -1026,7 +1026,7 @@ export function ChatPage() {
   // ─── Loading state ────────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="max-w-3xl mx-auto px-4 pt-4 pb-16">
+      <div className="max-w-3xl lg:max-w-4xl mx-auto px-4 pt-4 pb-16">
         <div className="flex items-center gap-3 mb-4">
           <Skeleton className="w-8 h-8 rounded-full" />
           <Skeleton className="h-5 w-40" />
@@ -1038,7 +1038,7 @@ export function ChatPage() {
 
   if (!conversation) {
     return (
-      <div className="max-w-3xl mx-auto px-4 py-16 text-center">
+      <div className="max-w-3xl lg:max-w-4xl mx-auto px-4 py-16 text-center">
         <h1 className="font-serif text-2xl font-medium mb-2">Conversation not found</h1>
         <p className="text-muted-foreground mb-6">This conversation doesn't exist or you don't have access.</p>
         <Link href="/messages">
@@ -1052,7 +1052,7 @@ export function ChatPage() {
 
   // ─── Render ───────────────────────────────────────────────────────────
   return (
-    <div className="max-w-3xl mx-auto flex flex-col h-[calc(100dvh-4rem)]">
+    <div className="max-w-3xl lg:max-w-4xl mx-auto flex flex-col h-[calc(100dvh-4rem)]">
       {/* ─── Header ──────────────────────────────────────────────────── */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-card shrink-0">
         <button

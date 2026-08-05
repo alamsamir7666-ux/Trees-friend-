@@ -114,7 +114,7 @@ export function EmailPreferencesPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-12 max-w-2xl">
+    <div className="container mx-auto px-4 py-12 max-w-2xl lg:max-w-3xl">
       <div className="mb-8">
         <Link href="/profile">
           <span className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Back to Profile</span>
@@ -136,7 +136,7 @@ export function EmailPreferencesPage() {
           {PREF_META.map(({ key, label, description, icon: Icon, canDisable }) => (
             <div
               key={key}
-              className={`flex items-center gap-4 border rounded-2xl px-5 py-4 transition-colors ${
+              className={`flex items-center gap-4 lg:gap-5 border rounded-2xl px-5 py-4 lg:px-6 lg:py-5 transition-colors ${
                 !canDisable ? "bg-muted/30 opacity-75" : "bg-card"
               }`}
             >

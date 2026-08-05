@@ -11,12 +11,12 @@ import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 
 function EmptyCart() {
   return (
-    <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4">
-      <div className="h-20 w-20 rounded-full bg-muted flex items-center justify-center mb-6">
-        <ShoppingBag className="h-9 w-9 text-muted-foreground" />
+    <div className="min-h-[60vh] lg:min-h-[70vh] flex flex-col items-center justify-center text-center px-4 lg:px-8">
+      <div className="h-20 w-20 lg:h-24 lg:w-24 rounded-full bg-muted flex items-center justify-center mb-6 lg:mb-8">
+        <ShoppingBag className="h-9 w-9 lg:h-11 lg:w-11 text-muted-foreground" />
       </div>
-      <h2 className="font-serif text-2xl font-medium mb-2">Your bag is empty</h2>
-      <p className="text-muted-foreground mb-6 text-sm">Discover our rituals and find your favourites.</p>
+      <h2 className="font-serif text-2xl lg:text-3xl font-medium mb-2 lg:mb-3">Your bag is empty</h2>
+      <p className="text-muted-foreground mb-6 lg:mb-8 text-sm lg:text-base">Discover our rituals and find your favourites.</p>
       <Link href="/products">
         <Button className="rounded-full px-8">Start Shopping</Button>
       </Link>
@@ -49,34 +49,34 @@ function GuestCartPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="bg-muted/30 border-b py-10">
-        <div className="container mx-auto px-4">
+      <div className="bg-muted/30 border-b py-6 md:py-8 lg:py-10">
+        <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-5xl xl:max-w-7xl">
           <h1 className="font-serif text-4xl font-medium">Your Bag</h1>
           <p className="text-muted-foreground mt-1 text-sm">{items.length} item{items.length !== 1 ? "s" : ""}</p>
         </div>
       </div>
 
-      <div className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-6 md:py-8 lg:py-10 max-w-5xl xl:max-w-7xl">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
           {/* Items */}
-          <div className="lg:col-span-2 space-y-4">
+          <div className="lg:col-span-2 space-y-4 lg:space-y-5">
             {items.map((item) => {
               const price = item.discountPrice ?? item.price;
               const img = item.image || null;
               return (
-                <div key={item.productId} className="flex gap-4 bg-card border rounded-xl p-4">
+                <div key={item.productId} className="flex gap-4 lg:gap-6 bg-card border rounded-xl p-4 lg:p-6">
                   <Link href={`/products/${item.productId}`}>
                     {img ? (
-                      <img src={img} alt={item.name} className="w-24 h-24 object-cover rounded-lg shrink-0 cursor-pointer" />
+                      <img src={img} alt={item.name} className="w-24 h-24 lg:w-32 lg:h-32 object-cover rounded-lg shrink-0 cursor-pointer" />
                     ) : (
-                      <NoImagePlaceholder className="w-24 h-24 rounded-lg shrink-0 cursor-pointer" />
+                      <NoImagePlaceholder className="w-24 h-24 lg:w-32 lg:h-32 rounded-lg shrink-0 cursor-pointer" />
                     )}
                   </Link>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start">
                       <div className="min-w-0">
                         <Link href={`/products/${item.productId}`}>
-                          <h3 className="font-medium text-sm leading-snug truncate hover:text-accent cursor-pointer">{item.name}</h3>
+                          <h3 className="font-medium text-sm lg:text-base leading-snug truncate hover:text-accent cursor-pointer">{item.name}</h3>
                         </Link>
                       </div>
                       <button
@@ -86,24 +86,24 @@ function GuestCartPage() {
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
-                    <div className="flex items-center justify-between mt-3">
+                    <div className="flex items-center justify-between mt-3 lg:mt-4">
                       <div className="flex items-center border rounded-full overflow-hidden">
                         <button
                           onClick={() => guestCart.updateQuantity(item.productId, item.quantity - 1)}
-                          className="px-3 py-1.5 text-muted-foreground hover:text-foreground"
+                          className="px-3 py-1.5 lg:px-4 lg:py-2 text-muted-foreground hover:text-foreground"
                         >
                           <Minus className="h-3.5 w-3.5" />
                         </button>
-                        <span className="px-3 text-sm font-medium">{item.quantity}</span>
+                        <span className="px-3 lg:px-4 text-sm lg:text-base font-medium">{item.quantity}</span>
                         <button
                           onClick={() => guestCart.updateQuantity(item.productId, item.quantity + 1)}
-                          className="px-3 py-1.5 text-muted-foreground hover:text-foreground"
+                          className="px-3 py-1.5 lg:px-4 lg:py-2 text-muted-foreground hover:text-foreground"
                         >
                           <Plus className="h-3.5 w-3.5" />
                         </button>
                       </div>
                       <div className="text-right">
-                        <p className="font-semibold">Tk{(price * item.quantity).toLocaleString()}</p>
+                        <p className="font-semibold lg:text-lg">Tk{(price * item.quantity).toLocaleString()}</p>
                         {item.discountPrice && (
                           <p className="text-xs text-muted-foreground line-through">Tk{(item.price * item.quantity).toLocaleString()}</p>
                         )}
@@ -117,8 +117,8 @@ function GuestCartPage() {
 
           {/* Summary */}
           <div>
-            <div className="bg-card border rounded-xl p-6 sticky top-24">
-              <h2 className="font-medium text-lg mb-5">Order Summary</h2>
+            <div className="bg-card border rounded-xl p-6 lg:shadow-lg sticky top-24">
+              <h2 className="font-medium text-lg lg:text-xl mb-5">Order Summary</h2>
               <div className="space-y-3 text-sm mb-5">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Subtotal</span>
@@ -128,7 +128,7 @@ function GuestCartPage() {
                   <span className="text-muted-foreground">Delivery</span>
                   <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping.toLocaleString()}`}</span>
                 </div>
-                <div className="border-t pt-3 flex justify-between font-semibold text-base">
+                <div className="border-t pt-3 flex justify-between font-semibold text-base lg:text-lg">
                   <span>Total</span>
                   <span>Tk{total.toLocaleString()}</span>
                 </div>
@@ -215,7 +215,7 @@ function AuthenticatedCartPage() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-10">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 max-w-5xl xl:max-w-7xl">
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
         </div>
@@ -227,18 +227,18 @@ function AuthenticatedCartPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="bg-muted/30 border-b py-10">
-        <div className="container mx-auto px-4">
+      <div className="bg-muted/30 border-b py-6 md:py-8 lg:py-10">
+        <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-5xl xl:max-w-7xl">
           <PageBreadcrumb crumbs={[{ label: "Your Bag", icon: <ShoppingBag className="h-3 w-3" /> }]} className="mb-3" />
           <h1 className="font-serif text-4xl font-medium">Your Bag</h1>
           <p className="text-muted-foreground mt-1 text-sm">{items.length} item{items.length !== 1 ? "s" : ""}</p>
         </div>
       </div>
 
-      <div className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-6 md:py-8 lg:py-10 max-w-5xl xl:max-w-7xl">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
           {/* Items, grouped by seller */}
-          <div className="lg:col-span-2 space-y-6">
+          <div className="lg:col-span-2 space-y-6 lg:space-y-8">
             {sellerGroups.map((group, gi) => (
               <div key={group.seller?.id ?? "admin-direct"} className="space-y-4">
                 {group.seller && (
@@ -259,12 +259,12 @@ function AuthenticatedCartPage() {
                     ? [item.listing!.height, item.listing!.potSize, item.listing!.age].filter(Boolean).join(" · ")
                     : item.variant!.name;
                   return (
-                    <div key={item.id} className="flex gap-4 bg-card border rounded-xl p-4">
+                    <div key={item.id} className="flex gap-4 lg:gap-6 bg-card border rounded-xl p-4 lg:p-6">
                       <Link href={`/products/${item.productId}`}>
                         {img ? (
-                          <img src={img} alt={item.product.name} className="w-24 h-24 object-cover rounded-lg shrink-0 cursor-pointer" />
+                          <img src={img} alt={item.product.name} className="w-24 h-24 lg:w-32 lg:h-32 object-cover rounded-lg shrink-0 cursor-pointer" />
                         ) : (
-                          <NoImagePlaceholder className="w-24 h-24 rounded-lg shrink-0 cursor-pointer" />
+                          <NoImagePlaceholder className="w-24 h-24 lg:w-32 lg:h-32 rounded-lg shrink-0 cursor-pointer" />
                         )}
                       </Link>
                       <div className="flex-1 min-w-0">
@@ -272,7 +272,7 @@ function AuthenticatedCartPage() {
                           <div className="min-w-0">
                             {label && <p className="text-xs text-muted-foreground uppercase tracking-wider mb-0.5">{label}</p>}
                             <Link href={`/products/${item.productId}`}>
-                              <h3 className="font-medium text-sm leading-snug truncate hover:text-accent cursor-pointer">{item.product.name}</h3>
+                              <h3 className="font-medium text-sm lg:text-base leading-snug truncate hover:text-accent cursor-pointer">{item.product.name}</h3>
                             </Link>
                           </div>
                           <button
@@ -282,24 +282,24 @@ function AuthenticatedCartPage() {
                             <Trash2 className="h-4 w-4" />
                           </button>
                         </div>
-                        <div className="flex items-center justify-between mt-3">
+                        <div className="flex items-center justify-between mt-3 lg:mt-4">
                           <div className="flex items-center border rounded-full overflow-hidden">
                             <button
                               onClick={() => handleUpdate(item.id, item.quantity - 1)}
-                              className="px-3 py-1.5 text-muted-foreground hover:text-foreground"
+                              className="px-3 py-1.5 lg:px-4 lg:py-2 text-muted-foreground hover:text-foreground"
                             >
                               <Minus className="h-3.5 w-3.5" />
                             </button>
-                            <span className="px-3 text-sm font-medium">{item.quantity}</span>
+                            <span className="px-3 lg:px-4 text-sm lg:text-base font-medium">{item.quantity}</span>
                             <button
                               onClick={() => handleUpdate(item.id, item.quantity + 1)}
-                              className="px-3 py-1.5 text-muted-foreground hover:text-foreground"
+                              className="px-3 py-1.5 lg:px-4 lg:py-2 text-muted-foreground hover:text-foreground"
                             >
                               <Plus className="h-3.5 w-3.5" />
                             </button>
                           </div>
                           <div className="text-right">
-                            <p className="font-semibold">Tk{(price * item.quantity).toLocaleString()}</p>
+                            <p className="font-semibold lg:text-lg">Tk{(price * item.quantity).toLocaleString()}</p>
                             {price < originalPrice && (
                               <p className="text-xs text-muted-foreground line-through">Tk{(originalPrice * item.quantity).toLocaleString()}</p>
                             )}
@@ -325,8 +325,8 @@ function AuthenticatedCartPage() {
 
           {/* Summary */}
           <div>
-            <div className="bg-card border rounded-xl p-6 sticky top-24">
-              <h2 className="font-medium text-lg mb-5">Order Summary</h2>
+            <div className="bg-card border rounded-xl p-6 lg:shadow-lg sticky top-24">
+              <h2 className="font-medium text-lg lg:text-xl mb-5">Order Summary</h2>
               <div className="space-y-3 text-sm mb-5">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Subtotal</span>
@@ -336,7 +336,7 @@ function AuthenticatedCartPage() {
                   <span className="text-muted-foreground">Delivery</span>
                   <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping.toLocaleString()}`}</span>
                 </div>
-                <div className="border-t pt-3 flex justify-between font-semibold text-base">
+                <div className="border-t pt-3 flex justify-between font-semibold text-base lg:text-lg">
                   <span>Total</span>
                   <span>Tk{total.toLocaleString()}</span>
                 </div>
@@ -367,7 +367,7 @@ export function CartPage() {
 
   if (!isLoaded) {
     return (
-      <div className="container mx-auto px-4 py-10">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 max-w-5xl xl:max-w-7xl">
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
         </div>

@@ -390,3 +390,114 @@
 .scrollbar-hide::-webkit-scrollbar {
   display: none; /* Chrome/Safari/Android WebView */
 }
+
+/* ── Desktop-optimized layout utilities ──────────────────────────────────
+   These classes provide consistent, industry-standard desktop container
+   widths and spacing. They are mobile-first: base styles apply to mobile,
+   lg: breakpoint overrides apply to desktop (≥1024px).
+
+   Container width scale (Tailwind default max-w + custom):
+   - max-w-6xl (1152px) — Homepage hero, full-width browsing pages
+   - max-w-5xl (1024px) — Product detail, seller store, blog article
+   - max-w-4xl (896px)  — Cart, checkout, profile, forms
+   - max-w-3xl (768px)  — Settings, single-column content
+   ─────────────────────────────────────────────────────────────────── */
+
+/* Desktop section spacing — consistent vertical rhythm */
+@layer utilities {
+  .section-py-desktop {
+    padding-top: 3rem;
+    padding-bottom: 3rem;
+  }
+  @media (min-width: 1024px) {
+    .section-py-desktop {
+      padding-top: 5rem;
+      padding-bottom: 5rem;
+    }
+  }
+
+  /* Desktop container with consistent horizontal padding */
+  .container-desktop {
+    width: 100%;
+    max-width: 1152px;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+  @media (min-width: 768px) {
+    .container-desktop {
+      padding-left: 2rem;
+      padding-right: 2rem;
+    }
+  }
+  @media (min-width: 1280px) {
+    .container-desktop {
+      padding-left: 3rem;
+      padding-right: 3rem;
+    }
+  }
+
+  /* Desktop card hover — professional elevation on hover for interactive cards */
+  .card-hover-desktop {
+    transition: box-shadow 0.3s ease, transform 0.3s ease;
+  }
+  @media (min-width: 1024px) {
+    .card-hover-desktop:hover {
+      box-shadow: var(--shadow-md);
+      transform: translateY(-2px);
+    }
+  }
+
+  /* Desktop grid — 4 columns on xl, 3 on lg, 2 on sm, 1 on mobile */
+  .product-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  @media (min-width: 640px) {
+    .product-grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.25rem;
+    }
+  }
+  @media (min-width: 1024px) {
+    .product-grid {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+    }
+  }
+  @media (min-width: 1280px) {
+    .product-grid {
+      grid-template-columns: repeat(4, 1fr);
+    }
+  }
+
+  /* Desktop two-column layout (main + sidebar) — stacks on mobile */
+  .layout-sidebar {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+  @media (min-width: 1024px) {
+    .layout-sidebar {
+      grid-template-columns: 1fr 320px;
+      gap: 2rem;
+    }
+  }
+  @media (min-width: 1280px) {
+    .layout-sidebar {
+      grid-template-columns: 1fr 360px;
+    }
+  }
+
+  /* Smooth image zoom on hover (desktop only) */
+  .img-zoom-hover {
+    transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+  @media (min-width: 1024px) {
+    .img-zoom-hover:hover {
+      transform: scale(1.05);
+    }
+  }
+}

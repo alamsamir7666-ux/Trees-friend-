@@ -141,7 +141,7 @@ export function SellerStorePage() {
 
   if (sellerError) {
     return (
-      <div className="max-w-5xl mx-auto px-4 py-16 text-center">
+      <div className="max-w-5xl xl:max-w-6xl mx-auto px-4 md:px-6 lg:px-8 py-16 text-center">
         <h1 className="font-serif text-2xl font-medium mb-2">Store not found</h1>
         <p className="text-muted-foreground mb-6">This seller isn't available right now.</p>
         <Link href="/products"><Button>Browse Products</Button></Link>
@@ -150,7 +150,7 @@ export function SellerStorePage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-4 pt-4 pb-16">
+    <div className="max-w-5xl xl:max-w-6xl mx-auto px-4 md:px-6 lg:px-8 pt-4 pb-16">
       <PageBreadcrumb
         crumbs={[
           { label: "Products", href: "/products" },
@@ -300,7 +300,7 @@ export function SellerStorePage() {
             This seller doesn't have any products listed right now.
           </p>
         ) : (
-          <div className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
+          <div className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-3 lg:gap-4 lg:overflow-x-visible">
             {products!.map((card) => {
               const variants = card.listing.variants;
               const inStock = variants.filter((v) => v.availableQuantity > 0);
@@ -319,7 +319,7 @@ export function SellerStorePage() {
                 <Link
                   key={card.listing.id}
                   href={`/products/${card.product.id}/listings/${card.listing.id}`}
-                  className="shrink-0 w-[130px]"
+                  className="shrink-0 w-[130px] lg:w-auto lg:shrink"
                 >
                   <article className="border border-border rounded-2xl p-2.5 h-full flex flex-col bg-card hover:shadow-md transition-shadow">
                     <div className="w-full aspect-square rounded-lg overflow-hidden bg-muted/30 mb-2">

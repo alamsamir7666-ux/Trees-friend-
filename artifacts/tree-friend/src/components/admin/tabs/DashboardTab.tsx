@@ -67,14 +67,14 @@ function KpiCard({
   icon: React.ElementType; color: string; trend?: "up" | "down" | "neutral";
 }) {
   return (
-    <div className="bg-card rounded-2xl border border-border p-5 flex flex-col gap-3 hover:shadow-md transition-shadow duration-200">
+    <div className="bg-card rounded-2xl border border-border p-5 lg:p-6 flex flex-col gap-3 hover:shadow-md transition-shadow duration-200">
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-semibold text-muted-foreground/70 uppercase tracking-wider">{label}</span>
         <div className={`h-9 w-9 rounded-xl ${color} flex items-center justify-center`}>
           <Icon className="h-4 w-4" />
         </div>
       </div>
-      <p className="text-2xl font-bold text-foreground tracking-tight">{value}</p>
+      <p className="text-2xl lg:text-3xl font-bold text-foreground tracking-tight">{value}</p>
       <div className="flex items-center gap-1.5">
         {trend === "up" && <ArrowUpRight className="h-3.5 w-3.5 text-success-foreground" />}
         {trend === "down" && <ArrowDownRight className="h-3.5 w-3.5 text-destructive" />}
@@ -340,9 +340,9 @@ export function DashboardTab() {
   if (dashStatsLoading) {
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 xl:gap-6 gap-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="bg-card rounded-2xl border p-5 flex flex-col gap-3">
+            <div key={i} className="bg-card rounded-2xl border p-5 lg:p-6 flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <Skeleton className="h-3 w-24 rounded-full" />
                 <Skeleton className="h-9 w-9 rounded-xl" />
@@ -352,12 +352,12 @@ export function DashboardTab() {
             </div>
           ))}
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 bg-card rounded-2xl border p-5">
+        <div className="grid grid-cols-1 lg:grid-cols-3 xl:gap-6 gap-4">
+          <div className="lg:col-span-2 bg-card rounded-2xl border p-5 lg:p-6">
             <Skeleton className="h-5 w-40 mb-5" />
             <div className="h-48"><Skeleton className="h-full w-full rounded-xl" /></div>
           </div>
-          <div className="bg-card rounded-2xl border p-5">
+          <div className="bg-card rounded-2xl border p-5 lg:p-6">
             <Skeleton className="h-5 w-40 mb-5" />
             <div className="space-y-4">
               {Array.from({ length: 4 }).map((_, i) => (
@@ -372,12 +372,12 @@ export function DashboardTab() {
             </div>
           </div>
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="bg-card rounded-2xl border p-5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:gap-6 gap-4">
+          <div className="bg-card rounded-2xl border p-5 lg:p-6">
             <Skeleton className="h-5 w-40 mb-5" />
             <div className="h-36"><Skeleton className="h-full w-full rounded-xl" /></div>
           </div>
-          <div className="bg-card rounded-2xl border p-5">
+          <div className="bg-card rounded-2xl border p-5 lg:p-6">
             <Skeleton className="h-5 w-40 mb-5" />
             <div className="space-y-3">
               {Array.from({ length: 3 }).map((_, i) => (
@@ -401,7 +401,7 @@ export function DashboardTab() {
   return (
     <div className="space-y-6">
       {/* ── KPI Row ──────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 xl:gap-6 gap-4">
         <KpiCard
           label="Revenue (This Month)"
           value={totalRevenue > 0 ? `Tk${(totalRevenue / 1000).toFixed(1)}k` : "Tk0"}
@@ -440,9 +440,9 @@ export function DashboardTab() {
       </div>
 
       {/* ── Revenue Trend + Order Funnel ─────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 xl:gap-6 gap-4">
         {/* Revenue trend chart */}
-        <div className="lg:col-span-2 bg-card rounded-2xl border border-border p-5">
+        <div className="lg:col-span-2 bg-card rounded-2xl border border-border p-5 lg:p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="font-semibold text-foreground text-sm">Revenue Overview</h3>
@@ -453,7 +453,7 @@ export function DashboardTab() {
               <span className="text-[11px] text-muted-foreground/70">Revenue</span>
             </div>
           </div>
-          <div className="h-52">
+          <div className="h-52 xl:h-64">
             {revenueTrend.some(d => d.revenue > 0) ? (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={revenueTrend} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
@@ -480,7 +480,7 @@ export function DashboardTab() {
         </div>
 
         {/* Order funnel */}
-        <div className="bg-card rounded-2xl border border-border p-5">
+        <div className="bg-card rounded-2xl border border-border p-5 lg:p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="font-semibold text-foreground text-sm">Order Pipeline</h3>
@@ -501,7 +501,7 @@ export function DashboardTab() {
             <AlertTriangle className="h-4 w-4 text-warning-foreground" />
             Action Required
           </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:gap-5 gap-3">
             <PendingActionCard
               icon={BadgeCheck}
               label="Seller Approvals"
@@ -535,9 +535,9 @@ export function DashboardTab() {
       )}
 
       {/* ── Seller Status + Top Sellers ──────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:gap-6 gap-4">
         {/* Seller status donut */}
-        <div className="bg-card rounded-2xl border border-border p-5">
+        <div className="bg-card rounded-2xl border border-border p-5 lg:p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="font-semibold text-foreground text-sm">Seller Status</h3>
@@ -551,7 +551,7 @@ export function DashboardTab() {
         </div>
 
         {/* Top sellers */}
-        <div className="bg-card rounded-2xl border border-border p-5">
+        <div className="bg-card rounded-2xl border border-border p-5 lg:p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="font-semibold text-foreground text-sm flex items-center gap-2">
@@ -601,10 +601,10 @@ export function DashboardTab() {
       </div>
 
       {/* ── Recent Orders + Category Breakdown ───────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 xl:gap-6 gap-4">
         {/* Recent orders */}
         <div className="lg:col-span-2 bg-card rounded-2xl border border-border overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-muted/50">
+          <div className="flex items-center justify-between px-5 lg:px-6 py-4 border-b border-muted/50">
             <div>
               <h3 className="font-semibold text-foreground text-sm">Recent Orders</h3>
               <p className="text-xs text-muted-foreground/70 mt-0.5">Latest activity across all sellers</p>
@@ -663,7 +663,7 @@ export function DashboardTab() {
         </div>
 
         {/* Category breakdown */}
-        <div className="bg-card rounded-2xl border border-border p-5">
+        <div className="bg-card rounded-2xl border border-border p-5 lg:p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="font-semibold text-foreground text-sm">Products by Category</h3>
@@ -674,7 +674,7 @@ export function DashboardTab() {
             </button>
           </div>
           {categoryData.length > 0 ? (
-            <div className="h-56">
+            <div className="h-56 xl:h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={categoryData} layout="vertical" margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={chart.gridStroke} horizontal={false} />
@@ -695,7 +695,7 @@ export function DashboardTab() {
       </div>
 
       {/* ── Quick Stats Footer ───────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:gap-5 gap-3">
         {[
           { label: "Customers", value: users?.length ?? 0, icon: Users, color: "bg-primary/10 text-primary", tab: "users" },
           { label: "Delivered", value: deliveredOrders, icon: CheckCircle2, color: "bg-success text-success-foreground", tab: "orders" },

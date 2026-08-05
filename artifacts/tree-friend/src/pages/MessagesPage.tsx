@@ -135,7 +135,7 @@ export function MessagesPage() {
     : currentConversations;
 
   return (
-    <div className="max-w-3xl mx-auto px-4 pt-4 pb-16">
+    <div className="max-w-5xl lg:max-w-6xl mx-auto px-4 md:px-6 lg:px-8 pt-4 pb-16">
       <PageBreadcrumb
         crumbs={[{ label: "Messages" }]}
         className="mb-4"

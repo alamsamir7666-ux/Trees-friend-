@@ -39,7 +39,7 @@ export function BlogPage() {
 
   if (loading) {
     return (
-      <div className="container mx-auto px-4 py-10 max-w-5xl">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 max-w-6xl">
         <PageBreadcrumb crumbs={[{ label: "Blog", icon: <BookOpen className="h-3 w-3" /> }]} className="mb-6" />
         <div className="flex justify-center py-24">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -49,7 +49,7 @@ export function BlogPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-10 max-w-5xl">
+    <div className="container mx-auto px-4 py-10 max-w-5xl xl:max-w-6xl">
       <PageBreadcrumb crumbs={[{ label: "Blog", icon: <BookOpen className="h-3 w-3" /> }]} className="mb-6" />
       <div className="mb-10 text-center">
         <p className="text-xs uppercase tracking-widest text-accent mb-2">Knowledge Base</p>
@@ -94,12 +94,12 @@ export function BlogPage() {
 
       {/* Grid */}
       {rest.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
           {rest.map((post) => (
             <Link key={post.slug} href={`/blog/${post.slug}`}>
               <article className="group bg-card border rounded-2xl overflow-hidden hover:shadow-lg transition-all duration-300 hover:-translate-y-0.5 cursor-pointer h-full flex flex-col">
                 {post.image ? (
-                  <div className="aspect-[16/10] overflow-hidden">
+                  <div className="aspect-[16/10] lg:h-64 overflow-hidden">
                     <img
                       src={post.image}
                       alt={post.title}
@@ -108,7 +108,7 @@ export function BlogPage() {
                     />
                   </div>
                 ) : (
-                  <div className="aspect-[16/10] bg-muted flex items-center justify-center">
+                  <div className="aspect-[16/10] lg:h-64 bg-muted flex items-center justify-center">
                     <BookOpen className="h-10 w-10 text-muted-foreground/30" />
                   </div>
                 )}

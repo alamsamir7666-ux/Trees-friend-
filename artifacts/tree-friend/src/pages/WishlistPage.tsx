@@ -264,8 +264,8 @@ export function WishlistPage() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-10">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 max-w-5xl xl:max-w-6xl">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 gap-5 lg:gap-8">
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="aspect-square rounded-xl" />)}
         </div>
       </div>
@@ -274,36 +274,36 @@ export function WishlistPage() {
 
   if (totalCount === 0) {
     return (
-      <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4">
-        <div className="h-20 w-20 rounded-full bg-muted flex items-center justify-center mb-6">
-          <Heart className="h-9 w-9 text-muted-foreground" />
+      <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4 lg:py-20">
+        <div className="h-20 w-20 lg:h-24 lg:w-24 rounded-full bg-muted flex items-center justify-center mb-6">
+          <Heart className="h-9 w-9 lg:h-12 lg:w-12 text-muted-foreground" />
         </div>
-        <h2 className="font-serif text-2xl font-medium mb-2">Your wishlist is empty</h2>
-        <p className="text-muted-foreground text-sm mb-6">Save products you love and come back to them anytime.</p>
-        <Link href="/products"><Button className="rounded-full px-8">Explore Products</Button></Link>
+        <h2 className="font-serif text-2xl lg:text-3xl font-medium mb-2">Your wishlist is empty</h2>
+        <p className="text-muted-foreground text-sm lg:text-base mb-6">Save products you love and come back to them anytime.</p>
+        <Link href="/products"><Button className="rounded-full px-8 lg:px-10 lg:text-base">Explore Products</Button></Link>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="bg-muted/30 border-b py-10">
-        <div className="container mx-auto px-4">
+      <div className="bg-muted/30 border-b py-6 md:py-8 lg:py-10">
+        <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-5xl xl:max-w-6xl">
           <PageBreadcrumb crumbs={[{ label: "Wishlist", icon: <Heart className="h-3 w-3" /> }]} className="mb-3" />
-          <h1 className="font-serif text-4xl font-medium">Wishlist</h1>
+          <h1 className="font-serif text-4xl lg:text-5xl font-medium">Wishlist</h1>
           <p className="text-muted-foreground mt-1 text-sm">{totalCount} saved item{totalCount !== 1 ? "s" : ""}</p>
         </div>
       </div>
 
-      <div className="container mx-auto px-4 py-8 space-y-10">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-6 md:py-8 lg:py-10 max-w-5xl xl:max-w-6xl space-y-10 lg:space-y-14">
         {items.length > 0 && (
           <section>
-            <h2 className="font-serif text-xl font-medium mb-4 flex items-center gap-2">
-              <Heart className="h-4 w-4 text-muted-foreground" />
+            <h2 className="font-serif text-xl lg:text-2xl font-medium mb-4 lg:mb-6 flex items-center gap-2">
+              <Heart className="h-4 w-4 lg:h-5 lg:w-5 text-muted-foreground" />
               Product Varieties
               <span className="text-sm font-normal text-muted-foreground">({items.length})</span>
             </h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 lg:gap-8">
               {items.map((item) => {
                 const img = item.image || null;
                 const categoryName = item.categoryId != null ? categoryNameById.get(item.categoryId) : undefined;
@@ -325,12 +325,12 @@ export function WishlistPage() {
                         </button>
                       </div>
                     </Link>
-                    <div className="p-3">
+                    <div className="p-3 lg:p-5">
                       <Link href={`/products/${item.productId}`}>
-                        <p className="font-medium text-sm leading-snug cursor-pointer hover:text-accent">{item.name}</p>
+                        <p className="font-medium text-sm lg:text-base leading-snug cursor-pointer hover:text-accent">{item.name}</p>
                       </Link>
                       {item.scientificName && (
-                        <p className="text-xs italic text-muted-foreground mt-0.5">{item.scientificName}</p>
+                        <p className="text-xs lg:text-sm italic text-muted-foreground mt-0.5">{item.scientificName}</p>
                       )}
                       {categoryName && (
                         <span className="inline-flex items-center gap-1 bg-primary/10 text-primary px-2.5 py-1 rounded-full text-xs font-medium mt-2">
@@ -345,7 +345,7 @@ export function WishlistPage() {
                           belongs to the Seller Listings section below,
                           or to picking a seller from the product page. */}
                       <Link href={`/products/${item.productId}`}>
-                        <Button size="sm" variant="outline" className="w-full text-xs border-primary text-primary hover:bg-primary/5 hover:text-primary">
+                        <Button size="sm" variant="outline" className="w-full text-xs lg:text-sm border-primary text-primary hover:bg-primary/5 hover:text-primary">
                           View Details
                           <ChevronRight className="h-3.5 w-3.5 ml-1" />
                         </Button>
@@ -360,12 +360,12 @@ export function WishlistPage() {
 
         {sellerListingItems.length > 0 && (
           <section>
-            <h2 className="font-serif text-xl font-medium mb-4 flex items-center gap-2">
-              <Store className="h-4 w-4 text-muted-foreground" />
+            <h2 className="font-serif text-xl lg:text-2xl font-medium mb-4 lg:mb-6 flex items-center gap-2">
+              <Store className="h-4 w-4 lg:h-5 lg:w-5 text-muted-foreground" />
               Seller Listings
               <span className="text-sm font-normal text-muted-foreground">({sellerListingItems.length})</span>
             </h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 lg:gap-8">
               {sellerListingItems.map((line) => {
                 const img = line.image || null;
                 const isAdding = loadingListingLineId === line.sellerListingVariantId;
@@ -388,11 +388,11 @@ export function WishlistPage() {
                         </button>
                       </div>
                     </Link>
-                    <div className="p-3">
+                    <div className="p-3 lg:p-5">
                       <Link href={detailHref}>
-                        <p className="font-medium text-sm leading-snug cursor-pointer hover:text-accent">{line.productName}</p>
+                        <p className="font-medium text-sm lg:text-base leading-snug cursor-pointer hover:text-accent">{line.productName}</p>
                       </Link>
-                      <p className="text-xs text-muted-foreground mt-0.5">{line.variantLabel}</p>
+                      <p className="text-xs lg:text-sm text-muted-foreground mt-0.5">{line.variantLabel}</p>
                       <span className="inline-flex items-center gap-1 bg-primary/10 text-primary px-2.5 py-1 rounded-full text-xs font-medium mt-2">
                         <Store className="h-3 w-3" />
                         {line.sellerName}
@@ -400,14 +400,14 @@ export function WishlistPage() {
                       <hr className="border-border mt-3 mb-3" />
                       <div className="flex flex-col gap-2">
                         <Link href={detailHref}>
-                          <Button size="sm" variant="outline" className="w-full text-xs border-primary text-primary hover:bg-primary/5 hover:text-primary">
+                          <Button size="sm" variant="outline" className="w-full text-xs lg:text-sm border-primary text-primary hover:bg-primary/5 hover:text-primary">
                             View Details
                             <ChevronRight className="h-3.5 w-3.5 ml-1" />
                           </Button>
                         </Link>
                         <Button
                           size="sm"
-                          className="w-full text-xs"
+                          className="w-full text-xs lg:text-sm"
                           disabled={isAdding || outOfStock}
                           onClick={() => handleAddSellerListingToCart(line)}
                         >

@@ -332,7 +332,7 @@ export function SellerDashboardPage() {
       {/* Main */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
-        <header className="h-16 bg-card border-b border-border flex items-center justify-between px-4 sm:px-6 shrink-0">
+        <header className="h-16 lg:h-18 bg-card border-b border-border flex items-center justify-between px-4 sm:px-6 lg:px-8 shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => setSidebarOpen(true)}
@@ -343,7 +343,7 @@ export function SellerDashboardPage() {
             </button>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="font-semibold text-foreground text-sm sm:text-base truncate">
+                <h1 className="font-semibold text-foreground text-sm sm:text-base lg:text-lg truncate">
                   {activeNav?.label ?? "Dashboard"}
                 </h1>
                 {onVacation && (
@@ -352,7 +352,7 @@ export function SellerDashboardPage() {
                   </span>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground hidden sm:block truncate">
+              <p className="text-xs text-muted-foreground hidden sm:block lg:text-sm truncate">
                 {seller.businessName}
                 {seller.location ? ` · ${seller.location}` : ""}
               </p>
@@ -381,7 +381,7 @@ export function SellerDashboardPage() {
 
         {/* Content */}
         <main className="flex-1 overflow-y-auto bg-background">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+          <div className="max-w-6xl xl:max-w-7xl mx-auto px-4 md:px-6 lg:px-8 xl:px-10 py-6 lg:py-8">
             {onVacation && activeSection === "profile" && (
               <div className="bg-warning border border-warning-border rounded-2xl px-4 py-3 mb-6 text-sm text-warning-foreground">
                 You're on vacation mode — your listings are hidden from buyers and Listings/Orders/Payment/Courier are

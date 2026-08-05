@@ -22,6 +22,16 @@ export function SearchAutocomplete({ onClose }: { onClose?: () => void }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const debouncedQuery = useDebounce(query, 250);
 
+  // Responsive breakpoint detection for desktop-specific dropdown sizing
+  const [isDesktop, setIsDesktop] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    setIsDesktop(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
   useEffect(() => {
     if (debouncedQuery.length < 2) { setResults(null); setOpen(false); return; }
     setLoading(true);
@@ -91,38 +101,38 @@ export function SearchAutocomplete({ onClose }: { onClose?: () => void }) {
         position: 'absolute',
         top: dropdownPos.top,
         left: dropdownPos.left,
-        width: dropdownPos.width,
+        width: isDesktop ? Math.max(dropdownPos.width, 480) : dropdownPos.width,
         zIndex: 99999,
         backgroundColor: 'hsl(var(--card))',
         border: '1px solid hsl(var(--border))',
         borderRadius: 16,
-        boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
-        maxHeight: '60vh',
+        boxShadow: isDesktop ? '0 12px 40px rgba(0,0,0,0.22)' : '0 8px 32px rgba(0,0,0,0.18)',
+        maxHeight: isDesktop ? '70vh' : '60vh',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
       }}
     >
       {!hasResults ? (
-        <div style={{ padding: '24px 20px', textAlign: 'center', fontSize: 14, color: 'hsl(var(--muted-foreground))' }}>
+        <div style={{ padding: isDesktop ? '28px 24px' : '24px 20px', textAlign: 'center', fontSize: isDesktop ? 15 : 14, color: 'hsl(var(--muted-foreground))' }}>
           No results for "<strong>{query}</strong>"
         </div>
       ) : (
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {results.categories.length > 0 && (
             <div>
-              <p style={{ padding: '8px 16px 4px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'hsl(var(--muted-foreground))' }}>Categories</p>
+              <p style={{ padding: isDesktop ? '10px 20px 6px' : '8px 16px 4px', fontSize: isDesktop ? 12 : 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'hsl(var(--muted-foreground))' }}>Categories</p>
               {results.categories.map(cat => (
                 <div key={cat.slug}
                   onTouchStart={handleTouchStart} onTouchEnd={e => handleTouchEnd(e, `/products?category=${cat.slug}`)}
                   onClick={() => go(`/products?category=${cat.slug}`)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: isDesktop ? 16 : 12, padding: isDesktop ? '12px 20px' : '10px 16px', cursor: 'pointer' }}
                 >
-                  <div style={{ height: 28, width: 28, borderRadius: '50%', backgroundColor: 'hsl(var(--secondary))', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <Tag size={14} color="hsl(var(--primary))" />
+                  <div style={{ height: isDesktop ? 36 : 28, width: isDesktop ? 36 : 28, borderRadius: '50%', backgroundColor: 'hsl(var(--secondary))', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <Tag size={isDesktop ? 18 : 14} color="hsl(var(--primary))" />
                   </div>
-                  <span style={{ fontSize: 14, color: 'hsl(var(--foreground))' }}>{cat.name}</span>
-                  <span style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', marginLeft: 'auto' }}>Category →</span>
+                  <span style={{ fontSize: isDesktop ? 15 : 14, color: 'hsl(var(--foreground))' }}>{cat.name}</span>
+                  <span style={{ fontSize: isDesktop ? 13 : 12, color: 'hsl(var(--muted-foreground))', marginLeft: 'auto' }}>Category →</span>
                 </div>
               ))}
             </div>
@@ -130,25 +140,25 @@ export function SearchAutocomplete({ onClose }: { onClose?: () => void }) {
           {results.products.length > 0 && (
             <div>
               {results.categories.length > 0 && <div style={{ height: 1, backgroundColor: 'hsl(var(--muted))', margin: '4px 16px' }} />}
-              <p style={{ padding: '8px 16px 4px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'hsl(var(--muted-foreground))' }}>Products</p>
+              <p style={{ padding: isDesktop ? '10px 20px 6px' : '8px 16px 4px', fontSize: isDesktop ? 12 : 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'hsl(var(--muted-foreground))' }}>Products</p>
               {results.products.map(product => {
                 return (
                   <div key={product.id}
                     onTouchStart={handleTouchStart} onTouchEnd={e => handleTouchEnd(e, `/products/${product.id}`)}
                     onClick={() => go(`/products/${product.id}`)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer' }}
+                    style={{ display: 'flex', alignItems: 'center', gap: isDesktop ? 16 : 12, padding: isDesktop ? '12px 20px' : '10px 16px', cursor: 'pointer' }}
                   >
-                    <div style={{ height: 44, width: 44, borderRadius: 10, overflow: 'hidden', backgroundColor: 'hsl(var(--muted))', flexShrink: 0 }}>
+                    <div style={{ height: isDesktop ? 56 : 44, width: isDesktop ? 56 : 44, borderRadius: 10, overflow: 'hidden', backgroundColor: 'hsl(var(--muted))', flexShrink: 0 }}>
                       {product.image
                         ? <img src={product.image} alt={product.name} style={{ height: '100%', width: '100%', objectFit: 'cover' }} />
                         : <div style={{ height: '100%', width: '100%', backgroundColor: 'hsl(var(--muted))' }} />}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ fontSize: 14, fontWeight: 500, color: 'hsl(var(--foreground))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{product.name}</p>
+                      <p style={{ fontSize: isDesktop ? 15 : 14, fontWeight: 500, color: 'hsl(var(--foreground))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{product.name}</p>
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
                       {product.startingPrice != null && (
-                        <p style={{ fontSize: 14, fontWeight: 600, color: 'hsl(var(--foreground))' }}>From Tk{product.startingPrice.toLocaleString()}</p>
+                        <p style={{ fontSize: isDesktop ? 15 : 14, fontWeight: 600, color: 'hsl(var(--foreground))' }}>From Tk{product.startingPrice.toLocaleString()}</p>
                       )}
                     </div>
                   </div>
@@ -160,7 +170,7 @@ export function SearchAutocomplete({ onClose }: { onClose?: () => void }) {
             <div
               onTouchStart={handleTouchStart} onTouchEnd={e => handleTouchEnd(e, `/products?q=${encodeURIComponent(query.trim())}`)}
               onClick={() => go(`/products?q=${encodeURIComponent(query.trim())}`)}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 16px', fontSize: 14, color: 'hsl(var(--primary))', cursor: 'pointer', fontWeight: 500 }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: isDesktop ? '14px 20px' : '12px 16px', fontSize: isDesktop ? 15 : 14, color: 'hsl(var(--primary))', cursor: 'pointer', fontWeight: 500 }}
             >
               <Search size={14} />
               See all results for "{query}"
@@ -183,7 +193,7 @@ export function SearchAutocomplete({ onClose }: { onClose?: () => void }) {
             onChange={e => setQuery(e.target.value)}
             placeholder="Search products, ingredients?"
             autoComplete="off"
-            className="w-full h-10 pl-10 pr-10 rounded-full border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-colors"
+            className="w-full h-10 lg:h-11 pl-10 lg:pl-11 pr-10 lg:pr-11 rounded-full border border-border bg-background text-sm lg:text-base focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-colors"
           />
           {loading && <Loader2 className="absolute right-3.5 h-4 w-4 text-muted-foreground animate-spin" />}
           {!loading && query && (

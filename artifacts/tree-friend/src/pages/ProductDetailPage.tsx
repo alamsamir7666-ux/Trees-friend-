@@ -98,9 +98,9 @@ export function ProductDetailPage() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-background">
-        <div className="container mx-auto px-4 py-10">
+        <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 max-w-5xl xl:max-w-7xl">
           <Skeleton className="h-4 w-36 mb-8" />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[3fr_2fr] gap-12">
             {/* Left: image gallery */}
             <div className="space-y-3">
               <Skeleton className="aspect-square w-full rounded-2xl" />
@@ -214,26 +214,26 @@ export function ProductDetailPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto px-4 py-8">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-6 md:py-8 lg:py-10 max-w-5xl xl:max-w-7xl">
         <PageBreadcrumb
           crumbs={[
             { label: "Products", href: "/products", icon: <ShoppingBag className="h-3 w-3" /> },
             ...(category ? [{ label: category.name, href: `/products?category=${category.slug}`, icon: <Package className="h-3 w-3" /> }] : []),
             { label: product.name.length > 35 ? product.name.slice(0, 35) + "…" : product.name },
           ]}
-          className="mb-4"
+          className="mb-4 lg:mb-6"
         />
         <Link href={backHref}>
-          <Button variant="ghost" size="sm" className="mb-6 gap-1 text-muted-foreground capitalize">
+          <Button variant="ghost" size="sm" className="mb-6 lg:mb-8 gap-1 text-muted-foreground capitalize">
             <ChevronLeft className="h-4 w-4" /> {backLabel}
           </Button>
         </Link>
 
         {/* Image + Details grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-12 mb-10">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[3fr_2fr] gap-8 lg:gap-14 mb-10">
           {/* Images */}
-          <div className="space-y-4">
-            <div className="aspect-square rounded-2xl overflow-hidden bg-muted/20 border">
+          <div className="space-y-4 lg:space-y-0 lg:flex lg:flex-row-reverse lg:gap-4">
+            <div className="aspect-square rounded-2xl lg:rounded-3xl overflow-hidden bg-muted/20 border lg:flex-1">
               {imgs.length > 0 ? (
                 <img src={imgs[activeImg]} alt={product.name} className="w-full h-full object-cover" />
               ) : (
@@ -241,12 +241,12 @@ export function ProductDetailPage() {
               )}
             </div>
             {imgs.length > 1 && (
-              <div className="flex gap-3">
+              <div className="flex gap-3 lg:flex-col lg:gap-3">
                 {imgs.map((img, i) => (
                   <button
                     key={i}
                     onClick={() => setActiveImg(i)}
-                    className={`w-16 h-16 rounded-xl overflow-hidden border-2 transition-colors ${activeImg === i ? "border-primary" : "border-transparent"}`}
+                    className={`w-16 h-16 lg:w-20 lg:h-20 rounded-xl lg:rounded-2xl overflow-hidden border-2 transition-colors ${activeImg === i ? "border-primary" : "border-transparent"}`}
                   >
                     <img src={img} alt="" className="w-full h-full object-cover" />
                   </button>
@@ -256,23 +256,23 @@ export function ProductDetailPage() {
           </div>
 
           {/* Details */}
-          <div className="flex flex-col">
+          <div className="flex flex-col lg:sticky lg:top-28 lg:self-start">
             <div className="mb-2">
               {category && <Badge variant="secondary" className="uppercase text-xs tracking-wider">{category.name}</Badge>}
             </div>
-            <h1 className="font-serif text-3xl md:text-4xl font-medium mb-1">{product.name}</h1>
+            <h1 className="font-serif text-3xl md:text-4xl lg:text-[2.5rem] lg:leading-tight font-medium mb-1">{product.name}</h1>
             {product.scientificName && (
-              <p className="text-sm text-muted-foreground italic mb-3">{product.scientificName}</p>
+              <p className="text-sm lg:text-base text-muted-foreground italic mb-3">{product.scientificName}</p>
             )}
 
             <div className="flex items-center gap-3 mb-6">
               <div className="flex items-center gap-2">
                 <div className="flex">
                   {Array.from({ length: 5 }).map((_, i) => (
-                    <Star key={i} className={`h-4 w-4 ${i < Math.round(product.averageRating) ? "fill-accent text-accent" : "text-muted"}`} />
+                    <Star key={i} className={`h-4 w-4 lg:h-5 lg:w-5 ${i < Math.round(product.averageRating) ? "fill-accent text-accent" : "text-muted"}`} />
                   ))}
                 </div>
-                <span className="text-sm text-muted-foreground">({product.reviewCount} reviews)</span>
+                <span className="text-sm lg:text-base text-muted-foreground">({product.reviewCount} reviews)</span>
               </div>
               <Button variant="outline" size="icon" className="rounded-full h-9 w-9 ml-auto" onClick={handleWishlist}>
                 <Heart className={`h-4 w-4 ${isWishlisted ? "fill-destructive text-destructive" : ""}`} />
@@ -283,19 +283,19 @@ export function ProductDetailPage() {
 
         {/* Description + extra fields - full width below the grid */}
         {product.description && (
-          <div className="bg-muted/30 border border-border rounded-2xl p-6 mb-6">
-            <h3 className="flex items-center gap-2 font-serif text-lg font-medium text-foreground mb-3">
-              <Info className="h-5 w-5 text-accent shrink-0" />
+          <div className="bg-muted/30 border border-border rounded-2xl p-6 lg:p-8 mb-6">
+            <h3 className="flex items-center gap-2 font-serif text-lg lg:text-xl font-medium text-foreground mb-3">
+              <Info className="h-5 w-5 lg:h-6 lg:w-6 text-accent shrink-0" />
               Botanical Description
             </h3>
-            <p className="text-muted-foreground leading-relaxed">{product.description}</p>
+            <p className="text-muted-foreground leading-relaxed lg:text-base">{product.description}</p>
           </div>
         )}
 
         {product.keyBenefits.length > 0 && (
-          <div className="mb-5 bg-muted/30 border border-border rounded-2xl p-6">
-            <h3 className="flex items-center gap-2 font-serif text-lg font-medium text-foreground mb-3">
-              <Award className="h-5 w-5 text-accent shrink-0" />
+          <div className="mb-5 bg-muted/30 border border-border rounded-2xl p-6 lg:p-8">
+            <h3 className="flex items-center gap-2 font-serif text-lg lg:text-xl font-medium text-foreground mb-3">
+              <Award className="h-5 w-5 lg:h-6 lg:w-6 text-accent shrink-0" />
               Key Benefits
             </h3>
             <ul className="space-y-1.5">
@@ -312,10 +312,10 @@ export function ProductDetailPage() {
         {(product.sunlight || product.watering || product.soilType || product.matureHeight || product.climateZone || product.growthRate || product.bloomSeason) && (
           <div className="mb-5 border border-border rounded-2xl overflow-hidden">
             <div className="flex items-center gap-2 px-5 py-4 bg-primary">
-              <Sprout className="h-5 w-5 text-primary-foreground" />
-              <h3 className="font-serif text-lg font-medium text-primary-foreground">Care Guide</h3>
+              <Sprout className="h-5 w-5 lg:h-6 lg:w-6 text-primary-foreground" />
+              <h3 className="font-serif text-lg lg:text-xl font-medium text-primary-foreground">Care Guide</h3>
             </div>
-            <div className="divide-y divide-border">
+            <div className="divide-y divide-border lg:grid lg:grid-cols-2 lg:divide-y-0">
               {[
                 { icon: Sun, label: "Sunlight", value: product.sunlight?.replace(/_/g, " "), capitalize: true },
                 { icon: Droplets, label: "Watering", value: product.watering },
@@ -327,9 +327,9 @@ export function ProductDetailPage() {
               ]
                 .filter(row => row.value)
                 .map((row, i) => (
-                  <div key={i} className="flex items-start gap-4 px-5 py-4">
-                    <div className="shrink-0 h-9 w-9 rounded-lg bg-muted/60 flex items-center justify-center">
-                      <row.icon className="h-4 w-4 text-muted-foreground" />
+                  <div key={i} className="flex items-start gap-4 px-5 py-4 lg:px-6 lg:py-5">
+                    <div className="shrink-0 h-9 w-9 lg:h-10 lg:w-10 rounded-lg bg-muted/60 flex items-center justify-center">
+                      <row.icon className="h-4 w-4 lg:h-5 lg:w-5 text-muted-foreground" />
                     </div>
                     <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-0.5 sm:gap-4">
                       <p className="text-sm text-muted-foreground shrink-0 sm:w-36">{row.label}</p>
@@ -342,9 +342,9 @@ export function ProductDetailPage() {
         )}
 
         {product.bestFor.length > 0 && (
-          <div className="mb-5 bg-muted/30 border border-border rounded-2xl p-6">
-            <h3 className="flex items-center gap-2 font-serif text-lg font-medium text-foreground mb-3">
-              <Target className="h-5 w-5 text-accent shrink-0" />
+          <div className="mb-5 bg-muted/30 border border-border rounded-2xl p-6 lg:p-8">
+            <h3 className="flex items-center gap-2 font-serif text-lg lg:text-xl font-medium text-foreground mb-3">
+              <Target className="h-5 w-5 lg:h-6 lg:w-6 text-accent shrink-0" />
               Best For
             </h3>
             <div className="flex flex-wrap gap-2">
@@ -356,9 +356,9 @@ export function ProductDetailPage() {
         )}
 
         {product.careTips.length > 0 && (
-          <div className="mb-5 bg-muted/30 border border-border rounded-2xl p-6">
-            <h3 className="flex items-center gap-2 font-serif text-lg font-medium text-foreground mb-3">
-              <Leaf className="h-5 w-5 text-accent shrink-0" />
+          <div className="mb-5 bg-muted/30 border border-border rounded-2xl p-6 lg:p-8">
+            <h3 className="flex items-center gap-2 font-serif text-lg lg:text-xl font-medium text-foreground mb-3">
+              <Leaf className="h-5 w-5 lg:h-6 lg:w-6 text-accent shrink-0" />
               Care Tips
             </h3>
             <ul className="space-y-1.5">
@@ -385,9 +385,9 @@ export function ProductDetailPage() {
         )}
 
         {/* Reviews */}
-        <section className="border-t pt-12 mb-16">
+        <section className="border-t pt-12 lg:pt-16 mb-16">
           <div className="flex items-center justify-between mb-8">
-            <h2 className="font-serif text-2xl font-medium">Customer Reviews</h2>
+            <h2 className="font-serif text-2xl lg:text-3xl font-medium">Customer Reviews</h2>
             {user && canReview && (
               <Button variant="outline" onClick={() => setShowReviewForm(!showReviewForm)}>
                 {showReviewForm ? "Cancel" : "Write a Review"}
@@ -401,7 +401,7 @@ export function ProductDetailPage() {
           </div>
 
           {showReviewForm && canReview && (
-            <div className="bg-muted/30 rounded-2xl p-6 mb-8">
+            <div className="bg-muted/30 rounded-2xl p-6 lg:p-8 mb-8">
               <h3 className="font-medium mb-4">Your Review</h3>
               <div className="flex gap-2 mb-4">
                 {Array.from({ length: 5 }).map((_, i) => (
@@ -492,15 +492,15 @@ export function ProductDetailPage() {
 
         {/* Trust Badges */}
         <section className="mb-8">
-          <div className="flex gap-4 overflow-x-auto pb-2 snap-x snap-mandatory scrollbar-hide">
-            <div className="snap-start shrink-0 w-[calc(100%-2rem)] sm:w-[calc(50%-0.5rem)] bg-gradient-to-br from-destructive/10 to-destructive/5 border border-destructive/20 rounded-2xl p-5 flex items-start gap-4">
+          <div className="flex gap-4 overflow-x-auto pb-2 snap-x snap-mandatory scrollbar-hide lg:overflow-x-hidden lg:pb-0">
+            <div className="snap-start shrink-0 w-[calc(100%-2rem)] sm:w-[calc(50%-0.5rem)] lg:shrink lg:w-auto lg:flex-1 bg-gradient-to-br from-destructive/10 to-destructive/5 border border-destructive/20 rounded-2xl p-5 flex items-start gap-4">
               <div className="shrink-0 h-12 w-12 rounded-full bg-destructive/10 flex items-center justify-center"><ShieldCheck className="h-6 w-6 text-destructive" /></div>
               <div>
                 <p className="font-semibold text-sm text-foreground mb-1">100% Authentic, Healthy Plants</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">Every tree and plant sold on Tree Friend is nursery-grown and inspected before dispatch. No mislabeled varieties, ever.</p>
               </div>
             </div>
-            <div className="snap-start shrink-0 w-[calc(100%-2rem)] sm:w-[calc(50%-0.5rem)] bg-gradient-to-br from-warning to-warning/70 border border-warning-border rounded-2xl p-5 flex items-start gap-4">
+            <div className="snap-start shrink-0 w-[calc(100%-2rem)] sm:w-[calc(50%-0.5rem)] lg:shrink lg:w-auto lg:flex-1 bg-gradient-to-br from-warning to-warning/70 border border-warning-border rounded-2xl p-5 flex items-start gap-4">
               <div className="shrink-0 h-12 w-12 rounded-full bg-warning flex items-center justify-center"><Package className="h-6 w-6 text-warning-foreground" /></div>
               <div>
                 <p className="font-semibold text-sm text-foreground mb-1">Careful Plant Packaging</p>
@@ -515,7 +515,7 @@ export function ProductDetailPage() {
         <ProductQA productId={product.id} />
 
         {recentlyViewed.length > 0 && (
-          <section className="border-t pt-12 mb-12">
+          <section className="border-t pt-12 lg:pt-16 mb-12">
             <div className="flex items-end justify-between mb-8">
               <div>
                 <p className="text-xs uppercase tracking-[0.15em] text-accent-text mb-2 font-medium">Your browsing history</p>
@@ -523,14 +523,14 @@ export function ProductDetailPage() {
               </div>
               <Link href="/products"><Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm">View all <ArrowRight className="ml-1 h-4 w-4" /></Button></Link>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-5 lg:gap-6">
               {recentlyViewed.slice(0, 4).map((p) => (<ProductCard key={p.id} product={p} />))}
             </div>
           </section>
         )}
 
         {relatedProducts.length > 0 && (
-          <section className="border-t pt-12">
+          <section className="border-t pt-12 lg:pt-16">
             <div className="flex items-end justify-between mb-8">
               <div>
                 <p className="text-xs uppercase tracking-[0.15em] text-accent-text mb-2 font-medium">You may also like</p>
@@ -542,7 +542,7 @@ export function ProductDetailPage() {
                 <Link href="/products"><Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm">View all <ArrowRight className="ml-1 h-4 w-4" /></Button></Link>
               )}
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-5 lg:gap-6">
               {relatedProducts.map((p) => (<ProductCard key={p.id} product={p} />))}
             </div>
           </section>

@@ -142,7 +142,7 @@ export function SellerMonthlyHistoryTab() {
   if (isLoading) {
     return (
       <div className="space-y-5">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 xl:gap-5 gap-3">
           {[1, 2, 3, 4].map((i) => (
             <Skeleton key={i} className="h-24 rounded-2xl" />
           ))}
@@ -182,15 +182,15 @@ export function SellerMonthlyHistoryTab() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 xl:gap-5 gap-3">
         {statCards.map((s) => (
-          <div key={s.label} className="rounded-2xl border border-border bg-card p-4 flex items-center gap-3">
+          <div key={s.label} className="rounded-2xl border border-border bg-card p-4 lg:p-5 flex items-center gap-3">
             <div className={cn("h-10 w-10 rounded-xl flex items-center justify-center shrink-0", s.color)}>
               <s.icon className="h-4.5 w-4.5" />
             </div>
             <div className="min-w-0">
               <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{s.label}</p>
-              <p className="text-lg font-bold text-foreground tabular-nums truncate">{s.value}</p>
+              <p className="text-lg lg:text-xl font-bold text-foreground tabular-nums truncate">{s.value}</p>
               <p className="text-[10px] text-muted-foreground truncate">{s.sub}</p>
             </div>
           </div>
@@ -199,14 +199,14 @@ export function SellerMonthlyHistoryTab() {
 
       {/* Revenue chart */}
       <section className="rounded-2xl border border-border bg-card">
-        <header className="flex items-center justify-between gap-3 px-5 py-4 border-b border-border/60">
+        <header className="flex items-center justify-between gap-3 px-5 lg:px-6 py-4 border-b border-border/60">
           <div>
             <h3 className="text-sm font-semibold text-foreground">Revenue Trend</h3>
             <p className="text-xs text-muted-foreground mt-0.5">Monthly delivered revenue</p>
           </div>
         </header>
-        <div className="p-5">
-          <div className="h-64">
+        <div className="p-5 lg:p-6">
+          <div className="h-64 xl:h-80">
             {chartData.some((d: any) => d.revenue > 0) ? (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData} margin={{ top: 10, right: 8, left: -8, bottom: 0 }}>
@@ -255,14 +255,14 @@ export function SellerMonthlyHistoryTab() {
 
       {/* Orders chart */}
       <section className="rounded-2xl border border-border bg-card">
-        <header className="flex items-center justify-between gap-3 px-5 py-4 border-b border-border/60">
+        <header className="flex items-center justify-between gap-3 px-5 lg:px-6 py-4 border-b border-border/60">
           <div>
             <h3 className="text-sm font-semibold text-foreground">Order Count</h3>
             <p className="text-xs text-muted-foreground mt-0.5">Monthly order volume</p>
           </div>
         </header>
-        <div className="p-5">
-          <div className="h-56">
+        <div className="p-5 lg:p-6">
+          <div className="h-56 xl:h-72">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} margin={{ top: 10, right: 8, left: -8, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
@@ -293,7 +293,7 @@ export function SellerMonthlyHistoryTab() {
 
       {/* Table */}
       <section className="rounded-2xl border border-border bg-card overflow-hidden">
-        <header className="px-5 py-4 border-b border-border/60">
+        <header className="px-5 lg:px-6 py-4 border-b border-border/60">
           <h3 className="text-sm font-semibold text-foreground">Monthly Breakdown</h3>
           <p className="text-xs text-muted-foreground mt-0.5">Detailed per-month figures</p>
         </header>

@@ -6,8 +6,10 @@ import { useUser } from "@clerk/react";
 import { useGuestCart } from "@/hooks/useGuestCart";
 
 const STORAGE_KEY = "treefriend_float_v1";
-const ICON_SIZE = 56;
-const EDGE = 16;
+const ICON_SIZE_MOBILE = 56;
+const ICON_SIZE_DESKTOP = 64;
+const EDGE_MOBILE = 16;
+const EDGE_DESKTOP = 24;
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
@@ -20,6 +22,19 @@ export function FloatingCartIcon() {
     query: { enabled: !!user, queryKey: getGetCartQueryKey() },
   });
   const guestCart = useGuestCart();
+
+  // Responsive breakpoint detection for desktop-specific sizing
+  const [isDesktop, setIsDesktop] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    setIsDesktop(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  const ICON_SIZE = isDesktop ? ICON_SIZE_DESKTOP : ICON_SIZE_MOBILE;
+  const EDGE = isDesktop ? EDGE_DESKTOP : EDGE_MOBILE;
 
   const serverCount = cart?.items?.reduce((s, i) => s + i.quantity, 0) ?? 0;
   const count = user ? serverCount : guestCart.totalCount;
@@ -57,7 +72,7 @@ export function FloatingCartIcon() {
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, []);
+  }, [ICON_SIZE, EDGE]);
 
   if (count === 0) return null;
   // Only hide inside an ACTIVE conversation (/messages/:id) where the
@@ -113,8 +128,8 @@ export function FloatingCartIcon() {
       }}
     >
       <div className="relative w-full h-full rounded-full bg-foreground shadow-2xl flex items-center justify-center border-2 border-background/20">
-        <ShoppingBag className="h-6 w-6 text-background" />
-        <span className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-accent text-accent-foreground text-[10px] font-bold flex items-center justify-center border-2 border-background shadow">
+        <ShoppingBag className="h-6 w-6 lg:h-7 lg:w-7 text-background" />
+        <span className="absolute -top-1.5 -right-1.5 lg:-top-2 lg:-right-2 h-5 w-5 lg:h-6 lg:w-6 rounded-full bg-accent text-accent-foreground text-[10px] lg:text-xs font-bold flex items-center justify-center border-2 border-background shadow">
           {count > 99 ? "99+" : count}
         </span>
       </div>

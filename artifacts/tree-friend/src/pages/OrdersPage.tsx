@@ -124,7 +124,7 @@ export function OrdersPage() {
   if (isGuest) {
     if (isLoading) {
       return (
-        <div className="container mx-auto px-4 py-10">
+        <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 max-w-5xl xl:max-w-6xl">
           <div className="space-y-4">
             {Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)}
           </div>
@@ -133,33 +133,33 @@ export function OrdersPage() {
     }
     if (guestTrackingIds.length === 0 && preOrders.length === 0) {
       return (
-        <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4">
-          <div className="h-20 w-20 rounded-full bg-muted flex items-center justify-center mb-6">
-            <Package2 className="h-9 w-9 text-muted-foreground" />
+        <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4 lg:py-20">
+          <div className="h-20 w-20 lg:h-24 lg:w-24 rounded-full bg-muted flex items-center justify-center mb-6">
+            <Package2 className="h-9 w-9 lg:h-12 lg:w-12 text-muted-foreground" />
           </div>
-          <h2 className="font-serif text-2xl font-medium mb-2">No orders yet</h2>
-          <p className="text-muted-foreground text-sm mb-6">Orders you place as a guest will appear here on this device.</p>
-          <Link href="/products"><Button className="rounded-full px-8">Start Shopping</Button></Link>
+          <h2 className="font-serif text-2xl lg:text-3xl font-medium mb-2">No orders yet</h2>
+          <p className="text-muted-foreground text-sm lg:text-base mb-6">Orders you place as a guest will appear here on this device.</p>
+          <Link href="/products"><Button className="rounded-full px-8 lg:px-10 lg:text-base">Start Shopping</Button></Link>
         </div>
       );
     }
     return (
       <div className="min-h-screen bg-background">
-        <div className="bg-muted/30 border-b py-10">
-          <div className="container mx-auto px-4">
+        <div className="bg-muted/30 border-b py-6 md:py-8 lg:py-10">
+        <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-5xl xl:max-w-6xl">
             <PageBreadcrumb crumbs={[{ label: "My Orders", icon: <Package2 className="h-3 w-3" /> }]} className="mb-3" />
-            <h1 className="font-serif text-4xl font-medium">My Orders</h1>
+            <h1 className="font-serif text-4xl lg:text-5xl font-medium">My Orders</h1>
             <p className="text-muted-foreground mt-1 text-sm">{guestTrackingIds.length + preOrders.length} order{(guestTrackingIds.length + preOrders.length) !== 1 ? "s" : ""} on this device</p>
           </div>
         </div>
-        <div className="container mx-auto px-4 py-8 max-w-3xl space-y-3">
+        <div className="container mx-auto px-4 md:px-6 lg:px-8 py-6 md:py-8 lg:py-10 max-w-5xl xl:max-w-6xl space-y-3 lg:space-y-5">
           {preOrders.map((o: any) => (
             <Link key={o.trackingId} href={`/pre-orders/${o.trackingId}`}>
-              <div className="border rounded-xl p-4 hover:bg-muted/30 transition-colors cursor-pointer">
+              <div className="border rounded-xl p-4 lg:p-6 hover:bg-muted/30 transition-colors cursor-pointer">
                 <div className="flex items-center justify-between mb-2">
                   <div>
-                    <span className="text-xs font-bold bg-info text-info-foreground rounded-full px-2.5 py-1">PRE-ORDER</span>
-                    <p className="font-mono font-semibold text-sm mt-1">{o.trackingId}</p>
+                    <span className="text-xs lg:text-sm font-bold bg-info text-info-foreground rounded-full px-2.5 py-1">PRE-ORDER</span>
+                    <p className="font-mono font-semibold text-sm lg:text-base mt-1">{o.trackingId}</p>
                     {o.createdAt && <p className="text-xs text-muted-foreground mt-0.5">{new Date(o.createdAt).toLocaleDateString("en-BD", { year: "numeric", month: "long", day: "numeric" })}</p>}
                   </div>
                   <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -169,10 +169,10 @@ export function OrdersPage() {
           ))}
           {guestTrackingIds.map((o) => (
             <Link key={o.trackingId} href={`/orders/${o.trackingId}`}>
-              <div className="border rounded-xl p-4 hover:bg-muted/30 transition-colors cursor-pointer">
+              <div className="border rounded-xl p-4 lg:p-6 hover:bg-muted/30 transition-colors cursor-pointer">
                 <div className="flex items-center justify-between mb-2">
                   <div>
-                    <p className="font-mono font-semibold text-sm">{o.trackingId}</p>
+                    <p className="font-mono font-semibold text-sm lg:text-base">{o.trackingId}</p>
                     {o.createdAt && (
                       <p className="text-xs text-muted-foreground mt-0.5">{new Date(o.createdAt).toLocaleDateString("en-BD", { year: "numeric", month: "long", day: "numeric" })}</p>
                     )}
@@ -231,7 +231,7 @@ export function OrdersPage() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-10">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-10 max-w-5xl xl:max-w-6xl">
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
         </div>
@@ -241,29 +241,29 @@ export function OrdersPage() {
 
   if (!orders || orders.length === 0) {
     return (
-      <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4">
-        <div className="h-20 w-20 rounded-full bg-muted flex items-center justify-center mb-6">
-          <Package2 className="h-9 w-9 text-muted-foreground" />
+      <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4 lg:py-20">
+        <div className="h-20 w-20 lg:h-24 lg:w-24 rounded-full bg-muted flex items-center justify-center mb-6">
+          <Package2 className="h-9 w-9 lg:h-12 lg:w-12 text-muted-foreground" />
         </div>
-        <h2 className="font-serif text-2xl font-medium mb-2">No orders yet</h2>
-        <p className="text-muted-foreground text-sm mb-6">Your orders will appear here once you've shopped with us.</p>
-        <Link href="/products"><Button className="rounded-full px-8">Start Shopping</Button></Link>
+        <h2 className="font-serif text-2xl lg:text-3xl font-medium mb-2">No orders yet</h2>
+        <p className="text-muted-foreground text-sm lg:text-base mb-6">Your orders will appear here once you've shopped with us.</p>
+        <Link href="/products"><Button className="rounded-full px-8 lg:px-10 lg:text-base">Start Shopping</Button></Link>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="bg-muted/30 border-b py-10">
-        <div className="container mx-auto px-4">
+      <div className="bg-muted/30 border-b py-6 md:py-8 lg:py-10">
+        <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-5xl xl:max-w-6xl">
           <PageBreadcrumb crumbs={[{ label: "My Orders", icon: <Package2 className="h-3 w-3" /> }]} className="mb-3" />
-          <h1 className="font-serif text-4xl font-medium">My Orders</h1>
+          <h1 className="font-serif text-4xl lg:text-5xl font-medium">My Orders</h1>
           <p className="text-muted-foreground mt-1 text-sm">{(orders?.length ?? 0) + preOrders.length} order{((orders?.length ?? 0) + preOrders.length) !== 1 ? "s" : ""}</p>
         </div>
       </div>
 
-      <div className="container mx-auto px-4 py-8 max-w-3xl">
-        <div className="space-y-4">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-6 md:py-8 lg:py-10 max-w-5xl xl:max-w-6xl">
+        <div className="space-y-4 lg:space-y-6">
           {[...(orders ?? []).map((o: any) => ({ ...o, _type: "order" })), ...preOrders.map((o: any) => ({ ...o, _type: "preorder" }))]
               .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
               .map((order, index) => {
@@ -274,18 +274,18 @@ export function OrdersPage() {
                   const isCancelled = order.status === "cancelled";
                   return (
                     <Link key={`pre-${order.id}`} href={`/pre-orders/${order.trackingId}`}>
-                    <div className="bg-card border rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow cursor-pointer">
-                      <div className="flex items-start justify-between mb-3">
-                        <p className="font-semibold text-lg">Pre-Order #{preNum2}</p>
+                    <div className="bg-card border rounded-xl p-5 lg:p-8 shadow-sm hover:shadow-md transition-shadow cursor-pointer">
+                      <div className="flex items-start justify-between mb-3 lg:mb-4">
+                        <p className="font-semibold text-lg lg:text-xl">Pre-Order #{preNum2}</p>
                         <div className="text-right">
-                          <p className="text-xs text-muted-foreground">Current Total:</p>
-                          <p className="font-semibold text-lg">Tk {preTotal.toLocaleString()}</p>
+                          <p className="text-xs lg:text-sm text-muted-foreground">Current Total:</p>
+                          <p className="font-semibold text-lg lg:text-xl">Tk {preTotal.toLocaleString()}</p>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 mb-3">
-                        <span className="text-xs font-bold bg-info text-info-foreground rounded-full px-2.5 py-1">PRE-ORDER</span>
-                        <span className={`text-xs font-bold rounded-full px-2.5 py-1 ${isCancelled ? "bg-destructive/10 text-destructive" : order.status === "arrived_in_bd" ? "bg-info text-info-foreground" : order.status === "shipped" ? "bg-info text-info-foreground" : order.status === "delivered" ? "bg-success text-success-foreground" : "bg-warning text-warning-foreground"}`}>
+                      <div className="flex items-center gap-2 mb-3 lg:mb-4">
+                        <span className="text-xs lg:text-sm font-bold bg-info text-info-foreground rounded-full px-2.5 py-1">PRE-ORDER</span>
+                        <span className={`text-xs lg:text-sm font-bold rounded-full px-2.5 py-1 ${isCancelled ? "bg-destructive/10 text-destructive" : order.status === "arrived_in_bd" ? "bg-info text-info-foreground" : order.status === "shipped" ? "bg-info text-info-foreground" : order.status === "delivered" ? "bg-success text-success-foreground" : "bg-warning text-warning-foreground"}`}>
                           {isCancelled ? "✕ CANCELLED" : order.status === "arrived_in_bd" ? "Arrived in BD" : order.status.charAt(0).toUpperCase() + order.status.slice(1)}
                         </span>
                       </div>
@@ -301,7 +301,7 @@ export function OrdersPage() {
                         <CopyTrackingButton trackingId={order.trackingId} />
                       </div>
 
-                      <div className="bg-muted/40 rounded-xl p-4 mb-4">
+                      <div className="bg-muted/40 rounded-xl p-4 lg:p-5 mb-4">
                         <div className="flex items-center gap-3 mb-3">
                           <img src={SHIP_ICON} className="h-8 w-8 rounded" />
                           <div>
@@ -344,12 +344,12 @@ export function OrdersPage() {
                 const rank = (orders ?? []).length - (orders ?? []).findIndex((o: any) => o.id === order.id);
                 return (
             <Link key={order.id} href={`/orders/${order.id}?rank=${rank}`}>
-              <div className="bg-card border rounded-xl p-5 hover:shadow-md transition-shadow cursor-pointer">
+              <div className="bg-card border rounded-xl p-5 lg:p-8 hover:shadow-md transition-shadow cursor-pointer">
                 <div className="flex items-start justify-between">
                   <div>
                     <div className="flex items-center gap-3 mb-1">
-                      <p className="font-medium">Order #{rank}</p>
-                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColors[order.orderStatus] ?? "bg-muted"}`}>
+                      <p className="font-medium lg:text-lg">Order #{rank}</p>
+                      <span className={`px-2.5 py-0.5 rounded-full text-xs lg:text-sm font-medium ${statusColors[order.orderStatus] ?? "bg-muted"}`}>
                         {order.orderStatus === "return_completed" ? "Refund Completed" : order.orderStatus.charAt(0).toUpperCase() + order.orderStatus.slice(1)}
                       </span>
                       {returnsMap[order.id] && order.orderStatus !== "return_completed" && (
@@ -367,7 +367,7 @@ export function OrdersPage() {
                     )}
                   </div>
                   <div className="text-right">
-                    <p className="font-semibold">Tk{order.totalAmount.toLocaleString()}</p>
+                    <p className="font-semibold lg:text-lg">Tk{order.totalAmount.toLocaleString()}</p>
                     <p className="text-xs text-muted-foreground capitalize">{order.paymentMethod}</p>
                   </div>
                 </div>

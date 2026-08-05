@@ -103,7 +103,7 @@ export function SubscriptionsPage() {
   const cancelledSubs = subs?.filter((s) => s.status === "cancelled") ?? [];
 
   return (
-    <div className="container mx-auto px-4 py-12 max-w-3xl">
+    <div className="container mx-auto px-4 py-12 max-w-3xl xl:max-w-5xl">
       <PageBreadcrumb crumbs={[{ label: "My Subscriptions", icon: <RefreshCw className="h-3 w-3" /> }]} className="mb-4" />
       <div className="flex items-end justify-between mb-8">
         <div>
@@ -128,7 +128,7 @@ export function SubscriptionsPage() {
       </div>
 
       {isLoading ? (
-        <div className="space-y-4">
+        <div className="space-y-4 lg:space-y-6">
           {[1, 2].map((i) => <Skeleton key={i} className="h-40 rounded-2xl" />)}
         </div>
       ) : activeSubs.length === 0 ? (
@@ -139,7 +139,7 @@ export function SubscriptionsPage() {
           <Link href="/products"><Button>Shop Now</Button></Link>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-4 lg:space-y-6">
           {activeSubs.map((sub) => (
             <div key={sub.id} className="border rounded-2xl overflow-hidden">
               {/* Header */}

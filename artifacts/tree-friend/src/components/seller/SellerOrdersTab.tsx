@@ -277,7 +277,7 @@ function OrderRow({ order }: { order: SellerOrder }) {
           {/* Customer */}
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Customer</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
               <div className="flex items-center gap-2 text-foreground">
                 <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 <span className="truncate">{order.shippingAddress?.fullName}</span>
@@ -374,15 +374,15 @@ export function SellerOrdersTab() {
   return (
     <div className="space-y-5">
       {/* Stat strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 xl:gap-5 gap-3">
         {statCards.map((s) => (
-          <div key={s.label} className="rounded-2xl border border-border bg-card p-4 flex items-center gap-3">
+          <div key={s.label} className="rounded-2xl border border-border bg-card p-4 lg:p-5 flex items-center gap-3">
             <div className={cn("h-10 w-10 rounded-xl flex items-center justify-center shrink-0", s.color)}>
               <s.icon className="h-4.5 w-4.5" />
             </div>
             <div className="min-w-0">
               <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{s.label}</p>
-              <p className="text-xl font-bold text-foreground tabular-nums">{s.value}</p>
+              <p className="text-xl lg:text-2xl font-bold text-foreground tabular-nums">{s.value}</p>
             </div>
           </div>
         ))}

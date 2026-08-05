@@ -147,7 +147,7 @@ function SwipeableSellerListingCard({ card, onAddToBag, adding, isLoggedIn }: Sw
     : null;
 
   return (
-    <div className="shrink-0 w-[300px] sm:w-[340px] border rounded-2xl p-4 bg-card flex flex-col gap-3 snap-start shadow-sm hover:shadow-md transition-shadow">
+    <div className="shrink-0 w-[300px] sm:w-[340px] lg:w-[360px] border rounded-2xl p-4 bg-card flex flex-col gap-3 snap-start shadow-sm hover:shadow-md transition-shadow">
       {/* ── Top: Seller identity ─────────────────────────────────── */}
       <div className="flex gap-3">
         <div className="h-20 w-20 sm:h-24 sm:w-24 rounded-xl overflow-hidden bg-muted/30 shrink-0 flex items-center justify-center">
@@ -269,7 +269,7 @@ interface SwipeableRowProps {
 /** Skeleton card matching the real card dimensions — maintains visual rhythm during load */
 function CardSkeleton() {
   return (
-    <div className="shrink-0 w-[300px] sm:w-[340px] border rounded-2xl p-4 bg-card snap-start animate-in fade-in duration-300">
+    <div className="shrink-0 w-[300px] sm:w-[340px] lg:w-[360px] border rounded-2xl p-4 bg-card snap-start animate-in fade-in duration-300">
       <div className="flex gap-3">
         <Skeleton className="h-20 w-20 sm:h-24 sm:w-24 rounded-xl" />
         <div className="flex-1 space-y-2">
@@ -611,23 +611,23 @@ export function ProductsPage() {
     <div className="min-h-screen bg-background">
 
       {/* ── Page header ──────────────────────────────────────────────── */}
-      <div className="bg-muted/30 border-b py-3">
-        <div className="container mx-auto px-4">
+      <div className="bg-muted/30 border-b py-3 md:py-4">
+        <div className="container mx-auto px-4 md:px-6 lg:px-8 max-w-6xl xl:max-w-7xl">
           <PageBreadcrumb crumbs={breadcrumbs} />
         </div>
       </div>
 
-      <div className="container mx-auto px-4 py-6">
+      <div className="container mx-auto px-4 md:px-6 lg:px-8 py-4 md:py-6 lg:py-8 max-w-6xl xl:max-w-7xl">
 
         {/* ── Search bar (always visible) ──────────────────────────── */}
-        <div className="bg-secondary/60 border border-border rounded-2xl px-4 py-3 mb-6">
-          <div className="relative w-full">
+        <div className="bg-secondary/60 border border-border rounded-2xl px-4 py-3 mb-6 lg:mb-8">
+          <div className="relative w-full lg:max-w-xl lg:mx-auto">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search for product"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="pl-9 h-10 rounded-xl border-border bg-card text-sm shadow-none w-full"
+              className="pl-9 h-10 rounded-xl border-border bg-card text-sm shadow-none w-full lg:h-11"
               aria-label="Search products"
             />
           </div>
@@ -639,9 +639,9 @@ export function ProductsPage() {
         {isShopAllView ? (
           <>
             {/* Page heading */}
-            <div className="mb-8">
-              <h1 className="font-serif text-3xl md:text-4xl font-medium leading-tight">Shop All</h1>
-              <p className="text-muted-foreground mt-2 text-sm max-w-2xl">
+            <div className="mb-8 lg:mb-10">
+              <h1 className="font-serif text-3xl md:text-4xl lg:text-[2.75rem] font-medium leading-tight">Shop All</h1>
+              <p className="text-muted-foreground mt-2 text-sm lg:text-base max-w-2xl">
                 Browse seller listings from verified nurseries. Swipe through each category to find the best trees and plants at the best prices.
               </p>
             </div>
@@ -669,7 +669,7 @@ export function ProductsPage() {
             ) : (
               /* ── Groups with swipeable rows ──────────────────────────── */
               shopAllGroups.map((group) => (
-                <section key={group.id} className="py-6">
+                <section key={group.id} className="py-4 md:py-6 lg:py-8">
                   {/* Section header */}
                   <div className="flex items-end justify-between mb-5">
                     <div className="min-w-0">
@@ -715,231 +715,374 @@ export function ProductsPage() {
               PRODUCT GRID VIEW (when searching or category-filtered)
               ════════════════════════════════════════════════════════════ */
           <>
-            {/* Filter bar */}
-            <div className="bg-secondary/60 border border-border rounded-2xl px-4 py-3 mb-6">
-              {/* Row 1: Sort, Per page, Filter toggle */}
-              <div className="flex items-center gap-3">
-                <div className="flex-1">
-                  <Select value={sort} onValueChange={setSort}>
-                    <SelectTrigger className="h-10 rounded-xl border-border bg-card text-sm">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SORT_OPTIONS.map(o => (
-                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+            {/* ── Desktop sidebar + main content layout ──────────────────── */}
+            <div className="lg:flex lg:gap-8">
 
-                <div className="min-w-[80px]">
-                  <Select value={String(perPage)} onValueChange={v => { setPerPage(Number(v)); }}>
-                    <SelectTrigger className="h-10 rounded-xl border-border bg-card text-sm">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PER_PAGE_OPTIONS.map(n => (
-                        <SelectItem key={n} value={n}>{n}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+              {/* ── Desktop filter sidebar (hidden on mobile) ──────────────── */}
+              <aside className="hidden lg:block lg:w-[272px] xl:w-[280px] lg:shrink-0">
+                <div className="lg:sticky lg:top-24">
+                  <div className="bg-secondary/60 border border-border rounded-2xl px-4 py-5">
+                    {/* Sidebar header */}
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-semibold text-sm">Filters</h3>
+                      {activeFiltersCount > 0 && (
+                        <Button variant="ghost" size="sm"
+                          onClick={() => { setMinRating(0); updateURL({ category: null, page: null }); }}
+                          className="text-xs text-muted-foreground h-auto py-0.5 px-2"
+                        >
+                          <X className="h-3 w-3 mr-0.5" /> Clear
+                        </Button>
+                      )}
+                    </div>
 
-                <button
-                  onClick={() => setShowFilterPanel(v => !v)}
-                  className={`flex items-center gap-2 h-10 px-4 rounded-xl border text-sm font-medium transition-colors ${
-                    showFilterPanel || activeFiltersCount > 0
-                      ? "border-accent bg-accent text-accent-foreground"
-                      : "border-border bg-card text-foreground hover:border-accent/60"
-                  }`}
-                  aria-label="Toggle filters"
-                >
-                  <SlidersHorizontal className="h-4 w-4" />
-                  {activeFiltersCount > 0 && (
-                    <span className="bg-card text-accent text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
-                      {activeFiltersCount}
-                    </span>
-                  )}
-                </button>
-
-                {totalFromAPI > 0 && (
-                  <p className="text-xs text-muted-foreground ml-auto hidden sm:block">
-                    {totalFromAPI} products
-                  </p>
-                )}
-              </div>
-
-              {/* Expandable filter panel */}
-              {showFilterPanel && (
-                <div className="mt-4 pt-4 border-t border-border grid grid-cols-1 sm:grid-cols-3 gap-6">
-                  {/* Category carousel */}
-                  <div className="sm:col-span-3">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Category</p>
-                    {(() => {
-                      const allCats = dbCategories ?? [];
-                      const parents = allCats.filter((cat: any) => !cat.parentId);
-                      const currentParent = parents[activeParentIdx];
-                      const subs = currentParent ? allCats.filter((cat: any) => cat.parentId === currentParent.id) : [];
-                      return (
-                        <div>
-                          <div className="flex justify-center gap-1.5 mb-3">
-                            {parents.map((_: any, i: number) => (
-                              <button key={i} onClick={() => setActiveParentIdx(i)}
-                                className={`h-1.5 rounded-full transition-all ${i === activeParentIdx ? "w-6 bg-accent" : "w-1.5 bg-border"}`} />
-                            ))}
+                    {/* Category tree */}
+                    <div className="mb-5 pb-5 border-b border-border">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Category</p>
+                      {(() => {
+                        const allCats = dbCategories ?? [];
+                        const parents = allCats.filter((cat: any) => !cat.parentId);
+                        return (
+                          <div className="space-y-1">
+                            {parents.map((parent: any, i: number) => {
+                              const subs = allCats.filter((cat: any) => cat.parentId === parent.id);
+                              const allSubSlugs = subs.map((s: any) => s.slug).join(",");
+                              const isParentActive = activeCategory === parent.slug || activeCategory === allSubSlugs;
+                              const hasActiveSub = subs.some((s: any) => activeCategory === s.slug);
+                              const isExpanded = isParentActive || hasActiveSub || activeParentIdx === i;
+                              return (
+                                <div key={parent.id}>
+                                  <button
+                                    onClick={() => {
+                                      setActiveParentIdx(i);
+                                      if (isParentActive || hasActiveSub) {
+                                        updateURL({ category: null, page: null });
+                                      } else {
+                                        updateURL({ category: allSubSlugs || parent.slug, page: null });
+                                      }
+                                    }}
+                                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-sm transition-colors ${
+                                      isParentActive || hasActiveSub
+                                        ? "bg-accent/10 text-accent font-medium"
+                                        : "text-foreground hover:bg-muted/50"
+                                    }`}
+                                  >
+                                    <span className="flex items-center gap-2 min-w-0">
+                                      <span className="text-base shrink-0">{parent.icon ?? "✨"}</span>
+                                      <span className="truncate">{parent.name}</span>
+                                    </span>
+                                    <span className="text-xs text-muted-foreground shrink-0 ml-1">{subs.length}</span>
+                                  </button>
+                                  {isExpanded && subs.length > 0 && (
+                                    <div className="ml-6 space-y-0.5 mt-0.5 mb-1">
+                                      {subs.map((sub: any) => {
+                                        const isActive = activeCategory === sub.slug;
+                                        return (
+                                          <button key={sub.id}
+                                            onClick={() => { updateURL({ category: isActive ? null : sub.slug, page: null }); }}
+                                            className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs transition-colors ${
+                                              isActive
+                                                ? "bg-accent text-accent-foreground font-medium"
+                                                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                                            }`}
+                                          >
+                                            {sub.icon && <span className="mr-1">{sub.icon}</span>}
+                                            {sub.name}
+                                          </button>
+                                        );
+                                      })}
+                                      <button
+                                        onClick={() => updateURL({ category: allSubSlugs, page: null })}
+                                        className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs transition-colors ${
+                                          activeCategory === allSubSlugs
+                                            ? "bg-accent text-accent-foreground font-medium"
+                                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                                        }`}
+                                      >
+                                        All {parent.name}
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
-                          <div className="border border-border rounded-2xl p-4 bg-card"
-                            onTouchStart={(e) => {
-                              const touch = e.touches[0];
-                              (e.currentTarget as any)._touchStartX = touch.clientX;
-                            }}
-                            onTouchEnd={(e) => {
-                              const startX = (e.currentTarget as any)._touchStartX ?? 0;
-                              const endX = e.changedTouches[0].clientX;
-                              const diff = startX - endX;
-                              if (Math.abs(diff) > 40) {
-                                if (diff > 0) setActiveParentIdx(i => Math.min(i + 1, parents.length - 1));
-                                else setActiveParentIdx(i => Math.max(i - 1, 0));
-                              }
-                            }}
-                          >
-                            <div className="flex items-center justify-between mb-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-2xl">{currentParent?.icon ?? "✨"}</span>
-                                <span className="font-semibold text-[15px]">{currentParent?.name}</span>
-                              </div>
-                              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{subs.length} types</span>
-                            </div>
+                        );
+                      })()}
+                    </div>
 
-                            {subs.length > 0 ? (
-                              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide" style={{ scrollbarWidth: "none" }}>
-                                {subs.map((sub: any) => {
-                                  const isActive = activeCategory === sub.slug;
-                                  const allSubSlugs = subs.map((s: any) => s.slug).join(",");
-                                  const isParentActive = activeCategory === allSubSlugs;
-                                  return (
-                                    <button key={sub.id}
-                                      onClick={() => {
-                                        const target = isActive ? null : sub.slug;
-                                        updateURL({ category: target, page: null });
-                                        setActiveParentIdx(activeParentIdx);
-                                      }}
+                    {/* Rating filter */}
+                    <div className="mb-5 pb-5 border-b border-border">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Min Rating</p>
+                      <div className="flex gap-2 flex-wrap">
+                        {[0, 3, 4, 4.5].map(r => (
+                          <button key={r}
+                            onClick={() => { setMinRating(r); if (r > 0) resetPage(); }}
+                            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                              minRating === r ? "bg-accent text-accent-foreground border-accent" : "bg-muted/50 text-foreground border-border hover:border-accent/50"
+                            }`}
+                          >
+                            {r === 0 ? "Any" : `${r}+`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Active category display */}
+                    {activeCategory && (
+                      <div className="mb-2">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Active</p>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-accent/10 text-accent text-xs font-medium">
+                            {activeCategoryObj?.name ?? activeCategory.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                            <button onClick={() => updateURL({ category: null, page: null })} className="hover:text-accent-foreground">
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </aside>
+
+              {/* ── Main content area ──────────────────────────────────────── */}
+              <div className="lg:flex-1 lg:min-w-0">
+                {/* Toolbar bar */}
+                <div className="bg-secondary/60 border border-border rounded-2xl px-4 py-3 mb-6">
+                  {/* Row 1: Results count (desktop left), Sort, Per page, Filter toggle (mobile) */}
+                  <div className="flex items-center gap-3">
+                    {/* Results count — shown on lg+ at start of row */}
+                    {totalFromAPI > 0 && (
+                      <p className="text-sm text-muted-foreground hidden lg:block lg:mr-auto">
+                        <span className="font-medium text-foreground">{totalFromAPI}</span> products
+                      </p>
+                    )}
+
+                    <div className="flex-1 lg:flex-initial lg:w-48">
+                      <Select value={sort} onValueChange={setSort}>
+                        <SelectTrigger className="h-10 rounded-xl border-border bg-card text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SORT_OPTIONS.map(o => (
+                            <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="min-w-[80px]">
+                      <Select value={String(perPage)} onValueChange={v => { setPerPage(Number(v)); }}>
+                        <SelectTrigger className="h-10 rounded-xl border-border bg-card text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {PER_PAGE_OPTIONS.map(n => (
+                            <SelectItem key={n} value={n}>{n}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Filter toggle — mobile only */}
+                    <button
+                      onClick={() => setShowFilterPanel(v => !v)}
+                      className={`lg:hidden flex items-center gap-2 h-10 px-4 rounded-xl border text-sm font-medium transition-colors ${
+                        showFilterPanel || activeFiltersCount > 0
+                          ? "border-accent bg-accent text-accent-foreground"
+                          : "border-border bg-card text-foreground hover:border-accent/60"
+                      }`}
+                      aria-label="Toggle filters"
+                    >
+                      <SlidersHorizontal className="h-4 w-4" />
+                      {activeFiltersCount > 0 && (
+                        <span className="bg-card text-accent text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                          {activeFiltersCount}
+                        </span>
+                      )}
+                    </button>
+
+                    {/* Results count — mobile/sm only */}
+                    {totalFromAPI > 0 && (
+                      <p className="text-xs text-muted-foreground ml-auto hidden sm:block lg:hidden">
+                        {totalFromAPI} products
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Expandable filter panel — mobile only */}
+                  {showFilterPanel && (
+                    <div className="lg:hidden mt-4 pt-4 border-t border-border grid grid-cols-1 sm:grid-cols-3 gap-6">
+                      {/* Category carousel */}
+                      <div className="sm:col-span-3">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Category</p>
+                        {(() => {
+                          const allCats = dbCategories ?? [];
+                          const parents = allCats.filter((cat: any) => !cat.parentId);
+                          const currentParent = parents[activeParentIdx];
+                          const subs = currentParent ? allCats.filter((cat: any) => cat.parentId === currentParent.id) : [];
+                          return (
+                            <div>
+                              <div className="flex justify-center gap-1.5 mb-3">
+                                {parents.map((_: any, i: number) => (
+                                  <button key={i} onClick={() => setActiveParentIdx(i)}
+                                    className={`h-1.5 rounded-full transition-all ${i === activeParentIdx ? "w-6 bg-accent" : "w-1.5 bg-border"}`} />
+                                ))}
+                              </div>
+                              <div className="border border-border rounded-2xl p-4 bg-card"
+                                onTouchStart={(e) => {
+                                  const touch = e.touches[0];
+                                  (e.currentTarget as any)._touchStartX = touch.clientX;
+                                }}
+                                onTouchEnd={(e) => {
+                                  const startX = (e.currentTarget as any)._touchStartX ?? 0;
+                                  const endX = e.changedTouches[0].clientX;
+                                  const diff = startX - endX;
+                                  if (Math.abs(diff) > 40) {
+                                    if (diff > 0) setActiveParentIdx(i => Math.min(i + 1, parents.length - 1));
+                                    else setActiveParentIdx(i => Math.max(i - 1, 0));
+                                  }
+                                }}
+                              >
+                                <div className="flex items-center justify-between mb-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-2xl">{currentParent?.icon ?? "✨"}</span>
+                                    <span className="font-semibold text-[15px]">{currentParent?.name}</span>
+                                  </div>
+                                  <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{subs.length} types</span>
+                                </div>
+
+                                {subs.length > 0 ? (
+                                  <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide" style={{ scrollbarWidth: "none" }}>
+                                    {subs.map((sub: any) => {
+                                      const isActive = activeCategory === sub.slug;
+                                      const allSubSlugs = subs.map((s: any) => s.slug).join(",");
+                                      const isParentActive = activeCategory === allSubSlugs;
+                                      return (
+                                        <button key={sub.id}
+                                          onClick={() => {
+                                            const target = isActive ? null : sub.slug;
+                                            updateURL({ category: target, page: null });
+                                            setActiveParentIdx(activeParentIdx);
+                                          }}
+                                          className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                                            isActive
+                                              ? "bg-accent text-accent-foreground border-accent"
+                                              : isParentActive
+                                                ? "bg-accent/20 text-accent border-accent/40"
+                                                : "bg-muted/50 text-foreground border-border hover:border-accent/50"
+                                          }`}
+                                        >
+                                          {sub.icon && <span className="mr-1">{sub.icon}</span>}
+                                          {sub.name}
+                                        </button>
+                                      );
+                                    })}
+                                    <button
+                                      onClick={() => updateURL({ category: subs.map((s: any) => s.slug).join(","), page: null })}
                                       className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                                        isActive
+                                        activeCategory === subs.map((s: any) => s.slug).join(",")
                                           ? "bg-accent text-accent-foreground border-accent"
-                                          : isParentActive
-                                            ? "bg-accent/20 text-accent border-accent/40"
-                                            : "bg-muted/50 text-foreground border-border hover:border-accent/50"
+                                          : "bg-muted/50 text-foreground border-border hover:border-accent/50"
                                       }`}
                                     >
-                                      {sub.icon && <span className="mr-1">{sub.icon}</span>}
-                                      {sub.name}
+                                      All {currentParent?.name}
                                     </button>
-                                  );
-                                })}
-                                <button
-                                  onClick={() => updateURL({ category: subs.map((s: any) => s.slug).join(","), page: null })}
-                                  className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                                    activeCategory === subs.map((s: any) => s.slug).join(",")
-                                      ? "bg-accent text-accent-foreground border-accent"
-                                      : "bg-muted/50 text-foreground border-border hover:border-accent/50"
-                                  }`}
-                                >
-                                  All {currentParent?.name}
-                                </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => updateURL({ category: currentParent?.slug ?? null, page: null })}
+                                    className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                                      activeCategory === currentParent?.slug
+                                        ? "bg-accent text-accent-foreground border-accent"
+                                        : "bg-muted/50 text-foreground border-border hover:border-accent/50"
+                                    }`}
+                                  >
+                                    Browse {currentParent?.name}
+                                  </button>
+                                )}
                               </div>
-                            ) : (
-                              <button
-                                onClick={() => updateURL({ category: currentParent?.slug ?? null, page: null })}
-                                className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                                  activeCategory === currentParent?.slug
-                                    ? "bg-accent text-accent-foreground border-accent"
-                                    : "bg-muted/50 text-foreground border-border hover:border-accent/50"
-                                }`}
-                              >
-                                Browse {currentParent?.name}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
 
-                  {/* Rating filter */}
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Min Rating</p>
-                    <div className="flex gap-2">
-                      {[0, 3, 4, 4.5].map(r => (
-                        <button key={r}
-                          onClick={() => { setMinRating(r); if (r > 0) resetPage(); }}
-                          className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                            minRating === r ? "bg-accent text-accent-foreground border-accent" : "bg-muted/50 text-foreground border-border hover:border-accent/50"
-                          }`}
+                      {/* Rating filter */}
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Min Rating</p>
+                        <div className="flex gap-2">
+                          {[0, 3, 4, 4.5].map(r => (
+                            <button key={r}
+                              onClick={() => { setMinRating(r); if (r > 0) resetPage(); }}
+                              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                                minRating === r ? "bg-accent text-accent-foreground border-accent" : "bg-muted/50 text-foreground border-border hover:border-accent/50"
+                              }`}
+                            >
+                              {r === 0 ? "Any" : `${r}+`}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Clear filters */}
+                      <div className="flex items-end">
+                        <Button variant="ghost" size="sm"
+                          onClick={() => { setMinRating(0); updateURL({ category: null, page: null }); }}
+                          className="text-muted-foreground"
                         >
-                          {r === 0 ? "Any" : `${r}+`}
-                        </button>
+                          <X className="h-3.5 w-3.5 mr-1" /> Clear filters
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Product grid */}
+                {isLoading ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-4 lg:gap-5 xl:gap-6">
+                    {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="aspect-[3/4] rounded-2xl" />)}
+                  </div>
+                ) : sortedProducts.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-20 text-center">
+                    <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
+                      <ShoppingBag className="w-7 h-7 text-muted-foreground" />
+                    </div>
+                    <h2 className="font-serif text-xl font-medium mb-2">No products found</h2>
+                    <p className="text-sm text-muted-foreground max-w-[320px] mb-6">
+                      Try adjusting your search or filters.
+                    </p>
+                    <Button variant="outline" onClick={() => { setSearch(""); setMinRating(0); updateURL({ category: null, page: null }); }} className="rounded-full">
+                      Clear all filters
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-4 lg:gap-5 xl:gap-6">
+                      {sortedProducts.map((p) => (
+                        <LazyProductCard key={p.id} product={p} backContext="products" />
                       ))}
                     </div>
-                  </div>
 
-                  {/* Clear filters */}
-                  <div className="flex items-end">
-                    <Button variant="ghost" size="sm"
-                      onClick={() => { setMinRating(0); updateURL({ category: null, page: null }); }}
-                      className="text-muted-foreground"
-                    >
-                      <X className="h-3.5 w-3.5 mr-1" /> Clear filters
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Product grid */}
-            {isLoading ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="aspect-[3/4] rounded-2xl" />)}
-              </div>
-            ) : sortedProducts.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
-                <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
-                  <ShoppingBag className="w-7 h-7 text-muted-foreground" />
-                </div>
-                <h2 className="font-serif text-xl font-medium mb-2">No products found</h2>
-                <p className="text-sm text-muted-foreground max-w-[320px] mb-6">
-                  Try adjusting your search or filters.
-                </p>
-                <Button variant="outline" onClick={() => { setSearch(""); setMinRating(0); updateURL({ category: null, page: null }); }} className="rounded-full">
-                  Clear all filters
-                </Button>
-              </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {sortedProducts.map((p) => (
-                    <LazyProductCard key={p.id} product={p} backContext="products" />
-                  ))}
-                </div>
-
-                {/* Pagination */}
-                {totalPages > 1 && (
-                  <div className="flex items-center justify-center gap-2 mt-8">
-                    <Button variant="outline" size="sm" disabled={currentPage === 1}
-                      onClick={() => handlePageChange(currentPage - 1)} className="rounded-full gap-1">
-                      <ChevronLeft className="h-4 w-4" /> Prev
-                    </Button>
-                    <span className="text-sm text-muted-foreground px-3">
-                      Page {currentPage} of {totalPages}
-                    </span>
-                    <Button variant="outline" size="sm" disabled={currentPage === totalPages}
-                      onClick={() => handlePageChange(currentPage + 1)} className="rounded-full gap-1">
-                      Next <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
+                    {/* Pagination */}
+                    {totalPages > 1 && (
+                      <div className="flex items-center justify-center gap-2 mt-8 lg:mt-10 lg:gap-3">
+                        <Button variant="outline" size="sm" disabled={currentPage === 1}
+                          onClick={() => handlePageChange(currentPage - 1)} className="rounded-full gap-1 lg:px-4">
+                          <ChevronLeft className="h-4 w-4" /> Prev
+                        </Button>
+                        <span className="text-sm text-muted-foreground px-3 lg:px-4 lg:text-base">
+                          Page {currentPage} of {totalPages}
+                        </span>
+                        <Button variant="outline" size="sm" disabled={currentPage === totalPages}
+                          onClick={() => handlePageChange(currentPage + 1)} className="rounded-full gap-1 lg:px-4">
+                          Next <ChevronRight className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    )}
+                  </>
                 )}
-              </>
-            )}
+              </div>{/* end main content */}
+            </div>{/* end sidebar + main layout */}
           </>
         )}
       </div>

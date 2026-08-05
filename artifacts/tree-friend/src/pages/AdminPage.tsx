@@ -486,7 +486,7 @@ export function AdminPage() {
 
   // ??? Sidebar ???????????????????????????????????????????????????????????????
   const Sidebar = ({ mobile = false }: { mobile?: boolean }) => (
-    <aside className={`${mobile ? "w-64" : "w-64"} bg-card border-r flex flex-col h-full`}>
+    <aside className={`${mobile ? "w-64" : "w-64 lg:w-64 xl:w-72"} bg-card border-r flex flex-col h-full`}>
       <div className="px-6 py-5 border-b">
         <div className="flex items-center gap-2.5">
           <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center">
@@ -757,7 +757,7 @@ export function AdminPage() {
       )}
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className="h-16 bg-card border-b flex items-center justify-between px-5 shrink-0">
+        <header className="h-16 lg:h-18 bg-card border-b flex items-center justify-between px-5 lg:px-6 shrink-0">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSidebarOpen(true)}
@@ -766,7 +766,7 @@ export function AdminPage() {
               <Menu className="h-5 w-5 text-muted-foreground" />
             </button>
             <div>
-              <h1 className="font-semibold text-foreground text-sm sm:text-base">{activeNav?.label ?? "Dashboard"}</h1>
+              <h1 className="font-semibold text-foreground text-sm sm:text-base lg:text-lg">{activeNav?.label ?? "Dashboard"}</h1>
               <p className="text-xs text-muted-foreground hidden sm:block">Tree Friend Admin</p>
             </div>
           </div>
@@ -778,8 +778,8 @@ export function AdminPage() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
-          <div className="max-w-7xl mx-auto">
+        <main className="flex-1 overflow-y-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
+          <div className="max-w-7xl xl:max-w-[1600px] mx-auto">
             {renderActiveTab()}
           </div>
         </main>
