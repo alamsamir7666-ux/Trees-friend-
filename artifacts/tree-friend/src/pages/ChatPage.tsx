@@ -1766,7 +1766,7 @@ function MessageBubble({
             coexist because useLongPress auto-cancels on >10px movement,
             so a swipe naturally suppresses the long-press menu. */}
         <div
-          className="relative group max-w-[75%] sm:max-w-[65%] min-w-0"
+          className="relative group max-w-[75%] sm:max-w-[65%] min-w-0 select-none"
           onClick={handleBubbleClick}
           onTouchStart={(e) => {
             longPressHandlers.onTouchStart?.(e);
