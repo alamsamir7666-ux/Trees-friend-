@@ -43,6 +43,22 @@ const EMPTY_FORM: CouponForm = {
   expiryDate: "",
 };
 
+// ── Error helpers ──────────────────────────────────────────────────────────
+// 404 from /api/sellers/me/coupons* almost always means the deployed backend
+// is stale (frontend was redeployed on Vercel but the api-server on Render
+// hasn't picked up the new seller-scoped coupon routes yet). Surface a clear
+// message instead of a generic "Not found".
+const DEPLOY_HINT =
+  "Coupons API not available on the server. If you just deployed the frontend, " +
+  "make sure the backend (api-server) is also redeployed -- the seller coupon " +
+  "routes were added in a recent commit.";
+
+async function readApiError(res: Response, fallback: string): Promise<string> {
+  if (res.status === 404) return DEPLOY_HINT;
+  const body = await res.json().catch(() => ({}));
+  return body?.error ?? fallback;
+}
+
 // ── Component ────────────────────────────────────────────────────────────
 /**
  * Seller-scoped Coupons tab.
@@ -82,7 +98,9 @@ export function SellerCouponsTab() {
       const res = await fetch(`${API}/api/sellers/me/coupons`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error("Failed to fetch coupons");
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Failed to fetch coupons"));
+      }
       const data = await res.json();
       setCoupons(Array.isArray(data) ? data : []);
     } catch (e: any) {
@@ -127,8 +145,7 @@ export function SellerCouponsTab() {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data?.error ?? `Failed to ${editing ? "update" : "create"} coupon`);
+        throw new Error(await readApiError(res, `Failed to ${editing ? "update" : "create"} coupon`));
       }
       setShowModal(false);
       setEditing(null);
@@ -148,7 +165,7 @@ export function SellerCouponsTab() {
         method: "PATCH",
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error("Failed to toggle coupon");
+      if (!res.ok) throw new Error(await readApiError(res, "Failed to toggle coupon"));
       fetchCoupons();
     } catch (e: any) {
       setError(e?.message ?? "Toggle failed");
@@ -163,7 +180,7 @@ export function SellerCouponsTab() {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error("Failed to delete coupon");
+      if (!res.ok) throw new Error(await readApiError(res, "Failed to delete coupon"));
       setConfirmDelete(null);
       fetchCoupons();
     } catch (e: any) {
@@ -202,7 +219,8 @@ export function SellerCouponsTab() {
 
       {error && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
+          <p className="font-medium mb-0.5">Couldn't load coupons</p>
+          <p className="text-destructive/90">{error}</p>
         </div>
       )}
 
