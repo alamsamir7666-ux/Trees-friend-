@@ -4328,6 +4328,13 @@ components:
           type: ["string", "null"]
         isActive:
           type: boolean
+        sellerId:
+          type: ["integer", "null"]
+          description: >
+            Null means a platform-wide coupon. Non-null means this coupon
+            was created by that seller and only discounts that seller's
+            own items in a cart (see routes/orders.ts
+            groupBySellerAndAllocateDiscount's targetSellerId doc comment).
       required:
         - id
         - code
@@ -4336,6 +4343,7 @@ components:
         - minOrderAmount
         - expiryDate
         - isActive
+        - sellerId
 
     ValidateCouponBody:
       type: object
@@ -4344,6 +4352,18 @@ components:
           type: string
         orderAmount:
           type: number
+        sellerIds:
+          type: array
+          items:
+            type: integer
+          description: >
+            Distinct seller ids present in the buyer's current cart
+            (admin-direct/null lines excluded). Optional -- if omitted,
+            seller-scoping isn't checked here and the real enforcement
+            point remains order creation (POST /orders). Sent by the
+            checkout page so a seller-scoped coupon that doesn't match
+            the cart is rejected at "Apply" time instead of silently
+            succeeding here and failing later at Place Order.
       required:
         - code
         - orderAmount

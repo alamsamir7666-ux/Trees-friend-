@@ -25,7 +25,7 @@ const VALID_DISCOUNT_TYPES = ["percentage", "fixed"];
 
 router.post("/coupons/validate", async (req, res) => {
   try {
-    const { code, orderAmount } = req.body;
+    const { code, orderAmount, sellerIds } = req.body;
 
     if (!code || typeof code !== "string") {
       res.status(400).json({ error: "Coupon code is required" });
@@ -61,6 +61,23 @@ router.post("/coupons/validate", async (req, res) => {
         error: `Minimum order amount is ৳${coupon.minOrderAmount}`,
       });
       return;
+    }
+    // Seller scoping (same rule enforced for real at order-creation time
+    // in routes/orders.ts -- see groupBySellerAndAllocateDiscount's
+    // targetSellerId doc comment). Checked here too, not just at
+    // checkout, so the buyer sees an honest "invalid coupon" at the
+    // moment they type the code instead of a false "applied!" that then
+    // silently fails (or worse, discounts the wrong seller) at Place
+    // Order. `sellerIds` is optional and caller-supplied (the distinct
+    // seller ids present in the buyer's current cart, "null" excluded) --
+    // if the caller doesn't send it, this check is skipped and the
+    // order-creation-time check remains the real enforcement point.
+    if (coupon.sellerId !== null && Array.isArray(sellerIds)) {
+      const cartHasSeller = sellerIds.some((id: unknown) => Number(id) === coupon.sellerId);
+      if (!cartHasSeller) {
+        res.status(400).json({ error: "This coupon isn't valid for the items in your cart." });
+        return;
+      }
     }
     res.json(formatCoupon(coupon));
   } catch (err) {

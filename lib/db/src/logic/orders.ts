@@ -28,10 +28,26 @@
  * reconciliation problems if one of the split orders is later cancelled.
  * Caller passes the total discount amount to allocate; this function picks
  * the largest group and assigns it there.
+ *
+ * targetSellerId (optional, added alongside seller-scoped coupons):
+ * defaults to undefined, which preserves the original "largest group"
+ * behavior above -- this is what a platform-wide discount (loyalty
+ * redemption, or a coupon with couponsTable.sellerId === null) should use.
+ *
+ * When a coupon IS seller-scoped, the caller must pass that coupon's
+ * sellerId here instead of leaving it to "largest group". Without this,
+ * a coupon created by Seller A would get handed to whichever seller
+ * happens to have the biggest subtotal in a mixed cart -- e.g. Seller B --
+ * discounting a sale Seller A has nothing to do with. The caller is
+ * responsible for having already verified that targetSellerId actually
+ * appears in `lines` (see requireCartHasSeller below); if it doesn't,
+ * every group's discountAmount comes back 0 rather than silently falling
+ * back to "largest group", since that fallback is exactly the bug this
+ * parameter exists to prevent.
  */
 export function groupBySellerAndAllocateDiscount<
   L extends { sellerId: number | null; lineTotal: number },
->(lines: L[], totalDiscount: number) {
+>(lines: L[], totalDiscount: number, targetSellerId?: number | null) {
   const groups = new Map<number | null, L[]>();
   for (const line of lines) {
     const key = line.sellerId;
@@ -45,14 +61,23 @@ export function groupBySellerAndAllocateDiscount<
     subtotal: groupLines.reduce((s, l) => s + l.lineTotal, 0),
   }));
 
-  // Assign the full discount to the single largest-subtotal group.
-  let largestIdx = 0;
-  for (let i = 1; i < groupList.length; i++) {
-    if (groupList[i].subtotal > groupList[largestIdx].subtotal) largestIdx = i;
+  let targetIdx = -1;
+  if (targetSellerId !== undefined) {
+    // Seller-scoped coupon: only ever discount that seller's own group.
+    // No fallback to "largest group" -- if the target isn't in the cart,
+    // targetIdx stays -1 and every group's discountAmount is 0 below.
+    targetIdx = groupList.findIndex((g) => g.sellerId === targetSellerId);
+  } else {
+    // Platform-wide discount (no seller to target): original behavior --
+    // assign the full discount to the single largest-subtotal group.
+    targetIdx = 0;
+    for (let i = 1; i < groupList.length; i++) {
+      if (groupList[i].subtotal > groupList[targetIdx].subtotal) targetIdx = i;
+    }
   }
 
   return groupList.map((g, i) => ({
     ...g,
-    discountAmount: i === largestIdx ? Math.min(totalDiscount, g.subtotal) : 0,
+    discountAmount: i === targetIdx ? Math.min(totalDiscount, g.subtotal) : 0,
   }));
 }

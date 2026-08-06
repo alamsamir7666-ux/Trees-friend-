@@ -973,11 +973,20 @@ export interface Coupon {
   /** @nullable */
   expiryDate: string | null;
   isActive: boolean;
+  /**
+     * Null means a platform-wide coupon. Non-null means this coupon was created by that seller and only discounts that seller's own items in a cart (see routes/orders.ts groupBySellerAndAllocateDiscount's targetSellerId doc comment).
+   *
+     * @nullable
+     */
+  sellerId: number | null;
 }
 
 export interface ValidateCouponBody {
   code: string;
   orderAmount: number;
+  /** Distinct seller ids present in the buyer's current cart (admin-direct/null lines excluded). Optional -- if omitted, seller-scoping isn't checked here and the real enforcement point remains order creation (POST /orders). Sent by the checkout page so a seller-scoped coupon that doesn't match the cart is rejected at "Apply" time instead of silently succeeding here and failing later at Place Order.
+   *  */
+  sellerIds?: number[];
 }
 
 export interface CreateCouponBody {
@@ -1498,6 +1507,105 @@ export interface RejectSellerListingBody {
   reason?: string | null;
 }
 
+export interface CreateConversationBody {
+  sellerId: number;
+  sellerListingId?: number;
+}
+
+export interface Conversation {
+  id: number;
+  sellerId: number;
+  sellerName: string;
+  /** @nullable */
+  sellerLogoUrl?: string | null;
+  sellerIsVerified: boolean;
+  /** @nullable */
+  sellerListingId?: number | null;
+  /** @nullable */
+  productName?: string | null;
+  /** @nullable */
+  productImage?: string | null;
+  /** @nullable */
+  productPrice?: number | null;
+  lastMessageAt: string;
+  createdAt: string;
+}
+
+export interface ConversationDetail {
+  id: number;
+  buyerId: string;
+  sellerId: number;
+  sellerName: string;
+  /** @nullable */
+  sellerLogoUrl?: string | null;
+  sellerIsVerified: boolean;
+  /** @nullable */
+  sellerListingId?: number | null;
+  /** @nullable */
+  productName?: string | null;
+  /** @nullable */
+  productImage?: string | null;
+  /** @nullable */
+  productPrice?: number | null;
+  /** @nullable */
+  productSlug?: string | null;
+  lastMessageAt: string;
+  createdAt: string;
+}
+
+export interface ConversationListItem {
+  id: number;
+  sellerId: number;
+  sellerName: string;
+  /** @nullable */
+  sellerLogoUrl?: string | null;
+  sellerIsVerified: boolean;
+  /** @nullable */
+  sellerListingId?: number | null;
+  /** @nullable */
+  productName?: string | null;
+  /** @nullable */
+  productImage?: string | null;
+  /** @nullable */
+  productPrice?: number | null;
+  /** @nullable */
+  lastMessage?: string | null;
+  lastMessageAt: string;
+  unreadCount: number;
+  createdAt: string;
+}
+
+export interface ConversationList {
+  buyerConversations: ConversationListItem[];
+  sellerConversations: ConversationListItem[];
+}
+
+export interface Message {
+  id: number;
+  conversationId: number;
+  senderId: string;
+  content: string;
+  messageType: string;
+  /** @nullable */
+  imageUrl?: string | null;
+  readByBuyer: boolean;
+  readBySeller: boolean;
+  createdAt: string;
+}
+
+export interface MessageList {
+  messages: Message[];
+  hasMore: boolean;
+  /** @nullable */
+  nextCursor?: number | null;
+}
+
+export interface SendMessageBody {
+  content: string;
+  messageType?: string;
+  imageUrl?: string;
+}
+
 export type ListProductsParams = {
 category?: string;
 search?: string;
@@ -1579,6 +1687,23 @@ export const ListAdminSellerListingsApprovalStatus = {
   pending: 'pending',
   approved: 'approved',
   rejected: 'rejected',
+} as const;
+
+export type ListMessagesParams = {
+/**
+ * Message ID cursor for pagination
+ */
+cursor?: number;
+limit?: number;
+direction?: ListMessagesDirection;
+};
+
+export type ListMessagesDirection = typeof ListMessagesDirection[keyof typeof ListMessagesDirection];
+
+
+export const ListMessagesDirection = {
+  before: 'before',
+  after: 'after',
 } as const;
 
 export type ListSellerOrdersParams = {

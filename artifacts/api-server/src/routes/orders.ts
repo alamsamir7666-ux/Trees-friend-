@@ -158,10 +158,20 @@ router.post("/orders/guest", async (req: any, res) => {
       };
     });
 
+    // Guest checkout is admin-direct-only (sellerId: null, see doc comment
+    // above) -- so only a platform-wide coupon (couponsTable.sellerId ===
+    // null) can ever apply here. A seller-scoped coupon has no matching
+    // seller group on this path by construction, so it's rejected rather
+    // than silently ignored (which would look to the buyer like their
+    // code just didn't work, with no explanation).
     let discountAmount = 0;
     if (couponCode) {
       const [coupon] = await db.select().from(couponsTable).where(eq(couponsTable.code, couponCode.toUpperCase())).limit(1);
       if (coupon && coupon.isActive) {
+        if (coupon.sellerId !== null) {
+          res.status(400).json({ error: "This coupon isn't valid for the items in your cart." });
+          return;
+        }
         discountAmount = coupon.discountType === "percentage"
           ? Math.floor((subtotal * Number(coupon.discountValue)) / 100)
           : Math.min(Number(coupon.discountValue), subtotal);
@@ -413,13 +423,30 @@ router.post("/orders", requireAuth, async (req: any, res) => {
     const allLines = [...resolvedVariantLines, ...resolvedListingLines];
     const grandSubtotal = allLines.reduce((s, l) => s + l.lineTotal, 0);
 
+    // Coupon scoping: a coupon with couponsTable.sellerId set was created
+    // by that seller and must ONLY discount that seller's own group in
+    // this cart -- never any other seller's, and never the platform's
+    // admin-direct (sellerId: null) group. If that seller isn't actually
+    // present in the cart, the coupon is rejected outright rather than
+    // silently applied nowhere or, worse, to some other group -- see
+    // groupBySellerAndAllocateDiscount's targetSellerId doc comment for
+    // why "just fall back to largest group" is exactly the bug this
+    // replaces. A coupon with sellerId === null is platform-wide and is
+    // allowed to land on whichever group is largest, same as loyalty.
     let couponDiscount = 0;
+    let couponSellerId: number | null | undefined; // undefined = no valid coupon applied
     if (couponCode) {
       const [coupon] = await db.select().from(couponsTable).where(eq(couponsTable.code, couponCode.toUpperCase())).limit(1);
       if (coupon && coupon.isActive) {
+        const sellerInCart = coupon.sellerId === null || allLines.some((l) => l.sellerId === coupon.sellerId);
+        if (!sellerInCart) {
+          res.status(400).json({ error: "This coupon isn't valid for the items in your cart." });
+          return;
+        }
         couponDiscount = coupon.discountType === "percentage"
           ? Math.floor((grandSubtotal * Number(coupon.discountValue)) / 100)
           : Math.min(Number(coupon.discountValue), grandSubtotal);
+        couponSellerId = coupon.sellerId;
       }
     }
 
@@ -430,10 +457,24 @@ router.post("/orders", requireAuth, async (req: any, res) => {
       loyaltyDiscount = Math.min(pointsToRedeem * TAKA_PER_POINT, maxLoyaltyDiscount);
     }
 
-    // Coupon and loyalty are both allocated to the single largest group
-    // (see groupBySellerAndAllocateDiscount doc comment) -- computed once
-    // here since both discounts share the same "largest group" target.
-    const groups = groupBySellerAndAllocateDiscount(allLines, couponDiscount + loyaltyDiscount);
+    // Coupon and loyalty can no longer be summed into one number and
+    // allocated in a single pass -- a seller-scoped coupon must land on
+    // that seller's group specifically, while loyalty (always
+    // platform-wide) still goes to the largest group. Two passes: apply
+    // the coupon first (targeted or largest-group, per couponSellerId),
+    // then layer loyalty on top via a second pass over the same lines
+    // using each group's now-discounted subtotal as its remaining room.
+    const afterCoupon = groupBySellerAndAllocateDiscount(allLines, couponDiscount, couponSellerId);
+    const remainingLines = afterCoupon.map((g) => ({
+      sellerId: g.sellerId,
+      lineTotal: g.subtotal - g.discountAmount,
+    }));
+    const afterLoyalty = groupBySellerAndAllocateDiscount(remainingLines, loyaltyDiscount);
+
+    const groups = afterCoupon.map((g, i) => ({
+      ...g,
+      discountAmount: g.discountAmount + afterLoyalty[i].discountAmount,
+    }));
 
     if (groups.length === 0) {
       res.status(400).json({ error: "Cart is empty" });

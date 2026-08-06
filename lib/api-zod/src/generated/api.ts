@@ -1338,7 +1338,8 @@ export const RemoveSellerListingVariantFromWishlistResponse = zod.object({
  */
 export const ValidateCouponBody = zod.object({
   "code": zod.string(),
-  "orderAmount": zod.number()
+  "orderAmount": zod.number(),
+  "sellerIds": zod.array(zod.number()).optional().describe('Distinct seller ids present in the buyer\'s current cart (admin-direct\/null lines excluded). Optional -- if omitted, seller-scoping isn\'t checked here and the real enforcement point remains order creation (POST \/orders). Sent by the checkout page so a seller-scoped coupon that doesn\'t match the cart is rejected at \"Apply\" time instead of silently succeeding here and failing later at Place Order.\n')
 })
 
 export const ValidateCouponResponse = zod.object({
@@ -1348,7 +1349,8 @@ export const ValidateCouponResponse = zod.object({
   "discountValue": zod.number(),
   "minOrderAmount": zod.number().nullable(),
   "expiryDate": zod.string().nullable(),
-  "isActive": zod.boolean()
+  "isActive": zod.boolean(),
+  "sellerId": zod.number().nullable().describe('Null means a platform-wide coupon. Non-null means this coupon was created by that seller and only discounts that seller\'s own items in a cart (see routes\/orders.ts groupBySellerAndAllocateDiscount\'s targetSellerId doc comment).\n')
 })
 
 
@@ -1362,7 +1364,8 @@ export const ListCouponsResponseItem = zod.object({
   "discountValue": zod.number(),
   "minOrderAmount": zod.number().nullable(),
   "expiryDate": zod.string().nullable(),
-  "isActive": zod.boolean()
+  "isActive": zod.boolean(),
+  "sellerId": zod.number().nullable().describe('Null means a platform-wide coupon. Non-null means this coupon was created by that seller and only discounts that seller\'s own items in a cart (see routes\/orders.ts groupBySellerAndAllocateDiscount\'s targetSellerId doc comment).\n')
 })
 export const ListCouponsResponse = zod.array(ListCouponsResponseItem)
 
@@ -2513,6 +2516,147 @@ export const CreateSellerPayoutAccountBody = zod.object({
   "bkashNumber": zod.string(),
   "accountHolderName": zod.string().optional()
 }).describe('bkashNumber must look like a plausible Bangladeshi mobile number (simple format check, not a live bKash lookup). accountHolderName is optional, for admin verification-by-eye only.')
+
+
+/**
+ * @summary List conversations for the authenticated user (as buyer or seller)
+ */
+export const ListConversationsResponse = zod.object({
+  "buyerConversations": zod.array(zod.object({
+  "id": zod.number(),
+  "sellerId": zod.number(),
+  "sellerName": zod.string(),
+  "sellerLogoUrl": zod.string().nullish(),
+  "sellerIsVerified": zod.boolean(),
+  "sellerListingId": zod.number().nullish(),
+  "productName": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
+  "productPrice": zod.number().nullish(),
+  "lastMessage": zod.string().nullish(),
+  "lastMessageAt": zod.string(),
+  "unreadCount": zod.number(),
+  "createdAt": zod.string()
+})),
+  "sellerConversations": zod.array(zod.object({
+  "id": zod.number(),
+  "sellerId": zod.number(),
+  "sellerName": zod.string(),
+  "sellerLogoUrl": zod.string().nullish(),
+  "sellerIsVerified": zod.boolean(),
+  "sellerListingId": zod.number().nullish(),
+  "productName": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
+  "productPrice": zod.number().nullish(),
+  "lastMessage": zod.string().nullish(),
+  "lastMessageAt": zod.string(),
+  "unreadCount": zod.number(),
+  "createdAt": zod.string()
+}))
+})
+
+
+/**
+ * @summary Create or retrieve a conversation with a seller (idempotent)
+ */
+export const CreateConversationBody = zod.object({
+  "sellerId": zod.number(),
+  "sellerListingId": zod.number().optional()
+})
+
+export const CreateConversationResponse = zod.object({
+  "id": zod.number(),
+  "sellerId": zod.number(),
+  "sellerName": zod.string(),
+  "sellerLogoUrl": zod.string().nullish(),
+  "sellerIsVerified": zod.boolean(),
+  "sellerListingId": zod.number().nullish(),
+  "productName": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
+  "productPrice": zod.number().nullish(),
+  "lastMessageAt": zod.string(),
+  "createdAt": zod.string()
+})
+
+
+/**
+ * @summary Get a single conversation with full metadata
+ */
+export const GetConversationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetConversationResponse = zod.object({
+  "id": zod.number(),
+  "buyerId": zod.string(),
+  "sellerId": zod.number(),
+  "sellerName": zod.string(),
+  "sellerLogoUrl": zod.string().nullish(),
+  "sellerIsVerified": zod.boolean(),
+  "sellerListingId": zod.number().nullish(),
+  "productName": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
+  "productPrice": zod.number().nullish(),
+  "productSlug": zod.string().nullish(),
+  "lastMessageAt": zod.string(),
+  "createdAt": zod.string()
+})
+
+
+/**
+ * @summary Get messages for a conversation with cursor-based pagination
+ */
+export const ListMessagesParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const listMessagesQueryLimitDefault = 50;
+export const listMessagesQueryDirectionDefault = `before`;
+
+export const ListMessagesQueryParams = zod.object({
+  "cursor": zod.coerce.number().optional().describe('Message ID cursor for pagination'),
+  "limit": zod.coerce.number().default(listMessagesQueryLimitDefault),
+  "direction": zod.enum(['before', 'after']).default(listMessagesQueryDirectionDefault)
+})
+
+export const ListMessagesResponse = zod.object({
+  "messages": zod.array(zod.object({
+  "id": zod.number(),
+  "conversationId": zod.number(),
+  "senderId": zod.string(),
+  "content": zod.string(),
+  "messageType": zod.string(),
+  "imageUrl": zod.string().nullish(),
+  "readByBuyer": zod.boolean(),
+  "readBySeller": zod.boolean(),
+  "createdAt": zod.string()
+})),
+  "hasMore": zod.boolean(),
+  "nextCursor": zod.number().nullish()
+})
+
+
+/**
+ * @summary Send a message in a conversation
+ */
+export const SendMessageParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const sendMessageBodyMessageTypeDefault = `text`;
+
+export const SendMessageBody = zod.object({
+  "content": zod.string(),
+  "messageType": zod.string().default(sendMessageBodyMessageTypeDefault),
+  "imageUrl": zod.string().optional()
+})
+
+
+/**
+ * @summary Mark all messages in a conversation as read
+ */
+export const MarkConversationReadParams = zod.object({
+  "id": zod.coerce.number()
+})
 
 
 /**

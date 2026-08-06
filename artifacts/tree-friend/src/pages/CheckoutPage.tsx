@@ -62,6 +62,14 @@ export function CheckoutPage() {
   const [discount, setDiscount] = useState(0);
   const [couponApplied, setCouponApplied] = useState(false);
   const [couponError, setCouponError] = useState("");
+  // Which seller's group this applied coupon actually discounts -- null
+  // means platform-wide (applies to whichever group is largest, same as
+  // loyalty). Tracked separately from discount/couponApplied so the
+  // summary label below can say the right thing instead of always
+  // claiming "largest order", which is only true for a platform-wide
+  // coupon now that seller-scoped coupons target their own seller
+  // specifically (see handleApplyCoupon and routes/orders.ts).
+  const [couponSellerId, setCouponSellerId] = useState<number | null>(null);
   const [giftWrap, setGiftWrap] = useState(false);
   const [giftMessage, setGiftMessage] = useState("");
   const [usePoints, setUsePoints] = useState(false);
@@ -184,13 +192,26 @@ export function CheckoutPage() {
 
   function handleApplyCoupon() {
     setCouponError("");
-    validateCoupon.mutate({ data: { code: couponCode, orderAmount: subtotal } }, {
+    // sellerIds lets the backend reject a seller-scoped coupon up front
+    // (routes/coupons.ts /coupons/validate) instead of only failing later
+    // at Place Order -- see that route's doc comment.
+    const cartSellerIds = sellerGroups.map((g) => g.sellerId).filter((id): id is number => id !== null);
+    validateCoupon.mutate({ data: { code: couponCode, orderAmount: subtotal, sellerIds: cartSellerIds } }, {
       onSuccess: (coupon) => {
+        // A seller-scoped coupon only discounts that seller's own group
+        // subtotal, not the whole cart -- matches routes/orders.ts
+        // groupBySellerAndAllocateDiscount(..., couponSellerId) exactly.
+        // A platform-wide coupon (coupon.sellerId === null) still applies
+        // against the largest group's subtotal, same as before.
+        const base = coupon.sellerId !== null
+          ? (sellerGroups.find((g) => g.sellerId === coupon.sellerId)?.subtotal ?? 0)
+          : subtotal;
         const computed = coupon.discountType === "percentage"
-          ? Math.floor(subtotal * (coupon.discountValue / 100))
-          : coupon.discountValue;
+          ? Math.floor(base * (coupon.discountValue / 100))
+          : Math.min(coupon.discountValue, base);
         setDiscount(computed);
         setCouponApplied(true);
+        setCouponSellerId(coupon.sellerId);
       },
       onError: () => {
         setCouponError("Invalid or expired coupon code.");
@@ -652,7 +673,12 @@ export function CheckoutPage() {
                 ) : (
                   <div className="flex items-center gap-2 text-sm text-success-foreground">
                     <CheckCircle2 className="h-4 w-4" />
-                    Coupon applied: -Tk{discount.toLocaleString()}{isMultiSeller ? " (largest order)" : ""}
+                    Coupon applied: -Tk{discount.toLocaleString()}
+                    {isMultiSeller && (
+                      couponSellerId !== null
+                        ? ` (${sellerGroups.find((g) => g.sellerId === couponSellerId)?.sellerName ?? "seller"}'s order)`
+                        : " (largest order)"
+                    )}
                   </div>
                 )}
 
