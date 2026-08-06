@@ -134,11 +134,6 @@ function SellerListingCard({ card, onAddToBag, adding, isLoggedIn }: CardProps) 
         </div>
       </div>
 
-      {/* Product name */}
-      <p className="font-serif text-base font-semibold text-foreground leading-snug line-clamp-2">
-        {card.product.name}
-      </p>
-
       {/* Pricing */}
       <div>
         <div className="flex items-baseline gap-2 flex-wrap">
