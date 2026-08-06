@@ -37,6 +37,7 @@ import { ProfileSync } from "./components/auth/ProfileSync";
 import { HomePage } from "./pages/HomePage";
 import { ProductsPage } from "./pages/ProductsPage";
 import { ProductDetailPage } from "./pages/ProductDetailPage";
+import { ProductSellerListingsPage } from "./pages/ProductSellerListingsPage";
 import { SellerListingDetailPage } from "./pages/SellerListingDetailPage";
 import { CartPage } from "./pages/CartPage";
 import { CheckoutPage } from "./pages/CheckoutPage";
@@ -413,6 +414,7 @@ function ClerkProviderWithRoutes() {
                 <Route path="/category/:slug" component={CategoryProductsPage} />
                 <Route path="/products" component={ProductsPage} />
                 <Route path="/products/:productId/listings/:listingId" component={SellerListingDetailPage} />
+                <Route path="/products/:id/seller-listings" component={ProductSellerListingsPage} />
                 <Route path="/store/:sellerId" component={SellerStorePage} />
                 <Route path="/products/:id" component={ProductDetailPage} />
                 <Route path="/cart" component={CartPage} />

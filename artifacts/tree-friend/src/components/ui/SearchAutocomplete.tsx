@@ -132,6 +132,7 @@ export function SearchAutocomplete({ onClose }: { onClose?: () => void }) {
               {results.categories.length > 0 && <div style={{ height: 1, backgroundColor: 'hsl(var(--muted))', margin: '4px 16px' }} />}
               <p style={{ padding: '8px 16px 4px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'hsl(var(--muted-foreground))' }}>Products</p>
               {results.products.map(product => {
+                const listingsPath = `/products/${product.id}/seller-listings`;
                 return (
                   <div key={product.id}
                     onTouchStart={handleTouchStart} onTouchEnd={e => handleTouchEnd(e, `/products/${product.id}`)}
@@ -146,11 +147,38 @@ export function SearchAutocomplete({ onClose }: { onClose?: () => void }) {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <p style={{ fontSize: 14, fontWeight: 500, color: 'hsl(var(--foreground))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{product.name}</p>
                     </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      {product.startingPrice != null && (
-                        <p style={{ fontSize: 14, fontWeight: 600, color: 'hsl(var(--foreground))' }}>From Tk{product.startingPrice.toLocaleString()}</p>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); go(listingsPath); }}
+                      onTouchStart={(e) => { e.stopPropagation(); }}
+                      onTouchEnd={(e) => {
+                        e.stopPropagation();
+                        if (!touchStart.current) return;
+                        const dx = Math.abs(e.changedTouches[0].clientX - touchStart.current.x);
+                        const dy = Math.abs(e.changedTouches[0].clientY - touchStart.current.y);
+                        if (dx < 10 && dy < 10) {
+                          e.preventDefault();
+                          go(listingsPath);
+                        }
+                        touchStart.current = null;
+                      }}
+                      style={{
+                        flexShrink: 0,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '6px 12px',
+                        borderRadius: 9999,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: 'hsl(var(--primary))',
+                        backgroundColor: 'hsl(var(--primary) / 0.08)',
+                        border: '1px solid hsl(var(--primary) / 0.2)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      View Listing
+                    </button>
                   </div>
                 );
               })}
