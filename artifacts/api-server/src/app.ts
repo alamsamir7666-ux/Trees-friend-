@@ -14,7 +14,7 @@ import smsWebhookRouter from "./routes/smsWebhook";
 import { logger } from "./lib/logger";
 import { ensureConversationsTables } from "./lib/ensureConversationsTables";
 import { ensurePresenceTables } from "./lib/ensurePresenceTables";
-import { apiLimiter, checkoutLimiter, newsletterLimiter, stockAlertLimiter } from "./middlewares/rateLimiter";
+import { apiLimiter, authLimiter, checkoutLimiter, newsletterLimiter, stockAlertLimiter } from "./middlewares/rateLimiter";
 
 const app: Express = express();
 
@@ -112,6 +112,17 @@ app.use("/api", apiLimiter);
 app.use("/api/newsletter", newsletterLimiter);
 app.use("/api/stock-alerts", stockAlertLimiter);
 app.use("/api/orders", checkoutLimiter);
+// authLimiter (20/15min) is tighter than the generic apiLimiter (200/15min)
+// and scoped to the two mobile-auth endpoints that verify a password against
+// Clerk's Backend API (routes/mobileAuth.ts: sign-in calls
+// clerkClient.users.verifyPassword, sign-up calls clerkClient.users.createUser
+// with a caller-supplied password) -- exactly the credential-guessing /
+// account-enumeration surface this limiter exists for. These are the only
+// password-verification endpoints in src/routes/; every other route either
+// has no credential check of its own or defers entirely to Clerk's own
+// session/JWT verification (clerkMiddleware, requireAuth), which Clerk rate
+// limits on its own end.
+app.use("/api/mobile-auth", authLimiter);
 // Part 2 of 4 (bKash Tokenized Checkout): create-payment is a
 // payment-initiating action with the same abuse surface as order creation
 // (routes/orders.ts, above), so it gets the same tight limiter. Scoped to

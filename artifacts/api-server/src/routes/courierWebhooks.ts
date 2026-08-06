@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { timingSafeEqual } from "node:crypto";
 import { db } from "@workspace/db";
 import { orderShipmentsTable, ordersTable, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -12,16 +13,24 @@ import { attemptSellerPayout } from "../lib/payouts";
  * webhook receivers aren't part of our typed client, same precedent as
  * /sms-webhook (smsWebhook.ts isn't in the spec either).
  *
- * No signature/HMAC verification here: neither Pathao's nor Steadfast's
- * publicly documented merchant API describes a webhook-signing secret in
- * the sources checked while building this (Steadfast's docs mention an
- * optional bearer-token header some community packages configure, but that
- * isn't confirmed as an official requirement). Flagging as a real gap
- * rather than fabricating a verification step that might silently reject
- * legitimate webhooks or, worse, look like security that isn't real. If
- * either courier's dashboard exposes a webhook secret/signing key when a
- * seller sets this up for real, add verification here before trusting
- * payloads in production.
+ * SECURITY (previously an open gap -- see git history / PART4B_HANDOFF.md
+ * for the prior unauthenticated state): both routes below now require a
+ * shared secret before any DB lookup happens, via `requireCourierWebhookSecret`.
+ * On top of that shared-secret floor, Pathao additionally gets real
+ * signature verification:
+ *
+ *  - Pathao: dashboard-configured webhook secret is sent back verbatim on
+ *    every webhook request as the `X-PATHAO-Signature` header (confirmed
+ *    against Pathao's own WooCommerce plugin source and merchant blog post
+ *    describing the "Webhook Integration" secret field -- see
+ *    verifyPathaoSignature below). Checked with a constant-time compare.
+ *  - Steadfast: Steadfast's own API docs (portal.packzy.com) don't
+ *    document an official webhook-signing convention. Community packages
+ *    consistently implement an `Authorization: Bearer <token>` check
+ *    against a merchant-configured token instead (not an official Steadfast
+ *    feature, just the de facto pattern every integration converges on) --
+ *    supported here as STEADFAST_WEBHOOK_BEARER_TOKEN, optional, layered on
+ *    top of (not instead of) the mandatory shared secret below.
  *
  * Each courier's webhook doesn't identify WHICH seller it's for (Pathao/
  * Steadfast only know their own merchant account, not our seller_id) -- so
@@ -52,6 +61,89 @@ import { attemptSellerPayout } from "../lib/payouts";
  */
 
 const router = Router();
+
+const COURIER_WEBHOOK_SECRET = process.env.COURIER_WEBHOOK_SECRET;
+
+if (!COURIER_WEBHOOK_SECRET) {
+  // Fail loudly at startup rather than silently accepting unauthenticated
+  // courier webhooks -- same convention as MOBILE_JWT_SECRET
+  // (middlewares/mobileJwt.ts) and CREDENTIAL_ENCRYPTION_KEY
+  // (lib/credentialEncryption.ts).
+  throw new Error(
+    "COURIER_WEBHOOK_SECRET environment variable is not set. Generate one with " +
+      "`openssl rand -base64 32` and configure the SAME value as the secret " +
+      "path segment / header on both the Pathao and Steadfast webhook URLs " +
+      "registered with each courier.",
+  );
+}
+
+/** Constant-time string compare, safe for secrets of different lengths (unlike `a === b`, which short-circuits on length and leaks timing info). */
+function safeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    // Still run timingSafeEqual against a same-length buffer so a
+    // length mismatch doesn't return faster than a content mismatch.
+    timingSafeEqual(bufA, Buffer.alloc(bufA.length));
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * Shared-secret floor for BOTH courier webhooks, checked before any DB
+ * lookup. Accepts the secret via EITHER:
+ *   - `X-Courier-Webhook-Secret` header, or
+ *   - `?secret=` query param (couriers' dashboards typically only let you
+ *     configure a URL, not custom headers, so a query param keeps this
+ *     usable from a plain "Callback URL" field; still transmitted over
+ *     HTTPS only, same as any URL-embedded token).
+ * Rejects with 401 before the request reaches handleCourierWebhook() at
+ * all -- no shipment/order lookup, no DB write, on a failed check.
+ */
+function requireCourierWebhookSecret(req: any, res: any, next: any) {
+  const provided = req.get("X-Courier-Webhook-Secret") ?? req.query.secret;
+  if (typeof provided !== "string" || !safeCompare(provided, COURIER_WEBHOOK_SECRET as string)) {
+    res.status(401).json({ ok: false, reason: "unauthorized" });
+    return;
+  }
+  next();
+}
+
+/**
+ * Pathao-specific: verifies the `X-PATHAO-Signature` header against the
+ * per-merchant webhook secret configured in the Pathao Merchant Dashboard
+ * (Developer API > Webhook Integration). Pathao sends this secret back
+ * verbatim on every webhook call (not an HMAC of the body -- confirmed
+ * against Pathao's own WooCommerce plugin source, which does a direct
+ * string compare, and Pathao's merchant blog describing the dashboard
+ * "Callback URL + Secret" field). Optional: only enforced if
+ * PATHAO_WEBHOOK_SECRET is set, since the mandatory shared secret above
+ * already covers this route either way.
+ */
+function verifyPathaoSignature(req: any): boolean {
+  const configured = process.env.PATHAO_WEBHOOK_SECRET;
+  if (!configured) return true; // not configured -- shared secret above still applies
+  const signature = req.get("X-PATHAO-Signature");
+  return typeof signature === "string" && safeCompare(signature, configured);
+}
+
+/**
+ * Steadfast-specific: verifies an `Authorization: Bearer <token>` header
+ * against a merchant-configured token. Not an officially documented
+ * Steadfast feature (their API docs don't describe a webhook-auth
+ * convention) -- this follows the pattern several community Steadfast
+ * integration packages use. Optional: only enforced if
+ * STEADFAST_WEBHOOK_BEARER_TOKEN is set, since the mandatory shared secret
+ * above already covers this route either way.
+ */
+function verifySteadfastBearerToken(req: any): boolean {
+  const configured = process.env.STEADFAST_WEBHOOK_BEARER_TOKEN;
+  if (!configured) return true; // not configured -- shared secret above still applies
+  const header = req.get("Authorization");
+  const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
+  return typeof token === "string" && safeCompare(token, configured);
+}
 
 const ORDER_STATUS_ON_SHIPMENT: Record<string, string | undefined> = {
   picked_up: "shipped",
@@ -161,7 +253,11 @@ async function handleCourierWebhook(provider: "pathao" | "steadfast", payload: u
   return { ok: true, orderId: shipment.orderId, statusUpdated: true };
 }
 
-router.post("/webhooks/courier/pathao", async (req, res) => {
+router.post("/webhooks/courier/pathao", requireCourierWebhookSecret, async (req, res) => {
+  if (!verifyPathaoSignature(req)) {
+    res.status(401).json({ ok: false, reason: "unauthorized" });
+    return;
+  }
   try {
     const result = await handleCourierWebhook("pathao", req.body);
     res.json(result);
@@ -171,7 +267,11 @@ router.post("/webhooks/courier/pathao", async (req, res) => {
   }
 });
 
-router.post("/webhooks/courier/steadfast", async (req, res) => {
+router.post("/webhooks/courier/steadfast", requireCourierWebhookSecret, async (req, res) => {
+  if (!verifySteadfastBearerToken(req)) {
+    res.status(401).json({ ok: false, reason: "unauthorized" });
+    return;
+  }
   try {
     const result = await handleCourierWebhook("steadfast", req.body);
     res.json(result);

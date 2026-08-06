@@ -2,8 +2,9 @@
  * Runs before every test file (vitest.config.ts `setupFiles`), and before
  * anything in this file imports `../src/app` transitively -- several
  * modules throw at import time if their required env var is absent
- * (middlewares/mobileJwt.ts -> MOBILE_JWT_SECRET, lib/credentialEncryption.ts
- * -> CREDENTIAL_ENCRYPTION_KEY is lazy but still needs a valid value once a
+ * (middlewares/mobileJwt.ts -> MOBILE_JWT_SECRET, routes/courierWebhooks.ts
+ * -> COURIER_WEBHOOK_SECRET, lib/credentialEncryption.ts ->
+ * CREDENTIAL_ENCRYPTION_KEY is lazy but still needs a valid value once a
  * courier/payment-config test calls it, lib/db -> DATABASE_URL). Setting
  * these here, rather than per-file, guarantees every test file sees the
  * same values and none can accidentally run without them.
@@ -23,6 +24,7 @@
  */
 
 process.env.MOBILE_JWT_SECRET ??= "test-mobile-jwt-secret-do-not-use-in-prod";
+process.env.COURIER_WEBHOOK_SECRET ??= "test-courier-webhook-secret-do-not-use-in-prod";
 // Must decode to exactly 32 bytes (see lib/credentialEncryption.ts's loadKey).
 process.env.CREDENTIAL_ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString("base64");
 process.env.CLERK_PUBLISHABLE_KEY ??= "pk_test_Y2xlcmsudGVzdC5leGFtcGxlLmNvbSQ";

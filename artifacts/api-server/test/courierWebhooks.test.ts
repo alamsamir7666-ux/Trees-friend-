@@ -7,28 +7,15 @@ import { eq } from "drizzle-orm";
 import { cleanupAll, seedCategory, seedProduct, seedSeller, seedUser, seedListing, seedOrder } from "./testDb";
 
 /**
- * HTTP-level coverage for routes/courierWebhooks.ts -- this route has never
- * been tested before this session. It receives external, unauthenticated
- * input from Pathao and Steadfast.
+ * HTTP-level coverage for routes/courierWebhooks.ts.
  *
- * SECURITY POSTURE, confirmed independently (not copied from the route's own
- * doc comment): re-reading routes/index.ts confirms this router is mounted
- * exactly like every other route (`router.use(courierWebhooksRouter)`), with
- * no requireAuth/requireSeller/requireAdmin wrapping it, no shared-secret
- * header check, and no signature verification of any kind in the handler
- * itself. The doc comment's claim is accurate. Independent conclusion: this
- * is a real, currently-open gap -- anyone who can reach this endpoint can
- * flip any order's shipment status (and, for delivered/in_transit-mapped
- * statuses, the parent order's buyer-facing orderStatus) for ANY order in
- * the system, as long as they know or can guess a courierTrackingId. Whether
- * that's an acceptable risk depends on how guessable/enumerable
- * courierTrackingId values are in production (they're assigned by Pathao/
- * Steadfast, not sequential ints from this app's own DB, which raises the
- * bar somewhat -- but "somewhat harder to guess" is not authentication).
- * Not fixed here per the task brief: a real fix (shared-secret header,
- * IP allowlist, or provider-specific signature verification once Pathao/
- * Steadfast dashboards are confirmed to expose one) is out of scope for a
- * testing-only session and deserves its own reviewed change.
+ * SECURITY: both routes now require COURIER_WEBHOOK_SECRET (set in
+ * test/setupEnv.ts) via either the `X-Courier-Webhook-Secret` header or a
+ * `?secret=` query param, checked before any DB lookup. `withSecret()`
+ * below attaches it to every request in this file that's meant to exercise
+ * the route's normal (post-auth) behavior; the "security posture" describe
+ * block specifically tests requests WITHOUT it (or with the wrong value) to
+ * pin down the 401 contract.
  *
  * Body-parsing behavior confirmed directly (not assumed) before writing
  * assertions below: express.json() runs BEFORE this route and, with its
@@ -49,6 +36,13 @@ describe("courier-webhooks routes (HTTP)", () => {
   let buyerClerkId: string;
   let productId: number;
   let listingId: number;
+
+  const WEBHOOK_SECRET = process.env.COURIER_WEBHOOK_SECRET as string;
+
+  /** Attaches the required shared secret to a supertest request via header. */
+  function withSecret(req: request.Test): request.Test {
+    return req.set("X-Courier-Webhook-Secret", WEBHOOK_SECRET);
+  }
 
   beforeAll(async () => {
     await cleanupAll();
@@ -95,8 +89,8 @@ describe("courier-webhooks routes (HTTP)", () => {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  describe("security posture, confirmed not assumed", () => {
-    it("accepts a request with no auth headers at all (route is genuinely unauthenticated)", async () => {
+  describe("security posture: shared-secret enforcement", () => {
+    it("rejects a request with no secret at all (401, before any DB lookup)", async () => {
       const trackingId = uniqueTrackingId("SEC-NOAUTH");
       const { order } = await seedOrderWithShipment({ courierTrackingId: trackingId });
 
@@ -104,15 +98,16 @@ describe("courier-webhooks routes (HTTP)", () => {
         .post("/api/webhooks/courier/pathao")
         .send({ consignment_id: trackingId, order_status: "Delivered" });
 
-      // No Authorization header, no API key, no signature -- and it's
-      // accepted and processed. This pins down the current (unauthenticated)
-      // behavior; it is not an endorsement of it.
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ ok: true, orderId: order.id, statusUpdated: true });
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ ok: false, reason: "unauthorized" });
+
+      // No DB lookup happened -- shipment status must be untouched.
+      const [row] = await db.select().from(orderShipmentsTable).where(eq(orderShipmentsTable.orderId, order.id));
+      expect(row.status).toBe("pending");
     });
 
-    it("accepts a request with garbage/irrelevant headers (they're silently ignored, not validated)", async () => {
-      const trackingId = uniqueTrackingId("SEC-GARBAGE-HEADERS");
+    it("rejects a request with the wrong secret, and garbage/irrelevant headers don't substitute for it", async () => {
+      const trackingId = uniqueTrackingId("SEC-WRONG-SECRET");
       await seedOrderWithShipment({ courierTrackingId: trackingId });
 
       const res = await request(app)
@@ -120,19 +115,45 @@ describe("courier-webhooks routes (HTTP)", () => {
         .set("Authorization", "Bearer totally-made-up-token")
         .set("X-Webhook-Signature", "not-a-real-signature")
         .set("X-Api-Key", "not-a-real-key")
+        .set("X-Courier-Webhook-Secret", "wrong-secret-value")
+        .send({ consignment_id: trackingId, order_status: "Delivered" });
+
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ ok: false, reason: "unauthorized" });
+    });
+
+    it("accepts the secret via ?secret= query param as an alternative to the header", async () => {
+      const trackingId = uniqueTrackingId("SEC-QUERY-PARAM");
+      const { order } = await seedOrderWithShipment({ courierTrackingId: trackingId });
+
+      const res = await request(app)
+        .post(`/api/webhooks/courier/pathao?secret=${encodeURIComponent(WEBHOOK_SECRET)}`)
         .send({ consignment_id: trackingId, order_status: "Delivered" });
 
       expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(true);
+      expect(res.body).toEqual({ ok: true, orderId: order.id, statusUpdated: true });
     });
 
-    it("a wrong-shaped payload (valid JSON object, none of the expected fields) is rejected via the route's own 200/ok:false contract, not a 500", async () => {
-      const res = await request(app)
-        .post("/api/webhooks/courier/pathao")
-        .send({ totally: "unexpected", shape: 123 });
+    it("with a correct secret, a wrong-shaped payload (valid JSON object, none of the expected fields) is rejected via the route's own 200/ok:false contract, not a 500", async () => {
+      const res = await withSecret(request(app).post("/api/webhooks/courier/pathao")).send({
+        totally: "unexpected",
+        shape: 123,
+      });
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: false, reason: "no_tracking_id" });
+    });
+
+    it("also enforces the secret on the steadfast route", async () => {
+      const trackingId = uniqueTrackingId("SEC-STEADFAST-NOAUTH");
+      await seedOrderWithShipment({ courierTrackingId: trackingId });
+
+      const res = await request(app)
+        .post("/api/webhooks/courier/steadfast")
+        .send({ consignment_id: trackingId, status: "delivered" });
+
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ ok: false, reason: "unauthorized" });
     });
   });
 
@@ -149,7 +170,7 @@ describe("courier-webhooks routes (HTTP)", () => {
         const { order, shipment } = await seedOrderWithShipment({ courierTrackingId: trackingId });
         const payload = { consignment_id: trackingId, order_status: pathaoStatus, merchant_order_id: String(order.id) };
 
-        const res = await request(app).post("/api/webhooks/courier/pathao").send(payload);
+        const res = await withSecret(request(app).post("/api/webhooks/courier/pathao")).send(payload);
 
         expect(res.status).toBe(200);
         expect(res.body.ok).toBe(true);
@@ -184,9 +205,10 @@ describe("courier-webhooks routes (HTTP)", () => {
       const trackingId = uniqueTrackingId("PATHAO-CANCELLED-GUARD");
       const { order, shipment } = await seedOrderWithShipment({ courierTrackingId: trackingId, orderStatus: "cancelled" });
 
-      const res = await request(app)
-        .post("/api/webhooks/courier/pathao")
-        .send({ consignment_id: trackingId, order_status: "Delivered" });
+      const res = await withSecret(request(app).post("/api/webhooks/courier/pathao")).send({
+        consignment_id: trackingId,
+        order_status: "Delivered",
+      });
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: true, orderId: order.id, statusUpdated: true });
@@ -216,7 +238,7 @@ describe("courier-webhooks routes (HTTP)", () => {
         const { order, shipment } = await seedOrderWithShipment({ courierTrackingId: trackingId });
         const payload = { consignment_id: trackingId, status: steadfastStatus };
 
-        const res = await request(app).post("/api/webhooks/courier/steadfast").send(payload);
+        const res = await withSecret(request(app).post("/api/webhooks/courier/steadfast")).send(payload);
 
         expect(res.status).toBe(200);
         expect(res.body.ok).toBe(true);
@@ -234,9 +256,10 @@ describe("courier-webhooks routes (HTTP)", () => {
       const trackingId = uniqueTrackingId("STEADFAST-TRACKCODE");
       const { shipment } = await seedOrderWithShipment({ courierTrackingId: trackingId });
 
-      const res = await request(app)
-        .post("/api/webhooks/courier/steadfast")
-        .send({ tracking_code: trackingId, status_type: "delivered" });
+      const res = await withSecret(request(app).post("/api/webhooks/courier/steadfast")).send({
+        tracking_code: trackingId,
+        status_type: "delivered",
+      });
 
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
@@ -249,7 +272,10 @@ describe("courier-webhooks routes (HTTP)", () => {
       const trackingId = uniqueTrackingId("STEADFAST-CID");
       const { shipment } = await seedOrderWithShipment({ courierTrackingId: trackingId });
 
-      const res = await request(app).post("/api/webhooks/courier/steadfast").send({ cid: trackingId, delivery_status: "delivered" });
+      const res = await withSecret(request(app).post("/api/webhooks/courier/steadfast")).send({
+        cid: trackingId,
+        delivery_status: "delivered",
+      });
 
       expect(res.status).toBe(200);
       const [row] = await db.select().from(orderShipmentsTable).where(eq(orderShipmentsTable.id, shipment.id));
@@ -259,8 +285,7 @@ describe("courier-webhooks routes (HTTP)", () => {
 
   describe("malformed / garbage payloads", () => {
     it("a non-object top-level JSON body (bare string) is rejected by express.json()'s strict parser with a 500, BEFORE reaching this route's own ok:false contract", async () => {
-      const res = await request(app)
-        .post("/api/webhooks/courier/pathao")
+      const res = await withSecret(request(app).post("/api/webhooks/courier/pathao"))
         .set("Content-Type", "application/json")
         .send('"just a string"');
       expect(res.status).toBe(500);
@@ -270,15 +295,16 @@ describe("courier-webhooks routes (HTTP)", () => {
     });
 
     it("an empty body with no Content-Type is treated as {} by express.json() and reaches the route's own no_tracking_id contract (200, not 500)", async () => {
-      const res = await request(app).post("/api/webhooks/courier/pathao");
+      const res = await withSecret(request(app).post("/api/webhooks/courier/pathao"));
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: false, reason: "no_tracking_id" });
     });
 
     it("wrong-typed consignment_id field (an object, not a string/number) does not crash the route", async () => {
-      const res = await request(app)
-        .post("/api/webhooks/courier/pathao")
-        .send({ consignment_id: { nested: "object" }, order_status: "Delivered" });
+      const res = await withSecret(request(app).post("/api/webhooks/courier/pathao")).send({
+        consignment_id: { nested: "object" },
+        order_status: "Delivered",
+      });
       // extractTrackingId does `String(id)` on whatever it finds, so this
       // still produces A tracking id string ("[object Object]") -- just one
       // that won't match any real shipment. Confirming the actual contract
@@ -291,9 +317,10 @@ describe("courier-webhooks routes (HTTP)", () => {
       const trackingId = uniqueTrackingId("PATHAO-BOGUS-STATUS");
       const { order, shipment } = await seedOrderWithShipment({ courierTrackingId: trackingId });
 
-      const res = await request(app)
-        .post("/api/webhooks/courier/pathao")
-        .send({ consignment_id: trackingId, order_status: "Some_Status_Pathao_Has_Never_Documented" });
+      const res = await withSecret(request(app).post("/api/webhooks/courier/pathao")).send({
+        consignment_id: trackingId,
+        order_status: "Some_Status_Pathao_Has_Never_Documented",
+      });
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: true, orderId: order.id, statusUpdated: false });
@@ -307,7 +334,7 @@ describe("courier-webhooks routes (HTTP)", () => {
     });
 
     it("a payload with no tracking-id field at all is rejected cleanly with no DB write", async () => {
-      const res = await request(app).post("/api/webhooks/courier/pathao").send({ order_status: "Delivered" });
+      const res = await withSecret(request(app).post("/api/webhooks/courier/pathao")).send({ order_status: "Delivered" });
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: false, reason: "no_tracking_id" });
     });
@@ -317,9 +344,10 @@ describe("courier-webhooks routes (HTTP)", () => {
     it("handles gracefully: no crash, no orphan order_shipments row created, returns no_matching_shipment", async () => {
       const before = await db.select().from(orderShipmentsTable);
 
-      const res = await request(app)
-        .post("/api/webhooks/courier/steadfast")
-        .send({ consignment_id: uniqueTrackingId("NEVER-BOOKED"), status: "delivered" });
+      const res = await withSecret(request(app).post("/api/webhooks/courier/steadfast")).send({
+        consignment_id: uniqueTrackingId("NEVER-BOOKED"),
+        status: "delivered",
+      });
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: false, reason: "no_matching_shipment" });
@@ -346,7 +374,7 @@ describe("courier-webhooks routes (HTTP)", () => {
       const { order, shipment } = await seedOrderWithShipment({ courierTrackingId: trackingId });
       const payload = { consignment_id: trackingId, order_status: "Delivered" };
 
-      const first = await request(app).post("/api/webhooks/courier/pathao").send(payload);
+      const first = await withSecret(request(app).post("/api/webhooks/courier/pathao")).send(payload);
       expect(first.status).toBe(200);
       expect(first.body).toEqual({ ok: true, orderId: order.id, statusUpdated: true });
 
@@ -355,7 +383,7 @@ describe("courier-webhooks routes (HTTP)", () => {
       const updatedAtAfterFirst = afterFirst.updatedAt;
 
       // Second, identical call for the same shipment/status.
-      const second = await request(app).post("/api/webhooks/courier/pathao").send(payload);
+      const second = await withSecret(request(app).post("/api/webhooks/courier/pathao")).send(payload);
       expect(second.status).toBe(200);
       // The route still reports statusUpdated: true, because the SHIPMENT
       // row's status/lastSyncedAt/rawWebhookPayload are unconditionally
