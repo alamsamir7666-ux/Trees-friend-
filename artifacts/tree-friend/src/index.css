@@ -50,13 +50,13 @@
      pastel-on-pastel mush like the old bg-green-100 text-green-800 pairs. */
   --color-success: hsl(var(--success));
   --color-success-foreground: hsl(var(--success-foreground));
-  --color-success-border: var(--success-border);
+  --color-success-border: hsl(var(--success-border));
   --color-warning: hsl(var(--warning));
   --color-warning-foreground: hsl(var(--warning-foreground));
-  --color-warning-border: var(--warning-border);
+  --color-warning-border: hsl(var(--warning-border));
   --color-info: hsl(var(--info));
   --color-info-foreground: hsl(var(--info-foreground));
-  --color-info-border: var(--info-border);
+  --color-info-border: hsl(var(--info-border));
 
   --color-chart-1: hsl(var(--chart-1));
   --color-chart-2: hsl(var(--chart-2));
