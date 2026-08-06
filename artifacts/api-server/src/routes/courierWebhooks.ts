@@ -10,8 +10,7 @@ import { attemptSellerPayout } from "../lib/payouts";
 /**
  * Shared normalized webhook endpoints (plan doc §8: "/webhooks/courier/pathao,
  * /webhooks/courier/steadfast"). Not registered in openapi.yaml -- external
- * webhook receivers aren't part of our typed client, same precedent as
- * /sms-webhook (smsWebhook.ts isn't in the spec either).
+ * webhook receivers aren't part of our typed client.
  *
  * SECURITY (previously an open gap -- see git history / PART4B_HANDOFF.md
  * for the prior unauthenticated state): both routes below now require a

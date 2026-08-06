@@ -9,9 +9,8 @@ import { createPayment, executePayment, queryPayment, BkashApiError } from "../l
  * bKash Tokenized Checkout create -> redirect -> callback -> execute cycle
  * (Part 2 of 4, see PART2_HANDOFF.md). Deliberately NOT registered in
  * lib/api-spec/openapi.yaml for /bkash/callback specifically -- same
- * precedent as routes/courierWebhooks.ts and routes/smsWebhook.ts (neither
- * is in the spec either, checked both before writing this): an external
- * provider's redirect/webhook target isn't part of our typed
+ * precedent as routes/courierWebhooks.ts (checked before writing this):
+ * an external provider's redirect/webhook target isn't part of our typed
  * frontend-facing client. POST /bkash/create-payment and
  * GET /bkash/query-payment/:paymentID ARE genuinely called by our own
  * frontend, so those two ARE added to openapi.yaml (see that file's
@@ -230,9 +229,10 @@ router.post("/bkash/create-payment/guest", async (req: any, res) => {
  * call rather than the order being permanently dead. This mirrors how the
  * OLD manual flow never had a hard "failed" state either (an unconfirmed
  * "pending_verification" order just sat there until an admin acted) --
- * "payment_pending" plays the same "still awaitable" role smsWebhook.ts's
- * "pending_verification" already plays for pre-orders, just for the new
- * live-API flow instead of the old manual one.
+ * "payment_pending" plays the same "still awaitable" role
+ * "pending_verification" already played for pre-orders under that old
+ * manual/SMS-based flow (since removed), just for the new live-API flow
+ * instead of the old manual one.
  *
  * Redirects the buyer's browser to a frontend page afterward (does not
  * return JSON -- this endpoint is only ever hit by a browser redirect, no

@@ -50,8 +50,7 @@ tags:
       buyer-facing create-payment routes here ARE part of this typed spec;
       /bkash/callback (bKash's own browser-redirect target after the buyer
       authorizes on bKash's hosted page) deliberately is NOT — same
-      precedent as courierWebhooks/smsWebhook, neither of which is in this
-      spec either.
+      precedent as courierWebhooks, which also isn't in this spec.
   - name: conversations
     description: >-
       Buyer-seller messaging. One conversation per buyer-seller pair,

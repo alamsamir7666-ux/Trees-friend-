@@ -90,8 +90,8 @@ router.get("/seller/orders", requireSeller, async (req, res) => {
     const shipmentMap = new Map(shipments.map((s) => [s.orderId, s]));
 
     // Buyer email lookup: orders.userId is a Clerk id, not our own users.id
-    // FK -- same join-by-clerkId pattern smsWebhook.ts and orders.ts both
-    // already use elsewhere in this codebase.
+    // FK -- same join-by-clerkId pattern used elsewhere in this codebase
+    // (e.g. orders.ts).
     const clerkIds = [...new Set(orders.map((o) => o.userId))];
     const users = await db.select().from(usersTable).where(inArray(usersTable.clerkId, clerkIds));
     const emailMap = new Map(users.map((u) => [u.clerkId, u.email]));

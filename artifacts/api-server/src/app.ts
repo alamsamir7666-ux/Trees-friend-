@@ -10,7 +10,6 @@ import {
   getClerkProxyHost,
 } from "./middlewares/clerkProxyMiddleware";
 import router from "./routes";
-import smsWebhookRouter from "./routes/smsWebhook";
 import { logger } from "./lib/logger";
 import { ensureConversationsTables } from "./lib/ensureConversationsTables";
 import { ensurePresenceTables } from "./lib/ensurePresenceTables";
@@ -135,7 +134,6 @@ app.use("/api/mobile-auth", authLimiter);
 app.use("/api/bkash/create-payment", checkoutLimiter);
 
 // ─── API routes ───────────────────────────────────────────────────────────────
-app.use("/api", smsWebhookRouter);
 app.use("/api", router);
 
 // ─── 404 handler ─────────────────────────────────────────────────────────────

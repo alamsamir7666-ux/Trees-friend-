@@ -502,11 +502,11 @@ router.post("/orders", requireAuth, async (req: any, res) => {
       // cancel/failure, so the buyer can retry payment against the SAME
       // order via a fresh Create Payment call rather than the order being
       // silently dead-ended; see that route's doc comment for the full
-      // reasoning). "pending_verification" is intentionally left alone and
-      // untouched by this part -- it remains preOrders.ts's and the old
-      // manual-SMS-matching flow's (smsWebhook.ts) status, not reused here,
-      // so a stale reader of "pending_verification" doesn't silently pick
-      // up unrelated bKash-in-progress orders.
+      // "pending_verification" is intentionally left alone and untouched by
+      // this part -- it remains preOrders.ts's status from the old manual
+      // payment-matching flow (since removed), not reused here, so a stale
+      // reader of "pending_verification" doesn't silently pick up unrelated
+      // bKash-in-progress orders.
       const paymentStatus = method === "cod" ? "pending" : "payment_pending";
 
       const [order] = await db
