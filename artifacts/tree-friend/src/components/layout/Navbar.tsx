@@ -422,7 +422,7 @@ export function Navbar() {
               <span className="tf-brand-name text-[19px] font-semibold tracking-tight" style={{ color: "hsl(var(--primary))" }}>Tree Friend</span>
             </Link>
             <div className="flex items-center gap-1.5">
-              <ThemeToggle className="h-8 w-8" />
+              <ThemeToggle className="h-8 w-8" align="start" />
               <button className="tf-circle-btn" aria-label="Close menu" onClick={() => setMobileOpen(false)}>
                 <X className="h-3.5 w-3.5" />
               </button>

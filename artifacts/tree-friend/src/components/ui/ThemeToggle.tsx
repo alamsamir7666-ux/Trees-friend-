@@ -44,7 +44,7 @@ const CHOICE_LABELS: Record<ThemeChoice, string> = {
   system: "System",
 };
 
-export function ThemeToggle({ className = "" }: { className?: string }) {
+export function ThemeToggle({ className = "", align = "end" }: { className?: string; align?: "start" | "center" | "end" }) {
   const { theme, setTheme, resolvedTheme } = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -125,7 +125,7 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
           />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[8rem]">
+      <DropdownMenuContent align={align} sideOffset={6} className="min-w-[8rem]">
         <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">
           Theme
         </DropdownMenuLabel>
