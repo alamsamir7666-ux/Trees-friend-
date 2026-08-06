@@ -24,7 +24,7 @@ import {
   Plus, Pencil, Trash2, Search, TrendingUp, DollarSign, Star,
   ChevronRight, X, Menu, BarChart3, CheckCircle2, Clock, Truck,
   AlertCircle, XCircle, Layers, MessageSquare, MapPin, Ban, UserCheck, ChevronDown, Archive,
-  Calendar, ToggleLeft, ToggleRight, RotateCcw, Activity, GitBranch, Upload, HelpCircle,
+  Calendar, RotateCcw, Activity, Upload, HelpCircle,
   BookOpen, FileText, Save, LayoutGrid, Store, Boxes, Wallet,
 } from "lucide-react";
 import { useAuth } from "@clerk/react";
@@ -35,7 +35,6 @@ import { CategoryModal } from "@/components/admin/modals/CategoryModal";
 import { ConfirmDialog } from "@/components/admin/modals/ConfirmDialog";
 import { SettingsTab } from "@/components/admin/tabs/SettingsTab";
 import { ReturnsTab } from "@/components/admin/tabs/ReturnsTab";
-import { AffiliatesTab } from "@/components/admin/tabs/AffiliatesTab";
 import { BlogTab } from "@/components/admin/tabs/BlogTab";
 import { AuditLogsTab } from "@/components/admin/tabs/AuditLogsTab";
 import { QATab } from "@/components/admin/tabs/QATab";
@@ -50,7 +49,6 @@ import { OrdersTab } from "@/components/admin/tabs/OrdersTab";
 import { UsersTab } from "@/components/admin/tabs/UsersTab";
 import { ReviewsTab } from "@/components/admin/tabs/ReviewsTab";
 import { ArchivedOrdersTab } from "@/components/admin/tabs/ArchivedOrdersTab";
-import { CouponsTab } from "@/components/admin/tabs/CouponsTab";
 import { MonthlyHistoryTab } from "@/components/admin/tabs/MonthlyHistoryTab";
 import { PaymentsTab } from "@/components/admin/tabs/PaymentsTab";
 
@@ -79,11 +77,9 @@ const navItems = [
   { id: "sellers",    label: "Sellers",         icon: Store },
   { id: "seller-listings", label: "Seller Listings", icon: Boxes },
   { id: "reviews",    label: "Reviews",         icon: MessageSquare },
-  { id: "coupons",    label: "Coupons",         icon: Tag },
   { id: "monthly",    label: "Monthly History", icon: Calendar },
   { id: "payments",   label: "Payments",        icon: Wallet },
   { id: "returns",    label: "Returns",          icon: RotateCcw },
-  { id: "affiliates", label: "Affiliates",       icon: GitBranch },
   { id: "blog",       label: "Blog Posts",       icon: BookOpen },
   { id: "auditlogs",  label: "Audit Logs",       icon: Activity },
   { id: "qa",         label: "Q&A",              icon: HelpCircle },
@@ -202,7 +198,6 @@ export function AdminPage() {
   const [expandedOrderId, setExpandedOrderId] = useState<number | string | null>(null);
   const [userSearch, setUserSearch] = useState("");
   const [reviewSearch, setReviewSearch] = useState("");
-  const [couponSearch, setCouponSearch] = useState("");
   const [archivedOrders, setArchivedOrders] = useState<any[]>([]);
   const [archivedPreOrders, setArchivedPreOrders] = useState<any[]>([]);
   const [archivedPage, setArchivedPage] = useState(1);
@@ -212,13 +207,6 @@ export function AdminPage() {
   const [archivedError, setArchivedError] = useState<string|null>(null);
   const [activeOrdersCount, setActiveOrdersCount] = useState(0);
   const [seedingCategories, setSeedingCategories] = useState(false);
-
-  // Coupons state
-  const [coupons, setCoupons] = useState<any[]>([]);
-  const [couponsLoading, setCouponsLoading] = useState(false);
-  const [editingCoupon, setEditingCoupon] = useState<any>(null);
-  const [showCouponModal, setShowCouponModal] = useState(false);
-  const [couponSaving, setCouponSaving] = useState(false);
 
   // Monthly history state
   const [monthlyRecords, setMonthlyRecords] = useState<any[]>([]);
@@ -231,21 +219,6 @@ export function AdminPage() {
 
   // Cancellation reason modal state
   const [cancelModal, setCancelModal] = useState<{ orderId: number; reason: string } | null>(null);
-
-  // Fetch coupons when tab is active
-  const fetchCoupons = useCallback(async () => {
-    setCouponsLoading(true);
-    try {
-      const token = await getToken();
-      const res = await fetch(API+"/api/coupons", { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json();
-      setCoupons(Array.isArray(data) ? data : []);
-    } catch {
-      setCoupons([]);
-    } finally {
-      setCouponsLoading(false);
-    }
-  }, [getToken]);
 
   // Fetch monthly records when tab is active
   const fetchMonthlyRecords = useCallback(async () => {
@@ -263,50 +236,12 @@ export function AdminPage() {
   }, [getToken]);
 
   useEffect(() => {
-    if (activeTab === "coupons") fetchCoupons();
-  }, [activeTab, fetchCoupons]);
-
-  useEffect(() => {
     if (activeTab === "orders") fetchAdminPreOrders();
   }, [activeTab]);
 
   useEffect(() => {
     if (activeTab === "monthly") fetchMonthlyRecords();
   }, [activeTab, fetchMonthlyRecords]);
-
-  // Coupon CRUD handlers
-  async function handleSaveCoupon(form: any) {
-    setCouponSaving(true);
-    try {
-      const token = await getToken();
-      const url = editingCoupon ? `${API}/api/coupons/${editingCoupon.id}` : API+"/api/coupons";
-      const method = editingCoupon ? "PUT" : "POST";
-      await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(form),
-      });
-      setShowCouponModal(false);
-      setEditingCoupon(null);
-      fetchCoupons();
-    } finally {
-      setCouponSaving(false);
-    }
-  }
-
-  async function handleDeleteCoupon(id: number) {
-    askConfirm("Delete Coupon", "This coupon will be permanently deleted.", async () => {
-      const token = await getToken();
-      await fetch(`${API}/api/coupons/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
-      fetchCoupons();
-    });
-  }
-
-  async function handleToggleCoupon(id: number) {
-    const token = await getToken();
-    await fetch(`${API}/api/coupons/${id}/toggle`, { method: "PATCH", headers: { Authorization: `Bearer ${token}` } });
-    fetchCoupons();
-  }
 
   async function handleArchiveNow() {
     if (!window.confirm("Archive last month's data now?")) return;
@@ -411,17 +346,6 @@ export function AdminPage() {
           r.comment?.toLowerCase().includes(reviewSearch.toLowerCase())
         ),
     [allReviews, reviewSearch]
-  );
-
-  // Filtered coupons with search
-  const filteredCoupons = useMemo(() =>
-    !couponSearch
-      ? coupons
-      : coupons.filter(c =>
-          c.code?.toLowerCase().includes(couponSearch.toLowerCase()) ||
-          c.description?.toLowerCase().includes(couponSearch.toLowerCase())
-        ),
-    [coupons, couponSearch]
   );
 
   function handleDeleteCategory(id: number) {
@@ -560,109 +484,6 @@ export function AdminPage() {
   // ??? Archived Orders Tab ????????????????????????????????????????????????????
 
 
-  // ??? Coupon Modal ??????????????????????????????????????????????????????????
-  const CouponModal = ({ coupon, onClose }: { coupon?: any; onClose: () => void }) => {
-    const [form, setForm] = useState({
-      code: coupon?.code ?? "",
-      discountType: coupon?.discountType ?? "percentage",
-      discountValue: coupon?.discountValue ?? "",
-      minOrderAmount: coupon?.minOrderAmount ?? "",
-      expiryDate: coupon?.expiryDate ? coupon.expiryDate.slice(0, 10) : "",
-    });
-
-    function handleSubmit(e: React.FormEvent) {
-      e.preventDefault();
-      handleSaveCoupon({
-        code: form.code,
-        discountType: form.discountType,
-        discountValue: parseFloat(String(form.discountValue)),
-        minOrderAmount: form.minOrderAmount ? parseFloat(String(form.minOrderAmount)) : null,
-        expiryDate: form.expiryDate || null,
-      });
-    }
-
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="absolute inset-0 bg-foreground/40 backdrop-blur-sm" onClick={onClose} />
-        <div className="relative bg-card rounded-2xl shadow-2xl w-full max-w-md">
-          <div className="flex items-center justify-between px-6 py-4 border-b">
-            <h2 className="font-semibold text-lg">{coupon ? "Edit Coupon" : "New Coupon"}</h2>
-            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
-              <X className="h-5 w-5 text-muted-foreground" />
-            </button>
-          </div>
-          <form onSubmit={handleSubmit} className="p-6 space-y-4">
-            <div>
-              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Coupon Code *</Label>
-              <Input
-                value={form.code}
-                onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
-                required
-                className="mt-1.5 rounded-xl font-mono"
-                placeholder="SAVE20"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Discount Type *</Label>
-                <Select value={form.discountType} onValueChange={v => setForm(f => ({ ...f, discountType: v }))}>
-                  <SelectTrigger className="mt-1.5 rounded-xl"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="percentage">Percentage (%)</SelectItem>
-                    <SelectItem value="fixed">Fixed Amount (Tk)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Value {form.discountType === "percentage" ? "(%)" : "(Tk)"} *
-                </Label>
-                <Input
-                  type="number"
-                  value={form.discountValue}
-                  onChange={e => setForm(f => ({ ...f, discountValue: e.target.value }))}
-                  required
-                  className="mt-1.5 rounded-xl"
-                  placeholder={form.discountType === "percentage" ? "20" : "500"}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Min Order (Tk)</Label>
-                <Input
-                  type="number"
-                  value={form.minOrderAmount}
-                  onChange={e => setForm(f => ({ ...f, minOrderAmount: e.target.value }))}
-                  className="mt-1.5 rounded-xl"
-                  placeholder="Optional"
-                />
-              </div>
-              <div>
-                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Expiry Date</Label>
-                <Input
-                  type="date"
-                  value={form.expiryDate}
-                  onChange={e => setForm(f => ({ ...f, expiryDate: e.target.value }))}
-                  className="mt-1.5 rounded-xl"
-                />
-              </div>
-            </div>
-            <div className="flex gap-3 pt-2">
-              <Button type="submit" disabled={couponSaving} className="flex-1 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground">
-                {coupon ? "Update Coupon" : "Create Coupon"}
-              </Button>
-              <Button type="button" variant="outline" onClick={onClose} className="rounded-xl">Cancel</Button>
-            </div>
-          </form>
-        </div>
-      </div>
-    );
-  };
-
-  // ??? Coupons Tab ???????????????????????????????????????????????????????????
-
-
   // ??? Monthly History Tab ???????????????????????????????????????????????????
 
 
@@ -677,12 +498,10 @@ export function AdminPage() {
       case "sellers":    return <SellersTab />;
       case "seller-listings": return <SellerListingsTab />;
       case "reviews":    return <ReviewsTab />;
-      case "coupons":    return <CouponsTab />;
       case "monthly":    return <MonthlyHistoryTab />;
       case "payments":   return <PaymentsTab />;
       case "settings":   return <SettingsTab />;
       case "returns":    return <ReturnsTab />;
-      case "affiliates": return <AffiliatesTab />;
       case "blog":       return <BlogTab />;
       case "auditlogs":  return <AuditLogsTab />;
       case "qa":         return <QATab />;
@@ -699,7 +518,7 @@ export function AdminPage() {
     orderSearch, setOrderSearch,
     userSearch, setUserSearch,
     reviewSearch, setReviewSearch,
-    couponSearch, setCouponSearch,
+    couponSearch: "", setCouponSearch: () => {},
     allProducts, filteredProducts,
     productsLoading, productsPage, setProductsPage,
     productsHasMore, editingProduct, setEditingProduct,
@@ -719,10 +538,13 @@ export function AdminPage() {
     archivedOrders, archivedPreOrders,
     archivedPage, archivedHasMore, archivedTotal,
     archivedLoading, archivedError, fetchArchivedOrders,
-    coupons, couponsLoading,
-    editingCoupon, setEditingCoupon,
-    showCouponModal, setShowCouponModal,
-    couponSaving, setCouponSaving, setCoupons,
+
+    // Coupons (removed from admin — now managed by sellers in their dashboard)
+    coupons: [], couponsLoading: false,
+    editingCoupon: null, setEditingCoupon: () => {},
+    showCouponModal: false, setShowCouponModal: () => {},
+    couponSaving: false, setCouponSaving: () => {}, setCoupons: () => {},
+
     monthlyRecords, monthlyLoading,
     dashStats, dashStatsLoading, activeOrdersCount,
     askConfirm, getToken,
@@ -732,11 +554,13 @@ export function AdminPage() {
     productsData,
     pendingOrders: dashStats.pendingOrders,
     handleDeleteCategory, handleDeleteReview, handleToggleBlock,
-    handleDeleteCoupon, handleToggleCoupon, handleArchiveNow,
+    // Coupon handlers removed from admin — sellers manage their own coupons now.
+    handleDeleteCoupon: () => {}, handleToggleCoupon: () => {},
+    handleArchiveNow,
     fetchOrders, fetchAdminPreOrders,
     handleSeedCategories,
     totalOrdersThisMonth,
-    filteredReviews, filteredCoupons,
+    filteredReviews, filteredCoupons: [],
     debouncedUserSearch,
   };
 
@@ -797,13 +621,6 @@ export function AdminPage() {
 
       {/* CategoryModal is now rendered locally inside CategoriesTab, which
           knows the current drill-down level and passes fixedParentId. */}
-
-      {(showCouponModal) && (
-        <CouponModal
-          coupon={editingCoupon}
-          onClose={() => { setShowCouponModal(false); setEditingCoupon(null); }}
-        />
-      )}
 
       {/* Cancellation Reason Modal */}
       <ConfirmDialog open={cdg.open} title={cdg.title} message={cdg.message} onConfirm={()=>{cdg.onConfirm();closeCdg();}} onCancel={closeCdg} danger={cdg.danger} />

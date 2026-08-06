@@ -27,6 +27,11 @@ export interface AdminContextValue {
   setUserSearch: (v: string) => void;
   reviewSearch: string;
   setReviewSearch: (v: string) => void;
+
+  // Coupons were removed from the admin panel (now managed by sellers in
+  // their dashboard). These no-op stubs remain for backward compatibility
+  // with any code still referencing the context shape -- they can be
+  // removed once all consumers are migrated.
   couponSearch: string;
   setCouponSearch: (v: string) => void;
 
@@ -84,7 +89,7 @@ export interface AdminContextValue {
   archivedError: string | null;
   fetchArchivedOrders: (page: number, append?: boolean) => void;
 
-  // Coupons
+  // Coupons (removed from admin panel — now seller-managed)
   coupons: any[];
   couponsLoading: boolean;
   editingCoupon: any;
@@ -122,6 +127,9 @@ export interface AdminContextValue {
   handleDeleteCategory: (id: number) => void;
   handleDeleteReview: (productId: number, reviewId: number) => void;
   handleToggleBlock: (userId: number, isBlocked: boolean) => void;
+  // Coupon handlers removed from admin — sellers manage their own coupons now.
+  // Stubs kept here so the context shape stays compatible with any consumer
+  // that still references them.
   handleDeleteCoupon: (id: number) => void;
   handleToggleCoupon: (id: number) => void;
   handleArchiveNow: () => void;

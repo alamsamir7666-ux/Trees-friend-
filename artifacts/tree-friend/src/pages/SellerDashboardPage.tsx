@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import {
   LayoutDashboard, Package, ShoppingBag, Wallet, Truck, Building2,
   Sprout, Loader2, Menu, Undo2, CalendarClock, X, ExternalLink,
-  Settings, ChevronRight, LogOut, BadgeCheck,
+  Settings, ChevronRight, LogOut, BadgeCheck, Tag,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -17,13 +17,14 @@ import { SellerMonthlyHistoryTab } from "@/components/seller/SellerMonthlyHistor
 import { CourierSettingsForm } from "@/components/seller/CourierSettingsForm";
 import { PaymentSettingsForm } from "@/components/seller/PaymentSettingsForm";
 import { BusinessProfileForm } from "@/components/seller/BusinessProfileForm";
+import { SellerCouponsTab } from "@/components/seller/SellerCouponsTab";
 import { useAuth } from "@clerk/react";
 
 updateSEO({ title: "Seller Dashboard", noIndex: true });
 
 type SectionId =
   | "dashboard" | "listings" | "orders" | "returns"
-  | "monthlyHistory" | "payment" | "courier" | "profile";
+  | "monthlyHistory" | "coupons" | "payment" | "courier" | "profile";
 
 const NAV_GROUPS: {
   label: string;
@@ -37,6 +38,7 @@ const NAV_GROUPS: {
       { id: "orders", label: "Orders", icon: ShoppingBag },
       { id: "returns", label: "Returns", icon: Undo2 },
       { id: "monthlyHistory", label: "Monthly History", icon: CalendarClock },
+      { id: "coupons", label: "Coupons", icon: Tag },
     ],
   },
   {
@@ -131,6 +133,8 @@ export function SellerDashboardPage() {
         return <SellerReturnsTab />;
       case "monthlyHistory":
         return <SellerMonthlyHistoryTab />;
+      case "coupons":
+        return <SellerCouponsTab />;
       case "payment":
         return <PaymentSettingsForm />;
       case "courier":

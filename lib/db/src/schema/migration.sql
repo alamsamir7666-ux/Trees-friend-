@@ -446,3 +446,24 @@ CREATE INDEX IF NOT EXISTS idx_messages_reply_to_id
   ON messages (reply_to_id)
   WHERE reply_to_id IS NOT NULL;
 
+
+-- ─── Seller-scoped coupons ────────────────────────────────────────────────
+-- Adds a nullable seller_id column to coupons. NULL = platform-wide coupon
+-- (legacy / referral / welcome coupons created by the system). Non-NULL =
+-- seller-scoped coupon that only the owning seller can manage via the seller
+-- dashboard's Coupons tab (added when coupons were shifted out of the admin
+-- panel and into the seller dashboard).
+--
+-- No foreign-key constraint is added deliberately: we want coupons to survive
+-- even if the owning seller is hard-deleted, so an admin can still re-assign
+-- or clean them up. The API layer enforces ownership on every write.
+--
+-- Idempotent (IF NOT EXISTS) so it's safe to run on every startup.
+ALTER TABLE coupons
+  ADD COLUMN IF NOT EXISTS seller_id INTEGER;
+
+-- Index for efficient "fetch all coupons owned by this seller" lookups
+-- (powers the seller dashboard's Coupons tab list view).
+CREATE INDEX IF NOT EXISTS idx_coupons_seller_id
+  ON coupons (seller_id)
+  WHERE seller_id IS NOT NULL;
