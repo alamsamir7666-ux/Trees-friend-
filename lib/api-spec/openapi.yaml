@@ -4004,6 +4004,11 @@ components:
           type: integer
         comment:
           type: string
+        photos:
+          type: array
+          items:
+            type: string
+          description: Up to 4 Cloudinary photo URLs the buyer attached to this review.
         createdAt:
           type: string
       required:
@@ -4013,6 +4018,7 @@ components:
         - userName
         - rating
         - comment
+        - photos
         - createdAt
 
     SellerListingReview:
@@ -4036,6 +4042,11 @@ components:
           type: integer
         comment:
           type: string
+        photos:
+          type: array
+          items:
+            type: string
+          description: Up to 4 Cloudinary photo URLs the buyer attached to this review.
         createdAt:
           type: string
       required:
@@ -4047,6 +4058,7 @@ components:
         - userName
         - rating
         - comment
+        - photos
         - createdAt
 
     CreateSellerListingReviewBody:

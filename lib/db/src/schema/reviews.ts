@@ -5,6 +5,7 @@ import {
   integer,
   timestamp,
   unique,
+  jsonb,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -69,6 +70,14 @@ export const reviewsTable = pgTable(
     userName: text("user_name").notNull(),
     rating: integer("rating").notNull(),
     comment: text("comment").notNull(),
+    // Up to 4 Cloudinary secure_urls a buyer attached to their review.
+    // Column added via migration.sql ("add_review_photos.sql" entry) --
+    // this Drizzle declaration was previously missing even though the
+    // column existed in the DB and routes/reviews.ts already read/wrote it
+    // via `as any` casts (see that file's formatReview/formatSellerListing
+    // Review comments). Same jsonb(string[]) convention as
+    // productsTable.images/keyBenefits/bestFor/careTips.
+    photos: jsonb("photos").$type<string[]>().notNull().default([]),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [

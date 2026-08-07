@@ -17,6 +17,7 @@ import { eq, and, desc, sql, lt } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import { chainRateLimiters, chatMessageBurstLimiter, chatMessageLimiter, conversationCreateLimiter } from "../middlewares/rateLimiter";
 import { logger } from "../lib/logger";
+import { deleteCloudinaryAssets } from "../lib/cloudinary";
 
 /**
  * Normalize any thrown value (Error, string, object, unknown) into a string
@@ -1267,8 +1268,14 @@ router.patch("/conversations/:id/messages/:messageId", requireAuth, async (req: 
 //      replies) instead of leaving a gap.
 //   4. The message's content, fileUrl, etc. are wiped to null so the
 //      original text/media is unrecoverable from the DB (privacy).
-//   5. The Cloudinary-hosted attachment file is NOT auto-deleted — that
-//      would require tracking public_ids and is a separate cleanup job.
+//   5. The Cloudinary-hosted attachment (image, video, or document) is
+//      also deleted from Cloudinary storage, not just unlinked from the
+//      DB — otherwise the file would sit in Cloudinary forever with
+//      nothing left anywhere that references it. Uses the same
+//      best-effort deleteCloudinaryAssets helper as every other
+//      image/file-owning route (products, seller listings, sellers,
+//      categories) — never blocks/fails this request if Cloudinary is
+//      slow or errors; failures are logged for a manual/retry pass.
 //
 // Returns the updated message (with isDeleted=true, deletedAt set, content
 // and file fields nulled out).
@@ -1334,6 +1341,20 @@ router.delete("/conversations/:id/messages/:messageId", requireAuth, async (req:
       })
       .where(eq(messagesTable.id, messageId))
       .returning();
+
+    // Best-effort Cloudinary cleanup after the DB write succeeds. `msg`
+    // (fetched above, before this update nulled the fields out) still has
+    // the original imageUrl/fileUrl -- without capturing those first, the
+    // underlying Cloudinary asset would have no reference left anywhere
+    // and could never be deleted. imageUrl and fileUrl are deliberately
+    // both included (not deduped) -- deleteCloudinaryAssets resolves each
+    // to its Cloudinary public_id, so a duplicate pair (legacy image
+    // messages mirror the same URL into both fields) is a harmless no-op
+    // second lookup, not a double-delete.
+    const attachmentUrls = [msg.imageUrl, msg.fileUrl].filter((u): u is string => !!u);
+    if (attachmentUrls.length > 0) {
+      deleteCloudinaryAssets(attachmentUrls).catch(() => {});
+    }
 
     res.json(formatMessage(updated));
   } catch (err) {

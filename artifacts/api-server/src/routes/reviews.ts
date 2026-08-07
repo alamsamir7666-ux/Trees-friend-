@@ -9,6 +9,7 @@ import { eq, and, sql, desc, isNull } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
+import { deleteCloudinaryAssets } from "../lib/cloudinary";
 
 // ─── Cloudinary config (add to .env.example too) ──────────────────────────
 // CLOUDINARY_CLOUD_NAME=your_cloud
@@ -56,7 +57,7 @@ function formatReview(r: typeof reviewsTable.$inferSelect) {
     userName: r.userName,
     rating: r.rating,
     comment: r.comment,
-    photos: (r as any).photos ?? [],  // new field from migration
+    photos: r.photos,
     createdAt: r.createdAt.toISOString(),
   };
 }
@@ -181,9 +182,8 @@ router.post(
           userName,
           rating: Math.round(ratingNum),
           comment: comment.trim(),
-          // Cast needed because the column is added via migration, not in Drizzle schema yet
-          ...(photoUrls.length > 0 ? { photos: photoUrls } : {}),
-        } as any)
+          photos: photoUrls,
+        })
         .returning();
 
       res.status(201).json(formatReview(review));
@@ -214,7 +214,7 @@ function formatSellerListingReview(r: typeof reviewsTable.$inferSelect) {
     userName: r.userName,
     rating: r.rating,
     comment: r.comment,
-    photos: (r as any).photos ?? [],
+    photos: r.photos,
     createdAt: r.createdAt.toISOString(),
   };
 }
@@ -353,8 +353,8 @@ router.post(
           userName,
           rating: Math.round(ratingNum),
           comment: comment.trim(),
-          ...(photoUrls.length > 0 ? { photos: photoUrls } : {}),
-        } as any)
+          photos: photoUrls,
+        })
         .returning();
 
       res.status(201).json(formatSellerListingReview(review));
@@ -408,6 +408,15 @@ router.delete("/reviews/:productId/:reviewId", requireAuth, async (req: any, res
       res.status(403).json({ error: "Forbidden" }); return;
     }
     await db.delete(reviewsTable).where(eq(reviewsTable.id, reviewId));
+
+    // Best-effort Cloudinary cleanup after the DB delete succeeds. `review`
+    // (fetched above, before the delete) still has its photos[] array.
+    // Never blocks/fails the response -- the review is already gone either
+    // way; failures are logged for a manual/retry pass instead.
+    if (review.photos?.length) {
+      deleteCloudinaryAssets(review.photos).catch(() => {});
+    }
+
     res.json({ message: "Review deleted" });
   } catch { res.status(500).json({ error: "Failed to delete review" }); }
 });

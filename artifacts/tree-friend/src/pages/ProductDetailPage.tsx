@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useLocation, useSearch, Link } from "wouter";
 import {
-  useGetProduct, useListReviews, useCreateReview, useUpdateReview, useDeleteReview,
+  useGetProduct, useListReviews, useUpdateReview, useDeleteReview,
   useAddToWishlist, useRemoveFromWishlist, useGetWishlist, useListProducts, useListCategories,
   useGetReviewEligibility,
   getGetWishlistQueryKey, getListReviewsQueryKey,
@@ -21,6 +21,7 @@ import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { saveRecentlyViewed, useRecentlyViewed } from "@/hooks/useRecentlyViewed";
 import { ProductQA } from "@/components/ui/ProductQA";
 import { SellerListingsSection } from "@/components/ui/SellerListingsSection";
+import { PhotoReviewForm } from "@/components/ui/PhotoReviewForm";
 import { updateSEO } from "@/lib/seo";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 
@@ -74,13 +75,10 @@ export function ProductDetailPage() {
 
   const addToWishlist = useAddToWishlist();
   const removeFromWishlist = useRemoveFromWishlist();
-  const createReview = useCreateReview();
   const updateReview = useUpdateReview();
   const deleteReview = useDeleteReview();
 
   const [activeImg, setActiveImg] = useState(0);
-  const [rating, setRating] = useState(5);
-  const [comment, setComment] = useState("");
   const [showReviewForm, setShowReviewForm] = useState(false);
   const [editingReviewId, setEditingReviewId] = useState<number | null>(null);
   const [editRating, setEditRating] = useState(5);
@@ -171,17 +169,6 @@ export function ProductDetailPage() {
     } else {
       addToWishlist.mutate({ productId: id }, { onSuccess: () => qc.invalidateQueries({ queryKey: getGetWishlistQueryKey() }) });
     }
-  }
-
-  function handleReview() {
-    if (!user) { setLocation("/sign-in"); return; }
-    createReview.mutate({ productId: id, data: { rating, comment } }, {
-      onSuccess: () => {
-        qc.invalidateQueries({ queryKey: getListReviewsQueryKey(id) });
-        qc.invalidateQueries({ queryKey: getGetReviewEligibilityQueryKey(id) });
-        setComment(""); setRating(5); setShowReviewForm(false);
-      },
-    });
   }
 
   function startEditReview(r: { id: number; rating: number; comment: string }) {
@@ -404,18 +391,15 @@ export function ProductDetailPage() {
           </div>
 
           {showReviewForm && canReview && (
-            <div className="bg-muted/30 rounded-2xl p-6 mb-8">
-              <h3 className="font-medium mb-4">Your Review</h3>
-              <div className="flex gap-2 mb-4">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <button key={i} onClick={() => setRating(i + 1)}>
-                    <Star className={`h-6 w-6 ${i < rating ? "fill-accent text-accent" : "text-muted-foreground"}`} />
-                  </button>
-                ))}
-              </div>
-              <Textarea placeholder="Share your experience with this product..." value={comment} onChange={(e) => setComment(e.target.value)} className="mb-4" rows={4} />
-              <Button onClick={handleReview} disabled={createReview.isPending || !comment.trim()}>Submit Review</Button>
-            </div>
+            <PhotoReviewForm
+              productId={id}
+              onSuccess={() => {
+                qc.invalidateQueries({ queryKey: getListReviewsQueryKey(id) });
+                qc.invalidateQueries({ queryKey: getGetReviewEligibilityQueryKey(id) });
+                setShowReviewForm(false);
+              }}
+              onCancel={() => setShowReviewForm(false)}
+            />
           )}
 
           {user && notPurchased && !alreadyReviewed && (
@@ -484,7 +468,29 @@ export function ProductDetailPage() {
                         </div>
                       </div>
                     ) : (
-                      <p className="text-sm text-muted-foreground leading-relaxed">{r.comment}</p>
+                      <>
+                        <p className="text-sm text-muted-foreground leading-relaxed">{r.comment}</p>
+                        {r.photos && r.photos.length > 0 && (
+                          <div className="flex flex-wrap gap-2 mt-3">
+                            {r.photos.map((photoUrl, i) => (
+                              <a
+                                key={i}
+                                href={photoUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="h-20 w-20 rounded-xl overflow-hidden bg-muted border shrink-0"
+                              >
+                                <img
+                                  src={photoUrl}
+                                  alt={`Photo ${i + 1} from ${r.userName}'s review`}
+                                  className="h-full w-full object-cover"
+                                  loading="lazy"
+                                />
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 );

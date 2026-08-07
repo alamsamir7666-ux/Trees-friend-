@@ -10,6 +10,7 @@ import {
 } from "@workspace/db";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { requireAuth, requireSellerAccount } from "../middlewares/auth";
+import { deleteCloudinaryAssets, cleanupRemovedImages } from "../lib/cloudinary";
 
 cloudinaryV2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -271,11 +272,24 @@ router.patch("/sellers/me", requireSellerAccount, async (req: any, res) => {
     if (nurseryImages !== undefined) updates.nurseryImages = nurseryImages;
     if (logoUrl !== undefined) updates.logoUrl = logoUrl || null;
 
+    const previousNurseryImages = req.dbSeller!.nurseryImages ?? [];
+    const previousLogoUrl = req.dbSeller!.logoUrl ?? null;
+
     const [updated] = await db
       .update(sellersTable)
       .set(updates)
       .where(eq(sellersTable.id, req.dbSeller!.id))
       .returning();
+
+    // Best-effort cleanup after the DB write succeeds. Runs only for the
+    // fields this request actually touched, and never blocks/fails the
+    // response -- the profile is already saved either way.
+    if (nurseryImages !== undefined) {
+      cleanupRemovedImages(previousNurseryImages, nurseryImages).catch(() => {});
+    }
+    if (logoUrl !== undefined && previousLogoUrl && previousLogoUrl !== logoUrl) {
+      deleteCloudinaryAssets([previousLogoUrl]).catch(() => {});
+    }
 
     res.json(formatSeller(updated));
   } catch (err) {

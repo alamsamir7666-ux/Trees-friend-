@@ -2,6 +2,7 @@ import { logAudit } from "../lib/audit";
 import { Router } from "express";
 import multerPkg from "multer";
 import { v2 as cloudinaryV2 } from "cloudinary";
+import { deleteCloudinaryAssets, cleanupRemovedImages } from "../lib/cloudinary";
 import { db } from "@workspace/db";
 import {
   productsTable,
@@ -781,6 +782,10 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
       .where(eq(productVariantsTable.productId, id));
     const wasOutOfStock = before.length > 0 && before.every((v) => v.stock === 0);
 
+    // Read before the write so we know which images (if any) are being
+    // dropped by this update -- needed to clean them up in Cloudinary below.
+    const [existingProduct] = await db.select().from(productsTable).where(eq(productsTable.id, id)).limit(1);
+
     const [p] = await db
       .update(productsTable)
       .set(updates)
@@ -789,6 +794,14 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
     if (!p) {
       res.status(404).json({ error: "Not found" });
       return;
+    }
+
+    // Only clean up Cloudinary AFTER the DB write succeeded, and only if
+    // images were actually part of this update -- otherwise there's nothing
+    // to diff. Never let a Cloudinary hiccup fail this request; the DB is
+    // already the source of truth and the product was saved successfully.
+    if (images !== undefined && existingProduct) {
+      cleanupRemovedImages(existingProduct.images ?? [], images).catch(() => {});
     }
 
     const nowInStock = before.some((v) => v.stock > 0);
@@ -831,10 +844,23 @@ router.delete("/products/:id", requireAdmin, async (req: any, res) => {
       res.status(400).json({ error: "Invalid product ID" });
       return;
     }
+    // Fetch the row before deleting it -- we need its images[] to clean up
+    // Cloudinary, and that data is gone the instant the DELETE below runs.
+    const [existingProduct] = await db.select().from(productsTable).where(eq(productsTable.id, id)).limit(1);
+
     // productVariantsTable.productId has no DB-level FK/cascade, so variants
     // must be deleted explicitly here or they would be orphaned forever.
     await db.delete(productVariantsTable).where(eq(productVariantsTable.productId, id));
     await db.delete(productsTable).where(eq(productsTable.id, id));
+
+    // Best-effort Cloudinary cleanup after the DB delete succeeds. Never
+    // blocks or fails the response -- the product is already gone from the
+    // site either way; a Cloudinary failure here just means storage cleanup
+    // needs a retry/manual pass, which is logged for that purpose.
+    if (existingProduct?.images?.length) {
+      deleteCloudinaryAssets(existingProduct.images).catch(() => {});
+    }
+
     res.json({ message: "Product deleted" });
   } catch (err) {
     res.status(500).json({ error: "Failed to delete product" });

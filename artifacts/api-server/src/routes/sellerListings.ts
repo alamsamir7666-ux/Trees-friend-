@@ -15,6 +15,7 @@ import { eq, and, inArray, sql, desc, asc } from "drizzle-orm";
 import { requireAuth, requireSeller, requireAdmin } from "../middlewares/auth";
 import { hasVerifiedPaymentConfig } from "@workspace/db/logic";
 import { notifyPreOrderCustomers } from "./preOrders";
+import { deleteCloudinaryAssets, cleanupRemovedImages } from "../lib/cloudinary";
 
 export { hasVerifiedPaymentConfig };
 
@@ -967,6 +968,16 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
       .where(eq(sellerListingsTable.id, id))
       .returning();
 
+    // Clean up any images that were part of the previous version of this
+    // listing but aren't in the new `images` array -- e.g. the seller
+    // removed a photo in the editor. `existing` was fetched above, before
+    // this update overwrote the row, so it still has the old array. Only
+    // runs when this request actually touched images; fires after the DB
+    // write succeeds and never blocks/fails the response.
+    if (images !== undefined) {
+      cleanupRemovedImages(existing.images ?? [], images).catch(() => {});
+    }
+
     if (toDelete.length > 0) {
       await db.delete(sellerListingVariantsTable).where(inArray(sellerListingVariantsTable.id, toDelete));
     }
@@ -1101,6 +1112,15 @@ router.delete("/seller-listings/:id", requireSeller, async (req: any, res) => {
       return;
     }
     await db.delete(sellerListingsTable).where(eq(sellerListingsTable.id, id));
+
+    // Best-effort Cloudinary cleanup after the DB delete succeeds. `existing`
+    // (fetched above, before the delete) still has the images[] array.
+    // Never blocks/fails the response -- the listing is already gone either
+    // way; failures here are logged for a manual/retry pass instead.
+    if (existing.images?.length) {
+      deleteCloudinaryAssets(existing.images).catch(() => {});
+    }
+
     res.json({ message: "Listing deleted" });
   } catch (err) {
     res.status(500).json({ error: "Failed to delete listing" });

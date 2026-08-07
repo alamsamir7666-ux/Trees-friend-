@@ -972,6 +972,7 @@ export const ListReviewsResponseItem = zod.object({
   "userName": zod.string(),
   "rating": zod.number(),
   "comment": zod.string(),
+  "photos": zod.array(zod.string()).describe('Up to 4 Cloudinary photo URLs the buyer attached to this review.'),
   "createdAt": zod.string()
 })
 export const ListReviewsResponse = zod.array(ListReviewsResponseItem)
@@ -1009,6 +1010,7 @@ export const UpdateReviewResponse = zod.object({
   "userName": zod.string(),
   "rating": zod.number(),
   "comment": zod.string(),
+  "photos": zod.array(zod.string()).describe('Up to 4 Cloudinary photo URLs the buyer attached to this review.'),
   "createdAt": zod.string()
 })
 
@@ -1042,6 +1044,7 @@ export const ListSellerListingReviewsResponseItem = zod.object({
   "userName": zod.string(),
   "rating": zod.number(),
   "comment": zod.string(),
+  "photos": zod.array(zod.string()).describe('Up to 4 Cloudinary photo URLs the buyer attached to this review.'),
   "createdAt": zod.string()
 })
 export const ListSellerListingReviewsResponse = zod.array(ListSellerListingReviewsResponseItem)

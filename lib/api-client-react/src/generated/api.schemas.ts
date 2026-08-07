@@ -811,6 +811,8 @@ export interface Review {
   userName: string;
   rating: number;
   comment: string;
+  /** Up to 4 Cloudinary photo URLs the buyer attached to this review. */
+  photos: string[];
   createdAt: string;
 }
 
@@ -823,6 +825,8 @@ export interface SellerListingReview {
   userName: string;
   rating: number;
   comment: string;
+  /** Up to 4 Cloudinary photo URLs the buyer attached to this review. */
+  photos: string[];
   createdAt: string;
 }
 

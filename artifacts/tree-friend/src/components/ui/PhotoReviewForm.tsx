@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Star, ImagePlus, X, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getToken } from "@/lib/getToken";
 
 interface PhotoReviewFormProps {
   productId: number;
@@ -54,9 +55,15 @@ export function PhotoReviewForm({ productId, onSuccess, onCancel }: PhotoReviewF
       formData.append("comment", comment.trim());
       photos.forEach((f) => formData.append("photos", f));
 
-      const r = await fetch(`/api/reviews/${productId}`, {
+      // Pull the Clerk session token via the shared getter so the backend's
+      // requireAuth middleware accepts the request -- same token the
+      // generated api-client sends for the plain-text review path (see
+      // uploadAttachment.ts for the same pattern on file uploads).
+      const token = await getToken();
+      const r = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/reviews/${productId}`, {
         method: "POST",
         credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         body: formData,
         // Do NOT set Content-Type - browser sets multipart boundary automatically
       });
