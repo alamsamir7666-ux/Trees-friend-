@@ -10,7 +10,17 @@ import {
   getListProductsQueryKey, getListAllOrdersQueryKey, getListCategoriesQueryKey, getListAllUsersQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
-import { useGetMe } from "@workspace/api-client-react";
+import { useMe } from "@/hooks/useMe";
+import type { Product, AdminReview } from "@workspace/api-client-react";
+import type {
+  AdminPreOrder,
+  AdminOrder,
+  ArchivedOrder,
+  MonthlyRecord,
+  AdminUser,
+  AdminContextValue,
+} from "@/contexts/AdminContext";
+import { useApiJson } from "@/lib/useApiFetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -93,36 +103,43 @@ const navItems = [
 
 // ??? Category form ????????????????????????????????????????????????????????????
 export function AdminPage() {
-  console.log("[AdminPage] component function called - fresh mount or re-render");
   const [cdg, setCdg] = useState<{open:boolean;title:string;message:string;onConfirm:()=>void;danger:boolean}>({open:false,title:"",message:"",onConfirm:()=>{},danger:true});
   const askConfirm = (title:string,message:string,cb:()=>void,danger=true) => setCdg({open:true,title,message,onConfirm:cb,danger});
   const closeCdg = () => setCdg(d=>({...d,open:false}));
   const qc = useQueryClient();
   const adminMountRef = useRef(false);
   useEffect(() => {
-    console.log("[AdminPage] MOUNT EFFECT - was already mounted before:", adminMountRef.current);
     adminMountRef.current = true;
   }, []);
   const { getToken } = useAuth();
+  const apiJson = useApiJson();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
   const [productsPage, setProductsPage] = useState(1);
   const { data: productsData, isLoading: productsLoading } = useListProducts({ limit: 25, page: productsPage, search: debouncedSearch || undefined });
-  const [allProducts, setAllProducts] = useState<any[]>([]);
+  const [allProducts, setAllProducts] = useState<Array<Product & { [key: string]: unknown }>>([]);
   const productsHasMore = productsData ? allProducts.length < (productsData.total ?? 0) : false;
   useEffect(() => { setProductsPage(1); setAllProducts([]); }, [debouncedSearch]);
   useEffect(() => {
     if (productsData?.products) {
-      if (productsPage === 1) setAllProducts(productsData.products);
-      else setAllProducts(prev => [...prev, ...productsData.products]);
+      // Cast through unknown — Product from the generated client doesn't
+      // have the index signature our local AdminProduct type adds, but
+      // the runtime shape is identical. The index signature is what lets
+      // admin UI components read dynamic fields (homepageTag, images, etc.)
+      // without `as any` casts at every access site.
+      const prods = productsData.products as unknown as Array<Product & { [key: string]: unknown }>;
+      if (productsPage === 1) setAllProducts(prods);
+      else setAllProducts(prev => [...prev, ...prods]);
     }
   }, [productsData, productsPage]);
-  const [orders, setOrders] = useState<any[]>([]);
-  const [adminPreOrders, setAdminPreOrders] = useState<any[]>([]);
-  const fetchAdminPreOrders = async () => {
+  const [orders, setOrders] = useState<AdminOrder[]>([]);
+  const [adminPreOrders, setAdminPreOrders] = useState<AdminPreOrder[]>([]);
+  // apiJson is created further down (after the order/preOrder state).
+  // Forward-declare via ref so fetchAdminPreOrders / fetchOrders can use it.
+  // (Simpler than reordering all the hooks.)
+  const fetchAdminPreOrders = useCallback(async (api: ReturnType<typeof useApiJson>) => {
     try {
-      const token = await getToken();
-      // Now calls the admin-only /admin/pre-orders endpoint (added in
+      // Calls the admin-only /admin/pre-orders endpoint (added in
       // admin.ts), which (a) requires admin auth and (b) joins through
       // preOrders.sellerListingVariantId -> variant -> listing -> seller
       // so each pre-order carries the seller fields the redesigned
@@ -130,11 +147,10 @@ export function AdminPage() {
       // Previously called the public GET /pre-orders endpoint which had
       // no auth and returned no seller context -- a leftover from
       // before the marketplace migration.
-      const res = await fetch(`${API}/api/admin/pre-orders`, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json();
+      const data = await api<AdminPreOrder[]>("/api/admin/pre-orders");
       if (Array.isArray(data)) setAdminPreOrders(data);
     } catch {}
-  };
+  }, []);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersPage, setOrdersPage] = useState(1);
   const [ordersHasMore, setOrdersHasMore] = useState(false);
@@ -142,40 +158,41 @@ export function AdminPage() {
   const [dashStats, setDashStats] = useState<{totalSales:number,totalOrders:number,pendingOrders:number,deliveredOrders:number}>({totalSales:0,totalOrders:0,pendingOrders:0,deliveredOrders:0});
   const [dashStatsLoading, setDashStatsLoading] = useState(true);
 
-  const fetchOrders = async (page: number, append = false) => {
+  const fetchOrders = useCallback(async (api: ReturnType<typeof useApiJson>, page: number, append = false) => {
     setOrdersLoading(true);
     try {
-      const token = await getToken();
-      const res = await fetch(`${API}/api/admin/orders?page=${page}`, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json();
-      const list = Array.isArray(data) ? data : (data.orders ?? []);
+      const data = await api<{ orders?: AdminOrder[]; total?: number; hasMore?: boolean } | AdminOrder[]>(`/api/admin/orders?page=${page}`);
+      const list: AdminOrder[] = Array.isArray(data) ? data : (data.orders ?? []);
       setOrders(prev => append ? [...prev, ...list] : list);
-      setOrdersHasMore(data.hasMore ?? list.length === 20);
-      if (!append) setOrdersTotal(data.total ?? list.length);
+      setOrdersHasMore(Array.isArray(data) ? list.length === 20 : (data.hasMore ?? list.length === 20));
+      if (!append) setOrdersTotal(Array.isArray(data) ? list.length : (data.total ?? list.length));
       setOrdersPage(page);
-    } catch (e: any) { console.error("fetchOrders error:", e?.message, e); }
+    } catch (e) {
+      console.error("fetchOrders error:", e instanceof Error ? e.message : e);
+    }
     setOrdersLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
-    fetchOrders(1);
-    fetchAdminPreOrders();
+    fetchOrders(apiJson, 1);
+    fetchAdminPreOrders(apiJson);
     setDashStatsLoading(true);
-    getToken().then(token =>
-      fetch(`${API}/api/admin/dashboard`, { headers: { Authorization: `Bearer ${token}` } })
-        .then(r => {
-          if (!r.ok) throw new Error(`Dashboard fetch failed: ${r.status}`);
-          return r.json();
-        })
-        .then(data => {
-          setDashStats({ totalSales: data.totalSales ?? 0, totalOrders: data.totalOrders ?? 0, pendingOrders: data.pendingOrders ?? 0, deliveredOrders: data.totalOrders != null && data.pendingOrders != null ? (data.totalOrders - data.pendingOrders) : 0 });
-        })
-        .catch((e) => console.error("Dashboard stats error:", e?.message))
-        .finally(() => setDashStatsLoading(false))
-    );
-  }, []);
+    apiJson<{ totalSales?: number; totalOrders?: number; pendingOrders?: number }>("/api/admin/dashboard")
+      .then((data) => {
+        const totalOrders = data.totalOrders ?? 0;
+        const pendingOrders = data.pendingOrders ?? 0;
+        setDashStats({
+          totalSales: data.totalSales ?? 0,
+          totalOrders,
+          pendingOrders,
+          deliveredOrders: totalOrders - pendingOrders,
+        });
+      })
+      .catch((e) => console.error("Dashboard stats error:", e instanceof Error ? e.message : e))
+      .finally(() => setDashStatsLoading(false));
+  }, [apiJson, fetchOrders, fetchAdminPreOrders]);
   const { data: users } = useListAllUsers({ query: { queryKey: getListAllUsersQueryKey() } });
-  const { data: me } = useGetMe();
+  const { data: me } = useMe();
   const { data: categories = [] } = useListCategories({ query: { staleTime: 30_000, queryKey: getListCategoriesQueryKey() } });
   const { data: allReviews = [], isLoading: reviewsLoading } = useListAllReviews();
 
@@ -186,20 +203,17 @@ export function AdminPage() {
   const toggleUserBlock = useToggleUserBlock();
 
   const [activeTab, setActiveTab] = useState("dashboard");
-  useEffect(() => {
-    console.log("[activeTab] changed to:", activeTab);
-  }, [activeTab]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<any>(null);
+  const [editingProduct, setEditingProduct] = useState<(Product & { [key: string]: unknown }) | null>(null);
   const [showProductModal, setShowProductModal] = useState(false);
-  const [editingCategory, setEditingCategory] = useState<any>(null);
+  const [editingCategory, setEditingCategory] = useState<{ id: number; name: string; slug: string; parentId: number | null; [key: string]: unknown } | null>(null);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [orderSearch, setOrderSearch] = useState("");
   const [expandedOrderId, setExpandedOrderId] = useState<number | string | null>(null);
   const [userSearch, setUserSearch] = useState("");
   const [reviewSearch, setReviewSearch] = useState("");
-  const [archivedOrders, setArchivedOrders] = useState<any[]>([]);
-  const [archivedPreOrders, setArchivedPreOrders] = useState<any[]>([]);
+  const [archivedOrders, setArchivedOrders] = useState<ArchivedOrder[]>([]);
+  const [archivedPreOrders, setArchivedPreOrders] = useState<AdminPreOrder[]>([]);
   const [archivedPage, setArchivedPage] = useState(1);
   const [archivedHasMore, setArchivedHasMore] = useState(false);
   const [archivedTotal, setArchivedTotal] = useState(0);
@@ -209,7 +223,7 @@ export function AdminPage() {
   const [seedingCategories, setSeedingCategories] = useState(false);
 
   // Monthly history state
-  const [monthlyRecords, setMonthlyRecords] = useState<any[]>([]);
+  const [monthlyRecords, setMonthlyRecords] = useState<MonthlyRecord[]>([]);
   const [monthlyLoading, setMonthlyLoading] = useState(false);
 
   // Debounced search values (prevent filtering on every keystroke)
@@ -224,20 +238,18 @@ export function AdminPage() {
   const fetchMonthlyRecords = useCallback(async () => {
     setMonthlyLoading(true);
     try {
-      const token = await getToken();
-      const res = await fetch(API+"/api/admin/monthly-records", { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json();
+      const data = await apiJson<MonthlyRecord[]>("/api/admin/monthly-records");
       setMonthlyRecords(Array.isArray(data) ? data : []);
     } catch {
       setMonthlyRecords([]);
     } finally {
       setMonthlyLoading(false);
     }
-  }, [getToken]);
+  }, [apiJson]);
 
   useEffect(() => {
-    if (activeTab === "orders") fetchAdminPreOrders();
-  }, [activeTab]);
+    if (activeTab === "orders") fetchAdminPreOrders(apiJson);
+  }, [activeTab, apiJson, fetchAdminPreOrders]);
 
   useEffect(() => {
     if (activeTab === "monthly") fetchMonthlyRecords();
@@ -245,14 +257,13 @@ export function AdminPage() {
 
   async function handleArchiveNow() {
     if (!window.confirm("Archive last month's data now?")) return;
-    const token = await getToken();
-    const res = await fetch(API+"/api/admin/monthly-records/archive", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const result = await res.json();
-    alert(result.message);
-    fetchMonthlyRecords();
+    try {
+      const result = await apiJson<{ message?: string }>("/api/admin/monthly-records/archive", { method: "POST" });
+      alert(result.message ?? "Archived");
+      fetchMonthlyRecords();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to archive");
+    }
   }
 
   const products = allProducts;
@@ -269,62 +280,80 @@ export function AdminPage() {
   const filteredProducts = useMemo(() => {
     if (!debouncedSearch.trim()) return products;
     const q = debouncedSearch.toLowerCase();
-    return products.filter(p =>
-      (p.name ?? "").toLowerCase().includes(q) ||
-      (p.category ?? "").toLowerCase().includes(q)
-    );
+    return products.filter(p => {
+      // `category` isn't on the Product schema (products have
+      // categoryId, not a denormalized category string), but the
+      // admin /products endpoint may join it in. Read defensively.
+      const pAny = p as Product & { category?: string };
+      return (
+        (p.name ?? "").toLowerCase().includes(q) ||
+        (pAny.category ?? "").toLowerCase().includes(q)
+      );
+    });
   }, [products, debouncedSearch]);
 
-  const recentCombined = [...orders, ...adminPreOrders.map((o: any) => ({
-    id: o.id, createdAt: o.createdAt, totalAmount: o.totalAmount ?? (Number(o.discountedPrice ?? 0) + Number(o.deliveryCharge ?? 0)),
-    orderStatus: o.status ?? "pre-order", _type: "preorder"
-  } as any))].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5);
+  const recentCombined: AdminOrder[] = [
+    ...(orders as AdminOrder[]).map((o) => ({
+      ...o,
+      _type: "order" as const,
+    })),
+    ...adminPreOrders.map((o) => ({
+      ...(o as unknown as AdminOrder),
+      totalAmount: o.totalAmount ?? (Number(o.discountedPrice ?? 0) * Number(o.quantity ?? 1) + Number(o.deliveryCharge ?? 0)),
+      orderStatus: o.status ?? "pre-order",
+      _type: "preorder" as const,
+      status: o.status,
+    })),
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5) as AdminOrder[];
 
   const TWO_DAYS = 2 * 24 * 60 * 60 * 1000;
-  const fetchArchivedOrders = async (page: number, append = false) => {
+  const fetchArchivedOrders = useCallback(async (page: number, append = false) => {
     setArchivedLoading(true);
     try {
-      const token = await getToken();
-      const res = await fetch(`${API}/api/admin/orders/archived?page=${page}`, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      const data = await apiJson<{ orders: ArchivedOrder[]; preOrders?: AdminPreOrder[]; hasMore: boolean; total: number; error?: string }>(`/api/admin/orders/archived?page=${page}`);
       setArchivedOrders(prev => append ? [...prev, ...data.orders] : data.orders);
       if (Array.isArray(data.preOrders)) setArchivedPreOrders(data.preOrders);
       setArchivedHasMore(data.hasMore);
       setArchivedTotal(data.total);
       setArchivedPage(page);
       setArchivedError(null);
-    } catch (e: any) {
-      setArchivedError(e.message ?? "Failed to load");
+    } catch (e) {
+      setArchivedError(e instanceof Error ? e.message : "Failed to load");
     }
     setArchivedLoading(false);
-  };
+  }, [apiJson]);
 
   useEffect(() => {
     fetchArchivedOrders(1);
     // Fetch real order counts for badges
-    getToken().then(token =>
-      fetch(`${API}/api/admin/orders/stats`, { headers: { Authorization: `Bearer ${token}` } })
-        .then(r => r.json())
-        .then(data => {
-          setActiveOrdersCount(data.activeOrders);
-          setArchivedTotal(data.archivedOrders);
-        })
-        .catch(() => {})
-    );
-  }, []);
+    apiJson<{ activeOrders?: number; archivedOrders?: number }>("/api/admin/orders/stats")
+      .then((data) => {
+        setActiveOrdersCount(data.activeOrders ?? 0);
+        setArchivedTotal(data.archivedOrders ?? 0);
+      })
+      .catch(() => {});
+  }, [apiJson, fetchArchivedOrders]);
 
   const filteredOrders = useMemo(
     () => {
-      const preOrdersMapped = adminPreOrders.map((o: any) => ({ ...o, _type: "preorder", orderStatus: o.status }));
+      // Map pre-orders into AdminOrder shape so the combined list has a
+      // single type. The pre-order's `status` field is preserved on the
+      // mapped object so the orders tab can read it for pre-order rows.
+      const preOrdersMapped: AdminOrder[] =
+        adminPreOrders.map((o) => ({
+          ...(o as unknown as AdminOrder),
+          _type: "preorder",
+          orderStatus: o.status ?? "pre-order",
+          status: o.status,
+        }));
       const allOrders = [...orders, ...preOrdersMapped].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       return allOrders.filter(o => {
         return !orderSearch ||
           String(o.id).includes(orderSearch) ||
-          ((o as any).orderStatus ?? "").toLowerCase().includes(orderSearch.toLowerCase()) ||
-          ((o as any).status ?? "").toLowerCase().includes(orderSearch.toLowerCase()) ||
-          ((o as any).userName ?? "").toLowerCase().includes(orderSearch.toLowerCase()) ||
-          ((o as any).userEmail ?? "").toLowerCase().includes(orderSearch.toLowerCase());
+          (o.orderStatus ?? "").toLowerCase().includes(orderSearch.toLowerCase()) ||
+          (o.status ?? "").toLowerCase().includes(orderSearch.toLowerCase()) ||
+          ((o as AdminOrder & { userName?: string }).userName ?? "").toLowerCase().includes(orderSearch.toLowerCase()) ||
+          ((o as AdminOrder & { userEmail?: string }).userEmail ?? "").toLowerCase().includes(orderSearch.toLowerCase());
       });
     },
     [orders, adminPreOrders, orderSearch]
@@ -336,15 +365,20 @@ export function AdminPage() {
     });
   }
 
-  // Filtered reviews with search
-  const filteredReviews = useMemo(() =>
-    !reviewSearch
-      ? (allReviews as any[])
-      : (allReviews as any[]).filter(r =>
-          r.productName?.toLowerCase().includes(reviewSearch.toLowerCase()) ||
-          r.userName?.toLowerCase().includes(reviewSearch.toLowerCase()) ||
-          r.comment?.toLowerCase().includes(reviewSearch.toLowerCase())
-        ),
+  // Filtered reviews with search. `allReviews` comes from the generated
+  // `useListAllReviews()` hook which returns `AdminReview[]` (with the
+  // joined productName field the search filters on).
+  const filteredReviews = useMemo<Array<AdminReview & { productName?: string }>>(
+    () => {
+      const reviews = allReviews as Array<AdminReview & { productName?: string }>;
+      return !reviewSearch
+        ? reviews
+        : reviews.filter(r =>
+            r.productName?.toLowerCase().includes(reviewSearch.toLowerCase()) ||
+            r.userName?.toLowerCase().includes(reviewSearch.toLowerCase()) ||
+            r.comment?.toLowerCase().includes(reviewSearch.toLowerCase())
+          );
+    },
     [allReviews, reviewSearch]
   );
 
@@ -368,7 +402,7 @@ export function AdminPage() {
       return;
     }
     updateOrderStatus.mutate({ id: orderId, data: { orderStatus: status } }, {
-      onSuccess: () => fetchOrders(1),
+      onSuccess: () => fetchOrders(apiJson, 1),
     });
   }
 
@@ -376,7 +410,7 @@ export function AdminPage() {
     if (!cancelModal) return;
     updateOrderStatus.mutate(
       { id: cancelModal.orderId, data: { orderStatus: "cancelled", cancellationReason: cancelModal.reason.trim() || null } },
-      { onSuccess: () => { fetchOrders(1); setCancelModal(null); } }
+      { onSuccess: () => { fetchOrders(apiJson, 1); setCancelModal(null); } }
     );
   }
 
@@ -389,11 +423,7 @@ export function AdminPage() {
   async function handleSeedCategories() {
     setSeedingCategories(true);
     try {
-      const token = await getToken();
-      await fetch(API+"/api/categories/seed", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      await apiJson("/api/categories/seed", { method: "POST" });
       qc.invalidateQueries({ queryKey: getListCategoriesQueryKey() });
     } finally {
       setSeedingCategories(false);
@@ -454,11 +484,11 @@ export function AdminPage() {
         <div className="flex items-center gap-3 px-2">
           <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shrink-0">
             <span className="text-primary-foreground text-xs font-bold">
-              {(me as any)?.firstName?.[0] ?? "A"}
+              {(me)?.firstName?.[0] ?? "A"}
             </span>
           </div>
           <div className="min-w-0">
-            <p className="text-xs font-semibold text-foreground truncate">{(me as any)?.firstName} {(me as any)?.lastName}</p>
+            <p className="text-xs font-semibold text-foreground truncate">{(me)?.firstName} {(me)?.lastName}</p>
             <p className="text-xs text-muted-foreground">Administrator</p>
           </div>
         </div>
@@ -557,15 +587,30 @@ export function AdminPage() {
     // Coupon handlers removed from admin — sellers manage their own coupons now.
     handleDeleteCoupon: () => {}, handleToggleCoupon: () => {},
     handleArchiveNow,
-    fetchOrders, fetchAdminPreOrders,
+    // Wrap fetchOrders / fetchAdminPreOrders so consumers can call them
+    // with the original (page, append?) / () signature — the underlying
+    // implementations take `apiJson` as the first arg, but that's an
+    // internal detail. The wrappers close over `apiJson` so consumers
+    // don't need to pass it.
+    fetchOrders: (page: number, append?: boolean) => fetchOrders(apiJson, page, append),
+    fetchAdminPreOrders: () => fetchAdminPreOrders(apiJson),
     handleSeedCategories,
     totalOrdersThisMonth,
     filteredReviews, filteredCoupons: [],
     debouncedUserSearch,
   };
 
+  // Cast through `unknown` because the generated `Category[]`, `AdminUser[]`,
+  // `AdminReview[]` types from `@workspace/api-client-react` don't structurally
+  // match our local `AdminCategory[]`, `AdminUser[]`, `Review[]` shapes (the
+  // generated types lack the `[key: string]: unknown` index signature our
+  // local interfaces add). Runtime shapes are identical; the cast just
+  // bridges the index-signature gap without forcing `as any` at every
+  // consumer access site.
+  const adminContextValueTyped = adminContextValue as unknown as AdminContextValue;
+
   return (
-    <AdminContext.Provider value={adminContextValue as any}>
+    <AdminContext.Provider value={adminContextValueTyped}>
     <div className="flex h-screen bg-background overflow-hidden font-sans">
       <div className="hidden md:flex shrink-0">
         <Sidebar />
@@ -597,7 +642,7 @@ export function AdminPage() {
 
           <div className="flex items-center gap-3">
             <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center">
-              <span className="text-primary-foreground text-xs font-bold">{(me as any)?.firstName?.[0] ?? "A"}</span>
+              <span className="text-primary-foreground text-xs font-bold">{(me)?.firstName?.[0] ?? "A"}</span>
             </div>
           </div>
         </header>
@@ -612,10 +657,10 @@ export function AdminPage() {
       {(showProductModal || editingProduct) && (
         <ProductModal
           product={editingProduct}
-          categories={categories as any[]}
+          categories={categories}
           tagCounts={tagCounts}
           onClose={() => { setShowProductModal(false); setEditingProduct(null); }}
-          onProductUpdated={(p) => setAllProducts(prev => prev.map((x: any) => x.id === p.id ? { ...x, ...p } : x))}
+          onProductUpdated={(p) => setAllProducts(prev => prev.map((x) => x.id === p.id ? { ...x, ...p } : x))}
         />
       )}
 

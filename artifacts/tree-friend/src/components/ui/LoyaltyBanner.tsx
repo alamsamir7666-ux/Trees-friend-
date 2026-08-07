@@ -1,8 +1,16 @@
+import { memo } from "react";
 import { Star, Gift } from "lucide-react";
 import { useLoyalty } from "@/hooks/useLoyalty";
 import { Link } from "wouter";
 
-export function LoyaltyBanner() {
+/**
+ * Loyalty points banner shown on the Profile page. Wrapped in `memo()`
+ * so a parent re-render (ProfilePage re-renders on tab switch, search
+ * input, etc.) doesn't re-render this component unnecessarily. The
+ * underlying `useLoyalty` hook is unaffected — TanStack Query's cache
+ * is the source of truth for when to refetch.
+ */
+export const LoyaltyBanner = memo(function LoyaltyBanner() {
   const { data, loading } = useLoyalty();
   if (loading || !data) return null;
 
@@ -26,4 +34,4 @@ export function LoyaltyBanner() {
       </Link>
     </div>
   );
-}
+});

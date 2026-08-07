@@ -1,6 +1,7 @@
 // artifacts/tree-friend/src/components/ui/OrderTimeline.tsx
 // Drop into OrderDetailPage.tsx - replaces the static progress bar.
 // Reads statusTimeline from the order object (added via migration).
+import { memo } from "react";
 import { CheckCircle2, Circle, Package, Truck, Home, Clock, XCircle } from "lucide-react";
 
 interface TimelineEvent {
@@ -54,7 +55,7 @@ function formatDate(iso: string) {
   });
 }
 
-export function OrderTimeline({ currentStatus, timeline = [] }: OrderTimelineProps) {
+export const OrderTimeline = memo(function OrderTimeline({ currentStatus, timeline = [] }: OrderTimelineProps) {
   const isCancelled = currentStatus === "cancelled";
   const currentStepIndex = STEPS.indexOf(currentStatus as (typeof STEPS)[number]);
 
@@ -164,4 +165,4 @@ export function OrderTimeline({ currentStatus, timeline = [] }: OrderTimelinePro
       </div>
     </div>
   );
-}
+});

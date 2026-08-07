@@ -95,16 +95,6 @@ ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon_image TEXT;
 -- Add gift wrap columns to orders
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS gift_wrap TEXT DEFAULT 'false';
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS gift_message TEXT;
--- affiliate_cashouts table
-CREATE TABLE IF NOT EXISTS affiliate_cashouts (
-  id SERIAL PRIMARY KEY,
-  affiliate_id INTEGER NOT NULL REFERENCES affiliates(id),
-  amount NUMERIC(12,2) NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  note TEXT,
-  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
-  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
-);
 
 
 -- seller_listing_variants table (one listing = many variants; price/stock/

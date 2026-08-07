@@ -1,50 +1,50 @@
-import { useState } from "react";
 import { Store, Mail, Coins, CreditCard, Settings, Globe, Truck, ShieldCheck } from "lucide-react";
-import { cn } from "@/lib/utils";
 
+/**
+ * Admin "Settings" tab.
+ *
+ * Previously this tab had editable Store Name / Support Email inputs
+ * whose "Save" buttons called `localStorage.setItem` — the value
+ * persisted only in the current admin's browser and was never sent to
+ * the backend, so it had zero effect on emails, the header, or order
+ * confirmations. The "Saved ✓" pill was misleading.
+ *
+ * Fix: render all settings as read-only display rows that document
+ * where each value is actually managed (env var on Render, another
+ * admin tab, seller dashboard, etc.). No fake inputs, no fake save
+ * buttons. If a setting genuinely needs to be editable from the admin
+ * UI, it should be backed by a real `/api/admin/settings` route —
+ * which doesn't exist yet, so we don't pretend it does.
+ */
 export function SettingsTab() {
-  const [storeName, setStoreName] = useState(() => localStorage.getItem("admin_storeName") || "Tree Friend");
-  const [supportEmail, setSupportEmail] = useState(() => localStorage.getItem("admin_supportEmail") || "hello@treefriend.com");
-  const [saved, setSaved] = useState<string | null>(null);
-
-  function handleSave(field: string, value: string) {
-    localStorage.setItem(`admin_${field}`, value);
-    setSaved(field);
-    setTimeout(() => setSaved(null), 2000);
-  }
-
   const storeSettings = [
     {
       icon: Store,
       label: "Store Name",
       desc: "Displayed in the header, emails, and order confirmations",
-      value: storeName,
-      field: "storeName",
-      editable: true,
-      onChange: setStoreName,
+      value: "Tree Friend",
+      managedIn: "Backend env var (Render)",
     },
     {
       icon: Mail,
       label: "Support Email",
       desc: "Customers will see this address for support inquiries",
-      value: supportEmail,
-      field: "supportEmail",
-      editable: true,
-      onChange: setSupportEmail,
+      value: "hello@treefriend.com",
+      managedIn: "Backend env var (Render)",
     },
     {
       icon: Coins,
       label: "Currency",
       desc: "Bangladeshi Taka — the primary currency for all transactions",
       value: "BDT (Tk)",
-      editable: false,
+      managedIn: "Hardcoded (single-marketplace)",
     },
     {
       icon: CreditCard,
       label: "Payment Methods",
       desc: "Enabled at checkout for customers",
       value: "bKash, Cash on Delivery",
-      editable: false,
+      managedIn: "Backend code + platform payment config",
     },
   ];
 
@@ -86,7 +86,7 @@ export function SettingsTab() {
         </div>
 
         <div className="space-y-3">
-          {storeSettings.map(({ icon: Icon, label, desc, value, field, editable, onChange }) => (
+          {storeSettings.map(({ icon: Icon, label, desc, value, managedIn }) => (
             <div
               key={label}
               className="rounded-2xl border border-border bg-card p-5 transition-shadow hover:shadow-sm"
@@ -98,31 +98,14 @@ export function SettingsTab() {
                 <div className="flex-1 min-w-0 overflow-hidden">
                   <div className="flex items-center justify-between gap-3 mb-1">
                     <p className="text-sm font-semibold text-foreground">{label}</p>
-                    {editable && saved === field && (
-                      <span className="text-[11px] font-medium text-success-foreground bg-success px-2 py-0.5 rounded-full">Saved</span>
-                    )}
                   </div>
                   <p className="text-xs text-muted-foreground mb-3">{desc}</p>
-                  {editable ? (
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <input
-                        type={field === "supportEmail" ? "email" : "text"}
-                        value={value}
-                        onChange={(e) => onChange?.(e.target.value)}
-                        className="flex-1 min-w-0 h-9 rounded-lg border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                      />
-                      <button
-                        onClick={() => handleSave(field!, value!)}
-                        className="h-9 px-4 rounded-lg text-xs font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shrink-0"
-                      >
-                        Save
-                      </button>
-                    </div>
-                  ) : (
-                    <p className="text-sm font-medium text-foreground bg-muted/40 rounded-lg px-3 py-2 inline-block">
-                      {value}
-                    </p>
-                  )}
+                  <p className="text-sm font-medium text-foreground bg-muted/40 rounded-lg px-3 py-2 inline-block">
+                    {value}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground mt-2">
+                    Managed in: <span className="font-medium text-foreground/80">{managedIn}</span>
+                  </p>
                 </div>
               </div>
             </div>

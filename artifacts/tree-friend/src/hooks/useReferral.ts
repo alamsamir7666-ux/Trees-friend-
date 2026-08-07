@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@clerk/react";
+import { apiClient } from "@/lib/apiClient";
 
 interface ReferralData {
   code: string;
@@ -9,30 +10,68 @@ interface ReferralData {
   shareUrl: string;
 }
 
+interface ApplyReferralResponse {
+  success?: boolean;
+  error?: string;
+}
+
+/**
+ * Fetches the signed-in user's referral code + stats.
+ *
+ * Previously this hook used `fetch("/api/referrals/my-code", { credentials:
+ * "include" })` — no Bearer token, no `VITE_API_BASE_URL` prefix. On Vercel
+ * the URL resolved to the SPA shell, the response was HTML, and the
+ * `.catch(() => {})` swallowed the resulting JSON parse error. The
+ * ReferralSection on the profile page silently rendered nothing.
+ *
+ * Now uses `apiClient`, which prepends `VITE_API_BASE_URL` and attaches
+ * the Bearer token. `applyReferralCode` returns a typed response so the
+ * caller can branch on `success`/`error` instead of always treating the
+ * payload as `any`.
+ */
 export function useReferral() {
   const { user } = useUser();
   const [data, setData] = useState<ReferralData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
+    let cancelled = false;
     setLoading(true);
-    fetch("/api/referrals/my-code", { credentials: "include" })
-      .then((r) => r.json())
-      .then(setData)
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    setError(null);
+    apiClient
+      .get<ReferralData>("/referrals/my-code")
+      .then(({ data: d }) => {
+        if (!cancelled) setData(d);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load referral code");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [user]);
 
-  async function applyReferralCode(code: string) {
-    const r = await fetch("/api/referrals/apply", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ code }),
-    });
-    return r.json();
-  }
+  const applyReferralCode = useCallback(async (code: string): Promise<ApplyReferralResponse> => {
+    try {
+      const { data: result } = await apiClient.post<ApplyReferralResponse>(
+        "/referrals/apply",
+        { code },
+      );
+      return result ?? { success: true };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : "Failed to apply referral code",
+      };
+    }
+  }, []);
 
-  return { data, loading, applyReferralCode };
+  return { data, loading, error, applyReferralCode };
 }

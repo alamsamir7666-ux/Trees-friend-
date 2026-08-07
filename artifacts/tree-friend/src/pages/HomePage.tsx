@@ -7,6 +7,7 @@ import { ProductCard } from "@/components/ui/ProductCard";
 import { HomepageProductCard } from "@/components/ui/HomepageProductCard";
 import { ProductCardSkeleton, ProductGridSkeleton } from "@/components/ui/ProductCardSkeleton";
 import { useListProducts, useListCategories, getListCategoriesQueryKey } from "@workspace/api-client-react";
+import type { Category } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/apiClient";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -120,7 +121,7 @@ function CollectionSlider() {
           style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
         >
           {categories.map((cat, idx) => {
-            const img = (cat as any).image || DEFAULT_CATEGORY_IMAGE;
+            const img = (cat as Category & { iconImage?: string | null }).iconImage || DEFAULT_CATEGORY_IMAGE;
             const bg = DEFAULT_CATEGORY_BG;
             return (
               <Link key={cat.slug} href={`/category/${cat.slug}`}>
@@ -336,8 +337,8 @@ export function HomePage() {
               {activeProducts.slice(0, MAX_FEATURED_PRODUCTS).map((product) => (
                 <HomepageProductCard
                   key={product.id}
-                  product={product as any}
-                  categoryName={categoryNameById.get((product as any).categoryId)}
+                  product={product}
+                  categoryName={categoryNameById.get(product.categoryId)}
                   backContext="featured"
                 />
               ))}
@@ -414,7 +415,7 @@ export function HomePage() {
               {bestProducts.slice(0, MAX_CATEGORY_PRODUCTS).map(product => (
                 <ProductCard
                   key={product.id}
-                  product={product as any}
+                  product={product}
                   backContext="category"
                 />
               ))}

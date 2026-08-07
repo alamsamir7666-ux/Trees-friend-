@@ -1,6 +1,12 @@
+import { memo } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 
-export function ProductCardSkeleton() {
+/**
+ * Pure-presentational skeleton placeholder for product cards. Wrapped in
+ * `memo()` so a parent re-render (e.g. a search-input keystroke updating
+ * the parent's state) doesn't re-render every skeleton in a grid of N.
+ */
+export const ProductCardSkeleton = memo(function ProductCardSkeleton() {
   return (
     <div className="bg-card border border-border rounded-2xl overflow-hidden flex flex-col">
       <Skeleton className="aspect-square w-full" />
@@ -20,7 +26,7 @@ export function ProductCardSkeleton() {
       </div>
     </div>
   );
-}
+});
 
 export function ProductGridSkeleton({ count = 4 }: { count?: number }) {
   return (
@@ -31,3 +37,4 @@ export function ProductGridSkeleton({ count = 4 }: { count?: number }) {
     </div>
   );
 }
+

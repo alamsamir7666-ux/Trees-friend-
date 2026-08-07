@@ -139,7 +139,7 @@ export function OrdersTab() {
     let delivered = 0;
     let cancelled = 0;
     let gmv = 0;
-    for (const o of orders as any[]) {
+    for (const o of orders) {
       if (o._type === "preorder") continue;
       const status = o.orderStatus;
       if (status === "pending") pending++;
@@ -241,7 +241,7 @@ export function OrdersTab() {
               </thead>
               <tbody className="divide-y divide-muted/50">
                 {visibleOrders.map((o) => {
-                  if ((o as any)._type === "preorder") {
+                  if (o._type === "preorder") {
                     const isPreExpanded = expandedOrderId === `pre-${o.id}`;
                     // Pre-orders now carry seller fields via the new
                     // /admin/pre-orders endpoint (joined through
@@ -250,9 +250,9 @@ export function OrdersTab() {
                     // regular-orders branch does, falling back to
                     // "Unknown seller" only for legacy pre-Phase-6 rows
                     // (null sellerListingVariantId) or deleted sellers.
-                    const preSellerName = (o as any).sellerBusinessName ?? null;
-                    const preSellerStatus = (o as any).sellerStatus ?? null;
-                    const preSellerEmail = (o as any).sellerContactEmail ?? null;
+                    const preSellerName = o.sellerBusinessName ?? null;
+                    const preSellerStatus = o.sellerStatus ?? null;
+                    const preSellerEmail = o.sellerContactEmail ?? null;
                     return (
                       <Fragment key={`pre-${o.id}`}>
                         <tr className="hover:bg-info/10 transition-colors cursor-pointer" onClick={() => setExpandedOrderId(isPreExpanded ? null : `pre-${o.id}`)}>
@@ -313,7 +313,7 @@ export function OrdersTab() {
                               o.status === "arrived_in_bd" ? "bg-info text-info-foreground border-info-border" :
                               o.status === "confirmed" ? "bg-success text-success-foreground border-success-border" :
                               "bg-warning text-warning-foreground border-warning-border"
-                            }`}>{o.status === "arrived_in_bd" ? "Arrived in BD" : o.status.charAt(0).toUpperCase() + o.status.slice(1)}</span>
+                            }`}>{o.status === "arrived_in_bd" ? "Arrived in BD" : (o.status ?? "").charAt(0).toUpperCase() + (o.status ?? "").slice(1)}</span>
                           </td>
                           <td className="px-4 py-3.5 text-right font-semibold text-foreground">Tk{(Number(o.discountedPrice) * Number(o.quantity) + Number(o.deliveryCharge)).toLocaleString()}</td>
                           <td className="px-4 py-3.5 text-right text-xs text-muted-foreground/70 italic">pre-order</td>
@@ -362,13 +362,13 @@ export function OrdersTab() {
                   const cfg = statusConfig[o.orderStatus] ?? { color: "bg-muted text-muted-foreground border-border", icon: AlertCircle };
                   const StatusIcon = cfg.icon;
                   const isExpanded = expandedOrderId === o.id;
-                  const addr = (o as any).shippingAddress as { fullName?: string; street?: string; line1?: string; city?: string; district?: string; phone?: string } | null;
-                  const sellerName = (o as any).sellerBusinessName ?? null;
-                  const sellerOwnerName = (o as any).sellerOwnerName ?? null;
-                  const sellerEmail = (o as any).sellerContactEmail ?? null;
-                  const sellerPhone = (o as any).sellerContactPhone ?? null;
-                  const sellerStatus = (o as any).sellerStatus ?? null;
-                  const itemTotal = ((o as any).items ?? []).reduce((n: number, it: any) => n + (it.quantity ?? 0), 0);
+                  const addr = o.shippingAddress as { fullName?: string; street?: string; line1?: string; city?: string; district?: string; phone?: string } | null;
+                  const sellerName = o.sellerBusinessName ?? null;
+                  const sellerOwnerName = o.sellerOwnerName ?? null;
+                  const sellerEmail = o.sellerContactEmail ?? null;
+                  const sellerPhone = o.sellerContactPhone ?? null;
+                  const sellerStatus = o.sellerStatus ?? null;
+                  const itemTotal = (o.items ?? []).reduce((n: number, it: any) => n + (it.quantity ?? 0), 0);
                   return (
                     <Fragment key={o.id}>
                       <tr className="hover:bg-primary/5 transition-colors cursor-pointer" onClick={() => setExpandedOrderId(isExpanded ? null : o.id)}>
@@ -377,21 +377,21 @@ export function OrdersTab() {
                             <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground/70 transition-transform shrink-0 ${isExpanded ? "rotate-180" : ""}`} />
                             <div>
                               <p className="font-semibold text-foreground">#{o.id}</p>
-                              {(o as any).trackingId && <p className="text-xs text-muted-foreground/70 font-mono">{(o as any).trackingId}</p>}
+                              {o.trackingId && <p className="text-xs text-muted-foreground/70 font-mono">{o.trackingId}</p>}
                               {itemTotal > 0 && <p className="text-[11px] text-muted-foreground/70 mt-0.5">{itemTotal} item{itemTotal === 1 ? "" : "s"}</p>}
                             </div>
                           </div>
                         </td>
                         <td className="px-4 py-3.5">
-                          {(o as any).userName ? (
+                          {o.userName ? (
                             <div>
-                              <p className="font-medium text-foreground text-xs">{(o as any).userName}</p>
-                              {!(o as any).userEmail?.endsWith("@clerk.user") && (o as any).userEmail && (
-                                <p className="text-xs text-muted-foreground/70">{(o as any).userEmail}</p>
+                              <p className="font-medium text-foreground text-xs">{o.userName}</p>
+                              {!o.userEmail?.endsWith("@clerk.user") && o.userEmail && (
+                                <p className="text-xs text-muted-foreground/70">{o.userEmail}</p>
                               )}
                             </div>
-                          ) : (o as any).shippingAddress?.fullName ? (
-                            <p className="text-xs text-muted-foreground">{(o as any).shippingAddress.fullName}</p>
+                          ) : o.shippingAddress?.fullName ? (
+                            <p className="text-xs text-muted-foreground">{o.shippingAddress.fullName}</p>
                           ) : (
                             <p className="text-xs text-muted-foreground/70">-</p>
                           )}
@@ -419,14 +419,14 @@ export function OrdersTab() {
                         </td>
                         <td className="px-4 py-3.5 text-muted-foreground text-xs">{new Date(o.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</td>
                         <td className="px-4 py-3.5">
-                          <span className="text-xs bg-muted px-2 py-1 rounded-lg font-medium text-muted-foreground capitalize">{(o as any).paymentMethod ?? "-"}</span>
+                          <span className="text-xs bg-muted px-2 py-1 rounded-lg font-medium text-muted-foreground capitalize">{o.paymentMethod ?? "-"}</span>
                         </td>
                         <td className="px-4 py-3.5">
                           <span className={`flex items-center gap-1.5 w-fit px-2.5 py-1 rounded-full text-xs font-medium border ${cfg.color}`}>
                             <StatusIcon className="h-3 w-3" />{o.orderStatus === "return_completed" ? "Refund Completed" : o.orderStatus}
                           </span>
                         </td>
-                        <td className="px-4 py-3.5 text-right font-semibold text-foreground">Tk{Number((o as any).totalAmount ?? (o as any).discountedPrice ?? 0).toLocaleString()}</td>
+                        <td className="px-4 py-3.5 text-right font-semibold text-foreground">Tk{Number(o.totalAmount ?? o.discountedPrice ?? 0).toLocaleString()}</td>
                         {/* Actions column — replaces the old "Update"
                             status dropdown. Admin shouldn't be the one
                             flipping fulfillment status post-Phase-2;
@@ -439,7 +439,7 @@ export function OrdersTab() {
                           <div className="flex items-center justify-end gap-1">
                             {sellerEmail ? (
                               <a
-                                href={`mailto:${sellerEmail}?subject=${encodeURIComponent(`Order #${o.id} — Tree Friend admin follow-up`)}&body=${encodeURIComponent(`Hi ${sellerOwnerName ?? sellerName},\n\nThis is the Tree Friend admin team. We're reaching out about order #${o.id} (tracking: ${(o as any).trackingId ?? "n/a"}).\n\nPlease advise on the current status.\n\nThanks,\nTree Friend Admin`)}`}
+                                href={`mailto:${sellerEmail}?subject=${encodeURIComponent(`Order #${o.id} — Tree Friend admin follow-up`)}&body=${encodeURIComponent(`Hi ${sellerOwnerName ?? sellerName},\n\nThis is the Tree Friend admin team. We're reaching out about order #${o.id} (tracking: ${o.trackingId ?? "n/a"}).\n\nPlease advise on the current status.\n\nThanks,\nTree Friend Admin`)}`}
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-foreground bg-muted hover:bg-primary/10 hover:text-primary border border-border transition-colors"
                                 title={`Email ${sellerEmail}`}
                               >
@@ -509,47 +509,47 @@ export function OrdersTab() {
                               <div>
                                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Items Ordered</p>
                                 <div className="space-y-1">
-                                  {((o as any).items ?? []).slice(0, 4).map((item: any) => (
+                                  {(o.items ?? []).slice(0, 4).map((item: any) => (
                                     <p key={item.productId} className="text-xs text-muted-foreground">
                                       {item.productName} × {item.quantity} - Tk{(item.price * item.quantity).toLocaleString()}
                                     </p>
                                   ))}
-                                  {((o as any).items ?? []).length > 4 && (
-                                    <p className="text-xs text-muted-foreground/70">+{((o as any).items ?? []).length - 4} more items</p>
+                                  {(o.items ?? []).length > 4 && (
+                                    <p className="text-xs text-muted-foreground/70">+{(o.items ?? []).length - 4} more items</p>
                                   )}
                                 </div>
                               </div>
                               <div>
-                                {(o.giftWrap === "true" || (o.giftWrap as any) === true) && (
+                                {(o.giftWrap === "true") && (
                                   <div className="mb-3 p-2 bg-primary/5 border border-primary/20 rounded-lg">
                                     <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-1">🎁 Gift Wrapping</p>
                                     {o.giftMessage && <p className="text-sm text-foreground">{o.giftMessage}</p>}
                                   </div>
                                 )}
                                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Payment Info</p>
-                                <p className="text-xs text-muted-foreground capitalize">Method: {(o as any).paymentMethod}</p>
-                                <p className={`text-xs capitalize ${(o as any).paymentStatus === "paid" ? "text-success-foreground" : "text-warning-foreground"}`}>
-                                  Status: {(o as any).paymentStatus}
+                                <p className="text-xs text-muted-foreground capitalize">Method: {o.paymentMethod}</p>
+                                <p className={`text-xs capitalize ${o.paymentStatus === "paid" ? "text-success-foreground" : "text-warning-foreground"}`}>
+                                  Status: {o.paymentStatus}
                                 </p>
-                                {(o as any).senderNumber && (
-                                  <p className="text-xs text-muted-foreground mt-1">From: <span className="font-mono">{(o as any).senderNumber}</span></p>
+                                {o.senderNumber && (
+                                  <p className="text-xs text-muted-foreground mt-1">From: <span className="font-mono">{o.senderNumber}</span></p>
                                 )}
-                                {(o as any).paidAt && (
-                                  <p className="text-xs text-muted-foreground mt-0.5">Paid: {new Date((o as any).paidAt).toLocaleString()}</p>
+                                {o.paidAt && (
+                                  <p className="text-xs text-muted-foreground mt-0.5">Paid: {new Date(o.paidAt).toLocaleString()}</p>
                                 )}
-                                {(o as any).transactionId && (
-                                  <p className="text-xs text-muted-foreground font-mono mt-1">{(o as any).transactionId}</p>
+                                {o.transactionId && (
+                                  <p className="text-xs text-muted-foreground font-mono mt-1">{o.transactionId}</p>
                                 )}
-                                {(o as any).couponCode && (
-                                  <p className="text-xs text-primary mt-1">Coupon: {(o as any).couponCode} (-Tk{(o as any).discountAmount})</p>
+                                {o.couponCode && (
+                                  <p className="text-xs text-primary mt-1">Coupon: {o.couponCode} (-Tk{o.discountAmount})</p>
                                 )}
                               </div>
-                              {o.orderStatus === "cancelled" && (o as any).cancellationReason && (
+                              {o.orderStatus === "cancelled" && o.cancellationReason && (
                                 <div className="col-span-full mt-2 p-2 bg-destructive/10 border border-destructive/20 rounded-lg">
                                   <p className="text-xs font-semibold text-destructive uppercase tracking-wider mb-1 flex items-center gap-1.5">
                                     <XCircle className="h-3.5 w-3.5" /> Cancelled by Customer
                                   </p>
-                                  <p className="text-xs text-destructive">Reason: {(o as any).cancellationReason}</p>
+                                  <p className="text-xs text-destructive">Reason: {o.cancellationReason}</p>
                                 </div>
                               )}
                             </div>

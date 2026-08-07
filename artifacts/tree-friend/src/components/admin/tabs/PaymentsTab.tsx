@@ -15,9 +15,9 @@ import { PayoutsSection } from "./PayoutsSection";
  * slot into SettingsTab.tsx/SellersTab.tsx): SettingsTab.tsx is a static
  * read-only settings display with no form infrastructure, and
  * SellersTab.tsx is scoped to per-SELLER config review, not the platform's
- * own single account. A dedicated tab mirrors how AffiliatesTab.tsx
- * already groups a primary resource (affiliates) with a secondary,
- * related one (CashoutsSection, rendered inside it) -- same shape here,
+ * own single account. A dedicated tab groups two related resources
+ * (platform payment config + seller payouts) the way other admin tabs
+ * group a primary resource with a secondary one — same shape here,
  * just as its own top-level tab rather than nested in an existing one,
  * since payments/payouts isn't a sub-concern of any existing tab's
  * primary resource.

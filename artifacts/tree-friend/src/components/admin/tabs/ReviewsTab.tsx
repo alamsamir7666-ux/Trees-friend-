@@ -405,7 +405,7 @@ export function ReviewsTab() {
 
   // Aggregate stats computed across ALL reviews (not affected by filter).
   const { totalCount, ratingCounts, targetCounts } = useMemo(() => {
-    const all = (reviews as Review[]) ?? [];
+    const all = reviews ?? [];
     const counts: Record<1 | 2 | 3 | 4 | 5, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     let productCount = 0;
     let variantCount = 0;
@@ -428,7 +428,7 @@ export function ReviewsTab() {
   // Apply rating filter + target filter + search + sort.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const arr = ((reviews as Review[]) ?? []).filter((r) => {
+    const arr = (reviews ?? []).filter((r) => {
       if (ratingFilter !== 0 && Math.round(Number(r.rating) || 0) !== ratingFilter) return false;
       if (targetFilter === "variant" && r.sellerListingVariantId == null) return false;
       if (targetFilter === "product" && r.sellerListingVariantId != null) return false;

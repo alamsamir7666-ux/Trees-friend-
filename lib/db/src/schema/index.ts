@@ -17,13 +17,10 @@ export * from "./auditLogs";
 export * from "./productQA";
 export * from "./returns";
 export * from "./productVariants";
-export * from "./affiliates";
 export * from "./subscriptions";
 export * from "./giftCards";
 export * from "./emailPreferences";
 export * from "./blogPosts";
-
-export * from "./affiliateCashouts";
 
 export * from "./preOrders";
 export * from "./homepageSections";

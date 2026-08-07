@@ -1,11 +1,193 @@
 import { createContext, useContext } from "react";
+import type {
+  Product,
+  Order,
+  Category,
+  AdminReview,
+} from "@workspace/api-client-react";
+
+/**
+ * AdminContext — shared state between AdminPage and its tab components.
+ *
+ * Previously this file was a 145-line god-object where ~30 fields were
+ * typed `any` (editingProduct, orders, users, reviews, cancelModal
+ * setter, statusConfig icons, etc.). The `any` typing propagated to
+ * every consumer: 9 admin tab components all received `any` data, so
+ * TypeScript couldn't catch shape drift between the API and the UI.
+ *
+ * This rewrite introduces proper types for the well-known shapes
+ * (products, orders, categories, reviews) using the generated schemas
+ * from `@workspace/api-client-react`. For admin-only response shapes
+ * that aren't in the OpenAPI spec (e.g. `/admin/dashboard` stats,
+ * `/admin/pre-orders` enriched rows, `/admin/orders/archived` rows),
+ * we define minimal local interfaces that capture the fields the UI
+ * actually reads — better than `any`, narrower than the full backend
+ * response. If the API adds fields later, the UI doesn't need to
+ * change; if the API removes a field the UI reads, TypeScript will
+ * flag it at the consumer.
+ */
+
+// ─── Admin-only response shapes (not in OpenAPI spec) ──────────────────────
+// These are defined locally because they come from admin-only endpoints
+// whose response shapes aren't generated into the api-client-react package.
+
+/** Row from GET /admin/orders (or merged with pre-orders in the UI).
+ *  Extends the generated Order with the extra fields the admin
+ *  endpoints join in (whatsappPhone, sellerName, etc.) plus pre-order
+ *  fields (status, discountedPrice, quantity, deliveryCharge,
+ *  productName) used when the UI maps both shapes into one list. */
+export interface AdminOrder extends Order {
+  /** Pre-order status field (mirrors Order.orderStatus for pre-orders). */
+  status?: string;
+  /** Buyer's WhatsApp phone, joined from the pre-orders / admin orders
+   *  response. Not in the generated Order type. */
+  whatsappPhone?: string | null;
+  /** Seller display name (joined from sellers table). */
+  sellerName?: string | null;
+  /** Seller's business name (joined from sellers table). */
+  sellerBusinessName?: string | null;
+  /** Seller's verification status (joined from sellers table). */
+  sellerStatus?: string | null;
+  /** Seller's contact email (joined from sellers table). */
+  sellerContactEmail?: string | null;
+  /** Seller owner's personal name (joined from sellers → users). */
+  sellerOwnerName?: string | null;
+  /** Seller's contact phone (joined from sellers table). */
+  sellerContactPhone?: string | null;
+  /** Buyer's display name (joined from users table). */
+  userName?: string | null;
+  /** Buyer's email (joined from users table). */
+  userEmail?: string | null;
+  /** Pre-order: discounted unit price. */
+  discountedPrice?: number | string;
+  /** Pre-order: quantity. */
+  quantity?: number;
+  /** Pre-order: delivery charge. */
+  deliveryCharge?: number | string;
+  /** Pre-order: product name. */
+  productName?: string;
+  /** Pre-order: product image URL. */
+  productImage?: string | null;
+  /** Discriminator used by the UI to render order vs pre-order rows. */
+  _type?: "order" | "preorder";
+  [key: string]: unknown;
+}
+
+/** Row from GET /admin/pre-orders — enriched with seller context.
+ *  Distinct from AdminOrder because pre-orders have a different primary
+ *  shape (no items array, no paymentStatus, etc.). */
+export interface AdminPreOrder {
+  id: number;
+  trackingId: string;
+  status: string;
+  totalAmount?: string | number | null;
+  discountedPrice?: string | number | null;
+  deliveryCharge?: string | number | null;
+  quantity?: number;
+  createdAt: string;
+  buyerName?: string | null;
+  buyerPhone?: string | null;
+  whatsappPhone?: string | null;
+  sellerId?: number | null;
+  sellerName?: string | null;
+  sellerLogoUrl?: string | null;
+  productName?: string | null;
+  productImage?: string | null;
+  [key: string]: unknown;
+}
+
+/** Row from GET /admin/orders/archived. */
+export interface ArchivedOrder {
+  id: number;
+  trackingId: string;
+  orderStatus: string;
+  paymentStatus: string;
+  totalAmount: string | number;
+  createdAt: string;
+  archivedAt?: string;
+  sellerId?: number | null;
+  sellerName?: string | null;
+  [key: string]: unknown;
+}
+
+/** Row from GET /admin/dashboard. */
+export interface DashboardStats {
+  totalSales: number;
+  totalOrders: number;
+  pendingOrders: number;
+  deliveredOrders: number;
+}
+
+/** Row from GET /admin/monthly-records. */
+export interface MonthlyRecord {
+  id: number;
+  year: number;
+  month: number;
+  totalSales: number | string;
+  totalOrders: number;
+  archivedAt?: string;
+  [key: string]: unknown;
+}
+
+/** Row from GET /admin/users (list-all-users admin endpoint). */
+export interface AdminUser {
+  id: number;
+  clerkId: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  role: "user" | "admin" | "seller";
+  isBlocked: boolean;
+  createdAt: string;
+  [key: string]: unknown;
+}
+
+/** Generic key/value map for status → color+icon config. */
+export interface StatusConfigEntry {
+  color: string;
+  icon: React.ElementType;
+}
+
+/** Cancellation modal state. */
+export interface CancelModalState {
+  orderId: number;
+  reason: string;
+}
+
+/** Confirm dialog state used by AdminPage's askConfirm helper. */
+export interface ConfirmDialogState {
+  open: boolean;
+  title: string;
+  message: string;
+  onConfirm: () => void;
+  danger: boolean;
+}
+
+/** Editing target — either a product being created/edited or null. */
+export type EditingProduct = (Product & { [key: string]: unknown }) | null;
+export type EditingCategory = (Category & { [key: string]: unknown }) | null;
+export type EditingCoupon = { id: number; code: string; [key: string]: unknown } | null;
+
+// ─── AdminContextValue ─────────────────────────────────────────────────────
 
 export interface AdminProduct {
   id: number;
   name: string;
+  slug: string;
   categoryId: number | null;
   inStock: boolean;
   productStatus: string;
+  images: string[];
+  homepageTag?: string | null;
+  /** Admin /products join: lowest listing price for this product. */
+  listingMinPrice?: number | string | null;
+  /** Admin /products join: highest listing price for this product. */
+  listingMaxPrice?: number | string | null;
+  /** Admin /products join: whether any listing has pre-order enabled. */
+  listingHasPreOrder?: boolean;
+  /** Admin /products join: total active listing count. */
+  listingCount?: number;
   [key: string]: unknown;
 }
 
@@ -40,48 +222,48 @@ export interface AdminContextValue {
   filteredProducts: AdminProduct[];
   productsLoading: boolean;
   productsPage: number;
-  setProductsPage: (v: any) => void;
+  setProductsPage: (v: number | ((prev: number) => number)) => void;
   productsHasMore: boolean;
-  editingProduct: any;
-  setEditingProduct: (v: any) => void;
+  editingProduct: EditingProduct;
+  setEditingProduct: (v: EditingProduct) => void;
   showProductModal: boolean;
   setShowProductModal: (v: boolean) => void;
   handleDeleteProduct: (id: number) => void;
   categories: AdminCategory[];
 
   // Orders
-  orders: any[];
-  adminPreOrders: any[];
+  orders: AdminOrder[];
+  adminPreOrders: AdminPreOrder[];
   ordersLoading: boolean;
   ordersPage: number;
   ordersHasMore: boolean;
   ordersTotal: number;
-  filteredOrders: any[];
+  filteredOrders: AdminOrder[];
   expandedOrderId: number | string | null;
   setExpandedOrderId: (v: number | string | null) => void;
   handleOrderStatusChange: (orderId: number, status: string) => void;
-  cancelModal: { orderId: number; reason: string } | null;
-  setCancelModal: (v: any) => void;
+  cancelModal: CancelModalState | null;
+  setCancelModal: (v: CancelModalState | null) => void;
 
   // Categories
-  editingCategory: any;
-  setEditingCategory: (v: any) => void;
+  editingCategory: EditingCategory;
+  setEditingCategory: (v: EditingCategory) => void;
   showCategoryModal: boolean;
   setShowCategoryModal: (v: boolean) => void;
   seedingCategories: boolean;
   setSeedingCategories: (v: boolean) => void;
 
   // Users
-  users: any[];
+  users: AdminUser[];
   usersLoading: boolean;
 
   // Reviews
-  reviews: any[];
+  reviews: AdminReview[];
   reviewsLoading: boolean;
 
   // Archived
-  archivedOrders: any[];
-  archivedPreOrders: any[];
+  archivedOrders: ArchivedOrder[];
+  archivedPreOrders: AdminPreOrder[];
   archivedPage: number;
   archivedHasMore: boolean;
   archivedTotal: number;
@@ -90,22 +272,22 @@ export interface AdminContextValue {
   fetchArchivedOrders: (page: number, append?: boolean) => void;
 
   // Coupons (removed from admin panel — now seller-managed)
-  coupons: any[];
+  coupons: Array<{ id: number; code: string; [key: string]: unknown }>;
   couponsLoading: boolean;
-  editingCoupon: any;
-  setEditingCoupon: (v: any) => void;
+  editingCoupon: EditingCoupon;
+  setEditingCoupon: (v: EditingCoupon) => void;
   showCouponModal: boolean;
   setShowCouponModal: (v: boolean) => void;
   couponSaving: boolean;
   setCouponSaving: (v: boolean) => void;
-  setCoupons: (v: any) => void;
+  setCoupons: (v: Array<{ id: number; code: string; [key: string]: unknown }>) => void;
 
   // Monthly
-  monthlyRecords: any[];
+  monthlyRecords: MonthlyRecord[];
   monthlyLoading: boolean;
 
   // Dashboard
-  dashStats: { totalSales: number; totalOrders: number; pendingOrders: number; deliveredOrders: number };
+  dashStats: DashboardStats;
   dashStatsLoading: boolean;
   activeOrdersCount: number;
 
@@ -117,10 +299,10 @@ export interface AdminContextValue {
   // Dashboard computed
   totalRevenue: number;
   deliveredOrders: number;
-  recentCombined: any[];
-  statusConfig: Record<string, { color: string; icon: any }>;
+  recentCombined: AdminOrder[];
+  statusConfig: Record<string, StatusConfigEntry>;
   products: AdminProduct[];
-  productsData: any;
+  productsData: { products?: AdminProduct[]; total?: number } | undefined;
   pendingOrders: number;
 
   // Handlers
@@ -139,8 +321,8 @@ export interface AdminContextValue {
   fetchAdminPreOrders: () => void;
 
   // Computed
-  filteredReviews: any[];
-  filteredCoupons: any[];
+  filteredReviews: AdminReview[];
+  filteredCoupons: Array<{ id: number; code: string; [key: string]: unknown }>;
   debouncedUserSearch: string;
 }
 

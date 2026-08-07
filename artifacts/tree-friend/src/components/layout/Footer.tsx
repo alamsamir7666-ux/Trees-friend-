@@ -112,8 +112,12 @@ export function Footer() {
           --tf-accent: hsl(var(--primary));
           --tf-border: hsl(var(--border));
           --tf-input-bg: hsl(var(--card));
-          --tf-font-serif: 'Lora', serif;
-          --tf-font-sans: 'Jost', sans-serif;
+          /* Use the app-wide font tokens (DM Sans + DM Serif Display) instead
+             of the previously-loaded Jost/Lora. The extra font <link>s were
+             dropped from index.html to save ~90KB of webfont payload; the
+             footer now inherits the same typography as the rest of the app. */
+          --tf-font-serif: var(--app-font-serif);
+          --tf-font-sans: var(--app-font-sans);
 
           position: relative;
           overflow: hidden;

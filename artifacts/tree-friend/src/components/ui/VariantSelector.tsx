@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, memo } from "react";
 import type { ProductVariant } from "@workspace/api-client-react";
 
 interface VariantSelectorProps {
@@ -7,7 +7,15 @@ interface VariantSelectorProps {
   onVariantChange: (variant: ProductVariant | null) => void;
 }
 
-export function VariantSelector({ variants, selected, onVariantChange }: VariantSelectorProps) {
+/**
+ * Variant picker for product detail page. Wrapped in `memo()` so a
+ * parent re-render (e.g. cart count badge updating in the navbar
+ * doesn't propagate, but more importantly: scroll position state in
+ * ProductDetailPage re-rendering on viewport changes) doesn't re-run
+ * the variant list mapping. The `onVariantChange` callback should be
+ * stable (useCallback) for the memo to be effective.
+ */
+export const VariantSelector = memo(function VariantSelector({ variants, selected, onVariantChange }: VariantSelectorProps) {
   // Auto-select the only variant when there's exactly one, so single-variant
   // products don't force an extra click before the user can add to cart.
   useEffect(() => {
@@ -75,4 +83,4 @@ export function VariantSelector({ variants, selected, onVariantChange }: Variant
       )}
     </div>
   );
-}
+});

@@ -32,7 +32,7 @@ export function CategoriesTab() {
     handleSeedCategories,
   } = useAdminContext();
 
-  const allCats = categories as any[];
+  const allCats = categories;
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [selectedSubcategoryId, setSelectedSubcategoryId] = useState<number | null>(null);
   const [modalParentId, setModalParentId] = useState<number | null>(null);
@@ -96,9 +96,9 @@ export function CategoriesTab() {
                           Same listingCount/listingHasPreOrder signal as
                           ProductsTab.tsx's Stock/Status column. */}
                       <td className="px-5 py-3 text-right text-muted-foreground text-xs">
-                        {((p as any).listingHasPreOrder ?? false)
+                        {(p.listingHasPreOrder ?? false)
                           ? "Pre-Order"
-                          : ((p as any).listingCount ?? 0) > 0
+                          : (p.listingCount ?? 0) > 0
                             ? "In Stock"
                             : "Out of Stock"}
                       </td>

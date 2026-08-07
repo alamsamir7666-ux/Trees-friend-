@@ -57,7 +57,7 @@ const EmailPreferencesPage = lazy(() => import("@/pages/EmailPreferencesPage").t
 const LoyaltyPage = lazy(() => import("@/pages/LoyaltyPage"));
 const ReferralPage = lazy(() => import("@/pages/ReferralPage"));
 const ComparePage = lazy(() => import("@/pages/ComparePage"));
-import { useGetMe } from "@workspace/api-client-react";
+import { useMe } from "@/hooks/useMe";
 import { useUser } from "@clerk/react";
 import { useThemeColor } from "@/hooks/useThemeColor";
 import { useHeartbeat } from "@/hooks/usePresence";
@@ -250,8 +250,6 @@ function ScrollManager() {
       // Do NOT save here - scrollY is already 0 by the time popstate fires.
       // The scroll listener already saved the correct position continuously.
       isPopStateRef.current = true;
-      console.log("[scroll] saved value for /:", sessionStorage.getItem("__scroll__/"));
-      console.log("[scroll] popstate fired, prev:", prevPathRef.current);
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -269,7 +267,6 @@ function ScrollManager() {
     prevPathRef.current = fullHref;
 
     const targetY = readScrollPosition(fullHref);
-    console.log("[scroll] effect ran, fullHref:", fullHref, "savedY:", targetY);
     if (targetY > 0) {
       pendingScrollRef.current = targetY;
 
@@ -292,7 +289,6 @@ function ScrollManager() {
         const viewportHeight = window.innerHeight;
 
         if (pageHeight - viewportHeight >= targetY || attempts >= MAX_ATTEMPTS) {
-          console.log("[scroll] restoring to:", targetY, "pageHeight:", pageHeight, "attempts:", attempts);
           window.scrollTo({ top: targetY, behavior: "instant" as ScrollBehavior });
           pendingScrollRef.current = null;
         } else {
@@ -321,9 +317,8 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
 }
 
 function AdminRoute() {
-  console.log("[AdminRoute] component function called - fresh mount or re-render");
   const { user: clerkUser } = useUser();
-  const { data: dbUser, isLoading } = useGetMe({ query: { retry: false, queryKey: ["me"], staleTime: Infinity, refetchOnMount: false, refetchOnReconnect: false } });
+  const { data: dbUser, isLoading } = useMe();
   const [verifiedAdmin, setVerifiedAdmin] = useState(false);
 
   useEffect(() => {

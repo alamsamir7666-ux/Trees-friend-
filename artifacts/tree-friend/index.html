@@ -79,15 +79,16 @@
     <!-- Preload LCP hero image so browser fetches it immediately -->
     <link rel="preload" as="image" href="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783747272/IMG_20260711_111454-removebg-preview_11zon_wsnwgd.png" fetchpriority="high" />
 
-    <!-- Fonts: DM Sans for body + DM Serif Display for headings (matches index.css) -->
+    <!-- Fonts: DM Sans (body) + DM Serif Display (headings) — matches index.css @theme.
+         Previously this block also loaded Jost, Lora, and Outfit for the
+         Footer's inline <style>, but those 3 extra families (≈90KB of
+         webfont payload) were only used by one component and weren't part
+         of the Tailwind design system. Footer now uses DM Sans / DM Serif
+         Display via the same --font-sans / --font-serif CSS vars as the
+         rest of the app, so we can drop the extra <link> entirely. -->
     <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" media="print" onload="this.media='all'" />
     <noscript><link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" /></noscript>
-
-    <!-- Fonts: Jost + Lora for the new footer design -->
-    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&family=Lora:wght@600;700&display=swap" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&family=Lora:wght@600;700&family=Outfit:wght@400;500;600&display=swap" media="print" onload="this.media='all'" />
-    <noscript><link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&family=Lora:wght@600;700&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet" /></noscript>
 
     <!-- Structured Data: Organization -->
     <script type="application/ld+json">

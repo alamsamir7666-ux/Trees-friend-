@@ -1,4 +1,5 @@
 import { useAdminContext } from "@/contexts/AdminContext";
+import type { EditingProduct } from "@/contexts/AdminContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -55,8 +56,8 @@ export function ProductsTab() {
                   <tr key={p.id} className="hover:bg-primary/5 transition-colors">
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
-                        {(p as any).images?.[0] ? (
-                          <img src={(p as any).images[0]} alt="" className="h-10 w-10 rounded-xl object-cover border" />
+                        {p.images?.[0] ? (
+                          <img src={p.images[0]} alt="" className="h-10 w-10 rounded-xl object-cover border" />
                         ) : (
                           <div className="h-10 w-10 rounded-xl bg-muted border" />
                         )}
@@ -72,7 +73,7 @@ export function ProductsTab() {
                       <span className="capitalize text-muted-foreground text-xs bg-muted px-2.5 py-1 rounded-full font-medium">{category?.name ?? "Uncategorized"}</span>
                     </td>
                     <td className="px-5 py-3.5">
-                      {(p as any).homepageTag ? (() => {
+                      {p.homepageTag ? (() => {
                         // homepageTag values are free-text keys created by the admin in
                         // Homepage Sections (see HomepageSectionsTab) — there's no fixed
                         // taxonomy, so only the two built-in defaults get special styling;
@@ -81,8 +82,8 @@ export function ProductsTab() {
                           trending:       { label: "🔥 Trending",      cls: "bg-success text-success-foreground border-success-border" },
                           new_arrivals:   { label: "✨ New Arrivals",  cls: "bg-info text-info-foreground border-info-border" },
                         };
-                        const cfg = TAG_LABELS[(p as any).homepageTag];
-                        return <span className={`text-xs px-2.5 py-1 rounded-full font-medium border ${cfg?.cls ?? "bg-muted text-muted-foreground border-border"}`}>{cfg?.label ?? (p as any).homepageTag}</span>;
+                        const cfg = TAG_LABELS[p.homepageTag];
+                        return <span className={`text-xs px-2.5 py-1 rounded-full font-medium border ${cfg?.cls ?? "bg-muted text-muted-foreground border-border"}`}>{cfg?.label ?? p.homepageTag}</span>;
                       })() : (
                         <span className="text-xs text-muted-foreground/70">-</span>
                       )}
@@ -98,11 +99,11 @@ export function ProductsTab() {
                           what sellers are actually charging, which is more
                           useful to admin than a field that will just say
                           "No variants" for every product going forward. */}
-                      {(p as any).listingMinPrice != null ? (
+                      {p.listingMinPrice != null ? (
                         <p className="font-semibold text-foreground">
-                          {(p as any).listingMinPrice === (p as any).listingMaxPrice
-                            ? `Tk${Number((p as any).listingMinPrice).toLocaleString()}`
-                            : `Tk${Number((p as any).listingMinPrice).toLocaleString()}–${Number((p as any).listingMaxPrice).toLocaleString()}`}
+                          {p.listingMinPrice === p.listingMaxPrice
+                            ? `Tk${Number(p.listingMinPrice).toLocaleString()}`
+                            : `Tk${Number(p.listingMinPrice).toLocaleString()}–${Number(p.listingMaxPrice).toLocaleString()}`}
                         </p>
                       ) : (
                         <p className="text-xs text-muted-foreground/70">No listings</p>
@@ -119,7 +120,7 @@ export function ProductsTab() {
                           has one pre-order variant" -- it's a simple
                           existence check, matching what a single boolean
                           badge can represent. */}
-                      {((p as any).listingHasPreOrder ?? false) ? (
+                      {(p.listingHasPreOrder ?? false) ? (
                         <span className="font-semibold text-info-foreground">Pre-Order</span>
                       ) : (
                         <>
@@ -131,17 +132,17 @@ export function ProductsTab() {
                               productVariantsTable). listingCount = number of
                               distinct qualifying seller listings; see
                               toProduct()'s doc comment in products.ts. */}
-                          <span className={`font-semibold ${((p as any).listingCount ?? 0) > 0 ? "text-foreground" : "text-destructive"}`}>
-                            {((p as any).listingCount ?? 0) > 0 ? "In Stock" : "Out of Stock"}
+                          <span className={`font-semibold ${(p.listingCount ?? 0) > 0 ? "text-foreground" : "text-destructive"}`}>
+                            {(p.listingCount ?? 0) > 0 ? "In Stock" : "Out of Stock"}
                           </span>
-                          {((p as any).listingCount ?? 0) === 0 && <p className="text-xs text-destructive/70">Restock needed</p>}
+                          {(p.listingCount ?? 0) === 0 && <p className="text-xs text-destructive/70">Restock needed</p>}
                         </>
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-right">
                       <div className="flex justify-end gap-1">
                         <button
-                          onClick={() => { setEditingProduct(p); setShowProductModal(true); }}
+                          onClick={() => { setEditingProduct(p as unknown as EditingProduct); setShowProductModal(true); }}
                           className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-info-foreground hover:bg-info/10 transition-colors"
                         >
                           <Pencil className="h-3.5 w-3.5" />

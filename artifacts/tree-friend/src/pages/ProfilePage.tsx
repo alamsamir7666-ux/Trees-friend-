@@ -1,5 +1,5 @@
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
-import { useUser, UserProfile, useAuth } from "@clerk/react";
+import { useUser, UserProfile } from "@clerk/react";
 import { LoyaltyBanner } from "@/components/ui/LoyaltyBanner";
 import { ReferralSection } from "@/components/ui/ReferralSection";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -11,9 +11,11 @@ import {
 } from "lucide-react";
 import { BecomeSellerContent } from "@/pages/BecomeSellerPage";
 import {
-  useGetMe, useListOrders, useGetMySeller, getGetMySellerQueryKey,
+  useListOrders, useGetMySeller, getGetMySellerQueryKey,
   useListMyFollowedSellers, getListMyFollowedSellersQueryKey,
 } from "@workspace/api-client-react";
+import { useMe } from "@/hooks/useMe";
+import { useApiJson } from "@/lib/useApiFetch";
 import { useState, useEffect, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -31,23 +33,23 @@ const statusColors: Record<string, { bg: string; text: string; icon: React.Eleme
 export function ProfilePage() {
   const { user } = useUser();
   const [, navigate] = useLocation();
-  const { data: dbUser } = useGetMe({ query: { retry: false, queryKey: ["me"] } });
+  const { data: dbUser } = useMe();
   const { data: orders, isLoading: ordersLoading } = useListOrders();
   const { data: seller } = useGetMySeller({ query: { retry: false, queryKey: getGetMySellerQueryKey() } });
   const { data: followedSellers, isLoading: followedSellersLoading } = useListMyFollowedSellers({
     query: { queryKey: getListMyFollowedSellersQueryKey() },
   });
 
-  const { getToken } = useAuth();
+  const apiJson = useApiJson();
   const [preOrders, setPreOrders] = useState<any[]>([]);
   useEffect(() => {
-    getToken().then(token => {
-      if (!token) return;
-      fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/pre-orders/my`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }).then(r => r.json()).then(d => { if (Array.isArray(d)) setPreOrders(d); }).catch(() => {});
-    });
-  }, []);
+    if (!user) return;
+    let cancelled = false;
+    apiJson<any[]>("/api/pre-orders/my")
+      .then((d) => { if (!cancelled && Array.isArray(d)) setPreOrders(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [user, apiJson]);
 
   const allRecent = [
     ...(orders ?? []).map((o: any) => ({ ...o, _type: "order" })),

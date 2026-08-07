@@ -8,7 +8,8 @@ import {
   TreePalm, Trees, Sprout, Flower, Flower2, Apple, Citrus, Leaf, Carrot, Wheat, Shrub, LayoutDashboard, Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useGetCart, getGetCartQueryKey, useListCategories, getListCategoriesQueryKey, useGetMe, useListProducts } from "@workspace/api-client-react";
+import { useGetCart, getGetCartQueryKey, useListCategories, getListCategoriesQueryKey, useListProducts } from "@workspace/api-client-react";
+import { useMe } from "@/hooks/useMe";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -120,9 +121,7 @@ export function Navbar() {
     query: { enabled: !!user, retry: false, queryKey: getGetCartQueryKey() },
   });
 
-  const { data: dbUser } = useGetMe({
-    query: { enabled: !!user, retry: false, queryKey: ["me"] },
-  });
+  const { data: dbUser } = useMe();
 
   const { data: dbCategories } = useListCategories({
     query: { staleTime: 60_000, queryKey: getListCategoriesQueryKey() },

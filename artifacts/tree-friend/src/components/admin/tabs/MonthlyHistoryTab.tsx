@@ -59,7 +59,7 @@ const {
                       <span className="font-semibold text-success-foreground">Tk{Number(r.totalRevenue).toLocaleString()}</span>
                     </td>
                     <td className="px-5 py-4 text-right text-xs text-muted-foreground/70">
-                      {new Date(r.archivedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
+                      {r.archivedAt ? new Date(r.archivedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
                     </td>
                   </tr>
                 ))}

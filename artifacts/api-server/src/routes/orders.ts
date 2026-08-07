@@ -12,7 +12,6 @@ import {
   couponsTable,
   usersTable,
   addressesTable,
-  affiliatesTable,
 } from "@workspace/db";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";

@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { useParams } from "wouter";
-import { useAuth } from "@clerk/react";
 import { Button } from "@/components/ui/button";
 import { BKASH_ICON, NAGAD_ICON } from "@/lib/preorderIcons";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -9,6 +8,30 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, Circle, Package, Anchor, Truck, Home, ChevronLeft, XCircle, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
+import { useApiFetch } from "@/lib/useApiFetch";
+
+interface PreOrder {
+  id: number;
+  trackingId: string;
+  status: string;
+  productName?: string;
+  productImage?: string | null;
+  quantity: number;
+  discountedPrice: number | string;
+  deliveryCharge: number | string;
+  shippingAddress?: { fullName?: string; street?: string; city?: string; district?: string; phone?: string } | null;
+  createdAt: string;
+  error?: string;
+  cancellationReason?: string | null;
+  buyerName?: string | null;
+  buyerPhone?: string | null;
+  senderNumber?: string | null;
+  transactionId?: string | null;
+  paymentMethod?: string;
+  paymentStatus?: string;
+  whatsappPhone?: string | null;
+  [key: string]: unknown;
+}
 
 const PRE_STEPS = ["pending", "confirmed", "arrived_in_bd", "shipped", "delivered"];
 const PRE_STEP_LABELS = ["Pending", "Confirmed", "Arrived in BD", "Shipped", "Delivered"];
@@ -25,8 +48,8 @@ const statusColors: Record<string, string> = {
 export function PreOrderDetailPage() {
   const params = useParams<{ id: string }>();
   const trackingId = params.id ?? "";
-  const { getToken } = useAuth();
-  const [order, setOrder] = useState<any>(null);
+  const apiFetch = useApiFetch();
+  const [order, setOrder] = useState<PreOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
@@ -35,16 +58,16 @@ export function PreOrderDetailPage() {
 
   useEffect(() => {
     if (!trackingId) return;
-    getToken().then(token => {
-      fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/pre-orders/track/${trackingId}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
-        .then(r => r.json())
-        .then(d => setOrder(d))
-        .catch(() => setOrder(null))
-        .finally(() => setLoading(false));
-    });
-  }, [trackingId]);
+    let cancelled = false;
+    // Pre-order tracking endpoint is public — tracking ID is the bearer
+    // secret. apiFetch attaches a token if available (harmless if not).
+    apiFetch(`/api/pre-orders/track/${trackingId}`)
+      .then(async (r) => (r.ok ? await r.json() : null))
+      .then((d) => { if (!cancelled) setOrder(d); })
+      .catch(() => { if (!cancelled) setOrder(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [trackingId, apiFetch]);
 
   async function handleCancel() {
     if (!cancelReason.trim() || cancelReason.trim().length < 3) {
@@ -54,11 +77,10 @@ export function PreOrderDetailPage() {
     setCancelLoading(true);
     setCancelError("");
     try {
-      const token = await getToken();
-      const r = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/pre-orders/${order.id}/status`, {
+      const r = await apiFetch(`/api/pre-orders/${order!.id}/status`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ status: "cancelled", cancellationReason: cancelReason.trim() }),
+        headers: { "Content-Type": "application/json" },
       });
       if (!r.ok) { setCancelError("Failed to cancel."); return; }
       setCancelOpen(false);

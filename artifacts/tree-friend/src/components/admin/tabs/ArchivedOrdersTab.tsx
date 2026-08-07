@@ -66,23 +66,23 @@ return (
             </thead>
             <tbody className="divide-y divide-muted/50">
               {[...archivedOrders, ...archivedPreOrders.map((o: any) => ({ ...o, _type: "preorder", orderStatus: o.status }))].sort((a,b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).map((o) => {
-                const sAddr = (o as any).shippingAddress as { fullName?: string } | null;
-                const sellerName = (o as any).sellerBusinessName ?? null;
-                const sellerStatus = (o as any).sellerStatus ?? null;
-                const sellerEmail = (o as any).sellerContactEmail ?? null;
-                const isPreOrder = (o as any)._type === "preorder";
+                const sAddr = o.shippingAddress as { fullName?: string } | null;
+                const sellerName = o.sellerBusinessName ?? null;
+                const sellerStatus = o.sellerStatus ?? null;
+                const sellerEmail = o.sellerContactEmail ?? null;
+                const isPreOrder = o._type === "preorder";
                 return (
                   <tr key={o.id} className="hover:bg-muted/40 transition-colors">
                     <td className="px-4 py-3.5">
                       <p className="font-semibold text-foreground">#{o.id}</p>
-                      {(o as any).trackingId && <p className="text-xs text-muted-foreground/70 font-mono">{(o as any).trackingId}</p>}
+                      {o.trackingId && <p className="text-xs text-muted-foreground/70 font-mono">{o.trackingId}</p>}
                     </td>
                     <td className="px-4 py-3.5">
-                      {(o as any).userName ? (
+                      {o.userName ? (
                         <div>
-                          <p className="font-medium text-foreground text-xs">{(o as any).userName}</p>
-                          {!(o as any).userEmail?.endsWith("@clerk.user") && (o as any).userEmail && (
-                            <p className="text-xs text-muted-foreground/70">{(o as any).userEmail}</p>
+                          <p className="font-medium text-foreground text-xs">{o.userName}</p>
+                          {!o.userEmail?.endsWith("@clerk.user") && o.userEmail && (
+                            <p className="text-xs text-muted-foreground/70">{o.userEmail}</p>
                           )}
                         </div>
                       ) : sAddr?.fullName ? (
@@ -134,14 +134,14 @@ return (
                     <td className="px-4 py-3.5">
                       <div className="space-y-0.5 max-w-[180px]">
                         {isPreOrder ? (
-                          <p className="text-xs text-muted-foreground truncate">{(o as any).productName} ×{(o as any).quantity ?? 1}</p>
+                          <p className="text-xs text-muted-foreground truncate">{o.productName} ×{o.quantity ?? 1}</p>
                         ) : (
                           <>
-                            {((o as any).items ?? []).slice(0, 2).map((item: any, idx: number) => (
+                            {(o.items ?? []).slice(0, 2).map((item: any, idx: number) => (
                               <p key={idx} className="text-xs text-muted-foreground truncate">{item.productName} ×{item.quantity}</p>
                             ))}
-                            {((o as any).items ?? []).length > 2 && (
-                              <p className="text-xs text-muted-foreground/70">+{((o as any).items ?? []).length - 2} more</p>
+                            {(o.items ?? []).length > 2 && (
+                              <p className="text-xs text-muted-foreground/70">+{(o.items ?? []).length - 2} more</p>
                             )}
                           </>
                         )}
@@ -149,26 +149,26 @@ return (
                     </td>
                     <td className="px-4 py-3.5 text-xs">
                       <div>
-                        {(o as any).orderStatus === "cancelled" ? (
+                        {o.orderStatus === "cancelled" ? (
                           <span className="inline-block bg-destructive/10 text-destructive text-xs font-medium px-2 py-0.5 rounded-lg mb-1">Cancelled</span>
                         ) : (
                           <span className="inline-block bg-success text-success-foreground text-xs font-medium px-2 py-0.5 rounded-lg mb-1">Delivered</span>
                         )}
                         <p className="text-muted-foreground/70">{new Date(o.updatedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</p>
-                        {(o as any).orderStatus === "cancelled" && (o as any).cancellationReason && (
-                          <p className="text-destructive/70 text-xs mt-0.5 max-w-[120px] truncate" title={(o as any).cancellationReason}>⚠️ {(o as any).cancellationReason}</p>
+                        {o.orderStatus === "cancelled" && o.cancellationReason && (
+                          <p className="text-destructive/70 text-xs mt-0.5 max-w-[120px] truncate" title={o.cancellationReason}>⚠️ {o.cancellationReason}</p>
                         )}
                       </div>
                     </td>
                     <td className="px-4 py-3.5">
                       <div>
-                        <span className="text-xs bg-muted px-2 py-1 rounded-lg font-medium text-muted-foreground capitalize">{(o as any).paymentMethod ?? "-"}</span>
-                        <span className={`ml-1.5 text-xs font-medium capitalize ${(o as any).paymentStatus === "paid" ? "text-success-foreground" : "text-warning-foreground"}`}>
-                          · {(o as any).paymentStatus}
+                        <span className="text-xs bg-muted px-2 py-1 rounded-lg font-medium text-muted-foreground capitalize">{o.paymentMethod ?? "-"}</span>
+                        <span className={`ml-1.5 text-xs font-medium capitalize ${o.paymentStatus === "paid" ? "text-success-foreground" : "text-warning-foreground"}`}>
+                          · {o.paymentStatus}
                         </span>
                       </div>
                     </td>
-                    <td className="px-4 py-3.5 text-right font-semibold text-foreground">Tk{Number((o as any).totalAmount ?? (o as any).discountedPrice ?? 0).toLocaleString()}</td>
+                    <td className="px-4 py-3.5 text-right font-semibold text-foreground">Tk{Number(o.totalAmount ?? o.discountedPrice ?? 0).toLocaleString()}</td>
                   </tr>
                 );
               })}

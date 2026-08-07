@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useSearch } from "wouter";
-import { useAuth } from "@clerk/react";
 import { useGetOrder, useListOrders, getListOrdersQueryKey, createBkashPayment, createBkashPaymentGuest } from "@workspace/api-client-react";
+import type { Order } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -11,6 +11,28 @@ import { Link } from "wouter";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { BKASH_ICON } from "@/lib/preorderIcons";
+import { useApiFetch } from "@/lib/useApiFetch";
+
+interface GuestOrder {
+  id: number;
+  trackingId: string;
+  orderStatus: string;
+  paymentStatus: string;
+  paymentMethod: string;
+  totalAmount: number | string;
+  items?: Array<{ productName: string; productImage?: string; quantity: number; price: number; [k: string]: unknown }>;
+  shippingAddress?: { fullName?: string; street?: string; line1?: string; city?: string; district?: string; phone?: string } | null;
+  createdAt: string;
+  [key: string]: unknown;
+}
+
+interface ReturnRow {
+  orderId: number;
+  status: string;
+  reason?: string;
+  adminNote?: string;
+  [key: string]: unknown;
+}
 
 const STEPS = ["pending", "confirmed", "processing", "shipped", "delivered"];
 
@@ -36,24 +58,29 @@ export function OrderDetailPage() {
   const rawId = params.id ?? "0";
   const isGuest = !/^\d+$/.test(rawId);
   const id = isGuest ? 0 : parseInt(rawId);
-  const { getToken } = useAuth();
+  const apiFetch = useApiFetch();
   const { data: orders } = useListOrders({ query: { enabled: !isGuest, queryKey: getListOrdersQueryKey() } });
   const orderRank = orders ? orders.length - orders.findIndex(o => o.id === id) : null;
   const { data: authOrder, isLoading: authLoading } = useGetOrder(id, { query: { enabled: !!id && !isGuest, queryKey: ["order", id] } });
 
-  const [guestOrder, setGuestOrder] = useState<any>(null);
+  const [guestOrder, setGuestOrder] = useState<GuestOrder | null>(null);
   const [guestLoading, setGuestLoading] = useState(isGuest);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
 
   useEffect(() => {
     if (!isGuest) return;
+    let cancelled = false;
     setGuestLoading(true);
-    fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/orders/track/${rawId}`)
-      .then(r => r.json())
-      .then(data => setGuestOrder(data))
-      .catch(() => setGuestOrder(null))
-      .finally(() => setGuestLoading(false));
-  }, [isGuest, rawId]);
+    // Guest order tracking endpoint is public (no Bearer token needed) —
+    // the tracking ID itself is the bearer secret. apiFetch still tries
+    // to attach a token (harmless if there's no signed-in user).
+    apiFetch(`/api/orders/track/${rawId}`)
+      .then(async (r) => (r.ok ? await r.json() : null))
+      .then((data) => { if (!cancelled) setGuestOrder(data); })
+      .catch(() => { if (!cancelled) setGuestOrder(null); })
+      .finally(() => { if (!cancelled) setGuestLoading(false); });
+    return () => { cancelled = true; };
+  }, [isGuest, rawId, apiFetch]);
 
   const order = isGuest ? guestOrder : authOrder;
   const isLoading = isGuest ? guestLoading : authLoading;
@@ -68,7 +95,7 @@ export function OrderDetailPage() {
   const [returnLoading, setReturnLoading] = useState(false);
   const [returnError, setReturnError] = useState("");
   const [returnSuccess, setReturnSuccess] = useState(false);
-  const [existingReturn, setExistingReturn] = useState<any>(null);
+  const [existingReturn, setExistingReturn] = useState<ReturnRow | null>(null);
 
   // Part 2 of 4 (bKash Tokenized Checkout, see PART2_HANDOFF.md): after
   // bKash's hosted page finishes, our own /api/bkash/callback redirects
@@ -85,20 +112,18 @@ export function OrderDetailPage() {
 
   useEffect(() => {
     if (!id || isGuest) return;
-    getToken().then(token =>
-      fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/returns/me`, {
-        headers: { Authorization: `Bearer ${token}` },
+    let cancelled = false;
+    apiFetch("/api/returns/me")
+      .then(async (r) => (r.ok ? await r.json() : []))
+      .then((data: ReturnRow[]) => {
+        if (!cancelled && Array.isArray(data)) {
+          const found = data.find((r) => r.orderId === id);
+          if (found) setExistingReturn(found);
+        }
       })
-        .then(r => r.json())
-        .then((data: any[]) => {
-          if (Array.isArray(data)) {
-            const found = data.find(r => r.orderId === id);
-            if (found) setExistingReturn(found);
-          }
-        })
-        .catch(() => {})
-    );
-  }, [id]);
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, apiFetch]);
 
   if (isLoading) {
     return <div className="container mx-auto px-4 py-10"><Skeleton className="h-96 rounded-xl" /></div>;
@@ -109,6 +134,13 @@ export function OrderDetailPage() {
 
   const currentStep = STEPS.indexOf(order.orderStatus);
   const addr = order.shippingAddress as { fullName?: string; street?: string; line1?: string; city?: string; district?: string; phone?: string } | null;
+
+  // Normalize for field accesses that would otherwise widen to `unknown`
+  // (because `order` is a union of `GuestOrder` and `Order`). This alias
+  // has the same runtime value but a uniform type. Use `ord` for any
+  // field access where the union confuses TypeScript; `order` itself is
+  // fine for fields that exist identically on both shapes.
+  const ord = order as Order;
 
   /**
    * "Pay with bKash" / "Retry payment" action -- reuses the exact same
@@ -123,6 +155,7 @@ export function OrderDetailPage() {
    * designed for a popup round-trip).
    */
   async function handlePayWithBkash() {
+    if (!order) return;
     setBkashRetryLoading(true);
     setBkashRetryError("");
     try {
@@ -137,6 +170,7 @@ export function OrderDetailPage() {
   }
 
   async function handleCancelOrder() {
+    if (!order) return;
     if (!cancelReason.trim() || cancelReason.trim().length < 3) {
       setCancelError("Please provide a reason for cancellation.");
       return;
@@ -144,11 +178,10 @@ export function OrderDetailPage() {
     setCancelLoading(true);
     setCancelError("");
     try {
-      const token = await getToken();
-      const r = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/orders/${order.id}/cancel`, {
+      const r = await apiFetch(`/api/orders/${order.id}/cancel`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
         body: JSON.stringify({ reason: cancelReason.trim() }),
+        headers: { "Content-Type": "application/json" },
       });
       const data = await r.json();
       if (!r.ok) { setCancelError(data.error ?? "Failed to cancel order."); return; }
@@ -162,6 +195,7 @@ export function OrderDetailPage() {
   }
 
   async function handleReturnRequest() {
+    if (!order) return;
     if (!returnReason.trim() || returnReason.trim().length < 10) {
       setReturnError("Please describe your reason in at least 10 characters.");
       return;
@@ -169,16 +203,15 @@ export function OrderDetailPage() {
     setReturnLoading(true);
     setReturnError("");
     try {
-      const returnToken = await getToken();
-      const r = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/returns`, {
+      const r = await apiFetch("/api/returns", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${returnToken}` },
         body: JSON.stringify({ orderId: order.id, reason: returnReason.trim() }),
+        headers: { "Content-Type": "application/json" },
       });
       const data = await r.json();
       if (!r.ok) { setReturnError(data.error ?? "Failed to submit return request."); return; }
       setReturnSuccess(true);
-      setExistingReturn(data);
+      setExistingReturn(data as ReturnRow);
       setTimeout(() => setReturnOpen(false), 2500);
     } catch {
       setReturnError("Something went wrong. Please try again.");
@@ -395,10 +428,10 @@ export function OrderDetailPage() {
                   <span className="text-muted-foreground">Subtotal</span>
                   <span>Tk{(order.items ?? []).reduce((s: number, i: any) => s + Number(i.price) * i.quantity, 0).toLocaleString()}</span>
                 </div>
-                {order.discountAmount > 0 && (
+                {Number(ord.discountAmount ?? 0) > 0 && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Discount{order.couponCode ? ` (${order.couponCode})` : ""}</span>
-                    <span className="text-success-foreground">-Tk{Number(order.discountAmount).toLocaleString()}</span>
+                    <span className="text-muted-foreground">Discount{ord.couponCode ? ` (${ord.couponCode})` : ""}</span>
+                    <span className="text-success-foreground">-Tk{Number(ord.discountAmount).toLocaleString()}</span>
                   </div>
                 )}
                 <div className="flex justify-between">

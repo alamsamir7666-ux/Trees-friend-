@@ -301,7 +301,7 @@ export function DashboardTab() {
   const totalSellers = allSellers.length;
   const activeSellerCount = activeSellers?.length ?? 0;
   const pendingSellerCount = pendingSellers?.length ?? 0;
-  const lowStockCount = products.filter(p => ((p as any).listingCount ?? 0) === 0).length;
+  const lowStockCount = products.filter(p => (p.listingCount ?? 0) === 0).length;
 
   // ── Revenue trend data ──────────────────────────────────────────────────
   const revenueTrend = generateRevenueTrend(orders);
@@ -309,7 +309,7 @@ export function DashboardTab() {
   // ── Top sellers ─────────────────────────────────────────────────────────
   const topSellers = (() => {
     const map = new Map<string, { businessName: string; status: string | null; orderCount: number; revenue: number }>();
-    for (const o of orders as any[]) {
+    for (const o of orders) {
       const name = o.sellerBusinessName;
       if (!name) continue;
       const existing = map.get(name) ?? { businessName: name, status: o.sellerStatus ?? null, orderCount: 0, revenue: 0 };
@@ -618,8 +618,8 @@ export function DashboardTab() {
               {recentCombined.map((o) => {
                 const cfg = statusConfig[o.orderStatus] ?? { color: "bg-muted text-muted-foreground", icon: AlertCircle };
                 const StatusIcon = cfg.icon;
-                const sellerName = (o as any).sellerBusinessName ?? null;
-                const sellerStatus = (o as any).sellerStatus ?? null;
+                const sellerName = o.sellerBusinessName ?? null;
+                const sellerStatus = o.sellerStatus ?? null;
                 return (
                   <div key={o.id} className="flex items-center gap-4 px-5 py-3 hover:bg-muted/40 transition-colors">
                     <div className="h-9 w-9 rounded-lg bg-muted/50 border border-border flex items-center justify-center shrink-0">
