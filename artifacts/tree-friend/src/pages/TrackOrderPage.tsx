@@ -3,7 +3,7 @@ import { useParams, useLocation } from "wouter";
 import { useTrackOrder, getTrackOrderQueryKey } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { CheckCircle2, Package, Truck, Home, Circle } from "lucide-react";
+import { CheckCircle2, Package, Truck, Home, Circle, AlertTriangle, RefreshCw } from "lucide-react";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 
 const STEPS = ["pending", "confirmed", "processing", "shipped", "delivered"];
@@ -28,9 +28,16 @@ export function TrackOrderPage() {
     }
   }, [submitted]);
 
-  const { data: order, isLoading, isError } = useTrackOrder(submitted, {
+  const { data: order, isLoading, isError, error, refetch, isRefetching } = useTrackOrder(submitted, {
     query: { enabled: !!submitted, retry: false, queryKey: getTrackOrderQueryKey(submitted) },
   });
+
+  // A 404 means "no order with this tracking ID" — an expected, valid
+  // outcome, not a failure. Any other error status (or a thrown network
+  // error with no status at all) is a genuine fetch failure.
+  const status = (error as { status?: number } | null)?.status;
+  const isNotFound = isError && status === 404;
+  const isFetchFailure = isError && !isNotFound;
 
   const currentStep = order ? STEPS.indexOf(order.orderStatus) : -1;
 
@@ -65,9 +72,25 @@ export function TrackOrderPage() {
         </div>
 
         {isLoading && <p className="text-center text-muted-foreground">Searching...</p>}
-        {isError && submitted && (
+        {isNotFound && submitted && (
           <div className="bg-destructive/10 text-destructive rounded-xl p-4 text-sm text-center">
             Order not found. Please check your tracking ID and try again.
+          </div>
+        )}
+        {isFetchFailure && submitted && (
+          <div className="bg-destructive/10 text-destructive rounded-xl p-4 text-sm text-center">
+            <AlertTriangle className="h-5 w-5 mx-auto mb-2" />
+            <p>Couldn't check this order. Something went wrong on our end.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              onClick={() => refetch()}
+              disabled={isRefetching}
+            >
+              <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${isRefetching ? "animate-spin" : ""}`} />
+              {isRefetching ? "Retrying…" : "Try again"}
+            </Button>
           </div>
         )}
 

@@ -470,10 +470,10 @@ router.get("/seller-listings/shop-all", async (req, res) => {
       })
       .filter((group) => group.cards.length > 0);
 
-    res.json({ groups: result });
+    return res.json({ groups: result });
   } catch (err) {
     console.error("Shop-all seller listings error:", err);
-    res.status(500).json({ error: "Failed to fetch shop-all listings" });
+    return res.status(500).json({ error: "Failed to fetch shop-all listings" });
   }
 });
 
@@ -609,10 +609,10 @@ router.get("/seller-listings/by-category", async (req, res) => {
       .filter((g) => g.cards.length > 0)
       .sort((a, b) => a.product.name.localeCompare(b.product.name));
 
-    res.json({ groups });
+    return res.json({ groups });
   } catch (err) {
     console.error("By-category seller listings error:", err);
-    res.status(500).json({ error: "Failed to fetch seller listings by category" });
+    return res.status(500).json({ error: "Failed to fetch seller listings by category" });
   }
 });
 

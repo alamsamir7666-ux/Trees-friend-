@@ -292,7 +292,7 @@ export function SellerListingsTab() {
                           )}
                           <div className="min-w-0">
                             <p className="text-sm font-medium text-foreground">
-                              {l.description?.trim() ? l.description.split("\\n")[0].slice(0, 60) : `Product #${l.productId}`}
+                              {l.description?.trim() ? l.description.split("\n")[0].slice(0, 60) : `Product #${l.productId}`}
                             </p>
                             <p className="text-[11px] text-muted-foreground">ID #{l.productId}</p>
                           </div>
