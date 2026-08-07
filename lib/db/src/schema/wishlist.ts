@@ -4,7 +4,10 @@ import {
   text,
   integer,
   timestamp,
+  uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { productsTable } from "./products";
 import { sellerListingVariantsTable } from "./sellerListingVariants";
 
@@ -32,21 +35,28 @@ export const wishlistTable = pgTable(
       .references(() => sellerListingVariantsTable.id, { onDelete: "cascade" }),
     addedAt: timestamp("added_at").defaultNow().notNull(),
   },
-  // No table-level unique() here for either uniqueness rule. A plain
-  // unique(userId, productId) would also cover seller-listing rows (they
-  // carry productId too, see sellerListingVariantId's comment above) and
-  // wrongly block wishlisting a product AND a seller listing of that same
-  // product, or two different sellers' listings of that same product, as
-  // separate rows. What's actually needed is two PARTIAL unique indexes --
-  // one scoped to WHERE seller_listing_variant_id IS NULL (product rows),
-  // one scoped to WHERE seller_listing_variant_id IS NOT NULL (listing
-  // rows) -- and drizzle-orm's pgTable builder here has no .where() on
-  // unique(). Defined as raw indexes in migration.sql instead (replacing
-  // the old table-wide wishlist_user_product_unique constraint), matching
-  // this table's established pattern of doing constraint changes directly
-  // in migration.sql. See migration.sql's wishlist section for the actual
-  // CREATE UNIQUE INDEX statements and DROP of the old constraint.
-  () => [],
+  (table) => [
+    // FIX: these partial unique indexes previously existed ONLY in
+    // migration.sql, not in the Drizzle schema. A plain
+    // unique(userId, productId) would also cover seller-listing rows
+    // (they carry productId too) and wrongly block wishlisting a product
+    // AND a seller listing of that same product, or two different
+    // sellers' listings of that same product, as separate rows. What's
+    // actually needed is two PARTIAL unique indexes — one scoped to
+    // WHERE seller_listing_variant_id IS NULL (product rows), one
+    // scoped to WHERE seller_listing_variant_id IS NOT NULL (listing
+    // rows). Now declared inline via `sql` so the schema is the single
+    // source of truth (drizzle-orm doesn't have a .where() on unique()
+    // yet, so we use a raw partial index with a WHERE clause).
+    uniqueIndex("wishlist_user_product_unique")
+      .on(table.userId, table.productId)
+      .where(sql`seller_listing_variant_id IS NULL`),
+    uniqueIndex("wishlist_user_seller_listing_variant_unique")
+      .on(table.userId, table.sellerListingVariantId)
+      .where(sql`seller_listing_variant_id IS NOT NULL`),
+    // Index for "user's wishlist" queries (most common read pattern).
+    index("wishlist_user_id_idx").on(table.userId),
+  ],
 );
 
 export type WishlistItem = typeof wishlistTable.$inferSelect;

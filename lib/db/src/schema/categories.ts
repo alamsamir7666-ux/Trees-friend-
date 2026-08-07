@@ -43,7 +43,12 @@ export const categoriesTable = pgTable("categories", {
   image: text("image"),
   displayOrder: integer("display_order").notNull().default(0),
   // NULL = top-level category. Set = subcategory nested under that category.
-  parentId: integer("parent_id"),
+  // Self-referencing FK: deleting a parent category cascades to its
+  // subcategories (which then cascade their products to "Uncategorized",
+  // per the table doc comment's deletion rule).
+  parentId: integer("parent_id").references((): any => categoriesTable.id, {
+    onDelete: "cascade",
+  }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

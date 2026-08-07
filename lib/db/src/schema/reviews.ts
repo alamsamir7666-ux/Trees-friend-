@@ -6,9 +6,11 @@ import {
   timestamp,
   unique,
   jsonb,
+  check,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { sql } from "drizzle-orm";
 import { productsTable } from "./products";
 import { sellersTable } from "./sellers";
 import { sellerListingsTable } from "./sellerListings";
@@ -68,6 +70,8 @@ export const reviewsTable = pgTable(
     ),
     userId: text("user_id").notNull(),
     userName: text("user_name").notNull(),
+    // FIX: CHECK constraint added — rating must be between 1 and 5.
+    // Previously accepted any integer (0, -1, 999 all valid).
     rating: integer("rating").notNull(),
     comment: text("comment").notNull(),
     // Up to 4 Cloudinary secure_urls a buyer attached to their review.
@@ -92,6 +96,11 @@ export const reviewsTable = pgTable(
       table.sellerListingVariantId,
       table.userId,
     ),
+    // FIX: CHECK constraint — rating must be 1-5 (industry standard for
+    // 5-star review systems). Prevents 0, negative, or >5 values from
+    // being inserted (defense-in-depth at the DB layer, in addition to
+    // API-layer validation).
+    check("reviews_rating_check", sql`${table.rating} >= 1 AND ${table.rating} <= 5`),
   ],
 );
 

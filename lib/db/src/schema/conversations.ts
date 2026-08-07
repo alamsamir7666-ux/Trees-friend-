@@ -6,10 +6,13 @@ import {
   boolean,
   timestamp,
   bigint,
+  uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { sellersTable } from "./sellers";
+import { sellerListingsTable } from "./sellerListings";
 
 /**
  * A conversation between a buyer and a seller. Each buyer-seller pair has
@@ -27,23 +30,52 @@ import { sellersTable } from "./sellers";
  * lastMessageAt is denormalized for efficient conversation-list sorting
  * without joining into messages. Updated on every new message insert.
  */
-export const conversationsTable = pgTable("conversations", {
-  id: serial("id").primaryKey(),
-  buyerId: text("buyer_id").notNull(), // Clerk user ID (text), same convention as follows/wishlist/cart
-  sellerId: integer("seller_id")
-    .notNull()
-    .references(() => sellersTable.id, { onDelete: "cascade" }),
-  // Optional: link to a specific listing when chat started from a product page
-  sellerListingId: integer("seller_listing_id"),
-  // Denormalized: updated on every new message for efficient sorting
-  lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
-  // Buyer can archive a conversation (hide from their list)
-  buyerArchived: boolean("buyer_archived").notNull().default(false),
-  // Seller can archive a conversation (hide from their list)
-  sellerArchived: boolean("seller_archived").notNull().default(false),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+export const conversationsTable = pgTable(
+  "conversations",
+  {
+    id: serial("id").primaryKey(),
+    buyerId: text("buyer_id").notNull(), // Clerk user ID (text), same convention as follows/wishlist/cart
+    sellerId: integer("seller_id")
+      .notNull()
+      .references(() => sellersTable.id, { onDelete: "cascade" }),
+    // Optional: link to a specific listing when chat started from a product page.
+    // FK added: cascade on delete — if a listing is removed, the conversation
+    // stays (buyer-seller pair still has a thread) but the product context
+    // card disappears. The conversation itself shouldn't be destroyed.
+    sellerListingId: integer("seller_listing_id").references(
+      () => sellerListingsTable.id,
+      { onDelete: "set null" },
+    ),
+    // Denormalized: updated on every new message for efficient sorting
+    lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
+    // Buyer can archive a conversation (hide from their list)
+    buyerArchived: boolean("buyer_archived").notNull().default(false),
+    // Seller can archive a conversation (hide from their list)
+    sellerArchived: boolean("seller_archived").notNull().default(false),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // FIX: this unique constraint previously existed ONLY in migration.sql,
+    // not in the Drizzle schema. A fresh `drizzle-kit push` would silently
+    // lose it, allowing duplicate buyer-seller conversations. Now declared
+    // inline so the schema is the single source of truth.
+    uniqueIndex("conversations_buyer_seller_unique").on(
+      table.buyerId,
+      table.sellerId,
+    ),
+    // Indexes for conversation-list sorting (buyer and seller side).
+    // Previously only in migration.sql.
+    index("conversations_buyer_last_message_idx").on(
+      table.buyerId,
+      table.lastMessageAt,
+    ),
+    index("conversations_seller_last_message_idx").on(
+      table.sellerId,
+      table.lastMessageAt,
+    ),
+  ],
+);
 
 /**
  * Messages in a conversation.
@@ -61,61 +93,74 @@ export const conversationsTable = pgTable("conversations", {
  * `attachmentType` is a normalized view of the attachment for quick UI
  * branching: "image" | "video" | "audio" | "document" | null.
  */
-export const messagesTable = pgTable("messages", {
-  id: serial("id").primaryKey(),
-  conversationId: integer("conversation_id")
-    .notNull()
-    .references(() => conversationsTable.id, { onDelete: "cascade" }),
-  senderId: text("sender_id").notNull(), // Clerk user ID — identifies who sent the message
-  content: text("content").notNull(),
-  // "text" | "image" | "file" | "product_card" — extensible for future media types
-  messageType: text("message_type").notNull().default("text"),
+export const messagesTable = pgTable(
+  "messages",
+  {
+    id: serial("id").primaryKey(),
+    conversationId: integer("conversation_id")
+      .notNull()
+      .references(() => conversationsTable.id, { onDelete: "cascade" }),
+    senderId: text("sender_id").notNull(), // Clerk user ID — identifies who sent the message
+    content: text("content").notNull(),
+    // "text" | "image" | "file" | "product_card" — extensible for future media types
+    messageType: text("message_type").notNull().default("text"),
 
-  // ─── Attachment fields (Phase: emoji + file attachments) ───────────────
-  // Legacy image URL — preserved for backward compat. New image uploads
-  // populate BOTH imageUrl and fileUrl so old clients keep working.
-  imageUrl: text("image_url"),
-  // Canonical attachment URL for any message type (image, file, video, audio).
-  fileUrl: text("file_url"),
-  // Original file name as uploaded by the sender (e.g. "invoice-2026.pdf").
-  fileName: text("file_name"),
-  // File size in bytes (number). bigint because media files can exceed 2GB.
-  fileSize: bigint("file_size", { mode: "number" }),
-  // MIME type (e.g. "application/pdf", "image/jpeg"). Used for icon + preview logic.
-  fileMimeType: text("file_mime_type"),
-  // Normalized attachment type for UI branching: "image" | "video" | "audio" | "document" | null.
-  attachmentType: text("attachment_type"),
+    // ─── Attachment fields (Phase: emoji + file attachments) ───────────────
+    // Legacy image URL — preserved for backward compat. New image uploads
+    // populate BOTH imageUrl and fileUrl so old clients keep working.
+    imageUrl: text("image_url"),
+    // Canonical attachment URL for any message type (image, file, video, audio).
+    fileUrl: text("file_url"),
+    // Original file name as uploaded by the sender (e.g. "invoice-2026.pdf").
+    fileName: text("file_name"),
+    // File size in bytes (number). bigint because media files can exceed 2GB.
+    fileSize: bigint("file_size", { mode: "number" }),
+    // MIME type (e.g. "application/pdf", "image/jpeg"). Used for icon + preview logic.
+    fileMimeType: text("file_mime_type"),
+    // Normalized attachment type for UI branching: "image" | "video" | "audio" | "document" | null.
+    attachmentType: text("attachment_type"),
 
-  // Read receipts
-  readByBuyer: boolean("read_by_buyer").notNull().default(false),
-  readBySeller: boolean("read_by_seller").notNull().default(false),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+    // Read receipts
+    readByBuyer: boolean("read_by_buyer").notNull().default(false),
+    readBySeller: boolean("read_by_seller").notNull().default(false),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
 
-  // ─── Edit tracking ──────────────────────────────────────────────────────
-  // Set to the timestamp of the most recent edit (null = never edited).
-  // The UI shows a small "edited" label next to the timestamp when this is
-  // non-null. WhatsApp/Telegram/Signal all do this — the existence of an
-  // edit is visible (transparency), but the previous content is not kept.
-  editedAt: timestamp("edited_at"),
+    // ─── Edit tracking ──────────────────────────────────────────────────────
+    // Set to the timestamp of the most recent edit (null = never edited).
+    // The UI shows a small "edited" label next to the timestamp when this is
+    // non-null. WhatsApp/Telegram/Signal all do this — the existence of an
+    // edit is visible (transparency), but the previous content is not kept.
+    editedAt: timestamp("edited_at"),
 
-  // ─── Soft-delete tracking ───────────────────────────────────────────────
-  // We never hard-delete chat messages — instead, we mark them deleted so
-  // the other participant still sees "This message was deleted" in place.
-  // This matches WhatsApp/Telegram semantics: a deleted message stays in
-  // the conversation thread as a tombstone, preserving context (timestamps,
-  // read-receipt sequence, replies) instead of leaving a gap.
-  isDeleted: boolean("is_deleted").notNull().default(false),
-  deletedAt: timestamp("deleted_at"),
+    // ─── Soft-delete tracking ───────────────────────────────────────────────
+    // We never hard-delete chat messages — instead, we mark them deleted so
+    // the other participant still sees "This message was deleted" in place.
+    // This matches WhatsApp/Telegram semantics: a deleted message stays in
+    // the conversation thread as a tombstone, preserving context (timestamps,
+    // read-receipt sequence, replies) instead of leaving a gap.
+    isDeleted: boolean("is_deleted").notNull().default(false),
+    deletedAt: timestamp("deleted_at"),
 
-  // ─── Reply tracking (swipe-to-reply) ────────────────────────────────────
-  // When non-null, this message is a reply to the message with this id.
-  // The referenced message must be in the same conversation (enforced at
-  // the API layer, not via DB FK, so that soft-deleting the parent doesn't
-  // cascade-block replies). The frontend looks up the parent message from
-  // its already-loaded messages array — no N+1 query needed on GET.
-  // Nullable so existing rows and non-reply messages default to null.
-  replyToId: integer("reply_to_id"),
-});
+    // ─── Reply tracking (swipe-to-reply) ────────────────────────────────────
+    // When non-null, this message is a reply to the message with this id.
+    // The referenced message must be in the same conversation (enforced at
+    // the API layer, not via DB FK, so that soft-deleting the parent doesn't
+    // cascade-block replies). The frontend looks up the parent message from
+    // its already-loaded messages array — no N+1 query needed on GET.
+    // Nullable so existing rows and non-reply messages default to null.
+    replyToId: integer("reply_to_id"),
+  },
+  (table) => [
+    // FIX: these indexes previously existed ONLY in migration.sql, not in
+    // the Drizzle schema. A fresh `drizzle-kit push` would silently lose
+    // them, making every message-list query a sequential scan. Now declared
+    // inline so the schema is the single source of truth.
+    index("messages_conversation_created_idx").on(
+      table.conversationId,
+      table.createdAt,
+    ),
+  ],
+);
 
 export const insertConversationSchema = createInsertSchema(conversationsTable).omit({
   id: true,

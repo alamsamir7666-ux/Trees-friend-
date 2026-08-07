@@ -1,4 +1,5 @@
 import { pgTable, serial, integer, text, boolean, timestamp } from "drizzle-orm/pg-core";
+import { productsTable } from "./products";
 import { sellerListingsTable } from "./sellerListings";
 import { sellersTable } from "./sellers";
 
@@ -19,7 +20,12 @@ import { sellersTable } from "./sellers";
  */
 export const productQATable = pgTable("product_qa", {
   id: serial("id").primaryKey(),
-  productId: integer("product_id").notNull(),
+  // FIX: FK added — previously no reference, so orphan Q&A rows could
+  // exist for deleted products. Cascade on delete: if a product is
+  // removed, its Q&A goes with it.
+  productId: integer("product_id")
+    .notNull()
+    .references(() => productsTable.id, { onDelete: "cascade" }),
   // Null for product-level Q&A (unchanged, admin-answered). Set for
   // seller-listing Q&A (seller-answered) -- see table doc comment above.
   sellerListingId: integer("seller_listing_id").references(

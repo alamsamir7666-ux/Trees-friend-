@@ -1,6 +1,6 @@
 // lib/db/src/schema/giftCards.ts
 import {
-  pgTable, serial, text, numeric, boolean, timestamp,
+  pgTable, serial, text, numeric, boolean, timestamp, integer,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -22,7 +22,12 @@ export const giftCardsTable = pgTable("gift_cards", {
 
 export const giftCardTransactionsTable = pgTable("gift_card_transactions", {
   id: serial("id").primaryKey(),
-  giftCardId: serial("gift_card_id").notNull().references(() => giftCardsTable.id),
+  // FIX: was `serial("gift_card_id")` — serial creates a sequence and
+  // defaults to nextval(), which is wrong for a FK column. Any insert
+  // that forgot to pass giftCardId would silently get a random sequence
+  // value that fails the FK check (or worse, matches a different gift
+  // card by coincidence). Now `integer`, the correct type for a FK.
+  giftCardId: integer("gift_card_id").notNull().references(() => giftCardsTable.id),
   orderId: text("order_id"),
   userId: text("user_id"),
   amount: numeric("amount", { precision: 10, scale: 2 }).notNull(), // negative = debit

@@ -81,6 +81,10 @@ overrides:
   # drizzle-orm instances cause TS2345 "SQL<unknown> not assignable to
   # SQL<unknown>" errors even though the runtime is fine.
   "@types/pg": "^8.11.0"
+  # Force a single drizzle-orm instance across the workspace so that
+  # @neondatabase/serverless doesn't create a second drizzle-orm via
+  # its own peer dependency. Same TS2345 issue as @types/pg above.
+  "drizzle-orm": "^0.45.2"
 
 allowBuilds:
   '@clerk/shared': true

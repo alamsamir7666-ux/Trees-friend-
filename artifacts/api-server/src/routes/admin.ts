@@ -302,7 +302,7 @@ router.get("/admin/orders/archived", requireAdmin, async (req: any, res) => {
         ))
         .orderBy(desc(ordersTable.updatedAt))
         .limit(limit)
-        .offset(offset) as Promise<OrderWithUser[]>,
+        .offset(offset) as unknown as Promise<OrderWithUser[]>,
       db.select({ total: sql<string>`COUNT(*)` })
         .from(ordersTable)
         .where(and(
@@ -446,7 +446,7 @@ router.get("/admin/orders", requireAdmin, async (req: any, res) => {
         .where(whereClause)
         .orderBy(desc(ordersTable.createdAt))
         .limit(limitNum)
-        .offset(offset) as Promise<OrderWithUser[]>,
+        .offset(offset) as unknown as Promise<OrderWithUser[]>,
       db.select({ total: sql<string>`COUNT(*)` })
         .from(ordersTable)
         .where(whereClause),

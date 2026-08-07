@@ -8,6 +8,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { categoriesTable } from "./categories";
 
 /**
  * A product is one named variety, e.g. "Alphonso Mango", "Honeycrisp Apple".
@@ -23,7 +24,9 @@ export const productsTable = pgTable("products", {
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
 
-  categoryId: integer("category_id").notNull(),
+  categoryId: integer("category_id")
+    .notNull()
+    .references(() => categoriesTable.id, { onDelete: "restrict" }),
 
   scientificName: text("scientific_name"),      // e.g. "Mangifera indica"
   description: text("description").notNull(),
@@ -48,6 +51,11 @@ export const productsTable = pgTable("products", {
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  // FIX: soft-delete column. Products should be soft-deleted (hidden from
+  // buyers) rather than hard-deleted, so historical orders/reviews that
+  // reference the product still have a valid FK target. The API layer
+  // filters WHERE deleted_at IS NULL on buyer-facing queries.
+  deletedAt: timestamp("deleted_at"),
 });
 
 export const insertProductSchema = createInsertSchema(productsTable).omit({

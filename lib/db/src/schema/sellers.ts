@@ -82,6 +82,13 @@ export const sellersTable = pgTable("sellers", {
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  // FIX: soft-delete column. Previously, hard-deleting a seller cascaded to
+  // wipe listings, reviews, conversations, follows, payment configs, payout
+  // accounts — destroying financial/communication history that should be
+  // retained for compliance. Now sellers are soft-deleted (set deleted_at
+  // instead of DELETE) and filtered out at the API layer. The DB row stays
+  // for audit trail.
+  deletedAt: timestamp("deleted_at"),
 });
 
 export const insertSellerSchema = createInsertSchema(sellersTable).omit({

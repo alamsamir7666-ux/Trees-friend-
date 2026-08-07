@@ -6,9 +6,12 @@ import {
   integer,
   timestamp,
   jsonb,
+  check,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { sql } from "drizzle-orm";
+import { sellersTable } from "./sellers";
 
 /**
  * A line item snapshot at checkout time. Mirrors the cart_items XOR shape
@@ -75,38 +78,57 @@ export type ShippingAddress = {
   postalCode?: string | null;
 };
 
-export const ordersTable = pgTable("orders", {
-  id: serial("id").primaryKey(),
-  trackingId: text("tracking_id").notNull().unique(),
-  userId: text("user_id").notNull(),
-  // Null for admin-direct orders (pre-marketplace buying path, still live
-  // -- see schema/cart.ts and OrderItem doc above). Set to the seller's id
-  // for every marketplace order; every item in that order's items[] then
-  // has the SAME sellerId, since checkout splits multi-seller carts into
-  // one order per seller before insert (plan doc §2, §7).
-  sellerId: integer("seller_id"),
-  items: jsonb("items").$type<OrderItem[]>().notNull(),
-  totalAmount: numeric("total_amount", { precision: 10, scale: 2 }).notNull(),
-  paymentMethod: text("payment_method").notNull(),
-  senderNumber: text("sender_number"),
-  paidAt: timestamp("paid_at"),
-  paymentStatus: text("payment_status").notNull().default("pending"),
-  orderStatus: text("order_status").notNull().default("pending"),
-  transactionId: text("transaction_id"),
-  shippingAddress: jsonb("shipping_address").$type<ShippingAddress>().notNull(),
-  couponCode: text("coupon_code"),
-  discountAmount: numeric("discount_amount", {
-    precision: 10,
-    scale: 2,
-  })
-    .notNull()
-    .default("0"),
-  giftWrap: text("gift_wrap").default("false"),
-  giftMessage: text("gift_message"),
-  cancellationReason: text("cancellation_reason"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+export const ordersTable = pgTable(
+  "orders",
+  {
+    id: serial("id").primaryKey(),
+    trackingId: text("tracking_id").notNull().unique(),
+    userId: text("user_id").notNull(),
+    // Null for admin-direct orders (pre-marketplace buying path, still live
+    // -- see schema/cart.ts and OrderItem doc above). Set to the seller's id
+    // for every marketplace order; every item in that order's items[] then
+    // has the SAME sellerId, since checkout splits multi-seller carts into
+    // one order per seller before insert (plan doc §2, §7).
+    // FK added: RESTRICT on delete — an order should never silently disappear
+    // when a seller is deleted (financial audit trail). The seller delete
+    // route should soft-delete instead.
+    sellerId: integer("seller_id").references(() => sellersTable.id, {
+      onDelete: "restrict",
+    }),
+    items: jsonb("items").$type<OrderItem[]>().notNull(),
+    totalAmount: numeric("total_amount", { precision: 10, scale: 2 }).notNull(),
+    paymentMethod: text("payment_method").notNull(),
+    senderNumber: text("sender_number"),
+    paidAt: timestamp("paid_at"),
+    paymentStatus: text("payment_status").notNull().default("pending"),
+    orderStatus: text("order_status").notNull().default("pending"),
+    transactionId: text("transaction_id"),
+    shippingAddress: jsonb("shipping_address").$type<ShippingAddress>().notNull(),
+    couponCode: text("coupon_code"),
+    discountAmount: numeric("discount_amount", {
+      precision: 10,
+      scale: 2,
+    })
+      .notNull()
+      .default("0"),
+    giftWrap: text("gift_wrap").default("false"),
+    giftMessage: text("gift_message"),
+    cancellationReason: text("cancellation_reason"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    // FIX: soft-delete column. Orders should NEVER be hard-deleted —
+    // financial records must be retained for accounting/tax compliance.
+    // Cancelled orders set this column; the row stays for audit trail.
+    deletedAt: timestamp("deleted_at"),
+  },
+  (table) => [
+    // FIX: CHECK constraints on money columns — total_amount and
+    // discount_amount must be >= 0. Prevents negative prices/discounts
+    // from being inserted (defense-in-depth at the DB layer).
+    check("orders_total_amount_check", sql`${table.totalAmount} >= 0`),
+    check("orders_discount_amount_check", sql`${table.discountAmount} >= 0`),
+  ],
+);
 
 export const insertOrderSchema = createInsertSchema(ordersTable).omit({
   id: true,
