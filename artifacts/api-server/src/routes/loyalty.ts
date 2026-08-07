@@ -35,7 +35,7 @@ export async function awardPoints(userId: string, orderId: number, orderTotal: n
       orderId,
     });
   } catch (err) {
-    console.error("[loyalty] awardPoints failed:", err);
+    logger.error({ err: err }, "[loyalty] awardPoints failed");
   }
 }
 
@@ -89,9 +89,11 @@ router.get("/loyalty/me", requireAuth, async (req: any, res) => {
         createdAt: t.createdAt.toISOString(),
       })),
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch loyalty points" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

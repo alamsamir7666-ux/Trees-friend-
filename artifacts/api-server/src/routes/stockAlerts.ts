@@ -4,10 +4,11 @@ import { stockAlertsTable, productsTable, productVariantsTable } from "@workspac
 import { eq, and } from "drizzle-orm";
 import { sendStockAlertEmail } from "../lib/email";
 import { sendWhatsAppStockAlert } from "../lib/whatsapp";
+import { stockAlertLimiter } from "../middlewares/rateLimiter";
 
 const router = Router();
 
-router.post("/stock-alerts", async (req, res) => {
+router.post("/stock-alerts", stockAlertLimiter, async (req, res) => {
   try {
     const { productId, variantId, email } = req.body;
     if (!productId || isNaN(Number(productId))) {
@@ -79,7 +80,8 @@ router.post("/stock-alerts", async (req, res) => {
     });
 
     res.status(201).json({ message: "You will be notified when this option is back in stock" });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to register stock alert" });
   }
 });
@@ -100,10 +102,10 @@ export async function notifyStockAlerts(productId: number, productName: string, 
       .where(conditions);
 
     for (const alert of alerts) {
-      console.log("[stock-alert] Processing alert:", alert.email);
+      logger.info({ data: alert.email }, "[stock-alert] Processing alert");
       if (alert.email.endsWith("@phone.notify")) {
         const phone = alert.email.replace("@phone.notify", "");
-        console.log("[stock-alert] Sending WhatsApp to:", phone);
+        logger.info({ data: phone }, "[stock-alert] Sending WhatsApp to");
         await sendWhatsAppStockAlert({ phone, productName, productId });
       } else {
         await sendStockAlertEmail({ to: alert.email, productName });
@@ -114,9 +116,10 @@ export async function notifyStockAlerts(productId: number, productName: string, 
         .where(eq(stockAlertsTable.id, alert.id));
     }
   } catch (err) {
-    console.error("[stock-alert] notifyStockAlerts failed:", err);
+    logger.error({ err: err }, "[stock-alert] notifyStockAlerts failed");
     throw err;
   }
 }
+import { logger } from "../lib/logger";
 
 export default router;

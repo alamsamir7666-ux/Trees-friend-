@@ -69,7 +69,7 @@ router.get("/seller-payment-configs/mine", requireSeller, async (req, res) => {
     }
     res.json(toMasked(config));
   } catch (err) {
-    console.error("Get seller payment config error:", err);
+    logger.error({ err: err }, "Get seller payment config error");
     res.status(500).json({ error: "Failed to fetch payment config" });
   }
 });
@@ -130,7 +130,7 @@ router.post("/seller-payment-configs", requireSeller, async (req, res) => {
 
     res.status(201).json(toMasked(config));
   } catch (err) {
-    console.error("Create seller payment config error:", err);
+    logger.error({ err: err }, "Create seller payment config error");
     res.status(500).json({ error: "Failed to save payment config" });
   }
 });
@@ -173,9 +173,10 @@ router.delete("/seller-payment-configs/mine", requireSeller, async (req, res) =>
 
     res.json({ message: "Payment config removed. Your listings will fall back to COD-only." });
   } catch (err) {
-    console.error("Delete seller payment config error:", err);
+    logger.error({ err: err }, "Delete seller payment config error");
     res.status(500).json({ error: "Failed to delete payment config" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

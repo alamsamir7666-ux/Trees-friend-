@@ -31,7 +31,8 @@ function describeError(err: unknown): string {
   if (typeof err === "string") return err;
   try {
     return JSON.stringify(err);
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     return String(err);
   }
 }

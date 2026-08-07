@@ -21,7 +21,7 @@ export async function sendWhatsAppStockAlert({
 }) {
   const client = getClient();
   if (!client) {
-    console.warn("[whatsapp] Twilio not configured");
+    logger.warn("[whatsapp] Twilio not configured");
     return;
   }
 
@@ -38,8 +38,9 @@ export async function sendWhatsAppStockAlert({
       to: `whatsapp:${to}`,
       body: message,
     });
-    console.log(`[whatsapp] Sent stock alert to ${to}`);
+    logger.info(`[whatsapp] Sent stock alert to ${to}`);
   } catch (err: any) {
-    console.error("[whatsapp] Failed to send:", err?.message ?? err);
+    logger.error({ err: err?.message ?? err }, "[whatsapp] Failed to send");
   }
 }
+import { logger } from "../lib/logger";

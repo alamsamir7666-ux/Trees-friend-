@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { ordersTable, usersTable, newsletterTable } from "@workspace/db";
 import { desc, eq } from "drizzle-orm";
@@ -64,7 +65,8 @@ router.get("/admin/export/orders", requireAdmin, async (_req, res) => {
       `attachment; filename="orders_${new Date().toISOString().split("T")[0]}.csv"`,
     );
     res.send(csv);
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to export orders" });
   }
 });
@@ -89,7 +91,8 @@ router.get("/admin/export/newsletter", requireAdmin, async (_req, res) => {
       `attachment; filename="newsletter_${new Date().toISOString().split("T")[0]}.csv"`,
     );
     res.send(csv);
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to export subscribers" });
   }
 });

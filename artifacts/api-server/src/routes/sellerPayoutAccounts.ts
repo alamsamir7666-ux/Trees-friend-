@@ -54,7 +54,7 @@ router.get("/seller-payout-accounts/mine", requireSeller, async (req, res) => {
     }
     res.json(account);
   } catch (err) {
-    console.error("Get seller payout account error:", err);
+    logger.error({ err: err }, "Get seller payout account error");
     res.status(500).json({ error: "Failed to fetch payout account" });
   }
 });
@@ -102,7 +102,7 @@ router.post("/seller-payout-accounts", requireSeller, async (req, res) => {
 
     res.status(201).json(account);
   } catch (err) {
-    console.error("Create seller payout account error:", err);
+    logger.error({ err: err }, "Create seller payout account error");
     res.status(500).json({ error: "Failed to save payout account" });
   }
 });
@@ -124,9 +124,10 @@ router.delete("/seller-payout-accounts/mine", requireSeller, async (req, res) =>
     }
     res.json({ message: "Payout account removed." });
   } catch (err) {
-    console.error("Delete seller payout account error:", err);
+    logger.error({ err: err }, "Delete seller payout account error");
     res.status(500).json({ error: "Failed to delete payout account" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

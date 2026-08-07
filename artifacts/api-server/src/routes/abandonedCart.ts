@@ -8,8 +8,9 @@ import {
   usersTable,
 } from "@workspace/db";
 import { eq, lt, and, isNull } from "drizzle-orm";
-import { requireAuth } from "../middlewares/auth";
+import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { sendAbandonedCartEmail } from "../lib/email";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
@@ -69,7 +70,8 @@ router.post("/abandoned-cart/sync", requireAuth, async (req: any, res) => {
       });
 
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Failed to sync abandoned cart");
     res.status(500).json({ error: "Failed to sync cart" });
   }
 });
@@ -84,15 +86,24 @@ router.post("/abandoned-cart/recover", requireAuth, async (req: any, res) => {
       .set({ recovered: true })
       .where(eq(abandonedCartsTable.userId, req.userId));
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Failed to mark abandoned cart recovered");
     res.status(500).json({ error: "Failed to mark recovered" });
   }
 });
 
 /**
  * Admin: Get all unrecovered abandoned carts (for dashboard insight).
+ *
+ * SECURITY: requireAdmin-gated. This endpoint returns customer userId,
+ * email, and cart contents for every unrecovered abandoned cart — that's
+ * PII that must not be publicly readable. Previously this route had NO
+ * auth middleware at all (the only /admin/* route in the codebase
+ * without one), which meant anyone on the internet could fetch every
+ * customer's email and shopping cart. Fixed by adding requireAdmin,
+ * matching every other /admin/* route's protection.
  */
-router.get("/admin/abandoned-carts", async (_req, res) => {
+router.get("/admin/abandoned-carts", requireAdmin, async (_req, res) => {
   try {
     const carts = await db
       .select()
@@ -109,7 +120,8 @@ router.get("/admin/abandoned-carts", async (_req, res) => {
         updatedAt: c.updatedAt.toISOString(),
       })),
     );
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Failed to fetch abandoned carts");
     res.status(500).json({ error: "Failed to fetch abandoned carts" });
   }
 });
@@ -154,9 +166,9 @@ export async function runAbandonedCartJob() {
         .where(eq(abandonedCartsTable.id, cart.id));
     }
 
-    console.log(`[abandoned-cart] Processed ${eligibleCarts.length} carts`);
+    logger.info({ count: eligibleCarts.length }, "Abandoned cart job processed");
   } catch (err) {
-    console.error("[abandoned-cart] Job failed:", err);
+    logger.error({ err }, "Abandoned cart job failed");
   }
 }
 

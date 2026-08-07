@@ -162,7 +162,7 @@ router.post("/sellers", requireAuth, async (req: any, res) => {
 
     res.status(201).json(formatSeller(seller));
   } catch (err) {
-    console.error("Seller application error:", err);
+    logger.error({ err: err }, "Seller application error");
     res.status(500).json({ error: "Failed to submit seller application" });
   }
 });
@@ -187,7 +187,7 @@ router.post("/sellers/upload-verification-doc", requireAuth, uploadMiddleware.si
       const stream = cloudinaryV2.uploader.upload_stream(
         { folder: "treefriend/seller-verification" },
         (err, result) => {
-          if (err || !result) { console.error("Cloudinary error:", err); return reject(err ?? new Error("Upload failed")); }
+          if (err || !result) { logger.error({ err: err }, "Cloudinary error"); return reject(err ?? new Error("Upload failed")); }
           resolve(result as { secure_url: string });
         }
       );
@@ -195,7 +195,7 @@ router.post("/sellers/upload-verification-doc", requireAuth, uploadMiddleware.si
     });
     res.json({ url: result.secure_url });
   } catch (err) {
-    console.error("Seller verification doc upload error:", err);
+    logger.error({ err: err }, "Seller verification doc upload error");
     res.status(500).json({ error: "Upload failed" });
   }
 });
@@ -293,7 +293,7 @@ router.patch("/sellers/me", requireSellerAccount, async (req: any, res) => {
 
     res.json(formatSeller(updated));
   } catch (err) {
-    console.error("Update seller profile error:", err);
+    logger.error({ err: err }, "Update seller profile error");
     res.status(500).json({ error: "Failed to update profile" });
   }
 });
@@ -343,7 +343,7 @@ router.put("/sellers/me/status", requireSellerAccount, async (req: any, res) => 
 
     res.json(formatSeller(updated));
   } catch (err) {
-    console.error("Update seller status error:", err);
+    logger.error({ err: err }, "Update seller status error");
     res.status(500).json({ error: "Failed to update status" });
   }
 });
@@ -389,7 +389,7 @@ router.post("/sellers/me/request-verification", requireSellerAccount, async (req
 
     res.json(formatSeller(updated));
   } catch (err) {
-    console.error("Request seller verification error:", err);
+    logger.error({ err: err }, "Request seller verification error");
     res.status(500).json({ error: "Failed to submit verification request" });
   }
 });
@@ -427,7 +427,7 @@ router.get("/sellers/following/mine", requireAuth, async (req: any, res) => {
       })),
     );
   } catch (err) {
-    console.error("List followed sellers error:", err);
+    logger.error({ err: err }, "List followed sellers error");
     res.status(500).json({ error: "Failed to fetch followed sellers" });
   }
 });
@@ -514,7 +514,7 @@ router.get("/sellers/:id", async (req, res) => {
       followerCount: Number(followerCountRow[0]?.count ?? 0),
     });
   } catch (err) {
-    console.error("Get public seller error:", err);
+    logger.error({ err: err }, "Get public seller error");
     res.status(500).json({ error: "Failed to fetch seller" });
   }
 });
@@ -544,7 +544,7 @@ router.get("/sellers/:id/follow", requireAuth, async (req: any, res) => {
 
     res.json({ isFollowing: !!existing });
   } catch (err) {
-    console.error("Get follow status error:", err);
+    logger.error({ err: err }, "Get follow status error");
     res.status(500).json({ error: "Failed to fetch follow status" });
   }
 });
@@ -583,7 +583,7 @@ router.post("/sellers/:id/follow", requireAuth, async (req: any, res) => {
 
     res.json({ isFollowing: true });
   } catch (err) {
-    console.error("Follow seller error:", err);
+    logger.error({ err: err }, "Follow seller error");
     res.status(500).json({ error: "Failed to follow seller" });
   }
 });
@@ -607,9 +607,10 @@ router.delete("/sellers/:id/follow", requireAuth, async (req: any, res) => {
 
     res.json({ isFollowing: false });
   } catch (err) {
-    console.error("Unfollow seller error:", err);
+    logger.error({ err: err }, "Unfollow seller error");
     res.status(500).json({ error: "Failed to unfollow seller" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

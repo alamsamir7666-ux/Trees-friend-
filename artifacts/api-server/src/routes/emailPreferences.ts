@@ -1,5 +1,6 @@
 // artifacts/api-server/src/routes/emailPreferences.ts
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { emailPreferencesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -43,7 +44,8 @@ router.get("/email-preferences", requireAuth, async (req: any, res) => {
     }
 
     res.json(formatPrefs(prefs));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch preferences" });
   }
 });
@@ -80,7 +82,8 @@ router.put("/email-preferences", requireAuth, async (req: any, res) => {
       .returning();
 
     res.json(formatPrefs(prefs));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to save preferences" });
   }
 });

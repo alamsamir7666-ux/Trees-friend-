@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { productVariantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -28,7 +29,7 @@ router.get("/products/:productId/variants", async (req, res) => {
       .from(productVariantsTable)
       .where(eq(productVariantsTable.productId, productId));
     res.json(variants.map(fmt));
-  } catch { res.status(500).json({ error: "Failed to fetch variants" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to fetch variants" }); }
 });
 
 /**

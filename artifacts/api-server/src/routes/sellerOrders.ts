@@ -102,7 +102,7 @@ router.get("/seller/orders", requireSeller, async (req, res) => {
       ),
     );
   } catch (err) {
-    console.error("List seller orders error:", err);
+    logger.error({ err: err }, "List seller orders error");
     res.status(500).json({ error: "Failed to fetch orders" });
   }
 });
@@ -129,7 +129,7 @@ router.get("/seller/orders/:id", requireSeller, async (req: any, res) => {
 
     res.json(formatSellerOrder(order, shipment, buyerEmail));
   } catch (err) {
-    console.error("Get seller order error:", err);
+    logger.error({ err: err }, "Get seller order error");
     res.status(500).json({ error: "Failed to fetch order" });
   }
 });
@@ -201,16 +201,18 @@ router.put("/seller/orders/:id/status", requireSeller, async (req: any, res) => 
           newStatus: orderStatus,
         }).catch(() => {});
       }
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Route handler error");
       /* non-blocking */
     }
 
     const [shipment] = await db.select().from(orderShipmentsTable).where(eq(orderShipmentsTable.orderId, id)).limit(1);
     res.json(formatSellerOrder(updated, shipment, null));
   } catch (err) {
-    console.error("Update seller order status error:", err);
+    logger.error({ err: err }, "Update seller order status error");
     res.status(500).json({ error: "Failed to update order status" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

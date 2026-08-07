@@ -54,7 +54,7 @@ router.get("/categories/:categoryId/listing-attribute-options", async (req: any,
 
     res.json(rows.map(toOption));
   } catch (err) {
-    console.error("List listing attribute options error:", err);
+    logger.error({ err: err }, "List listing attribute options error");
     res.status(500).json({ error: "Failed to fetch listing attribute options" });
   }
 });
@@ -100,7 +100,7 @@ router.post("/admin/listing-attribute-options", requireAdmin, async (req, res) =
 
     res.status(201).json(toOption(o));
   } catch (err) {
-    console.error("Create listing attribute option error:", err);
+    logger.error({ err: err }, "Create listing attribute option error");
     res.status(500).json({ error: "Failed to create listing attribute option" });
   }
 });
@@ -134,7 +134,7 @@ router.put("/admin/listing-attribute-options/:id", requireAdmin, async (req: any
     }
     res.json(toOption(o));
   } catch (err) {
-    console.error("Update listing attribute option error:", err);
+    logger.error({ err: err }, "Update listing attribute option error");
     res.status(500).json({ error: "Failed to update listing attribute option" });
   }
 });
@@ -159,5 +159,6 @@ router.delete("/admin/listing-attribute-options/:id", requireAdmin, async (req: 
     res.status(500).json({ error: "Failed to delete listing attribute option" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

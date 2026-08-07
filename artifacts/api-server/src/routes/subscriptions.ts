@@ -1,5 +1,6 @@
 // artifacts/api-server/src/routes/subscriptions.ts
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { subscriptionsTable, productsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
@@ -49,7 +50,8 @@ router.get("/subscriptions", requireAuth, async (req: any, res) => {
       .from(subscriptionsTable)
       .where(eq(subscriptionsTable.userId, req.userId));
     res.json(subs.map(formatSub));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch subscriptions" });
   }
 });
@@ -65,7 +67,8 @@ router.get("/subscriptions/:id", requireAuth, async (req: any, res) => {
       .limit(1);
     if (!sub) { res.status(404).json({ error: "Not found" }); return; }
     res.json(formatSub(sub));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch subscription" });
   }
 });
@@ -118,7 +121,8 @@ router.post("/subscriptions", requireAuth, async (req: any, res) => {
       .returning();
 
     res.status(201).json(formatSub(sub));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to create subscription" });
   }
 });
@@ -162,7 +166,8 @@ router.patch("/subscriptions/:id", requireAuth, async (req: any, res) => {
       .returning();
 
     res.json(formatSub(updated));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to update subscription" });
   }
 });
@@ -184,7 +189,8 @@ router.delete("/subscriptions/:id", requireAuth, async (req: any, res) => {
       .where(eq(subscriptionsTable.id, id));
 
     res.json({ message: "Subscription cancelled" });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to cancel subscription" });
   }
 });
@@ -194,7 +200,8 @@ router.get("/admin/subscriptions", requireAdmin, async (_req, res) => {
   try {
     const subs = await db.select().from(subscriptionsTable);
     res.json(subs.map(formatSub));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch subscriptions" });
   }
 });

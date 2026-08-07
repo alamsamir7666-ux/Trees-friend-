@@ -89,9 +89,7 @@ export async function attemptSellerPayout(
   if (order.paymentStatus !== "paid") {
     // Delivered but never actually paid via bKash (COD, or a bkash order
     // stuck at payment_pending) -- nothing to disburse. Also not an error.
-    console.log(
-      `[payouts] Order ${order.id} paymentStatus is "${order.paymentStatus}", not "paid" -- skipping payout.`,
-    );
+    logger.info(`[payouts] Order ${order.id} paymentStatus is "${order.paymentStatus}", not "paid" -- skipping payout.`,);
     return null;
   }
 
@@ -108,7 +106,7 @@ export async function attemptSellerPayout(
     // "failed"/"pending" row does NOT hit this guard, deliberately -- see
     // RETRY POLICY note above; this is exactly what a manual retry needs
     // to pass through.
-    console.log(`[payouts] Order ${order.id} already has a successful payout, skipping.`);
+    logger.info(`[payouts] Order ${order.id} already has a successful payout, skipping.`);
     return null;
   }
 
@@ -137,7 +135,7 @@ export async function attemptSellerPayout(
         failureReason: "No payout account on file for this seller",
       })
       .returning();
-    console.log(`[payouts] Order ${order.id}: seller ${order.sellerId} has no payout account, recorded failed payout.`);
+    logger.info(`[payouts] Order ${order.id}: seller ${order.sellerId} has no payout account, recorded failed payout.`);
     return { payoutId: payoutRow.id, status: "failed" };
   }
 
@@ -165,7 +163,7 @@ export async function attemptSellerPayout(
       .update(payoutsTable)
       .set({ status: "success", bkashTransactionId: result.trxID, updatedAt: new Date() })
       .where(eq(payoutsTable.id, payoutRow.id));
-    console.log(`[payouts] Order ${order.id}: payout succeeded, trxID ${result.trxID}.`);
+    logger.info(`[payouts] Order ${order.id}: payout succeeded, trxID ${result.trxID}.`);
     return { payoutId: payoutRow.id, status: "success" };
   } catch (err) {
     const failureReason =
@@ -176,7 +174,8 @@ export async function attemptSellerPayout(
       .update(payoutsTable)
       .set({ status: "failed", failureReason, updatedAt: new Date() })
       .where(eq(payoutsTable.id, payoutRow.id));
-    console.error(`[payouts] Order ${order.id}: payout failed --`, failureReason);
+    logger.error({ orderId: order.id, failureReason }, "Payout failed");
     return { payoutId: payoutRow.id, status: "failed" };
   }
 }
+import { logger } from "../lib/logger";

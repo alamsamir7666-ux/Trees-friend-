@@ -4,6 +4,7 @@ import { ordersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { createPayment, executePayment, queryPayment, BkashApiError } from "../lib/bkash";
+import { checkoutLimiter } from "../middlewares/rateLimiter";
 
 /**
  * bKash Tokenized Checkout create -> redirect -> callback -> execute cycle
@@ -133,7 +134,7 @@ async function handleCreatePayment(order: typeof ordersTable.$inferSelect, res: 
     });
   } catch (err) {
     if (err instanceof BkashApiError) {
-      console.error("[bkash] create-payment error:", err.step, err.message);
+      logger.error({ err, step: err.step }, "bkash create-payment error");
       res.status(502).json({ error: "Couldn't start bKash payment. Please try again shortly." });
       return;
     }
@@ -157,7 +158,7 @@ async function handleCreatePayment(order: typeof ordersTable.$inferSelect, res: 
  * See order-sequencing doc comment at the top of this file for why this
  * acts on an ALREADY-CREATED order rather than creating one itself.
  */
-router.post("/bkash/create-payment", requireAuth, async (req: any, res) => {
+router.post("/bkash/create-payment", requireAuth, checkoutLimiter, async (req: any, res) => {
   try {
     const loaded = await loadOwnOrder(req);
     if ("error" in loaded) {
@@ -166,7 +167,7 @@ router.post("/bkash/create-payment", requireAuth, async (req: any, res) => {
     }
     await handleCreatePayment(loaded.order, res);
   } catch (err) {
-    console.error("[bkash] create-payment unexpected error:", err);
+    logger.error({ err: err }, "[bkash] create-payment unexpected error");
     res.status(500).json({ error: "Failed to start bKash payment" });
   }
 });
@@ -191,7 +192,7 @@ router.post("/bkash/create-payment/guest", async (req: any, res) => {
     }
     await handleCreatePayment(loaded.order, res);
   } catch (err) {
-    console.error("[bkash] create-payment (guest) unexpected error:", err);
+    logger.error({ err }, "bkash create-payment (guest) unexpected error");
     res.status(500).json({ error: "Failed to start bKash payment" });
   }
 });
@@ -262,7 +263,7 @@ router.get("/bkash/callback", async (req, res) => {
       const queried = await queryPayment({ paymentID });
       merchantInvoiceNumber = queried.merchantInvoiceNumber ?? null;
     } catch (err) {
-      console.error("[bkash] callback: query-payment lookup failed", err);
+      logger.error({ err: err }, "[bkash] callback: query-payment lookup failed");
     }
 
     if (!merchantInvoiceNumber) {
@@ -277,7 +278,7 @@ router.get("/bkash/callback", async (req, res) => {
       .limit(1);
 
     if (!order) {
-      console.error("[bkash] callback: no order matches merchantInvoiceNumber", merchantInvoiceNumber);
+      logger.error({ err: merchantInvoiceNumber }, "[bkash] callback: no order matches merchantInvoiceNumber");
       res.redirect(`${frontendBase}/orders?bkash=order_not_found`);
       return;
     }
@@ -297,7 +298,7 @@ router.get("/bkash/callback", async (req, res) => {
     try {
       executed = await executePayment({ paymentID });
     } catch (err) {
-      console.error("[bkash] callback: execute-payment failed", err);
+      logger.error({ err: err }, "[bkash] callback: execute-payment failed");
       res.redirect(`${frontendBase}${orderPath}?bkash=execute_failed`);
       return;
     }
@@ -340,7 +341,7 @@ router.get("/bkash/callback", async (req, res) => {
 
     res.redirect(`${frontendBase}${orderPath}?bkash=success`);
   } catch (err) {
-    console.error("[bkash] callback unexpected error:", err);
+    logger.error({ err: err }, "[bkash] callback unexpected error");
     res.redirect(`${frontendBase}/orders?bkash=error`);
   }
 });
@@ -362,13 +363,14 @@ router.get("/bkash/query-payment/:paymentID", requireAdmin, async (req: any, res
     res.json(result);
   } catch (err) {
     if (err instanceof BkashApiError) {
-      console.error("[bkash] query-payment error:", err.step, err.message);
+      logger.error({ err, step: err.step }, "bkash query-payment error");
       res.status(502).json({ error: "Couldn't query bKash payment status" });
       return;
     }
-    console.error("[bkash] query-payment unexpected error:", err);
+    logger.error({ err: err }, "[bkash] query-payment unexpected error");
     res.status(500).json({ error: "Failed to query payment" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

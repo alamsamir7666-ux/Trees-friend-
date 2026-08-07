@@ -473,7 +473,7 @@ router.get("/seller-listings/shop-all", async (req, res) => {
 
     return res.json({ groups: result });
   } catch (err) {
-    console.error("Shop-all seller listings error:", err);
+    logger.error({ err: err }, "Shop-all seller listings error");
     return res.status(500).json({ error: "Failed to fetch shop-all listings" });
   }
 });
@@ -612,7 +612,7 @@ router.get("/seller-listings/by-category", async (req, res) => {
 
     return res.json({ groups });
   } catch (err) {
-    console.error("By-category seller listings error:", err);
+    logger.error({ err: err }, "By-category seller listings error");
     return res.status(500).json({ error: "Failed to fetch seller listings by category" });
   }
 });
@@ -641,7 +641,7 @@ router.get("/seller-listings/mine", requireSeller, async (req, res) => {
 
     res.json(listings.map((l) => toListingWithVariants(l, variantsByListing.get(l.id) ?? [])));
   } catch (err) {
-    console.error("List my seller listings error:", err);
+    logger.error({ err: err }, "List my seller listings error");
     res.status(500).json({ error: "Failed to fetch your listings" });
   }
 });
@@ -791,7 +791,7 @@ router.post("/seller-listings", requireSeller, async (req, res) => {
 
     res.status(201).json(toListingWithVariants(listing, insertedVariants));
   } catch (err) {
-    console.error("Create seller listing error:", err);
+    logger.error({ err: err }, "Create seller listing error");
     res.status(500).json({ error: "Failed to create listing" });
   }
 });
@@ -1077,7 +1077,7 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
 
     res.json(toListingWithVariants(updated, finalVariants));
   } catch (err) {
-    console.error("Update seller listing error:", err);
+    logger.error({ err: err }, "Update seller listing error");
     res.status(500).json({ error: "Failed to update listing" });
   }
 });
@@ -1148,7 +1148,7 @@ router.post("/seller-listings/upload-image", requireSeller, uploadMiddleware.arr
               { folder: "treefriend/seller-listings", quality: 80, format: "webp" },
               (err, result) => {
                 if (err || !result) {
-                  console.error("Cloudinary error:", err);
+                  logger.error({ err: err }, "Cloudinary error");
                   return reject(err ?? new Error("Upload failed"));
                 }
                 resolve(result.secure_url);
@@ -1160,7 +1160,7 @@ router.post("/seller-listings/upload-image", requireSeller, uploadMiddleware.arr
     );
     res.json({ urls });
   } catch (err) {
-    console.error("Seller listing image upload error:", err);
+    logger.error({ err: err }, "Seller listing image upload error");
     res.status(500).json({ error: "Upload failed" });
   }
 });
@@ -1300,7 +1300,7 @@ router.get("/products/:productId/seller-listings", async (req: any, res) => {
 
     res.json(cards.map(({ qualifyingVariants, ...card }) => card));
   } catch (err) {
-    console.error("List product seller listings error:", err);
+    logger.error({ err: err }, "List product seller listings error");
     res.status(500).json({ error: "Failed to fetch seller listings" });
   }
 });
@@ -1379,7 +1379,7 @@ router.get("/seller-listings/:id", async (req, res) => {
       reviewCount: Number(stats.count),
     });
   } catch (err) {
-    console.error("Get seller listing by id error:", err);
+    logger.error({ err: err }, "Get seller listing by id error");
     res.status(500).json({ error: "Failed to fetch listing" });
   }
 });
@@ -1494,7 +1494,7 @@ router.get("/sellers/:id/listings", async (req: any, res) => {
 
     res.json(cards.map(({ qualifyingVariants, ...card }) => card));
   } catch (err) {
-    console.error("List seller listings error:", err);
+    logger.error({ err: err }, "List seller listings error");
     res.status(500).json({ error: "Failed to fetch seller's listings" });
   }
 });
@@ -1569,7 +1569,7 @@ router.get("/sellers/:id/reviews", async (req: any, res) => {
       ratingBreakdown,
     });
   } catch (err) {
-    console.error("List seller reviews error:", err);
+    logger.error({ err: err }, "List seller reviews error");
     res.status(500).json({ error: "Failed to fetch seller's reviews" });
   }
 });
@@ -1678,5 +1678,6 @@ router.put("/admin/seller-listings/:id/reject", requireAdmin, async (req: any, r
     res.status(500).json({ error: "Failed to reject listing" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

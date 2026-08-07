@@ -1,23 +1,92 @@
 /**
- * Simple in-memory rate limiter.
- * For production with multiple instances, replace with Redis-backed limiter
- * using the `rate-limiter-flexible` package.
+ * Redis-backed rate limiter (Upstash).
+ *
+ * Why Redis:
+ *   The previous implementation used an in-memory Map + setInterval
+ *   cleanup. On Vercel (and any multi-instance deployment), that's
+ *   broken: every Lambda instance has its own Map, so a determined
+ *   attacker hitting different instances is never throttled. The
+ *   setInterval cleanup also doesn't run reliably on serverless
+ *   (frozen between invocations).
+ *
+ *   Upstash Redis is HTTP-based (no persistent connection), so it works
+ *   in serverless environments where TCP connection pooling doesn't.
+ *   The @upstash/ratelimit package implements the sliding-window
+ *   algorithm on top of it, which is the industry standard for
+ *   distributed rate limiting.
+ *
+ * Configuration:
+ *   Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in your env
+ *   vars (Vercel → Storage → Upstash Integration → Connect to project).
+ *   If unset, the limiter falls back to an in-memory Map for local dev
+ *   — NEVER use this fallback in production. The fallback logs a
+ *   prominent warning on first use.
+ *
+ * Per-user vs per-IP:
+ *   The key is `prefix:ip:userId`. userId is populated when the limiter
+ *   runs AFTER requireAuth (see app.ts — limiters are now mounted after
+ *   Clerk middleware, and per-route limiters run after requireAuth in
+ *   their respective route files). When userId is unavailable (pre-auth
+ *   routes like /mobile-auth/sign-in), the key degrades to IP-only,
+ *   which is still correct for credential-guessing protection.
  */
 
-interface RateLimitEntry {
+import { Ratelimit } from "@upstash/ratelimit";
+import { Redis } from "@upstash/redis";
+import type { Request, Response, NextFunction } from "express";
+import { logger } from "../lib/logger";
+
+// ─── Redis client (lazy-init, falls back to in-memory for dev) ──────────────
+
+let _redis: Redis | null = null;
+let _redisInitAttempted = false;
+let _fallbackWarned = false;
+
+function getRedis(): Redis | null {
+  if (_redisInitAttempted) return _redis;
+  _redisInitAttempted = true;
+
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (!url || !token) {
+    // Fall back to in-memory for local dev. The fallback limiter is
+    // created by createRateLimiter below when getRedis() returns null.
+    return null;
+  }
+
+  try {
+    _redis = new Redis({ url, token });
+    logger.info("Rate limiter: connected to Upstash Redis");
+  } catch (err) {
+    logger.error({ err }, "Rate limiter: failed to connect to Upstash Redis, falling back to in-memory (NOT production-safe)");
+  }
+  return _redis;
+}
+
+// ─── In-memory fallback (dev only) ──────────────────────────────────────────
+
+interface InMemoryEntry {
   count: number;
   resetAt: number;
 }
 
-const store = new Map<string, RateLimitEntry>();
+const inMemoryStore = new Map<string, InMemoryEntry>();
 
-// Clean up expired entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of store.entries()) {
-    if (entry.resetAt < now) store.delete(key);
-  }
-}, 5 * 60 * 1000);
+// Clean up expired entries every 5 minutes. This interval only runs on
+// long-lived processes (Render) — on Vercel serverless it's a no-op
+// (frozen between invocations), which is fine because the fallback is
+// dev-only.
+if (typeof setInterval !== "undefined") {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of inMemoryStore.entries()) {
+      if (entry.resetAt < now) inMemoryStore.delete(key);
+    }
+  }, 5 * 60 * 1000).unref?.();
+}
+
+// ─── Rate limiter factory ───────────────────────────────────────────────────
 
 export function createRateLimiter(options: {
   windowMs: number;
@@ -25,22 +94,91 @@ export function createRateLimiter(options: {
   message?: string;
   keyPrefix?: string;
 }) {
-  const { windowMs, max, message = "Too many requests. Please try again later.", keyPrefix = "rl" } = options;
+  const {
+    windowMs,
+    max,
+    message = "Too many requests. Please try again later.",
+    keyPrefix = "rl",
+  } = options;
 
-  return function rateLimitMiddleware(req: any, res: any, next: any) {
-    // Key: prefix + IP + optional userId
+  // Upstash ratelimit instance (created once per limiter, reused across
+  // requests). Uses the sliding-window algorithm for accuracy.
+  // Created lazily inside the middleware so we don't construct it at
+  // module-load time (when Redis env vars may not be set yet in dev).
+  let upstashLimiter: Ratelimit | null = null;
+  function getLimiter(): Ratelimit | null {
+    const redis = getRedis();
+    if (!redis) return null;
+    if (!upstashLimiter) {
+      upstashLimiter = new Ratelimit({
+        redis,
+        limiter: Ratelimit.slidingWindow(max, `${windowMs}ms`),
+        prefix: `ratelimit:${keyPrefix}`,
+        analytics: process.env.NODE_ENV === "production",
+      });
+    }
+    return upstashLimiter;
+  }
+
+  return async function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
+    // Key: prefix + IP + optional userId (populated when this limiter
+    // runs after requireAuth). userId is undefined for pre-auth routes
+    // like /mobile-auth/sign-in, which is fine — IP-only is still
+    // correct there.
     const ip = req.ip ?? req.socket?.remoteAddress ?? "unknown";
     const userId = req.userId ?? "";
-    const key = `${keyPrefix}:${ip}:${userId}`;
+    const key = `${ip}:${userId}`;
 
+    const redis = getRedis();
+
+    if (redis) {
+      // ─── Production path: Upstash Redis ───
+      const limiter = getLimiter();
+      if (limiter) {
+        try {
+          const result = await limiter.limit(key);
+          res.setHeader("X-RateLimit-Limit", max);
+          res.setHeader("X-RateLimit-Remaining", Math.max(0, result.remaining));
+          res.setHeader("X-RateLimit-Reset", Math.ceil(result.reset / 1000));
+
+          if (!result.success) {
+            res.status(429).json({ error: message });
+            return;
+          }
+          next();
+          return;
+        } catch (err) {
+          // If Redis is unreachable, log and FAIL OPEN (allow the request).
+          // Failing closed would block every user during a Redis outage —
+          // a worse outcome than letting a few extra requests through.
+          // The global apiLimiter still provides some protection.
+          logger.error({ err, keyPrefix }, "Rate limiter: Redis error, failing open");
+          next();
+          return;
+        }
+      }
+    }
+
+    // ─── Dev fallback: in-memory Map ───
+    if (!_fallbackWarned && process.env.NODE_ENV === "production") {
+      logger.warn(
+        "Rate limiter: UPSTASH_REDIS_REST_URL not set — using in-memory fallback. " +
+          "This is NOT safe for production multi-instance deployments. " +
+          "Add Upstash Redis via Vercel → Storage → Upstash Integration.",
+      );
+      _fallbackWarned = true;
+    }
+
+    const memKey = `${keyPrefix}:${key}`;
     const now = Date.now();
-    const entry = store.get(key);
+    const entry = inMemoryStore.get(memKey);
 
     if (!entry || entry.resetAt < now) {
-      store.set(key, { count: 1, resetAt: now + windowMs });
+      inMemoryStore.set(memKey, { count: 1, resetAt: now + windowMs });
       res.setHeader("X-RateLimit-Limit", max);
       res.setHeader("X-RateLimit-Remaining", max - 1);
-      return next();
+      next();
+      return;
     }
 
     entry.count++;
@@ -53,7 +191,6 @@ export function createRateLimiter(options: {
       res.status(429).json({ error: message });
       return;
     }
-
     next();
   };
 }
@@ -71,21 +208,30 @@ export function createRateLimiter(options: {
  * the others.
  */
 export function chainRateLimiters(...limiters: ReturnType<typeof createRateLimiter>[]) {
-  return function chainedRateLimitMiddleware(req: any, res: any, next: any) {
+  return async function chainedRateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
     let i = 0;
-    function run() {
+    async function run() {
       if (i >= limiters.length) return next();
       const limiter = limiters[i++];
-      limiter(req, res, (err?: unknown) => {
-        if (err) return next(err);
-        run();
+      await new Promise<void>((resolve, reject) => {
+        limiter(req, res, (err?: unknown) => {
+          if (err) return reject(err);
+          resolve();
+        });
       });
+      if (res.headersSent) return; // a limiter sent a 429
+      await run();
     }
-    run();
+    try {
+      await run();
+    } catch (err) {
+      next(err);
+    }
   };
 }
 
-// Pre-configured limiters
+// ─── Pre-configured limiters ────────────────────────────────────────────────
+
 export const apiLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,   // 15 minutes
   max: 200,

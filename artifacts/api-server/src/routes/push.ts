@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { requireAuth } from "../middlewares/auth";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
@@ -35,7 +36,8 @@ router.post("/push/subscribe", requireAuth, async (req: any, res) => {
     });
 
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to save subscription" });
   }
 });
@@ -51,7 +53,8 @@ router.post("/push/unsubscribe", requireAuth, async (req: any, res) => {
       DELETE FROM push_subscriptions WHERE endpoint = ${endpoint}
     `).catch(() => {});
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to remove subscription" });
   }
 });

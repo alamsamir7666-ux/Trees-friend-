@@ -16,6 +16,8 @@ import {
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import { sendOrderConfirmation } from "../lib/email";
+import { logger } from "../lib/logger";
+import { checkoutLimiter } from "../middlewares/rateLimiter";
 import crypto from "crypto";
 import { awardPoints, redeemPoints, TAKA_PER_POINT } from "./loyalty";
 import type { OrderItem } from "@workspace/db";
@@ -227,7 +229,7 @@ router.post("/orders/guest", async (req: any, res) => {
 
     res.status(201).json({ id: order.id, trackingId: order.trackingId });
   } catch (err: any) {
-    console.error("guest order error:", err?.message);
+    logger.error({ err: err }, "guest order error");
     res.status(500).json({ error: "Failed to place order" });
   }
 });
@@ -288,7 +290,7 @@ router.post("/orders/guest", async (req: any, res) => {
  * required when method === "bkash".
  */
 
-router.post("/orders", requireAuth, async (req: any, res) => {
+router.post("/orders", requireAuth, checkoutLimiter, async (req: any, res) => {
   try {
     const {
       paymentMethod,
@@ -524,70 +526,96 @@ router.post("/orders", requireAuth, async (req: any, res) => {
     }
 
     const trackingId = () => "EE" + crypto.randomBytes(4).toString("hex").toUpperCase();
-    const createdOrders: (typeof ordersTable.$inferSelect)[] = [];
 
-    for (const g of groups) {
-      const method = resolvedPaymentMethods.get(g.sellerId)!;
-      const groupSenderNumber = resolvedSenderNumbers.get(g.sellerId) ?? null;
-      const groupDeliveryFee = g.lines.reduce((s, l) => s + l.deliveryCharge, 0);
-      const groupTotal = Math.max(0, g.subtotal - g.discountAmount + groupDeliveryFee);
-      // Part 2: "bkash" now creates the order BEFORE any bKash API call has
-      // happened at all -- see PART2_HANDOFF.md's order-sequencing
-      // decision. "payment_pending" (new value, distinct from the old
-      // "pending_verification") specifically means "a real bKash Create
-      // Payment/Execute Payment cycle for this order hasn't completed yet"
-      // -- routes/bkashPayment.ts's callback handler is the only place
-      // that ever moves an order OUT of this status (to "paid" on success;
-      // left as "payment_pending" -- not "failed" -- on a bKash-side
-      // cancel/failure, so the buyer can retry payment against the SAME
-      // order via a fresh Create Payment call rather than the order being
-      // silently dead-ended; see that route's doc comment for the full
-      // "pending_verification" is intentionally left alone and untouched by
-      // this part -- it remains preOrders.ts's status from the old manual
-      // payment-matching flow (since removed), not reused here, so a stale
-      // reader of "pending_verification" doesn't silently pick up unrelated
-      // bKash-in-progress orders.
-      const paymentStatus = method === "cod" ? "pending" : "payment_pending";
+    // ─── ATOMIC CHECKOUT TRANSACTION ────────────────────────────────────────
+    // All order writes (insert orders, delete cart, decrement stock) MUST be
+    // atomic. Previously these were separate SQL statements — a mid-checkout
+    // failure (DB blip, FK violation, deadlock) left the buyer with partial
+    // orders, decremented stock without orders, or a deleted cart with no
+    // orders. Now wrapped in a single db.transaction: either all writes
+    // commit together, or all roll back together.
+    //
+    // Side effects (loyalty points, email confirmation, address auto-save)
+    // are deliberately OUTSIDE the transaction — they're fire-and-forget
+    // (.catch(() => {})) and don't need to block the order commit. If they
+    // fail after the order is committed, the order still exists; the buyer
+    // just doesn't get the email. That's the correct failure mode.
+    const createdOrders = await db.transaction(async (tx) => {
+      const created: (typeof ordersTable.$inferSelect)[] = [];
 
-      const [order] = await db
-        .insert(ordersTable)
-        .values({
-          trackingId: trackingId(),
-          userId: req.userId,
-          sellerId: g.sellerId,
-          items: g.lines.map((l) => l.orderItem),
-          totalAmount: String(groupTotal),
-          paymentMethod: method,
-          paymentStatus,
-          orderStatus: "pending",
-          transactionId: method === "bkash" ? null : (transactionId?.trim() ?? null),
-          senderNumber: method === "bkash" ? null : groupSenderNumber,
-          shippingAddress,
-          couponCode: g.discountAmount > 0 && couponCode ? couponCode : null,
-          discountAmount: String(g.discountAmount),
-          giftWrap: giftWrap ? "true" : "false",
-          giftMessage: giftWrap ? giftMessage : null,
-        })
-        .returning();
-      createdOrders.push(order);
-    }
+      for (const g of groups) {
+        const method = resolvedPaymentMethods.get(g.sellerId)!;
+        const groupSenderNumber = resolvedSenderNumbers.get(g.sellerId) ?? null;
+        const groupDeliveryFee = g.lines.reduce((s, l) => s + l.deliveryCharge, 0);
+        const groupTotal = Math.max(0, g.subtotal - g.discountAmount + groupDeliveryFee);
+        // Part 2: "bkash" now creates the order BEFORE any bKash API call has
+        // happened at all -- see PART2_HANDOFF.md's order-sequencing
+        // decision. "payment_pending" (new value, distinct from the old
+        // "pending_verification") specifically means "a real bKash Create
+        // Payment/Execute Payment cycle for this order hasn't completed yet"
+        // -- routes/bkashPayment.ts's callback handler is the only place
+        // that ever moves an order OUT of this status (to "paid" on success;
+        // left as "payment_pending" -- not "failed" -- on a bKash-side
+        // cancel/failure, so the buyer can retry payment against the SAME
+        // order via a fresh Create Payment call rather than the order being
+        // silently dead-ended; see that route's doc comment for the full
+        // "pending_verification" is intentionally left alone and untouched by
+        // this part -- it remains preOrders.ts's status from the old manual
+        // payment-matching flow (since removed), not reused here, so a stale
+        // reader of "pending_verification" doesn't silently pick up unrelated
+        // bKash-in-progress orders.
+        const paymentStatus = method === "cod" ? "pending" : "payment_pending";
 
-    await db.delete(cartItemsTable).where(eq(cartItemsTable.userId, req.userId));
+        const [order] = await tx
+          .insert(ordersTable)
+          .values({
+            trackingId: trackingId(),
+            userId: req.userId,
+            sellerId: g.sellerId,
+            items: g.lines.map((l) => l.orderItem),
+            totalAmount: String(groupTotal),
+            paymentMethod: method,
+            paymentStatus,
+            orderStatus: "pending",
+            transactionId: method === "bkash" ? null : (transactionId?.trim() ?? null),
+            senderNumber: method === "bkash" ? null : groupSenderNumber,
+            shippingAddress,
+            couponCode: g.discountAmount > 0 && couponCode ? couponCode : null,
+            discountAmount: String(g.discountAmount),
+            giftWrap: giftWrap ? "true" : "false",
+            giftMessage: giftWrap ? giftMessage : null,
+          })
+          .returning();
+        created.push(order);
+      }
 
-    await Promise.all([
-      ...variantLines.map(({ cart, variant }) =>
-        db.update(productVariantsTable).set({ stock: Math.max(0, variant.stock - cart.quantity) }).where(eq(productVariantsTable.id, variant.id))
-      ),
-      // Phase 2: stock decrement moves to sellerListingVariantsTable -- the
-      // listing itself no longer carries stock/availableQuantity.
-      ...listingLines.map(({ cart, variant }) =>
-        db.update(sellerListingVariantsTable).set({
-          stock: Math.max(0, variant.stock - cart.quantity),
-          availableQuantity: Math.max(0, variant.availableQuantity - cart.quantity),
-          updatedAt: new Date(),
-        }).where(eq(sellerListingVariantsTable.id, variant.id))
-      ),
-    ]);
+      // Delete the buyer's cart now that every order has been inserted.
+      // Inside the transaction so a stock-decrement failure below rolls
+      // back the cart deletion too — without this, a failed checkout would
+      // leave the buyer with an empty cart and no orders.
+      await tx.delete(cartItemsTable).where(eq(cartItemsTable.userId, req.userId));
+
+      // Decrement stock on every purchased variant. Inside the transaction
+      // so a failure here rolls back the order inserts — without this, a
+      // stock mismatch would create orders for items that weren't actually
+      // in stock.
+      await Promise.all([
+        ...variantLines.map(({ cart, variant }) =>
+          tx.update(productVariantsTable).set({ stock: Math.max(0, variant.stock - cart.quantity) }).where(eq(productVariantsTable.id, variant.id))
+        ),
+        // Phase 2: stock decrement moves to sellerListingVariantsTable -- the
+        // listing itself no longer carries stock/availableQuantity.
+        ...listingLines.map(({ cart, variant }) =>
+          tx.update(sellerListingVariantsTable).set({
+            stock: Math.max(0, variant.stock - cart.quantity),
+            availableQuantity: Math.max(0, variant.availableQuantity - cart.quantity),
+            updatedAt: new Date(),
+          }).where(eq(sellerListingVariantsTable.id, variant.id))
+        ),
+      ]);
+
+      return created;
+    });
 
     // Loyalty points redeem/award once at the grand-total level (a single
     // ledger event), not once per resulting order -- points are a
@@ -667,7 +695,7 @@ router.post("/orders", requireAuth, async (req: any, res) => {
     // cost of every caller expecting an array. See CheckoutPage.tsx.
     res.status(201).json(createdOrders.map(formatOrder));
   } catch (err) {
-    console.error("order creation error:", err);
+    logger.error({ err, userId: req.userId }, "Order creation failed");
     res.status(500).json({ error: "Failed to create order" });
   }
 });

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { productsTable, productVariantsTable, categoriesTable } from "@workspace/db";
 import { requireAdmin } from "../middlewares/auth";
@@ -314,7 +315,8 @@ router.post("/admin/products/bulk-import", requireAdmin, async (req: any, res) =
         + `add price/stock for these products via seller listings instead.`
         + (errors.length > 0 ? ` ${errors.length} row(s) failed.` : ""),
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to process CSV import" });
   }
 });

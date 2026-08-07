@@ -65,9 +65,10 @@ router.get("/seller/monthly-history", requireSeller, async (req: any, res) => {
 
     res.json({ records, months });
   } catch (err) {
-    console.error("Seller monthly history error:", err);
+    logger.error({ err: err }, "Seller monthly history error");
     res.status(500).json({ error: "Failed to fetch monthly history" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

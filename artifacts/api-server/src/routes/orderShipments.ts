@@ -82,7 +82,7 @@ router.get("/seller/orders/:orderId/shipment", requireSeller, async (req: any, r
       .limit(1);
     res.json(shipment ? formatShipment(shipment) : null);
   } catch (err) {
-    console.error("Get shipment error:", err);
+    logger.error({ err: err }, "Get shipment error");
     res.status(500).json({ error: "Failed to fetch shipment" });
   }
 });
@@ -196,7 +196,7 @@ router.post("/seller/orders/:orderId/book-courier", requireSeller, async (req: a
       });
     } catch (err) {
       const message = err instanceof CourierBookingError ? err.message : "Courier booking failed";
-      console.error("Courier booking error:", err instanceof CourierBookingError ? { message: err.message, provider: err.provider, raw: err.raw } : err);
+      logger.error({ err: err instanceof CourierBookingError ? { message: err.message, provider: err.provider, raw: err.raw } : err }, "Courier booking error");
       res.status(502).json({ error: message });
       return;
     }
@@ -230,7 +230,7 @@ router.post("/seller/orders/:orderId/book-courier", requireSeller, async (req: a
 
     res.status(201).json(formatShipment(shipment));
   } catch (err) {
-    console.error("Book courier error:", err);
+    logger.error({ err: err }, "Book courier error");
     res.status(500).json({ error: "Failed to book courier" });
   }
 });
@@ -287,7 +287,7 @@ router.put("/seller/orders/:orderId/shipment-status", requireSeller, async (req:
 
     res.json(formatShipment(shipment));
   } catch (err) {
-    console.error("Update shipment status error:", err);
+    logger.error({ err: err }, "Update shipment status error");
     res.status(500).json({ error: "Failed to update shipment status" });
   }
 });
@@ -321,9 +321,10 @@ router.get("/orders/:orderId/shipment", requireAuth, async (req: any, res) => {
       .limit(1);
     res.json(shipment ? formatShipment(shipment) : null);
   } catch (err) {
-    console.error("Get buyer shipment error:", err);
+    logger.error({ err: err }, "Get buyer shipment error");
     res.status(500).json({ error: "Failed to fetch shipment" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

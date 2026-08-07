@@ -2,6 +2,7 @@ import { Router } from "express";
 import multerPkg from "multer";
 import { v2 as cloudinaryV2 } from "cloudinary";
 import { requireAdmin, requireAuth } from "../middlewares/auth";
+import { logger } from "../lib/logger";
 
 cloudinaryV2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -34,7 +35,7 @@ router.post("/assets/upload", requireAuth, requireAdmin, uploadMiddleware.single
       const stream = cloudinaryV2.uploader.upload_stream(
         { folder: "envyenhance/assets" },
         (err, result) => {
-          if (err || !result) { console.error("Cloudinary error:", err); return reject(err ?? new Error("Upload failed")); }
+          if (err || !result) { logger.error({ err: err }, "Cloudinary error"); return reject(err ?? new Error("Upload failed")); }
           resolve(result as { secure_url: string });
         }
       );
@@ -42,8 +43,8 @@ router.post("/assets/upload", requireAuth, requireAdmin, uploadMiddleware.single
     });
     res.json({ url: result.secure_url });
   } catch (err) {
-    console.error("Asset upload endpoint error:", err);
-    res.status(500).json({ error: "Upload failed", details: String(err) });
+    logger.error({ err }, "Asset upload failed");
+    res.status(500).json({ error: "Upload failed" });
   }
 });
 

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { productsTable, categoriesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -58,7 +59,8 @@ ${allUrls
     res.setHeader("Content-Type", "application/xml");
     res.setHeader("Cache-Control", "public, max-age=3600"); // Cache 1 hour
     res.send(xml);
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).send("Failed to generate sitemap");
   }
 });

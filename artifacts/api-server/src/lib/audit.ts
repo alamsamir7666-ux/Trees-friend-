@@ -30,6 +30,7 @@ export async function logAudit({
     });
   } catch (e) {
     // Never let audit logging break the main action
-    console.error("Audit log failed:", e);
+    logger.error({ err: e }, "Audit log failed");
   }
 }
+import { logger } from "../lib/logger";

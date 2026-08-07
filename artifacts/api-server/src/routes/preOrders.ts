@@ -2,7 +2,8 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { preOrdersTable, productsTable, sellerListingVariantsTable } from "@workspace/db";
 import { eq, and, or, isNull } from "drizzle-orm";
-import { requireAuth } from "../middlewares/auth";
+import { requireAuth, requireAdmin } from "../middlewares/auth";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
@@ -67,7 +68,7 @@ router.post("/pre-orders", requireAuth, async (req, res) => {
     });
     res.status(201).json({ message: "Pre-order placed!", trackingId, deliveryCharge, discountedPrice });
   } catch (err) {
-    console.error("[pre-order] Failed:", err);
+    logger.error({ err }, "Pre-order placement failed");
     res.status(500).json({ error: "Failed to place pre-order" });
   }
 });
@@ -94,7 +95,10 @@ router.get("/pre-orders/track/:trackingId", async (req, res) => {
     const [order] = await db.select().from(preOrdersTable).where(eq(preOrdersTable.trackingId, trackingId)).limit(1);
     if (!order) { res.status(404).json({ error: "Not found" }); return; }
     res.json(order);
-  } catch { res.status(500).json({ error: "Failed" }); }
+  } catch (err) {
+    logger.error({ err, trackingId: req.params.trackingId }, "Failed to track pre-order");
+    res.status(500).json({ error: "Failed" });
+  }
 });
 
 router.get("/pre-orders/my", requireAuth, async (req, res) => {
@@ -102,10 +106,27 @@ router.get("/pre-orders/my", requireAuth, async (req, res) => {
     const userId = req.userId!;
     const orders = await db.select().from(preOrdersTable).where(eq(preOrdersTable.userId, userId));
     res.json(orders);
-  } catch { res.status(500).json({ error: "Failed" }); }
+  } catch (err) {
+    logger.error({ err, userId: req.userId }, "Failed to fetch my pre-orders");
+    res.status(500).json({ error: "Failed" });
+  }
 });
 
-router.post("/pre-orders/:id/status", async (req, res) => {
+/**
+ * Update a pre-order's status (pending → confirmed → arrived_in_bd →
+ * shipped → delivered, or → cancelled). Admin-only — this is a
+ * fulfillment-state mutation, not a buyer-facing action.
+ *
+ * SECURITY: requireAdmin-gated. Previously this route had NO auth
+ * middleware at all, which meant anyone on the internet could change
+ * any pre-order's status to any value (delivered, cancelled, etc.) by
+ * guessing or enumerating the numeric id. The same file's POST
+ * /pre-orders route correctly used requireAuth, so this was an
+ * inconsistency — likely an oversight, not a deliberate public
+ * endpoint. Fixed by adding requireAdmin, matching every other
+ * status-mutation route in admin.ts.
+ */
+router.post("/pre-orders/:id/status", requireAdmin, async (req, res) => {
   try {
     const { status, cancellationReason } = req.body;
     const [current] = await db.select().from(preOrdersTable).where(eq(preOrdersTable.id, Number(req.params.id))).limit(1);
@@ -113,11 +134,14 @@ router.post("/pre-orders/:id/status", async (req, res) => {
     if (current.status === "delivered" || current.status === "cancelled") {
       res.status(400).json({ error: "Cannot change status of delivered or cancelled pre-orders" }); return;
     }
-    const updateData: any = { status, updatedAt: new Date() };
+    const updateData: Record<string, unknown> = { status, updatedAt: new Date() };
     if (status === "cancelled" && cancellationReason) updateData.cancellationReason = cancellationReason;
     const [order] = await db.update(preOrdersTable).set(updateData).where(eq(preOrdersTable.id, Number(req.params.id))).returning();
     res.json(order);
-  } catch { res.status(500).json({ error: "Failed" }); }
+  } catch (err) {
+    logger.error({ err, preOrderId: req.params.id }, "Failed to update pre-order status");
+    res.status(500).json({ error: "Failed" });
+  }
 });
 
 /**
@@ -175,7 +199,7 @@ export async function notifyPreOrderCustomers(productId: number, productName: st
       : and(eq(preOrdersTable.productId, productId), eq(preOrdersTable.status, "pending"));
 
     const orders = await db.select().from(preOrdersTable).where(scope);
-    console.log(`[pre-order] Notifying ${orders.length} customers`);
+    logger.info({ count: orders.length, productId, sellerListingVariantId }, "Notifying pre-order customers");
     for (const order of orders) {
       if (order.whatsappPhone) {
         const phone = order.whatsappPhone.replace(/[^+\d]/g, "");
@@ -189,11 +213,15 @@ export async function notifyPreOrderCustomers(productId: number, productName: st
             to: `whatsapp:${to}`,
             body: `🌸 *Tree Friend*\n\nGreat news! Your pre-ordered *${productName}* has arrived and is now being shipped to you! 🚚\n\nExpected delivery: 2-3 days.\n\nTrack: ${siteUrl}/track\n\nThank you for your patience! 💕`,
           });
-        } catch (err: any) { console.error(`[pre-order] WhatsApp failed:`, err?.message); }
+        } catch (err) {
+          logger.error({ err, orderId: order.id }, "Pre-order WhatsApp notification failed");
+        }
       }
       await db.update(preOrdersTable).set({ status: "shipped", notifiedAt: new Date(), updatedAt: new Date() }).where(eq(preOrdersTable.id, order.id));
     }
-  } catch (err) { console.error("[pre-order] notify failed:", err); }
+  } catch (err) {
+    logger.error({ err, productId, sellerListingVariantId }, "Pre-order customer notification failed");
+  }
 }
 
 export default router;

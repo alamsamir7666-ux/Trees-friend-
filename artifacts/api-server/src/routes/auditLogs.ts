@@ -34,7 +34,7 @@ export async function logAdminAction({
       after: after ?? null,
     });
   } catch (err) {
-    console.error("[audit] logAdminAction failed:", err);
+    logger.error({ err: err }, "[audit] logAdminAction failed");
   }
 }
 
@@ -60,9 +60,11 @@ router.get("/admin/audit-logs", requireAdmin, async (req, res) => {
         createdAt: l.createdAt.toISOString(),
       })),
     );
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch audit logs" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

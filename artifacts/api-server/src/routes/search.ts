@@ -1,5 +1,6 @@
 // Fast autocomplete endpoint — add this to routes/index.ts
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import {
   productsTable,
@@ -134,7 +135,8 @@ router.get("/search/autocomplete", async (req, res) => {
       }),
       categories,
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Search failed" });
   }
 });

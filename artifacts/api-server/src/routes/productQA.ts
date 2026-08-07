@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { productQATable, ordersTable, sellerListingsTable } from "@workspace/db";
 import { eq, and, sql, desc, gt, isNull } from "drizzle-orm";
@@ -40,7 +41,8 @@ router.get("/products/:productId/qa", async (req, res) => {
         createdAt: q.createdAt.toISOString(),
       })),
     );
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch Q&A" });
   }
 });
@@ -97,7 +99,8 @@ router.post("/products/:productId/qa", requireAuth, async (req: any, res) => {
       answeredAt: null,
       createdAt: qa.createdAt.toISOString(),
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to post question" });
   }
 });
@@ -139,7 +142,8 @@ router.get("/seller-listings/:sellerListingId/qa", async (req, res) => {
         createdAt: q.createdAt.toISOString(),
       })),
     );
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch Q&A" });
   }
 });
@@ -204,7 +208,8 @@ router.post("/seller-listings/:sellerListingId/qa", requireAuth, async (req: any
       answeredAt: null,
       createdAt: qa.createdAt.toISOString(),
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to post question" });
   }
 });
@@ -255,7 +260,8 @@ router.put("/seller/qa/:id/answer", requireSeller, async (req: any, res) => {
       answeredAt: qa.answeredAt?.toISOString() ?? null,
       createdAt: qa.createdAt.toISOString(),
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to post answer" });
   }
 });
@@ -288,7 +294,8 @@ router.put("/admin/qa/:id/answer", requireAdmin, async (req: any, res) => {
       return;
     }
     res.json(qa);
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to post answer" });
   }
 });
@@ -302,7 +309,8 @@ router.delete("/admin/qa/:id", requireAdmin, async (req: any, res) => {
     }
     await db.delete(productQATable).where(eq(productQATable.id, id));
     res.json({ message: "Deleted" });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to delete question" });
   }
 });
@@ -315,7 +323,8 @@ router.get("/admin/qa/unanswered", requireAdmin, async (_req, res) => {
       .where(sql`answer IS NULL`)
       .orderBy(productQATable.createdAt);
     res.json(questions);
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch questions" });
   }
 });

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import {
   wishlistTable,
@@ -161,7 +162,7 @@ router.post("/wishlist/:productId", requireAuth, async (req: any, res) => {
   const productId = parseInt(req.params.productId);
   try {
     await db.insert(wishlistTable).values({ userId: req.userId, productId });
-  } catch {}
+  } catch (err) { logger.error({ err }, "Unhandled error in route"); }
   res.json({ message: "Added to wishlist" });
 });
 
@@ -202,7 +203,7 @@ router.post("/wishlist/seller-listing-variant/:variantId", requireAuth, async (r
       productId: listing.productId,
       sellerListingVariantId,
     });
-  } catch {}
+  } catch (err) { logger.error({ err }, "Unhandled error in route"); }
   res.json({ message: "Added to wishlist" });
 });
 

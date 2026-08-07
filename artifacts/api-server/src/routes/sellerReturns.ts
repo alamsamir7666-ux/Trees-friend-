@@ -122,7 +122,7 @@ router.get("/seller/returns", requireSeller, async (req: any, res) => {
 
     res.json({ returns: result, page, limit, total: Number(total), totalPages: Math.max(1, Math.ceil(Number(total) / limit)) });
   } catch (err) {
-    console.error("List seller returns error:", err);
+    logger.error({ err: err }, "List seller returns error");
     res.status(500).json({ error: "Failed to fetch returns" });
   }
 });
@@ -178,7 +178,7 @@ router.get("/seller/returns/:id", requireSeller, async (req: any, res) => {
       customerEmail: buyerEmail,
     });
   } catch (err) {
-    console.error("Get seller return error:", err);
+    logger.error({ err: err }, "Get seller return error");
     res.status(500).json({ error: "Failed to fetch return" });
   }
 });
@@ -282,9 +282,10 @@ router.put("/seller/returns/:id", requireSeller, sellerReturnWriteLimiter, async
 
     res.json(fmt(updated));
   } catch (err) {
-    console.error("Update seller return error:", err);
+    logger.error({ err: err }, "Update seller return error");
     res.status(500).json({ error: "Failed to update return" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

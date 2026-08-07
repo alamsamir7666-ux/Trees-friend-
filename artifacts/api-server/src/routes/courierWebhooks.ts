@@ -175,7 +175,7 @@ async function handleCourierWebhook(provider: "pathao" | "steadfast", payload: u
     .limit(1);
 
   if (!shipment) {
-    console.log(`[courier-webhook:${provider}] No shipment found for tracking id`, trackingId);
+    logger.info({ provider, trackingId }, "courier-webhook: no shipment found for tracking id");
     return { ok: false, reason: "no_matching_shipment" as const };
   }
 
@@ -191,7 +191,7 @@ async function handleCourierWebhook(provider: "pathao" | "steadfast", payload: u
   await db.update(orderShipmentsTable).set(updates).where(eq(orderShipmentsTable.id, shipment.id));
 
   if (!normalizedStatus) {
-    console.log(`[courier-webhook:${provider}] Unrecognized status in payload, stored raw only`, payload);
+    logger.info({ provider, payload }, "courier-webhook: unrecognized status, stored raw only");
     return { ok: true, orderId: shipment.orderId, statusUpdated: false };
   }
 
@@ -223,7 +223,8 @@ async function handleCourierWebhook(provider: "pathao" | "steadfast", payload: u
             newStatus: mappedOrderStatus,
           }).catch(() => {});
         }
-      } catch {
+      } catch (err) {
+        logger.error({ err }, "Route handler error");
         /* non-blocking */
       }
 
@@ -243,7 +244,7 @@ async function handleCourierWebhook(provider: "pathao" | "steadfast", payload: u
         try {
           await attemptSellerPayout(order);
         } catch (err) {
-          console.error(`[courier-webhook:${provider}] Unexpected error in attemptSellerPayout for order ${order.id}:`, err);
+          logger.error({ err, orderId: order.id, provider }, "courier-webhook: unexpected error in attemptSellerPayout");
         }
       }
     }
@@ -261,7 +262,7 @@ router.post("/webhooks/courier/pathao", requireCourierWebhookSecret, async (req,
     const result = await handleCourierWebhook("pathao", req.body);
     res.json(result);
   } catch (err) {
-    console.error("[courier-webhook:pathao] error:", err);
+    logger.error({ err: err }, "[courier-webhook:pathao] error");
     res.status(500).json({ ok: false });
   }
 });
@@ -275,9 +276,10 @@ router.post("/webhooks/courier/steadfast", requireCourierWebhookSecret, async (r
     const result = await handleCourierWebhook("steadfast", req.body);
     res.json(result);
   } catch (err) {
-    console.error("[courier-webhook:steadfast] error:", err);
+    logger.error({ err: err }, "[courier-webhook:steadfast] error");
     res.status(500).json({ ok: false });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

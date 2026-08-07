@@ -1,12 +1,14 @@
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { newsletterTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
+import { newsletterLimiter } from "../middlewares/rateLimiter";
 
 const router = Router();
 
-router.post("/newsletter/subscribe", async (req, res) => {
+router.post("/newsletter/subscribe", newsletterLimiter, async (req, res) => {
   try {
     const { email } = req.body;
     if (!email || typeof email !== "string" || !email.includes("@")) {
@@ -25,7 +27,8 @@ router.post("/newsletter/subscribe", async (req, res) => {
       });
 
     res.status(201).json({ message: "Successfully subscribed to newsletter" });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to subscribe" });
   }
 });
@@ -42,7 +45,8 @@ router.post("/newsletter/unsubscribe", async (req, res) => {
       .set({ isActive: false })
       .where(eq(newsletterTable.email, email.toLowerCase().trim()));
     res.json({ message: "Unsubscribed successfully" });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to unsubscribe" });
   }
 });
@@ -63,7 +67,8 @@ router.get("/admin/newsletter/subscribers", requireAdmin, async (_req, res) => {
         subscribedAt: s.createdAt.toISOString(),
       })),
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch subscribers" });
   }
 });

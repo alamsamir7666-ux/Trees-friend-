@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { logger } from "../lib/logger";
 
 let _client: Resend | null = null;
 
@@ -8,9 +9,30 @@ function getClient(): Resend | null {
   return _client;
 }
 
-const FROM = "Tree Friend <onboarding@resend.dev>";
-const REPLY_TO = "helptreefriend@gmail.com";
+/**
+ * FROM address for all outgoing emails.
+ *
+ * Uses the EMAIL_FROM env var if set (e.g.
+ * "Tree Friend <noreply@treefriend.com>"). Falls back to Resend's
+ * shared onboarding domain ONLY in development — in production, the
+ * fallback logs a warning because onboarding@resend.dev will land in
+ * spam for most recipients.
+ *
+ * To configure for production:
+ *   1. Verify your domain in Resend (https://resend.com/domains)
+ *   2. Set EMAIL_FROM="Tree Friend <noreply@yourdomain.com>" in your
+ *      environment variables
+ */
+const FROM = process.env.EMAIL_FROM ?? "Tree Friend <onboarding@resend.dev>";
+const REPLY_TO = process.env.EMAIL_REPLY_TO ?? "helptreefriend@gmail.com";
 const APP_URL = process.env.APP_URL ?? "https://treefriend.com";
+
+if (process.env.NODE_ENV === "production" && FROM.endsWith("@resend.dev")) {
+  logger.warn(
+    "EMAIL_FROM is not set (or ends with @resend.dev) — outgoing emails will likely land in spam. " +
+      "Verify your domain in Resend and set EMAIL_FROM=\"Tree Friend <noreply@yourdomain.com>\" in your env vars.",
+  );
+}
 
 export async function sendOrderConfirmation({
   to,
@@ -132,7 +154,7 @@ export async function sendOrderConfirmation({
       html,
     });
   } catch (err) {
-    console.error("[email] sendOrderConfirmation failed:", err);
+    logger.error({ err: err }, "[email] sendOrderConfirmation failed");
   }
 }
 
@@ -229,7 +251,7 @@ export async function sendOrderStatusUpdate({
       html,
     });
   } catch (err) {
-    console.error("[email] sendOrderStatusUpdate failed:", err);
+    logger.error({ err: err }, "[email] sendOrderStatusUpdate failed");
   }
 }
 
@@ -294,7 +316,7 @@ export async function sendAbandonedCartEmail({
       html,
     });
   } catch (err) {
-    console.error("[email] sendAbandonedCartEmail failed:", err);
+    logger.error({ err: err }, "[email] sendAbandonedCartEmail failed");
   }
 }
 
@@ -339,7 +361,7 @@ export async function sendStockAlertEmail({
       html,
     });
   } catch (err) {
-    console.error("[email] sendStockAlertEmail failed:", err);
+    logger.error({ err: err }, "[email] sendStockAlertEmail failed");
   }
 }
 
@@ -400,7 +422,7 @@ export async function sendSubscriptionReminderEmail({
       html,
     });
   } catch (err) {
-    console.error("[email] sendSubscriptionReminderEmail failed:", err);
+    logger.error({ err: err }, "[email] sendSubscriptionReminderEmail failed");
   }
 }
 
@@ -453,7 +475,7 @@ export async function sendSubscriptionExpiredEmail({
       html,
     });
   } catch (err) {
-    console.error("[email] sendSubscriptionExpiredEmail failed:", err);
+    logger.error({ err: err }, "[email] sendSubscriptionExpiredEmail failed");
   }
 }
 export async function sendNewsletterWelcome({ to }: { to: string }) {
@@ -489,6 +511,6 @@ export async function sendNewsletterWelcome({ to }: { to: string }) {
       html,
     });
   } catch (err) {
-    console.error("[email] sendNewsletterWelcome failed:", err);
+    logger.error({ err: err }, "[email] sendNewsletterWelcome failed");
   }
 }

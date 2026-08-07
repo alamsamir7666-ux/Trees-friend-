@@ -13,7 +13,7 @@ import router from "./routes";
 import { logger } from "./lib/logger";
 import { ensureConversationsTables } from "./lib/ensureConversationsTables";
 import { ensurePresenceTables } from "./lib/ensurePresenceTables";
-import { apiLimiter, authLimiter, checkoutLimiter, newsletterLimiter, stockAlertLimiter } from "./middlewares/rateLimiter";
+import { apiLimiter } from "./middlewares/rateLimiter";
 
 const app: Express = express();
 
@@ -81,9 +81,30 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
 });
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
-  : true; // Allow all in dev
+// SECURITY: in production, ALLOWED_ORIGINS MUST be set to the exact
+// frontend URL(s). If unset in production, we default to an empty array
+// (deny all) rather than `true` (allow all) — the previous fallback of
+// `true` combined with `credentials: true` was the worst-case CORS
+// config (any website could make credentialed requests). In development,
+// `true` is convenient for local testing across ports.
+const allowedOrigins: boolean | string[] =
+  process.env.NODE_ENV === "production"
+    ? (process.env.ALLOWED_ORIGINS
+        ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
+        : [])
+    : (process.env.ALLOWED_ORIGINS
+        ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
+        : true);
+
+if (
+  process.env.NODE_ENV === "production" &&
+  (!process.env.ALLOWED_ORIGINS || (Array.isArray(allowedOrigins) && allowedOrigins.length === 0))
+) {
+  logger.warn(
+    "ALLOWED_ORIGINS is not set in production — CORS will deny ALL cross-origin requests. " +
+      "Set ALLOWED_ORIGINS to your frontend URL(s) (comma-separated) in your env vars.",
+  );
+}
 
 app.use(
   cors({
@@ -107,31 +128,16 @@ app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 app.use(clerkMiddleware({ publishableKey: process.env.CLERK_PUBLISHABLE_KEY }));
 
 // ─── Rate Limiting ───────────────────────────────────────────────────────────
+// The global apiLimiter is IP-based (no userId needed) and runs before
+// requireAuth, so it's safe to mount at the app level. It provides a
+// coarse-grained ceiling on total request volume per IP.
+//
+// Per-route limiters (checkoutLimiter, authLimiter, etc.) are applied at
+// the ROUTE level after requireAuth, so they can key on userId in
+// addition to IP — see routes/orders.ts, routes/mobileAuth.ts, etc.
+// Mounting them here (before requireAuth) would make req.userId always
+// undefined, defeating the per-user keying.
 app.use("/api", apiLimiter);
-app.use("/api/newsletter", newsletterLimiter);
-app.use("/api/stock-alerts", stockAlertLimiter);
-app.use("/api/orders", checkoutLimiter);
-// authLimiter (20/15min) is tighter than the generic apiLimiter (200/15min)
-// and scoped to the two mobile-auth endpoints that verify a password against
-// Clerk's Backend API (routes/mobileAuth.ts: sign-in calls
-// clerkClient.users.verifyPassword, sign-up calls clerkClient.users.createUser
-// with a caller-supplied password) -- exactly the credential-guessing /
-// account-enumeration surface this limiter exists for. These are the only
-// password-verification endpoints in src/routes/; every other route either
-// has no credential check of its own or defers entirely to Clerk's own
-// session/JWT verification (clerkMiddleware, requireAuth), which Clerk rate
-// limits on its own end.
-app.use("/api/mobile-auth", authLimiter);
-// Part 2 of 4 (bKash Tokenized Checkout): create-payment is a
-// payment-initiating action with the same abuse surface as order creation
-// (routes/orders.ts, above), so it gets the same tight limiter. Scoped to
-// exactly the two create-payment paths, not the whole /api/bkash prefix --
-// /api/bkash/callback is bKash's OWN redirect target hitting the buyer's
-// browser after they've already authorized a real payment on bKash's
-// hosted page; rate-limiting that could strand a buyer who already paid.
-// /api/bkash/query-payment/:id is admin-gated separately (requireAdmin)
-// and used for occasional reconciliation, not a checkout-volume path.
-app.use("/api/bkash/create-payment", checkoutLimiter);
 
 // ─── API routes ───────────────────────────────────────────────────────────────
 app.use("/api", router);

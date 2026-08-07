@@ -14,6 +14,7 @@ import { eq, desc, sql, and, lt, or, not, inArray } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { sendOrderStatusUpdate } from "../lib/email";
 import { logAudit } from "../lib/audit";
+import { logger } from "../lib/logger";
 import { attemptSellerPayout } from "../lib/payouts";
 
 const router = Router();
@@ -458,7 +459,7 @@ router.get("/admin/orders", requireAdmin, async (req: any, res) => {
       hasMore: offset + limitNum < totalNum,
     });
   } catch (err: any) {
-    console.error("orders endpoint error:", err?.message, err?.stack);
+    logger.error({ err }, "Admin: orders endpoint failed");
     res.status(500).json({ error: err?.message ?? "Failed to fetch orders" });
   }
 });
@@ -647,7 +648,7 @@ router.get("/admin/pre-orders", requireAdmin, async (_req, res) => {
 
     res.json(preOrders);
   } catch (err: any) {
-    console.error("admin pre-orders endpoint error:", err?.message, err?.stack);
+    logger.error({ err }, "Admin: pre-orders endpoint failed");
     res.status(500).json({ error: err?.message ?? "Failed to fetch admin pre-orders" });
   }
 });
@@ -845,7 +846,7 @@ router.get("/admin/payouts", requireAdmin, async (req: any, res) => {
       hasMore: offset + limitNum < totalNum,
     });
   } catch (err: any) {
-    console.error("admin payouts endpoint error:", err?.message, err?.stack);
+    logger.error({ err }, "Admin: payouts endpoint failed");
     res.status(500).json({ error: err?.message ?? "Failed to fetch payouts" });
   }
 });
@@ -953,7 +954,7 @@ router.post("/admin/payouts/:id/retry", requireAdmin, async (req: any, res) => {
 
     res.json(formatPayout(newPayout as PayoutWithContext));
   } catch (err: any) {
-    console.error("admin payout retry error:", err?.message, err?.stack);
+    logger.error({ err }, "Admin: payout retry failed");
     res.status(500).json({ error: err?.message ?? "Failed to retry payout" });
   }
 });
@@ -1042,7 +1043,7 @@ router.patch("/admin/payouts/:id/note", requireAdmin, async (req: any, res) => {
       clawbackNotedAmount: updated.clawbackNotedAmount != null ? Number(updated.clawbackNotedAmount) : null,
     });
   } catch (err: any) {
-    console.error("admin payout note error:", err?.message, err?.stack);
+    logger.error({ err }, "Admin: payout note failed");
     res.status(500).json({ error: err?.message ?? "Failed to update payout note" });
   }
 });

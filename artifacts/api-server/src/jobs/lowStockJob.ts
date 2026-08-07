@@ -2,6 +2,7 @@ import { db } from "@workspace/db";
 import { productsTable, productVariantsTable } from "@workspace/db";
 import { lte, eq, inArray } from "drizzle-orm";
 import { Resend } from "resend";
+import { logger } from "../lib/logger";
 
 const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD ?? "5");
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "";
@@ -26,6 +27,12 @@ export async function runLowStockAlert() {
     const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
     if (!resend) return;
 
+    // Use the verified FROM domain (lib/email.ts centralizes this). Inline
+    // here because this job predates the shared email module and constructs
+    // its own Resend client. Falls back to the env var if set, otherwise
+    // uses the same default as lib/email.ts.
+    const fromAddress = process.env.EMAIL_FROM ?? "Tree Friend Alerts <onboarding@resend.dev>";
+
     const rows = lowStockVariants
       .map((v) => {
         const productName = productNameById.get(v.productId) ?? "Unknown product";
@@ -35,14 +42,14 @@ export async function runLowStockAlert() {
       .join("");
 
     await resend.emails.send({
-      from: "Tree Friend Alerts <noreply@treefriend.com>",
+      from: fromAddress,
       to: [ADMIN_EMAIL],
       subject: `⚠️ Low Stock Alert — ${lowStockVariants.length} variant(s) need restocking`,
       html: `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;"><h2>Low Stock Alert</h2><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#fdf2f8;"><th style="padding:8px 12px;text-align:left;">Product (Variant)</th><th style="padding:8px 12px;text-align:center;">Stock</th></tr></thead><tbody>${rows}</tbody></table><p><a href="${process.env.APP_URL ?? ""}/admin" style="color:#f43f5e;">Go to Admin Dashboard →</a></p></div>`,
     });
 
-    console.log(`[low-stock] Alert sent for ${lowStockVariants.length} variants`);
+    logger.info({ count: lowStockVariants.length }, "Low stock alert sent");
   } catch (err) {
-    console.error("[low-stock] Job failed:", err);
+    logger.error({ err }, "Low stock alert job failed");
   }
 }

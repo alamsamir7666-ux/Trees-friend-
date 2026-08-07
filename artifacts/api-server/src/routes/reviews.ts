@@ -78,7 +78,7 @@ router.get("/reviews/:productId", async (req, res) => {
       .where(and(eq(reviewsTable.productId, productId), isNull(reviewsTable.sellerListingId)))
       .orderBy(desc(reviewsTable.createdAt));
     res.json(reviews.map(formatReview));
-  } catch { res.status(500).json({ error: "Failed to fetch reviews" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to fetch reviews" }); }
 });
 
 router.get("/reviews/:productId/eligibility", requireAuth, async (req: any, res) => {
@@ -108,7 +108,7 @@ router.get("/reviews/:productId/eligibility", requireAuth, async (req: any, res)
     );
     if (!hasPurchased) { res.json({ canReview: false, reason: "not_purchased" }); return; }
     res.json({ canReview: true, reason: null });
-  } catch { res.status(500).json({ error: "Failed to check eligibility" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to check eligibility" }); }
 });
 
 // POST /reviews/:productId — with optional photo uploads
@@ -188,7 +188,7 @@ router.post(
 
       res.status(201).json(formatReview(review));
     } catch (err) {
-      console.error("Review submit error:", err);
+      logger.error({ err: err }, "Review submit error");
       res.status(500).json({ error: "Failed to submit review" });
     }
   },
@@ -231,7 +231,7 @@ router.get("/seller-listings/:sellerListingId/reviews", async (req, res) => {
       .where(eq(reviewsTable.sellerListingId, sellerListingId))
       .orderBy(desc(reviewsTable.createdAt));
     res.json(reviews.map(formatSellerListingReview));
-  } catch { res.status(500).json({ error: "Failed to fetch reviews" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to fetch reviews" }); }
 });
 
 router.get("/seller-listings/:sellerListingId/reviews/eligibility", requireAuth, async (req: any, res) => {
@@ -269,7 +269,7 @@ router.get("/seller-listings/:sellerListingId/reviews/eligibility", requireAuth,
     );
     if (!hasPurchased) { res.json({ canReview: false, reason: "not_purchased" }); return; }
     res.json({ canReview: true, reason: null });
-  } catch { res.status(500).json({ error: "Failed to check eligibility" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to check eligibility" }); }
 });
 
 router.post(
@@ -359,7 +359,7 @@ router.post(
 
       res.status(201).json(formatSellerListingReview(review));
     } catch (err) {
-      console.error("Seller listing review submit error:", err);
+      logger.error({ err: err }, "Seller listing review submit error");
       res.status(500).json({ error: "Failed to submit review" });
     }
   },
@@ -393,7 +393,7 @@ router.put("/reviews/:reviewId", requireAuth, async (req: any, res) => {
       .where(eq(reviewsTable.id, reviewId))
       .returning();
     res.json(formatReview(updated));
-  } catch { res.status(500).json({ error: "Failed to update review" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to update review" }); }
 });
 
 router.delete("/reviews/:productId/:reviewId", requireAuth, async (req: any, res) => {
@@ -418,7 +418,7 @@ router.delete("/reviews/:productId/:reviewId", requireAuth, async (req: any, res
     }
 
     res.json({ message: "Review deleted" });
-  } catch { res.status(500).json({ error: "Failed to delete review" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to delete review" }); }
 });
 
 router.get("/admin/reviews", requireAdmin, async (_req, res) => {
@@ -517,7 +517,7 @@ router.get("/admin/reviews", requireAdmin, async (_req, res) => {
         sellerListingVariantCondition: r.sellerListingVariantCondition ?? null,
       })),
     );
-  } catch { res.status(500).json({ error: "Failed to fetch reviews" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to fetch reviews" }); }
 });
 
 // ─── Order status timeline ────────────────────────────────────────────────────
@@ -553,8 +553,9 @@ router.post("/admin/orders/:id/timeline", requireAdmin, async (req: any, res) =>
       .where(eq(ordersTable.id, orderId));
 
     res.json({ timeline });
-  } catch { res.status(500).json({ error: "Failed to update order timeline" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to update order timeline" }); }
 });
+import { logger } from "../lib/logger";
 
 export default router;
 

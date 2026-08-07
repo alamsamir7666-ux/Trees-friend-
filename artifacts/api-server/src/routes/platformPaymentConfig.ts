@@ -6,6 +6,7 @@ import { requireAdmin } from "../middlewares/auth";
 import { encryptCredential, maskCredential } from "../lib/credentialEncryption";
 import { grantToken, clearCachedToken, BkashApiError } from "../lib/bkash";
 import { logAudit } from "../lib/audit";
+import { logger } from "../lib/logger";
 
 /**
  * Admin-only: the PLATFORM's single bKash merchant config (Part 1 of 4 --
@@ -84,20 +85,32 @@ router.get("/platform-payment-config", requireAdmin, async (_req, res) => {
     }
     res.json(toMasked(config));
   } catch (err) {
-    console.error("Get platform payment config error:", err);
+    logger.error({ err }, "Failed to fetch platform payment config");
     res.status(500).json({ error: "Failed to fetch platform payment config" });
   }
 });
 
 /**
  * Admin: create or replace the platform's bKash merchant config.
- * Delete-then-insert (same pattern as sellerPaymentConfigs.ts) rather than
- * an UPDATE, so isVerified always resets to false on any credential
- * replacement -- a credential rotation should not silently keep a stale
- * "verified" flag pointing at the OLD credentials. singleton's DB-level
- * UNIQUE constraint (see schema doc comment) means this delete-then-insert
- * can never accidentally leave two rows behind even under a race, unlike
- * a table with no such constraint.
+ *
+ * Uses a transaction with SELECT-then-INSERT-or-UPDATE instead of the
+ * old DELETE-then-INSERT pattern. The old pattern had a race window:
+ * under two concurrent POSTs, both DELETEs could fire before either
+ * INSERT, then the second INSERT would throw on the singleton UNIQUE
+ * constraint, returning 500 and leaving the platform with ZERO bKash
+ * config (the prior row was already deleted). That broke all bKash
+ * checkout until an admin manually re-added credentials.
+ *
+ * The new pattern: inside a transaction, SELECT the existing row. If
+ * it exists, UPDATE it in place (preserving the row's id and createdAt).
+ * If not, INSERT a new row. isVerified always resets to false on any
+ * credential replacement — a credential rotation should not silently
+ * keep a stale "verified" flag pointing at the OLD credentials.
+ *
+ * The transaction's SERIALIZABLE isolation (Postgres default for
+ * drizzle-orm transactions) ensures two concurrent POSTs can't both
+ * see "no row exists" and both INSERT — the second will block until
+ * the first commits, then see the new row and UPDATE it instead.
  */
 router.post("/platform-payment-config", requireAdmin, async (req, res) => {
   try {
@@ -121,19 +134,37 @@ router.post("/platform-payment-config", requireAdmin, async (req, res) => {
       return;
     }
 
-    await db.delete(platformPaymentConfigTable);
+    const encryptedValues = {
+      provider: resolvedProvider,
+      merchantAppKey: encryptCredential(merchantAppKey),
+      merchantAppSecret: encryptCredential(merchantAppSecret),
+      merchantUsername: encryptCredential(merchantUsername),
+      merchantPassword: encryptCredential(merchantPassword),
+      isVerified: false,
+      updatedAt: new Date(),
+    };
 
-    const [config] = await db
-      .insert(platformPaymentConfigTable)
-      .values({
-        provider: resolvedProvider,
-        merchantAppKey: encryptCredential(merchantAppKey),
-        merchantAppSecret: encryptCredential(merchantAppSecret),
-        merchantUsername: encryptCredential(merchantUsername),
-        merchantPassword: encryptCredential(merchantPassword),
-        isVerified: false,
-      })
-      .returning();
+    const config = await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ id: platformPaymentConfigTable.id })
+        .from(platformPaymentConfigTable)
+        .limit(1);
+
+      if (existing) {
+        const [updated] = await tx
+          .update(platformPaymentConfigTable)
+          .set(encryptedValues)
+          .where(eq(platformPaymentConfigTable.id, existing.id))
+          .returning();
+        return updated;
+      }
+
+      const [inserted] = await tx
+        .insert(platformPaymentConfigTable)
+        .values(encryptedValues)
+        .returning();
+      return inserted;
+    });
 
     // BUGFIX follow-up (see PART4_FIX_HANDOFF.md and clearCachedToken()'s
     // own doc comment): a token granted under the OLD credentials must not
@@ -143,7 +174,7 @@ router.post("/platform-payment-config", requireAdmin, async (req, res) => {
 
     res.status(201).json(toMasked(config));
   } catch (err) {
-    console.error("Create platform payment config error:", err);
+    logger.error({ err }, "Failed to save platform payment config");
     res.status(500).json({ error: "Failed to save platform payment config" });
   }
 });
@@ -247,7 +278,7 @@ router.post("/admin/platform-payment-config/verify", requireAdmin, async (req: a
       res.status(400).json({ error: err.message, step: err.step });
       return;
     }
-    console.error("Verify platform payment config error:", err);
+    logger.error({ err }, "Failed to verify platform payment config");
     res.status(500).json({ error: "Failed to verify platform payment config" });
   }
 });

@@ -1,5 +1,6 @@
 // artifacts/api-server/src/routes/giftCards.ts
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { giftCardsTable, giftCardTransactionsTable } from "@workspace/db";
 import { eq, and, gte } from "drizzle-orm";
@@ -58,7 +59,8 @@ router.get("/gift-cards/check/:code", async (req, res) => {
       recipientName: card.recipientName,
       expiryDate: card.expiryDate?.toISOString() ?? null,
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to check gift card" });
   }
 });
@@ -71,7 +73,8 @@ router.get("/gift-cards/my", requireAuth, async (req: any, res) => {
       .from(giftCardsTable)
       .where(eq(giftCardsTable.purchasedByUserId, req.userId));
     res.json(cards.map(formatCard));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch gift cards" });
   }
 });
@@ -118,7 +121,8 @@ router.post("/gift-cards", requireAuth, async (req: any, res) => {
       .returning();
 
     res.status(201).json(formatCard(card));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to create gift card" });
   }
 });
@@ -176,7 +180,8 @@ router.post("/gift-cards/redeem", requireAuth, async (req: any, res) => {
     });
 
     res.json({ amountApplied: debitAmount, remainingBalance: newBalance });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to redeem gift card" });
   }
 });
@@ -208,7 +213,8 @@ router.post("/admin/gift-cards", requireAdmin, async (_req, res) => {
       .returning();
 
     res.status(201).json(formatCard(card));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to issue gift card" });
   }
 });
@@ -218,7 +224,8 @@ router.get("/admin/gift-cards", requireAdmin, async (_req, res) => {
   try {
     const cards = await db.select().from(giftCardsTable);
     res.json(cards.map(formatCard));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch gift cards" });
   }
 });

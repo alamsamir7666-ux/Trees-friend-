@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import {
   blogPostsTable,
@@ -120,7 +121,7 @@ router.get("/blog-posts", async (_req, res) => {
   try {
     const posts = await db.select().from(blogPostsTable).orderBy(desc(blogPostsTable.createdAt));
     res.json(posts.map(p => fmtPost(p)));
-  } catch { res.status(500).json({ error: "Failed to fetch blog posts" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to fetch blog posts" }); }
 });
 
 // GET /blog-posts/:slug — public single post
@@ -130,7 +131,7 @@ router.get("/blog-posts/:slug", async (req, res) => {
     if (!post) { res.status(404).json({ error: "Post not found" }); return; }
     const linkedProducts = await resolveLinkedProducts(post);
     res.json(fmtPost(post, linkedProducts));
-  } catch { res.status(500).json({ error: "Failed to fetch blog post" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to fetch blog post" }); }
 });
 
 // POST /admin/blog-posts — create
@@ -187,7 +188,7 @@ router.patch("/admin/blog-posts/:id", requireAdmin, async (req: any, res) => {
     if (!updated) { res.status(404).json({ error: "Post not found" }); return; }
     const linkedProducts = await resolveLinkedProducts(updated);
     res.json(fmtPost(updated, linkedProducts));
-  } catch { res.status(500).json({ error: "Failed to update blog post" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to update blog post" }); }
 });
 
 // DELETE /admin/blog-posts/:id — delete
@@ -197,7 +198,7 @@ router.delete("/admin/blog-posts/:id", requireAdmin, async (req: any, res) => {
     if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
     await db.delete(blogPostsTable).where(eq(blogPostsTable.id, id));
     res.json({ message: "Blog post deleted" });
-  } catch { res.status(500).json({ error: "Failed to delete blog post" }); }
+  } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to delete blog post" }); }
 });
 
 export default router;

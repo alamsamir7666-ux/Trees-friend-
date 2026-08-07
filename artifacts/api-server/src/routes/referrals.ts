@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import {
   referralsTable,
@@ -51,7 +52,8 @@ router.get("/referrals/my-code", requireAuth, async (req: any, res) => {
       earnedPoints: used * 100, // 100 points per successful referral
       shareUrl: `${process.env.APP_URL ?? "https://treefriend.com"}/?ref=${code}`,
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to get referral code" });
   }
 });
@@ -110,7 +112,8 @@ router.post("/referrals/apply", requireAuth, async (req: any, res) => {
       couponCode,
       message: "Referral applied! You get ৳100 off your first order.",
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to apply referral" });
   }
 });

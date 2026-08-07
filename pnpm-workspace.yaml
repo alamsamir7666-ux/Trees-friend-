@@ -75,6 +75,12 @@ overrides:
   # drizzle-kit uses esbuild internally on an older version that's vulnerable, this overrides it
   "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
   esbuild: "0.27.3"
+  # Force a single @types/pg version across the workspace so that
+  # @upstash/redis (which also depends on @types/pg) doesn't create a
+  # second drizzle-orm instance via a different @types/pg peer. Two
+  # drizzle-orm instances cause TS2345 "SQL<unknown> not assignable to
+  # SQL<unknown>" errors even though the runtime is fine.
+  "@types/pg": "^8.11.0"
 
 allowBuilds:
   '@clerk/shared': true

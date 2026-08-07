@@ -1,4 +1,5 @@
 import { logAudit } from "../lib/audit";
+import { logger } from "../lib/logger";
 import { Router } from "express";
 import multerPkg from "multer";
 import { v2 as cloudinaryV2 } from "cloudinary";
@@ -409,7 +410,7 @@ router.get("/products/tag-counts", async (_req, res) => {
     rows.forEach(r => { if (r.tag) counts[r.tag] = r.count; });
     res.json(counts);
   } catch (e) {
-    console.error("tag-counts error:", e);
+    logger.error({ err: e }, "tag-counts error");
     res.status(500).json({ error: "Failed to fetch tag counts" });
   }
 });
@@ -474,7 +475,7 @@ router.post("/products/upload-image", requireAuth, requireAdmin, uploadMiddlewar
       const stream = cloudinaryV2.uploader.upload_stream(
         { folder: "envyenhance/products", ...(isPrimary ? {} : { quality: 75, format: "webp" }), ...(publicId ? { public_id: publicId } : {}) },
         (err, result) => {
-          if (err || !result) { console.error("Cloudinary error:", err); return reject(err ?? new Error("Upload failed")); }
+          if (err || !result) { logger.error({ err: err }, "Cloudinary error"); return reject(err ?? new Error("Upload failed")); }
           const url = isPrimary
             ? result.secure_url.replace("/upload/", "/upload/f_jpg/")
             : result.secure_url;
@@ -485,8 +486,8 @@ router.post("/products/upload-image", requireAuth, requireAdmin, uploadMiddlewar
     })));
     res.json({ urls });
   } catch (err) {
-    console.error("Upload endpoint error:", err);
-    res.status(500).json({ error: "Upload failed", details: String(err) });
+    logger.error({ err }, "Product image upload failed");
+    res.status(500).json({ error: "Upload failed" });
   }
 });
 
@@ -708,7 +709,7 @@ router.post("/products", requireAdmin, async (req: any, res) => {
 
     res.status(201).json(toProduct(p, [], 0, 0));
   } catch (err) {
-    console.error("Create product error:", err);
+    logger.error({ err: err }, "Create product error");
     res.status(500).json({ error: "Failed to create product" });
   }
 });
@@ -832,7 +833,7 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
       ),
     );
   } catch (err) {
-    console.error("Update product error:", err);
+    logger.error({ err: err }, "Update product error");
     res.status(500).json({ error: "Failed to update product" });
   }
 });
@@ -922,7 +923,8 @@ router.post("/products/:id/duplicate", requireAdmin, async (req: any, res) => {
     // admin-created product post-Phase-2; sellers create their own listings
     // against it same as any other product.
     res.status(201).json(toProduct(copy, [], 0, 0));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to duplicate product" });
   }
 });

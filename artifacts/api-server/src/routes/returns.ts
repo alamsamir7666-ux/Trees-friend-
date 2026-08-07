@@ -1,4 +1,5 @@
 import { logAudit } from "../lib/audit";
+import { logger } from "../lib/logger";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { returnsTable, ordersTable, sellersTable } from "@workspace/db";
@@ -78,7 +79,8 @@ router.post("/returns", requireAuth, async (req: any, res) => {
       .returning();
 
     res.status(201).json(fmt(returnReq));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to create return request" });
   }
 });
@@ -92,7 +94,8 @@ router.get("/returns/me", requireAuth, async (req: any, res) => {
       .where(eq(returnsTable.userId, req.userId))
       .orderBy(desc(returnsTable.createdAt));
     res.json(returns.map(fmt));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to fetch returns" });
   }
 });
@@ -187,7 +190,8 @@ router.put("/admin/returns/:id", requireAdmin, async (req: any, res) => {
 
     await logAudit({ adminId: req.userId, adminEmail: req.dbUser?.email, action: "return.updated", targetType: "return", targetId: String(id) });
     res.json(fmt(updated));
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Route handler error");
     res.status(500).json({ error: "Failed to update return" });
   }
 });

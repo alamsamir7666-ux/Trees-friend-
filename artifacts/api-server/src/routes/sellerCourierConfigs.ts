@@ -59,7 +59,7 @@ router.get("/seller-courier-configs/mine", requireSeller, async (req, res) => {
     }
     res.json(toMasked(config));
   } catch (err) {
-    console.error("Get seller courier config error:", err);
+    logger.error({ err: err }, "Get seller courier config error");
     res.status(500).json({ error: "Failed to fetch courier config" });
   }
 });
@@ -135,7 +135,7 @@ router.post("/seller-courier-configs", requireSeller, async (req, res) => {
 
     res.status(201).json(toMasked(config));
   } catch (err) {
-    console.error("Create seller courier config error:", err);
+    logger.error({ err: err }, "Create seller courier config error");
     res.status(500).json({ error: "Failed to save courier config" });
   }
 });
@@ -152,9 +152,10 @@ router.delete("/seller-courier-configs/mine", requireSeller, async (req, res) =>
     }
     res.json({ message: "Courier config removed. Orders will fall back to manual status updates." });
   } catch (err) {
-    console.error("Delete seller courier config error:", err);
+    logger.error({ err: err }, "Delete seller courier config error");
     res.status(500).json({ error: "Failed to delete courier config" });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

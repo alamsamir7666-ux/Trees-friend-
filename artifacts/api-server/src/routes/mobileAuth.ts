@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { clerkClient } from "@clerk/express";
 import { signMobileJwt } from "../middlewares/mobileJwt";
+import { authLimiter } from "../middlewares/rateLimiter";
 
 const router = Router();
 
@@ -14,7 +15,7 @@ const router = Router();
  * mints our own mobile session JWT for the Flutter app to use as a Bearer
  * token on all subsequent API calls.
  */
-router.post("/mobile-auth/sign-in", async (req, res) => {
+router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body ?? {};
     if (typeof email !== "string" || typeof password !== "string" || !email || !password) {
@@ -41,7 +42,8 @@ router.post("/mobile-auth/sign-in", async (req, res) => {
         userId: user.id,
         password,
       });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Route handler error");
       res.status(401).json({ error: "Invalid email or password" });
       return;
     }
@@ -62,7 +64,7 @@ router.post("/mobile-auth/sign-in", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Mobile sign-in error:", err);
+    logger.error({ err: err }, "Mobile sign-in error");
     res.status(500).json({ error: "Sign-in failed. Please try again." });
   }
 });
@@ -77,7 +79,7 @@ router.post("/mobile-auth/sign-in", async (req, res) => {
  * want email verification for mobile sign-ups too, that would need to be
  * layered on separately (e.g. your own verification-code email flow).
  */
-router.post("/mobile-auth/sign-up", async (req, res) => {
+router.post("/mobile-auth/sign-up", authLimiter, async (req, res) => {
   try {
     const { email, password, firstName, lastName } = req.body ?? {};
     if (typeof email !== "string" || typeof password !== "string" || !email || !password) {
@@ -110,12 +112,13 @@ router.post("/mobile-auth/sign-up", async (req, res) => {
       },
     });
   } catch (err: any) {
-    console.error("Mobile sign-up error:", err);
+    logger.error({ err: err }, "Mobile sign-up error");
     // Clerk returns structured errors with a `errors` array; surface the
     // first message if present (e.g. "That email address is taken").
     const clerkMessage = err?.errors?.[0]?.message;
     res.status(400).json({ error: clerkMessage ?? "Sign-up failed. Please try again." });
   }
 });
+import { logger } from "../lib/logger";
 
 export default router;

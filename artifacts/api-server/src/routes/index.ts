@@ -29,6 +29,7 @@ import subscriptionsRouter from "./subscriptions";
 import giftCardsRouter from "./giftCards";
 import emailPreferencesRouter from "./emailPreferences";
 import searchRouter from "./search";
+import cronRouter from "./cron";
 // flashSales router removed in Phase 2: flash sales were entirely
 // productVariantsTable-based (products tagged homepageTag="flash" with a
 // discounted admin variant) with no seller/marketplace ownership concept
@@ -116,5 +117,8 @@ router.use(sellerPayoutAccountsRouter);
 router.use(bkashPaymentRouter);
 router.use(conversationsRouter);
 router.use(presenceRouter);
+// Cron job endpoints (Vercel scheduled tasks). Authenticated via
+// CRON_SECRET Bearer token, not requireAuth — see routes/cron.ts.
+router.use(cronRouter);
 
 export default router;
