@@ -1,14 +1,12 @@
 import { useState } from "react";
-import { useAuth } from "@clerk/react";
+import { useApiFetch } from "@/lib/useApiFetch";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Upload } from "lucide-react";
 
-const API = import.meta.env.VITE_API_BASE_URL ?? "";
-
 export function BulkImportTab() {
-  const { getToken } = useAuth();
+  const apiFetch = useApiFetch();
   const [csvText, setCsvText] = useState("");
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -45,8 +43,8 @@ export function BulkImportTab() {
     if (!csvText.trim()) { setError("Please paste CSV content first."); return; }
     setLoading(true); setError(""); setResult(null);
     try {
-      const r = await fetch(API+"/api/admin/products/bulk-import", {
-        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${await getToken()}` },
+      const r = await apiFetch("/api/admin/products/bulk-import", {
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ csv: csvText }),
       });
       const data = await r.json();

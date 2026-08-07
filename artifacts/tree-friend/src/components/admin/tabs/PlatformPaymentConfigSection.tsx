@@ -1,12 +1,10 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@clerk/react";
+import { useApiFetch } from "@/lib/useApiFetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, ShieldCheck, ShieldAlert, KeyRound } from "lucide-react";
 import { toast } from "sonner";
-
-const API = import.meta.env.VITE_API_BASE_URL ?? "";
 
 /**
  * Admin UI for the platform's single bKash merchant config -- Part 4 of 4
@@ -37,7 +35,7 @@ const API = import.meta.env.VITE_API_BASE_URL ?? "";
  *    routes/platformPaymentConfig.ts before writing this).
  */
 export function PlatformPaymentConfigSection() {
-  const { getToken } = useAuth();
+  const apiFetch = useApiFetch();
   const [config, setConfig] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [verifying, setVerifying] = useState(false);
@@ -50,23 +48,17 @@ export function PlatformPaymentConfigSection() {
     merchantPassword: "",
   });
 
-  function fetchConfig() {
+  async function fetchConfig() {
     setLoading(true);
-    getToken().then((token) =>
-      fetch(API + "/api/platform-payment-config", { headers: { Authorization: `Bearer ${token}` } })
-        .then((r) => {
-          if (r.status === 404) {
-            setConfig(null);
-            return null;
-          }
-          return r.json();
-        })
-        .then((d) => {
-          if (d) setConfig(d);
-        })
-        .catch(() => {})
-        .finally(() => setLoading(false)),
-    );
+    try {
+      const r = await apiFetch("/api/platform-payment-config");
+      if (r.status === 404) {
+        setConfig(null);
+      } else {
+        const d = await r.json();
+        if (d) setConfig(d);
+      }
+    } catch {} finally { setLoading(false); }
   }
 
   useEffect(() => {
@@ -80,10 +72,9 @@ export function PlatformPaymentConfigSection() {
     }
     setSaving(true);
     try {
-      const token = await getToken();
-      const r = await fetch(API + "/api/platform-payment-config", {
+      const r = await apiFetch("/api/platform-payment-config", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: "bkash", ...form }),
       });
       const data = await r.json();
@@ -107,10 +98,8 @@ export function PlatformPaymentConfigSection() {
   async function handleVerify() {
     setVerifying(true);
     try {
-      const token = await getToken();
-      const r = await fetch(API + "/api/admin/platform-payment-config/verify", {
+      const r = await apiFetch("/api/admin/platform-payment-config/verify", {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
       });
       const data = await r.json();
       if (!r.ok) {

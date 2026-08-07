@@ -1,8 +1,6 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@clerk/react";
+import { useApiFetch } from "@/lib/useApiFetch";
 import { Store, Mail, Phone } from "lucide-react";
-
-const API = import.meta.env.VITE_API_BASE_URL ?? "";
 
 // Mirrors the SELLER_STATUS_STYLE / SELLER_STATUS_LABEL maps in OrdersTab
 // and ArchivedOrdersTab. Kept local for the same reason -- if a fourth
@@ -21,28 +19,27 @@ const SELLER_STATUS_LABEL: Record<string, string> = {
 };
 
 export function ReturnsTab() {
-  const { getToken } = useAuth();
+  const apiFetch = useApiFetch();
   const [returns, setReturns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
   const [refundInputs, setRefundInputs] = useState<Record<number, string>>({});
 
   useEffect(() => {
-    getToken().then(token =>
-      fetch(API + "/api/admin/returns", { headers: { Authorization: `Bearer ${token}` } })
-        .then(r => r.json())
-        .then(d => { if (Array.isArray(d)) setReturns(d); })
-        .catch(() => {})
-        .finally(() => setLoading(false))
-    );
-  }, []);
+    let cancelled = false;
+    apiFetch("/api/admin/returns")
+      .then(async (r) => { const d = await r.json(); if (!cancelled && Array.isArray(d)) setReturns(d); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [apiFetch]);
 
   async function updateStatus(id: number, status: string, adminNote?: string, refundAmount?: string) {
     setUpdatingId(id);
     try {
-      const r = await fetch(`${API}/api/admin/returns/${id}`, {
+      const r = await apiFetch(`/api/admin/returns/${id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${await getToken()}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status, adminNote, refundAmount }),
       });
       if (r.ok) {

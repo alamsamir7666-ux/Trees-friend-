@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useAuth } from "@clerk/react";
+import { useApiFetch } from "@/lib/useApiFetch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -7,10 +7,8 @@ import { Plus, Search, Save, Pencil, Trash2, X } from "lucide-react";
 import { RichTextEditor } from "@/components/admin/RichTextEditor";
 import { ProductPicker } from "@/components/admin/ProductPicker";
 
-const API = import.meta.env.VITE_API_BASE_URL ?? "";
-
 export function BlogTab() {
-  const { getToken } = useAuth();
+  const apiFetch = useApiFetch();
   const [posts, setPosts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQ, setSearchQ] = useState("");
@@ -27,11 +25,11 @@ export function BlogTab() {
   useEffect(() => {
     if (fetchedRef.current) return;
     fetchedRef.current = true;
-    getToken().then(token => fetch(API+"/api/blog-posts", { headers: { Authorization: `Bearer ${token}` } })
+    apiFetch("/api/blog-posts")
       .then(r => r.json())
       .then(data => setPosts(Array.isArray(data) ? data : []))
       .catch(() => {})
-      .finally(() => setLoading(false)));
+      .finally(() => setLoading(false));
   }, []);
 
   function openCreate() {
@@ -71,10 +69,10 @@ export function BlogTab() {
     setSaving(true); setError("");
     try {
       const body = { ...form, content: form.content };
-      const url = editingPost ? `${API}/api/admin/blog-posts/${editingPost.id}` : API+"/api/admin/blog-posts";
+      const url = editingPost ? `/api/admin/blog-posts/${editingPost.id}` : "/api/admin/blog-posts";
       const method = editingPost ? "PATCH" : "POST";
-      const r = await fetch(url, {
-        method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${await getToken()}` },
+      const r = await apiFetch(url, {
+        method, headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const data = await r.json();
@@ -90,7 +88,7 @@ export function BlogTab() {
   }
 
   async function handleDelete(id: number) {
-    const r = await fetch(`${API}/api/admin/blog-posts/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${await getToken()}` } });
+    const r = await apiFetch(`/api/admin/blog-posts/${id}`, { method: "DELETE" });
     if (r.ok) { setPosts(prev => prev.filter(p => p.id !== id)); setDeleteConfirm(null); }
   }
 
@@ -192,8 +190,7 @@ export function BlogTab() {
                     fd.append("images", file);
                     fd.append("productName", "blog-cover");
                     fd.append("startIndex", "1");
-                    const token = await getToken();
-                    const res = await fetch(`${API}/api/products/upload-image`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd });
+                    const res = await apiFetch("/api/products/upload-image", { method: "POST", body: fd });
                     const data = await res.json();
                     if (data.urls?.[0]) setForm(f => ({ ...f, image: data.urls[0] }));
                     e.target.value = "";

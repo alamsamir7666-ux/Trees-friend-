@@ -1,37 +1,35 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@clerk/react";
+import { useApiFetch } from "@/lib/useApiFetch";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Trash2 } from "lucide-react";
 
-const API = import.meta.env.VITE_API_BASE_URL ?? "";
-
 export function QATab() {
+  const apiFetch = useApiFetch();
   const [questions, setQuestions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [answeringId, setAnsweringId] = useState<number | null>(null);
   const [answerText, setAnswerText] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const { getToken: getQAToken } = useAuth();
-
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
-        const token = await getQAToken();
-        const r = await fetch(`${API}/api/admin/qa/unanswered`, { headers: { Authorization: "Bearer " + token } });
-        setQuestions(await r.json());
-      } catch {} finally { setLoading(false); }
+        const r = await apiFetch("/api/admin/qa/unanswered");
+        const data = await r.json();
+        if (!cancelled) setQuestions(data);
+      } catch {} finally { if (!cancelled) setLoading(false); }
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [apiFetch]);
 
   async function submitAnswer(id: number) {
     if (!answerText.trim() || answerText.trim().length < 2) return;
     setSaving(true);
     try {
-      const token = await getQAToken();
-      const r = await fetch(`${API}/api/admin/qa/${id}/answer`, {
-        method: "PUT", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      const r = await apiFetch(`/api/admin/qa/${id}/answer`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answer: answerText.trim() }),
       });
       if (r.ok) {
@@ -43,8 +41,7 @@ export function QATab() {
 
   async function deleteQuestion(id: number) {
     if (!window.confirm("Delete this question?")) return;
-    const token = await getQAToken();
-    await fetch(`${API}/api/admin/qa/${id}`, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+    await apiFetch(`/api/admin/qa/${id}`, { method: "DELETE" });
     setQuestions(prev => prev.filter(q => q.id !== id));
   }
 

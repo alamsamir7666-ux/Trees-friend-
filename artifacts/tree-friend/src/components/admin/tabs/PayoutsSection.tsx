@@ -1,10 +1,8 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@clerk/react";
+import { useApiFetch } from "@/lib/useApiFetch";
 import { Button } from "@/components/ui/button";
 import { RotateCcw, StickyNote, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-
-const API = import.meta.env.VITE_API_BASE_URL ?? "";
 
 /**
  * Admin payout visibility + manual retry + case-by-case return notes --
@@ -31,7 +29,7 @@ const API = import.meta.env.VITE_API_BASE_URL ?? "";
  * `PATCH /admin/payouts/:id/note` for the enforcement of that boundary.
  */
 export function PayoutsSection() {
-  const { getToken } = useAuth();
+  const apiFetch = useApiFetch();
   const [payouts, setPayouts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [retryingId, setRetryingId] = useState<number | null>(null);
@@ -40,17 +38,13 @@ export function PayoutsSection() {
   const [amountDraft, setAmountDraft] = useState("");
   const [savingNote, setSavingNote] = useState(false);
 
-  function fetchPayouts() {
+  async function fetchPayouts() {
     setLoading(true);
-    getToken().then((token) =>
-      fetch(API + "/api/admin/payouts", { headers: { Authorization: `Bearer ${token}` } })
-        .then((r) => r.json())
-        .then((d) => {
-          if (Array.isArray(d?.payouts)) setPayouts(d.payouts);
-        })
-        .catch(() => {})
-        .finally(() => setLoading(false)),
-    );
+    try {
+      const r = await apiFetch("/api/admin/payouts");
+      const d = await r.json();
+      if (Array.isArray(d?.payouts)) setPayouts(d.payouts);
+    } catch {} finally { setLoading(false); }
   }
 
   useEffect(() => {
@@ -60,11 +54,7 @@ export function PayoutsSection() {
   async function handleRetry(id: number) {
     setRetryingId(id);
     try {
-      const token = await getToken();
-      const r = await fetch(`${API}/api/admin/payouts/${id}/retry`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const r = await apiFetch(`/api/admin/payouts/${id}/retry`, { method: "POST" });
       const data = await r.json();
       if (!r.ok) {
         toast.error(data?.error ?? "Retry failed");
@@ -94,10 +84,9 @@ export function PayoutsSection() {
   async function handleSaveNote(id: number) {
     setSavingNote(true);
     try {
-      const token = await getToken();
-      const r = await fetch(`${API}/api/admin/payouts/${id}/note`, {
+      const r = await apiFetch(`/api/admin/payouts/${id}/note`, {
         method: "PATCH",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           adminNote: noteDraft.trim() || null,
           clawbackNotedAmount: amountDraft.trim() === "" ? null : Number(amountDraft),

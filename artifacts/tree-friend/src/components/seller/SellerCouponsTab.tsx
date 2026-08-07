@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAuth } from "@clerk/react";
+import { useApiFetch } from "@/lib/useApiFetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,8 +11,6 @@ import {
 import {
   Search, Plus, Tag, Pencil, Trash2, ToggleLeft, ToggleRight, X,
 } from "lucide-react";
-
-const API = import.meta.env.VITE_API_BASE_URL ?? "";
 
 // ── Types ────────────────────────────────────────────────────────────────
 interface SellerCoupon {
@@ -78,7 +76,7 @@ async function readApiError(res: Response, fallback: string): Promise<string> {
  * are not visible here.
  */
 export function SellerCouponsTab() {
-  const { getToken } = useAuth();
+  const apiFetch = useApiFetch();
 
   const [coupons, setCoupons] = useState<SellerCoupon[]>([]);
   const [loading, setLoading] = useState(false);
@@ -94,10 +92,7 @@ export function SellerCouponsTab() {
     setLoading(true);
     setError(null);
     try {
-      const token = await getToken();
-      const res = await fetch(`${API}/api/sellers/me/coupons`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await apiFetch("/api/sellers/me/coupons");
       if (!res.ok) {
         throw new Error(await readApiError(res, "Failed to fetch coupons"));
       }
@@ -109,7 +104,7 @@ export function SellerCouponsTab() {
     } finally {
       setLoading(false);
     }
-  }, [getToken]);
+  }, [apiFetch]);
 
   useEffect(() => {
     fetchCoupons();
@@ -127,10 +122,9 @@ export function SellerCouponsTab() {
     setSaving(true);
     setError(null);
     try {
-      const token = await getToken();
       const url = editing
-        ? `${API}/api/sellers/me/coupons/${editing.id}`
-        : `${API}/api/sellers/me/coupons`;
+        ? `/api/sellers/me/coupons/${editing.id}`
+        : "/api/sellers/me/coupons";
       const method = editing ? "PUT" : "POST";
       const body = {
         code: form.code,
@@ -139,9 +133,9 @@ export function SellerCouponsTab() {
         minOrderAmount: form.minOrderAmount ? parseFloat(form.minOrderAmount) : null,
         expiryDate: form.expiryDate || null,
       };
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!res.ok) {
@@ -160,10 +154,8 @@ export function SellerCouponsTab() {
   // ── Toggle active ────────────────────────────────────────────────────
   async function handleToggle(id: number) {
     try {
-      const token = await getToken();
-      const res = await fetch(`${API}/api/sellers/me/coupons/${id}/toggle`, {
+      const res = await apiFetch(`/api/sellers/me/coupons/${id}/toggle`, {
         method: "PATCH",
-        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(await readApiError(res, "Failed to toggle coupon"));
       fetchCoupons();
@@ -175,10 +167,8 @@ export function SellerCouponsTab() {
   // ── Delete ───────────────────────────────────────────────────────────
   async function handleDelete(id: number) {
     try {
-      const token = await getToken();
-      const res = await fetch(`${API}/api/sellers/me/coupons/${id}`, {
+      const res = await apiFetch(`/api/sellers/me/coupons/${id}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(await readApiError(res, "Failed to delete coupon"));
       setConfirmDelete(null);

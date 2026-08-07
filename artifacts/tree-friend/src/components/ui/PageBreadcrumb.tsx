@@ -1,7 +1,6 @@
 // components/ui/PageBreadcrumb.tsx
 // Reusable breadcrumb navigation system with appealing icons for all pages
 
-import { memo } from "react";
 import { Link } from "wouter";
 import { Home, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -18,12 +17,16 @@ interface PageBreadcrumbProps {
 }
 
 /**
- * Pure-presentational breadcrumb nav. Wrapped in `memo()` because parents
- * pass `crumbs` as a fresh array literal on every render — `memo` does a
- * shallow compare on the array reference and skips re-rendering when the
- * parent's state change didn't actually change the crumbs.
+ * Pure-presentational breadcrumb nav.
+ *
+ * NOTE: previously wrapped in `memo()`, but every parent passes a fresh
+ * array literal as `crumbs` (e.g. `crumbs={[{ label: "Blog", ... }]}`),
+ * which means the shallow comparison always fails (new array reference
+ * every render) — the memo overhead was worse than the re-render cost.
+ * Removed `memo()` since this is a lightweight `<nav>` with a few links;
+ * the re-render is negligible.
  */
-export const PageBreadcrumb = memo(function PageBreadcrumb({ crumbs, className }: PageBreadcrumbProps) {
+export function PageBreadcrumb({ crumbs, className }: PageBreadcrumbProps) {
   return (
     <nav
       aria-label="Breadcrumb"
@@ -72,4 +75,4 @@ export const PageBreadcrumb = memo(function PageBreadcrumb({ crumbs, className }
       })}
     </nav>
   );
-});
+}
