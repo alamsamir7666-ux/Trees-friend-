@@ -15,6 +15,7 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, sql, lt } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
+import { chainRateLimiters, chatMessageBurstLimiter, chatMessageLimiter, conversationCreateLimiter } from "../middlewares/rateLimiter";
 import { logger } from "../lib/logger";
 
 /**
@@ -50,6 +51,11 @@ const uploadMiddleware = multerPkg({
 });
 
 const router = Router();
+
+// Burst + sustained chat limiter, chained once and reused on every
+// message-sending route (POST /messages and POST /upload) so both surfaces
+// share the exact same two-tier budget instead of drifting apart.
+const chatSendLimiter = chainRateLimiters(chatMessageBurstLimiter, chatMessageLimiter);
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -396,7 +402,7 @@ router.get("/conversations", requireAuth, async (req: any, res) => {
 // conversation already exists for this buyer-seller pair, returns it
 // instead of creating a duplicate. This is the standard pattern used by
 // marketplaces (eBay, Etsy, Daraz) to avoid duplicate threads.
-router.post("/conversations", requireAuth, async (req: any, res) => {
+router.post("/conversations", requireAuth, conversationCreateLimiter, async (req: any, res) => {
   try {
     const { sellerId, sellerListingId } = req.body;
     const buyerId = req.userId;
@@ -839,7 +845,7 @@ router.get("/conversations/:id/messages", requireAuth, async (req: any, res) => 
 //
 // This JSON endpoint is used by the emoji/text input path and by clients
 // that already have a file URL (e.g. re-using an existing upload).
-router.post("/conversations/:id/messages", requireAuth, async (req: any, res) => {
+router.post("/conversations/:id/messages", requireAuth, chatSendLimiter, async (req: any, res) => {
   try {
     const convId = parseInt(req.params.id);
     if (isNaN(convId)) {
@@ -1001,6 +1007,7 @@ router.post("/conversations/:id/messages", requireAuth, async (req: any, res) =>
 router.post(
   "/conversations/:id/upload",
   requireAuth,
+  chatSendLimiter,
   uploadMiddleware.single("file"),
   async (req: any, res) => {
     try {
