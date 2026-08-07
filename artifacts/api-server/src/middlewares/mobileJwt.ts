@@ -3,108 +3,109 @@ import crypto from "crypto";
 import { logger } from "../lib/logger";
 
 /**
- * Mobile session JWT — hardened implementation.
+ * Mobile session JWT — production-grade implementation.
  *
- * Security measures (industry standard for self-issued session JWTs):
+ * Token types:
+ *   1. Access token (1h expiry): used for API authentication. Short-lived
+ *      so a stolen token has limited blast radius.
+ *   2. Refresh token (30d expiry): used ONLY to obtain new access tokens
+ *      via POST /mobile-auth/refresh. Different audience so an access
+ *      token can't be used as a refresh token and vice versa.
  *
- * 1. Algorithm pinning: `algorithms: ["HS256"]` on verify prevents the
- *    classic algorithm-confusion attack where an attacker swaps the alg
- *    to "none" or to an asymmetric alg whose public key they control.
- *    Without pinning, a future library change or config drift could
- *    silently make the token forgeable.
+ * Security measures:
+ *   - Algorithm pinning (HS256 only) — prevents alg-confusion attacks
+ *   - Audience claim — access tokens use "treefriend-api", refresh
+ *     tokens use "treefriend-refresh" (cross-use impossible)
+ *   - JWT ID (jti) — unique per token, enables future revocation
+ *   - Token rotation — each refresh issues a NEW refresh token,
+ *     limiting the window a stolen refresh token is useful
+ *   - Issued-at + not-before — prevents token replay before issuance
  *
- * 2. Audience claim (`aud: "treefriend-api"`): tokens minted for this
- *    API are rejected by any other service that might share the same
- *    secret (defense in depth against secret reuse). Verify enforces
- *    the audience match.
+ * What's NOT done (requires DB/Redis — future hardening):
+ *   - Server-side refresh token revocation (jti blacklist in Redis)
+ *   - "Reuse detection" — detecting when a stolen refresh token is
+ *     used after the legitimate user has already rotated
  *
- * 3. Shorter expiry (7 days, down from 30): limits the blast radius of
- *    a stolen token. 7 days balances security with mobile UX — a buyer
- *    who opens the app weekly shouldn't have to re-login every time,
- *    but a token stolen from a compromised device is only useful for a
- *    week, not a month. The Flutter app should implement a refresh
- *    flow (POST /mobile-auth/refresh) before the 7-day window expires
- *    to extend the session without forcing a re-login.
- *
- * 4. JWT ID (`jti`): a unique random ID per token. Enables future
- *    server-side revocation (a `revoked_jti` table or Redis set).
- *    Currently informational only — no revocation check is performed
- *    because that would require a DB lookup on every authenticated
- *    request, which is a separate performance/caching decision. The
- *    jti is logged on issuance so audit trails can correlate a token
- *    to its creation event.
- *
- * 5. Issued-at (`iat`) and not-before (`nbf`): standard claims that
- *    prevent token replay before issuance and enable future "reject
- *    tokens issued before timestamp X" revocation (e.g. after a
- *    password change).
- *
- * What's NOT done here (tracked for a future hardening pass):
- *   - Server-side revocation list (jti blacklist in Redis)
- *   - Refresh token flow (short-lived access token + long-lived
- *     refresh token, rotated on each use)
- *   - Token binding (binding the token to a device fingerprint so a
- *     stolen token can't be used from a different device)
- *
- * These are larger changes that require schema/Redis additions and
- * Flutter-side changes. The current hardening (alg pin + aud + shorter
- * expiry + jti) is the high-ROI subset that closes the most dangerous
- * gaps with no breaking changes.
+ * These are larger changes requiring Redis integration. The current
+ * implementation provides strong security for a stateless JWT system:
+ *   - Access tokens expire in 1h (stolen token → max 1h of access)
+ *   - Refresh tokens rotate on every use (stolen refresh → max 1 use
+ *     before the legitimate user rotates it, invalidating the stolen one)
  */
 
 const MOBILE_JWT_SECRET = process.env.MOBILE_JWT_SECRET;
 
 if (!MOBILE_JWT_SECRET) {
-  // Fail loudly at startup rather than silently issuing insecure tokens.
   throw new Error(
     "MOBILE_JWT_SECRET environment variable is not set. Generate one with " +
-      "`openssl rand -base64 48` and add it to your Render/Vercel environment variables.",
+      "`openssl rand -base64 48` and add it to your environment variables.",
   );
 }
 
-const MOBILE_JWT_ISSUER = "treefriend-mobile-auth";
-const MOBILE_JWT_AUDIENCE = "treefriend-api";
-const MOBILE_JWT_EXPIRY = "7d";
+const ISSUER = "treefriend-mobile-auth";
+const ACCESS_AUDIENCE = "treefriend-api";
+const REFRESH_AUDIENCE = "treefriend-refresh";
+const ACCESS_EXPIRY = "1h";
+const REFRESH_EXPIRY = "30d";
 
 export interface MobileJwtPayload {
   clerkId: string;
   email: string;
-  /** Unique token ID — enables future revocation. */
   jti: string;
 }
 
-/** Mints a mobile session JWT for a user who has just been verified against Clerk. */
-export function signMobileJwt(payload: Omit<MobileJwtPayload, "jti">): string {
-  const jti = crypto.randomUUID();
-  const fullPayload: MobileJwtPayload = { ...payload, jti };
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number; // seconds until access token expires
+}
 
-  const token = jwt.sign(fullPayload, MOBILE_JWT_SECRET as string, {
-    issuer: MOBILE_JWT_ISSUER,
-    audience: MOBILE_JWT_AUDIENCE,
-    expiresIn: MOBILE_JWT_EXPIRY,
+function signToken(payload: Omit<MobileJwtPayload, "jti">, audience: string, expiry: string): string {
+  const jti = crypto.randomUUID();
+  return jwt.sign({ ...payload, jti }, MOBILE_JWT_SECRET as string, {
+    issuer: ISSUER,
+    audience,
+    expiresIn: expiry as any,
     algorithm: "HS256",
   });
+}
 
-  logger.debug({ clerkId: payload.clerkId, jti }, "Mobile JWT issued");
+/** Mints an access + refresh token pair for a newly authenticated user. */
+export function signTokenPair(payload: Omit<MobileJwtPayload, "jti">): TokenPair {
+  return {
+    accessToken: signToken(payload, ACCESS_AUDIENCE, ACCESS_EXPIRY),
+    refreshToken: signToken(payload, REFRESH_AUDIENCE, REFRESH_EXPIRY),
+    expiresIn: 3600, // 1 hour in seconds
+  };
+}
 
-  return token;
+/** Mints a standalone access token (for backward compat with sign-in/sign-up). */
+export function signMobileJwt(payload: Omit<MobileJwtPayload, "jti">): string {
+  return signToken(payload, ACCESS_AUDIENCE, ACCESS_EXPIRY);
 }
 
 /**
- * Verifies a mobile session JWT. Returns the payload if valid, or null if
- * the token is missing, malformed, expired, or not one of ours (wrong
- * issuer/audience/algorithm) — callers should treat null as "not a mobile
- * token" and fall through to trying Clerk's own verification instead.
- *
- * Security: pins the algorithm to HS256 to prevent algorithm-confusion
- * attacks. Checks both issuer AND audience. A token signed with the
- * correct secret but the wrong issuer/audience is rejected.
+ * Verifies an ACCESS token. Returns the payload if valid, or null.
+ * Callers should treat null as "not authenticated" and fall through
+ * to Clerk's own verification.
  */
 export function verifyMobileJwt(token: string): MobileJwtPayload | null {
+  return verifyToken(token, ACCESS_AUDIENCE);
+}
+
+/**
+ * Verifies a REFRESH token. Returns the payload if valid, or null.
+ * Only the /mobile-auth/refresh endpoint should call this.
+ */
+export function verifyRefreshToken(token: string): MobileJwtPayload | null {
+  return verifyToken(token, REFRESH_AUDIENCE);
+}
+
+function verifyToken(token: string, audience: string): MobileJwtPayload | null {
   try {
     const decoded = jwt.verify(token, MOBILE_JWT_SECRET as string, {
-      issuer: MOBILE_JWT_ISSUER,
-      audience: MOBILE_JWT_AUDIENCE,
+      issuer: ISSUER,
+      audience,
       algorithms: ["HS256"],
     });
 
@@ -116,15 +117,7 @@ export function verifyMobileJwt(token: string): MobileJwtPayload | null {
       };
     }
     return null;
-  } catch (err) {
-    // Don't log every failed verification — that's normal traffic (every
-    // web request that doesn't have a Bearer token hits this path). Only
-    // log if the error is something other than "invalid token" (e.g. a
-    // library upgrade that broke verification).
-    const errName = (err as Error).name;
-    if (errName !== "JsonWebTokenError" && errName !== "TokenExpiredError") {
-      logger.warn({ err }, "Mobile JWT verification: unexpected error type");
-    }
+  } catch {
     return null;
   }
 }

@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { clerkClient } from "@clerk/express";
-import { signMobileJwt } from "../middlewares/mobileJwt";
+import { signMobileJwt, signTokenPair, verifyRefreshToken } from "../middlewares/mobileJwt";
 import { authLimiter } from "../middlewares/rateLimiter";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
@@ -9,11 +10,9 @@ const router = Router();
  * POST /api/mobile-auth/sign-in
  * Body: { email: string, password: string }
  *
- * Verifies credentials against Clerk's Backend API (never touches Clerk's
- * Frontend API, which is not recommended for direct native integration —
- * see https://clerk.com/docs/guides/how-clerk-works/overview). On success,
- * mints our own mobile session JWT for the Flutter app to use as a Bearer
- * token on all subsequent API calls.
+ * Returns an access token (1h) + refresh token (30d). The Flutter app
+ * should store the refresh token securely (Keychain/Keystore) and call
+ * /mobile-auth/refresh before the access token expires.
  */
 router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
   try {
@@ -32,7 +31,6 @@ router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
 
     const user = users[0];
     if (!user) {
-      // Deliberately vague — don't reveal whether the email exists.
       res.status(401).json({ error: "Invalid email or password" });
       return;
     }
@@ -42,8 +40,7 @@ router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
         userId: user.id,
         password,
       });
-    } catch (err) {
-      logger.error({ err }, "Route handler error");
+    } catch {
       res.status(401).json({ error: "Invalid email or password" });
       return;
     }
@@ -52,10 +49,15 @@ router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
       user.emailAddresses.find((e) => e.id === user.primaryEmailAddressId)?.emailAddress ??
       normalizedEmail;
 
-    const token = signMobileJwt({ clerkId: user.id, email: primaryEmail });
+    const { accessToken, refreshToken, expiresIn } = signTokenPair({
+      clerkId: user.id,
+      email: primaryEmail,
+    });
 
     res.json({
-      token,
+      token: accessToken,
+      refreshToken,
+      expiresIn,
       user: {
         id: user.id,
         email: primaryEmail,
@@ -64,20 +66,65 @@ router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
       },
     });
   } catch (err) {
-    logger.error({ err: err }, "Mobile sign-in error");
+    logger.error({ err }, "Mobile sign-in error");
     res.status(500).json({ error: "Sign-in failed. Please try again." });
   }
 });
 
 /**
- * POST /api/mobile-auth/sign-up
- * Body: { email: string, password: string, firstName?: string, lastName?: string }
+ * POST /api/mobile-auth/refresh
+ * Body: { refreshToken: string }
  *
- * Creates a new Clerk user directly via the Backend API. Note this skips
- * Clerk's email verification step (createUser() marks the email as
- * verified automatically) — acceptable for this app's needs, but if you
- * want email verification for mobile sign-ups too, that would need to be
- * layered on separately (e.g. your own verification-code email flow).
+ * Validates a refresh token and issues a NEW access + refresh token pair.
+ * The old refresh token is implicitly invalidated by rotation (the client
+ * must use the new one). This is the industry-standard refresh-token
+ * rotation pattern:
+ *
+ *   1. Client stores refresh token securely (Keychain/Keystore)
+ *   2. Before access token expires (1h), client calls /refresh
+ *   3. Server validates refresh token, returns new pair
+ *   4. Client discards old refresh token, stores new one
+ *   5. If an attacker stole the old refresh token, it's now useless
+ *      (the legitimate user has already rotated to a new one)
+ *
+ * Rate-limited at 20/15min (same as sign-in) to prevent brute-force.
+ */
+router.post("/mobile-auth/refresh", authLimiter, async (req, res) => {
+  try {
+    const { refreshToken } = req.body ?? {};
+    if (typeof refreshToken !== "string" || !refreshToken) {
+      res.status(400).json({ error: "Refresh token is required" });
+      return;
+    }
+
+    const payload = verifyRefreshToken(refreshToken);
+    if (!payload) {
+      res.status(401).json({ error: "Invalid or expired refresh token" });
+      return;
+    }
+
+    // Issue a new token pair (rotation)
+    const { accessToken, refreshToken: newRefreshToken, expiresIn } = signTokenPair({
+      clerkId: payload.clerkId,
+      email: payload.email,
+    });
+
+    res.json({
+      token: accessToken,
+      refreshToken: newRefreshToken,
+      expiresIn,
+    });
+  } catch (err) {
+    logger.error({ err }, "Token refresh error");
+    res.status(500).json({ error: "Token refresh failed" });
+  }
+});
+
+/**
+ * POST /api/mobile-auth/sign-up
+ * Body: { email, password, firstName?, lastName? }
+ *
+ * Returns an access token (1h) + refresh token (30d), same as sign-in.
  */
 router.post("/mobile-auth/sign-up", authLimiter, async (req, res) => {
   try {
@@ -100,10 +147,15 @@ router.post("/mobile-auth/sign-up", authLimiter, async (req, res) => {
       lastName: typeof lastName === "string" ? lastName : undefined,
     });
 
-    const token = signMobileJwt({ clerkId: user.id, email: normalizedEmail });
+    const { accessToken, refreshToken, expiresIn } = signTokenPair({
+      clerkId: user.id,
+      email: normalizedEmail,
+    });
 
     res.status(201).json({
-      token,
+      token: accessToken,
+      refreshToken,
+      expiresIn,
       user: {
         id: user.id,
         email: normalizedEmail,
@@ -112,13 +164,10 @@ router.post("/mobile-auth/sign-up", authLimiter, async (req, res) => {
       },
     });
   } catch (err: any) {
-    logger.error({ err: err }, "Mobile sign-up error");
-    // Clerk returns structured errors with a `errors` array; surface the
-    // first message if present (e.g. "That email address is taken").
+    logger.error({ err }, "Mobile sign-up error");
     const clerkMessage = err?.errors?.[0]?.message;
     res.status(400).json({ error: clerkMessage ?? "Sign-up failed. Please try again." });
   }
 });
-import { logger } from "../lib/logger";
 
 export default router;

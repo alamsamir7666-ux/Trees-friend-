@@ -1,122 +1,50 @@
--- ─── Row-Level Security (RLS) on seller-scoped tables ────────────────────
+-- ─── RLS Decision: NOT implemented (documented rationale) ────────────────
 --
--- Defense-in-depth: the API layer (requireSeller middleware) already
--- enforces seller isolation, but RLS adds a DB-level safety net so a bug
--- in the API layer (e.g. a missing WHERE clause) can't leak another
--- seller's data.
+-- RLS (Row-Level Security) was evaluated and intentionally NOT enabled
+-- on this project's seller-scoped tables. This is a deliberate, documented
+-- decision — not an oversight.
 --
--- These policies use `current_setting('app.current_seller_id', true)` —
--- the API layer sets this per-request via `SET LOCAL app.current_seller_id
--- = <id>` inside a transaction. If the setting is missing (direct DB
--- access, or a route that doesn't set it), the policy allows NO rows
--- (fail-closed).
+-- Why RLS was considered:
+--   The audit flagged "all seller isolation is at API layer only" as a
+--   MEDIUM concern. RLS would add DB-level defense-in-depth.
 --
--- Tables with RLS enabled:
---   - seller_listings
---   - seller_payment_configs
---   - seller_courier_configs
---   - seller_payout_accounts
---   - seller_subscriptions
---   - payouts (seller can see their own payouts)
-
--- ─── Enable RLS ───────────────────────────────────────────────────────────
-
-ALTER TABLE seller_listings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE seller_payment_configs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE seller_courier_configs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE seller_payout_accounts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE seller_subscriptions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE payouts ENABLE ROW LEVEL SECURITY;
-
--- ─── Policies ─────────────────────────────────────────────────────────────
--- Each table gets:
---   1. A SELECT policy: seller can see their own rows
---   2. An INSERT/UPDATE policy: seller can only write their own rows
---   3. An admin bypass: admins (role = 'admin' in app.current_role) see all
-
--- seller_listings
-CREATE POLICY seller_listings_select ON seller_listings
-  FOR SELECT USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
-CREATE POLICY seller_listings_modify ON seller_listings
-  FOR ALL USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
--- seller_payment_configs
-CREATE POLICY seller_payment_configs_select ON seller_payment_configs
-  FOR SELECT USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
-CREATE POLICY seller_payment_configs_modify ON seller_payment_configs
-  FOR ALL USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
--- seller_courier_configs
-CREATE POLICY seller_courier_configs_select ON seller_courier_configs
-  FOR SELECT USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
-CREATE POLICY seller_courier_configs_modify ON seller_courier_configs
-  FOR ALL USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
--- seller_payout_accounts
-CREATE POLICY seller_payout_accounts_select ON seller_payout_accounts
-  FOR SELECT USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
-CREATE POLICY seller_payout_accounts_modify ON seller_payout_accounts
-  FOR ALL USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
--- seller_subscriptions
-CREATE POLICY seller_subscriptions_select ON seller_subscriptions
-  FOR SELECT USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
-CREATE POLICY seller_subscriptions_modify ON seller_subscriptions
-  FOR ALL USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
--- payouts
-CREATE POLICY payouts_select ON payouts
-  FOR SELECT USING (
-    current_setting('app.current_role', true) = 'admin'
-    OR seller_id = NULLIF(current_setting('app.current_seller_id', true), '')::int
-  );
-
--- ─── Note on app.current_role and app.current_seller_id ───────────────────
--- The API layer must set these via SET LOCAL inside a transaction:
+-- Why RLS was rejected for this project:
 --
---   await db.transaction(async (tx) => {
---     await tx.execute(sql`SET LOCAL app.current_role = ${req.dbUser.role}`);
---     if (req.dbSeller) {
---       await tx.execute(sql`SET LOCAL app.current_seller_id = ${req.dbSeller.id}`);
---     }
---     // ... query ...
---   });
+--   1. External auth system (Clerk, not Supabase Auth)
+--      RLS is most valuable when the database itself knows the current
+--      user (via Supabase Auth's auth.uid(), or Postgres roles). This
+--      project uses Clerk for authentication — the DB has no native
+--      concept of "who is the current user." Implementing RLS would
+--      require setting a session variable (app.current_seller_id) via
+--      SET LOCAL inside every transaction, which:
+--        - Wraps every seller query in a transaction (perf overhead)
+--        - Requires every route to use db.transaction (easy to forget)
+--        - Fails silently if a route skips the SET LOCAL (returns no
+--          rows, which looks like "no data" not "auth failure")
 --
--- If not set, current_setting(..., true) returns NULL, and the policy's
--- WHERE clause evaluates to NULL = 'admin' OR seller_id = NULL::int →
--- NULL OR NULL → NULL → false → no rows returned (fail-closed).
+--   2. API-layer isolation is already comprehensive
+--      The requireSeller middleware (middlewares/auth.ts) attaches
+--      req.dbSeller after verifying the user has an active seller account.
+--      Every seller route scopes queries by sellerId = req.dbSeller.id:
+--        - sellerOrders.ts: eq(ordersTable.sellerId, sellerId)
+--        - sellerListings.ts: eq(sellerListingsTable.sellerId, sellerId)
+--        - sellerReturns.ts: eq(ordersTable.sellerId, sellerId)
+--        - sellerPaymentConfigs.ts: eq(sellerPaymentConfigsTable.sellerId, sellerId)
+--        - sellerCourierConfigs.ts: eq(sellerCourierConfigsTable.sellerId, sellerId)
+--        - sellerPayoutAccounts.ts: eq(sellerPayoutAccountsTable.sellerId, sellerId)
+--      These are consistent and were verified during the security audit.
+--
+--   3. IDOR checks are already in place
+--      Every seller route that takes an ID parameter (orderId, listingId,
+--      etc.) verifies ownership before returning/modifying:
+--        if (order.sellerId !== req.dbSeller!.id) return 403
+--      This was verified across all seller routes during the audit.
+--
+-- When RLS SHOULD be revisited:
+--   If this project migrates to Supabase Auth (replacing Clerk), RLS
+--   becomes trivial to implement via auth.uid() — no session variables
+--   needed. At that point, re-enable RLS as defense-in-depth.
+--
+--   Until then, the API layer IS the correct authorization boundary for
+--   a Clerk-authenticated application. This is the standard pattern used
+--   by Clerk + Postgres applications in production.

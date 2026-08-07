@@ -14,7 +14,8 @@ import {
   sellerListingVariantsTable,
   sellersTable,
 } from "@workspace/db";
-import { eq, ilike, gte, lte, and, desc, sql, inArray, or } from "drizzle-orm";
+import { eq, ilike, gte, lte, and, desc, sql, inArray, or, isNull } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../middlewares/auth";
 import { notifyStockAlerts } from "./stockAlerts";
 import { notifyPreOrderCustomers } from "./preOrders";
@@ -379,7 +380,7 @@ router.get("/products/featured", async (_req, res) => {
     const products = await db
       .select()
       .from(productsTable)
-      .where(eq(productsTable.homepageTag, "trending"))
+      .where(and(eq(productsTable.homepageTag, "trending"), isNull(productsTable.deletedAt)))
       .limit(8);
 
     const ids = products.map((p) => p.id);
@@ -421,12 +422,12 @@ router.get("/products/homepage", async (_req, res) => {
       db
         .select()
         .from(productsTable)
-        .where(eq(productsTable.homepageTag, "trending"))
+        .where(and(eq(productsTable.homepageTag, "trending"), isNull(productsTable.deletedAt)))
         .orderBy(desc(productsTable.createdAt)),
       db
         .select()
         .from(productsTable)
-        .where(eq(productsTable.homepageTag, "new_arrivals"))
+        .where(and(eq(productsTable.homepageTag, "new_arrivals"), isNull(productsTable.deletedAt)))
         .orderBy(desc(productsTable.createdAt)),
     ]);
 
@@ -512,7 +513,7 @@ router.get("/products/:id", async (req, res) => {
     const [p] = await db
       .select()
       .from(productsTable)
-      .where(eq(productsTable.id, id));
+      .where(and(eq(productsTable.id, id), isNull(productsTable.deletedAt)));
     if (!p) {
       res.status(404).json({ error: "Product not found" });
       return;
@@ -563,7 +564,7 @@ router.get("/products", async (req, res) => {
     const limitNum = Math.min(200, Math.max(1, parseInt(limit)));
     const offset = (pageNum - 1) * limitNum;
 
-    const conditions = [];
+    const conditions: SQL[] = [isNull(productsTable.deletedAt)]; // Always exclude soft-deleted
     if (category) {
       const slugs = category.split(",").map(s => s.trim()).filter(Boolean);
       const matchingCats = await db
@@ -577,12 +578,15 @@ router.get("/products", async (req, res) => {
           : sql`false`
       );
     }
-    if (search) conditions.push(or(ilike(productsTable.name, `%${search}%`), ilike(productsTable.description, `%${search}%`)));
+    if (search) {
+      const searchCond = or(ilike(productsTable.name, `%${search}%`), ilike(productsTable.description, `%${search}%`));
+      if (searchCond) conditions.push(searchCond);
+    }
 
     const homepageTagFilter = req.query.homepageTag as string | undefined;
     if (homepageTagFilter) conditions.push(eq(productsTable.homepageTag, homepageTagFilter));
 
-    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const where = and(...conditions);
 
     const [{ total }] = await db
       .select({ total: sql<string>`COUNT(*)` })
@@ -845,22 +849,20 @@ router.delete("/products/:id", requireAdmin, async (req: any, res) => {
       res.status(400).json({ error: "Invalid product ID" });
       return;
     }
-    // Fetch the row before deleting it -- we need its images[] to clean up
-    // Cloudinary, and that data is gone the instant the DELETE below runs.
-    const [existingProduct] = await db.select().from(productsTable).where(eq(productsTable.id, id)).limit(1);
 
-    // productVariantsTable.productId has no DB-level FK/cascade, so variants
-    // must be deleted explicitly here or they would be orphaned forever.
-    await db.delete(productVariantsTable).where(eq(productVariantsTable.productId, id));
-    await db.delete(productsTable).where(eq(productsTable.id, id));
-
-    // Best-effort Cloudinary cleanup after the DB delete succeeds. Never
-    // blocks or fails the response -- the product is already gone from the
-    // site either way; a Cloudinary failure here just means storage cleanup
-    // needs a retry/manual pass, which is logged for that purpose.
-    if (existingProduct?.images?.length) {
-      deleteCloudinaryAssets(existingProduct.images).catch(() => {});
-    }
+    // SOFT-DELETE: set deleted_at instead of hard-deleting. This preserves
+    // the product row for historical orders/reviews that reference it,
+    // while hiding it from all buyer-facing queries (which filter
+    // WHERE deleted_at IS NULL — see the GET routes above).
+    //
+    // Product variants are also soft-deleted (or rather, the product is
+    // hidden so its variants are unreachable) — we don't touch
+    // productVariantsTable here because a hard-delete would orphan
+    // historical order items that reference those variants by ID.
+    await db
+      .update(productsTable)
+      .set({ deletedAt: new Date(), productStatus: "discontinued" })
+      .where(eq(productsTable.id, id));
 
     res.json({ message: "Product deleted" });
   } catch (err) {

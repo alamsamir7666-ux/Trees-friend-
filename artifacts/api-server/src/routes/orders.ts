@@ -540,8 +540,9 @@ router.post("/orders", requireAuth, checkoutLimiter, async (req: any, res) => {
     // (.catch(() => {})) and don't need to block the order commit. If they
     // fail after the order is committed, the order still exists; the buyer
     // just doesn't get the email. That's the correct failure mode.
-    const createdOrders = await db.transaction(async (tx) => {
-      const created: (typeof ordersTable.$inferSelect)[] = [];
+    const createdOrders = await db.transaction(
+      async (tx) => {
+        const created: (typeof ordersTable.$inferSelect)[] = [];
 
       for (const g of groups) {
         const method = resolvedPaymentMethods.get(g.sellerId)!;
@@ -615,7 +616,15 @@ router.post("/orders", requireAuth, checkoutLimiter, async (req: any, res) => {
       ]);
 
       return created;
-    });
+    },
+      // SERIALIZABLE isolation: prevents race conditions where two concurrent
+      // checkouts for the same variant could both read the same stock count
+      // and both decrement, resulting in overselling. SERIALIZABLE is the
+      // strongest isolation level — if two transactions conflict, one is
+      // aborted and must retry. For checkout (low frequency, high stakes),
+      // this is the correct tradeoff.
+      { isolationLevel: "serializable" },
+    );
 
     // Loyalty points redeem/award once at the grand-total level (a single
     // ledger event), not once per resulting order -- points are a

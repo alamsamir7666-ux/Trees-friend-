@@ -8,7 +8,7 @@ import {
   reviewsTable,
   followsTable,
 } from "@workspace/db";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, isNull } from "drizzle-orm";
 import { requireAuth, requireSellerAccount } from "../middlewares/auth";
 import { deleteCloudinaryAssets, cleanupRemovedImages } from "../lib/cloudinary";
 
@@ -465,7 +465,7 @@ router.get("/sellers/:id", async (req, res) => {
     const [seller] = await db
       .select()
       .from(sellersTable)
-      .where(and(eq(sellersTable.id, id), eq(sellersTable.status, "active")))
+      .where(and(eq(sellersTable.id, id), eq(sellersTable.status, "active"), isNull(sellersTable.deletedAt)))
       .limit(1);
 
     if (!seller) {
