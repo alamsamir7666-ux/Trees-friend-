@@ -4,6 +4,11 @@ import { sellerPaymentConfigsTable, sellerListingsTable } from "@workspace/db";
 import { eq, and, ne } from "drizzle-orm";
 import { requireSeller } from "../middlewares/auth";
 import { encryptCredential, maskCredential } from "../lib/credentialEncryption";
+import { CreateSellerPaymentConfigBody } from "@workspace/api-zod";
+import { validateBody } from "../lib/validateRequest";
+import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
 
 /**
  * Seller Payment Settings (plan doc §4 "Payment Settings", §7). This is
@@ -89,27 +94,14 @@ router.get("/seller-payment-configs/mine", requireSeller, async (req, res) => {
  * validating against the only value the schema/plan actually support
  * today rather than silently accepting anything.
  */
-router.post("/seller-payment-configs", requireSeller, async (req, res) => {
+router.post("/seller-payment-configs", requireSeller, validateBody(CreateSellerPaymentConfigBody, "CreateSellerPaymentConfigBody"), async (req: ApiRequest<z.infer<typeof CreateSellerPaymentConfigBody>>, res) => {
   try {
-    const { provider, merchantAppKey, merchantAppSecret, merchantUsername, merchantPassword } = req.body as {
-      provider?: string;
-      merchantAppKey?: string;
-      merchantAppSecret?: string;
-      merchantUsername?: string;
-      merchantPassword?: string;
-    };
-
+    // VAL-MIGRATE-2: Zod validates shape (provider: 'bkash' | undefined,
+    // all 4 credential fields: required strings). The provider enum check
+    // is built into the schema (zod.enum(['bkash']).optional()), so the
+    // manual resolvedProvider !== 'bkash' check is superseded.
+    const { provider, merchantAppKey, merchantAppSecret, merchantUsername, merchantPassword } = req.body;
     const resolvedProvider = provider ?? "bkash";
-    if (resolvedProvider !== "bkash") {
-      res.status(400).json({ error: 'provider must be "bkash" (the only provider this schema/plan supports today)' });
-      return;
-    }
-    if (!merchantAppKey || !merchantAppSecret || !merchantUsername || !merchantPassword) {
-      res.status(400).json({
-        error: "merchantAppKey, merchantAppSecret, merchantUsername, and merchantPassword are all required",
-      });
-      return;
-    }
 
     // Delete any existing config for this seller (one bKash merchant
     // account at a time -- see doc comment above).
@@ -177,6 +169,5 @@ router.delete("/seller-payment-configs/mine", requireSeller, async (req, res) =>
     res.status(500).json({ error: "Failed to delete payment config" });
   }
 });
-import { logger } from "../lib/logger";
 
 export default router;
