@@ -6,7 +6,7 @@ import {
   timestamp,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { type z } from "zod/v4";
 
 /**
  * Category tree — 2 DB levels, 3 browsing levels:

@@ -100,7 +100,7 @@ export function trackViewProduct(product: { id: number; name: string; price: num
   }
 }
 
-export function trackPurchase(order: { id: number; total: number; items: Array<{ productId: number; productName: string; price: number; quantity: number }> }) {
+export function trackPurchase(order: { id: number; total: number; items: { productId: number; productName: string; price: number; quantity: number }[] }) {
   trackEvent("purchase", {
     transaction_id: order.id,
     currency: "BDT",

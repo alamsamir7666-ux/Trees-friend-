@@ -176,7 +176,7 @@ router.post("/admin/products/bulk-import", requireAdmin, async (req: any, res) =
       const stockRaw = stockIdx >= 0 ? parseInt(cols[stockIdx] ?? "0") : 0;
       const deliveryChargeRaw = deliveryChargeIdx >= 0 ? parseFloat(cols[deliveryChargeIdx] ?? "0") : 0;
 
-      let variantForm = (variantFormIdx >= 0 ? cols[variantFormIdx]?.trim().toLowerCase() : "") || "sapling";
+      const variantForm = (variantFormIdx >= 0 ? cols[variantFormIdx]?.trim().toLowerCase() : "") || "sapling";
       if (!VALID_FORMS.has(variantForm)) {
         errors.push(`Row ${rowNum}: variantform "${variantForm}" is invalid — must be one of seed, sapling, grafted, potted`);
         continue;
@@ -228,7 +228,7 @@ router.post("/admin/products/bulk-import", requireAdmin, async (req: any, res) =
 
     let productsCreated = 0;
     let productsMerged = 0;
-    let variantsCreated = 0;
+    const variantsCreated = 0;
 
     // --- Pass 3: for each group, create-or-reuse the product, then insert one variant per row ---
     for (const [, rows] of groups) {

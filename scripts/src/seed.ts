@@ -262,7 +262,7 @@ async function seed() {
 
   // --- Stage 3: products (need subcategory ids from stage 2) ---
   const existingProducts = await db.select().from(products);
-  let insertedProducts: { id: number; slug: string }[] = [];
+  const insertedProducts: { id: number; slug: string }[] = [];
   if (existingProducts.length === 0) {
     for (const p of seedProducts) {
       const { subcategorySlug, variants, ...productFields } = p;

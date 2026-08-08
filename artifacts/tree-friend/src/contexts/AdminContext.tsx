@@ -272,7 +272,7 @@ export interface AdminContextValue {
   fetchArchivedOrders: (page: number, append?: boolean) => void;
 
   // Coupons (removed from admin panel — now seller-managed)
-  coupons: Array<{ id: number; code: string; [key: string]: unknown }>;
+  coupons: { id: number; code: string; [key: string]: unknown }[];
   couponsLoading: boolean;
   editingCoupon: EditingCoupon;
   setEditingCoupon: (v: EditingCoupon) => void;
@@ -280,7 +280,7 @@ export interface AdminContextValue {
   setShowCouponModal: (v: boolean) => void;
   couponSaving: boolean;
   setCouponSaving: (v: boolean) => void;
-  setCoupons: (v: Array<{ id: number; code: string; [key: string]: unknown }>) => void;
+  setCoupons: (v: { id: number; code: string; [key: string]: unknown }[]) => void;
 
   // Monthly
   monthlyRecords: MonthlyRecord[];
@@ -322,7 +322,7 @@ export interface AdminContextValue {
 
   // Computed
   filteredReviews: AdminReview[];
-  filteredCoupons: Array<{ id: number; code: string; [key: string]: unknown }>;
+  filteredCoupons: { id: number; code: string; [key: string]: unknown }[];
   debouncedUserSearch: string;
 }
 

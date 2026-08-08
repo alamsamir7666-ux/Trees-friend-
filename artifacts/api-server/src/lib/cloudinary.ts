@@ -78,7 +78,7 @@ export function publicIdFromUrl(url: string): { publicId: string; resourceType: 
  * Safe to call with duplicate/empty/non-Cloudinary URLs -- those are
  * filtered out before any API call is made.
  */
-export async function deleteCloudinaryAssets(urls: Array<string | null | undefined>): Promise<void> {
+export async function deleteCloudinaryAssets(urls: (string | null | undefined)[]): Promise<void> {
   const parsed = urls
     .filter((u): u is string => !!u)
     .map((u) => ({ url: u, parsed: publicIdFromUrl(u) }))

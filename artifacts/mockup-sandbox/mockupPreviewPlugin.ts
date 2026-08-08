@@ -39,7 +39,7 @@ export function mockupPreviewPlugin(): Plugin {
       .every((segment) => !segment.startsWith("_"));
   }
 
-  async function discoverComponents(): Promise<Array<DiscoveredComponent>> {
+  async function discoverComponents(): Promise<DiscoveredComponent[]> {
     const files = await glob(`${MOCKUPS_DIR}/**/*.tsx`, {
       cwd: root,
       ignore: ["**/_*/**", "**/_*.tsx"],
@@ -51,7 +51,7 @@ export function mockupPreviewPlugin(): Plugin {
     }));
   }
 
-  function generateSource(components: Array<DiscoveredComponent>): string {
+  function generateSource(components: DiscoveredComponent[]): string {
     const entries = components
       .map(
         (c) =>

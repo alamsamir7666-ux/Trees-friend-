@@ -3,40 +3,16 @@ import { db } from "@workspace/db";
 import { auditLogsTable } from "@workspace/db";
 import { desc } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
-export async function logAdminAction({
-  adminId,
-  adminEmail,
-  action,
-  targetType,
-  targetId,
-  before,
-  after,
-}: {
-  adminId: string;
-  adminEmail?: string;
-  action: string;
-  targetType?: string;
-  targetId?: string | number;
-  before?: Record<string, unknown>;
-  after?: Record<string, unknown>;
-}) {
-  try {
-    await db.insert(auditLogsTable).values({
-      adminId,
-      adminEmail: adminEmail ?? null,
-      action,
-      targetType: targetType ?? null,
-      targetId: targetId != null ? String(targetId) : null,
-      before: before ?? null,
-      after: after ?? null,
-    });
-  } catch (err) {
-    logger.error({ err: err }, "[audit] logAdminAction failed");
-  }
-}
+// CQ-3: removed dead `logAdminAction` export — it was a duplicate of
+// lib/audit.ts's `logAudit` function (the one every callsite actually uses).
+// Keeping it here caused confusion: "which audit function do I call?" — the
+// answer is always `logAudit` from lib/audit.ts, which is the canonical
+// implementation with the try/catch + logger fallback. This file now only
+// owns the GET /admin/audit-logs read endpoint; writes go through lib/audit.ts.
 
 router.get("/admin/audit-logs", requireAdmin, async (req, res) => {
   try {
@@ -65,6 +41,5 @@ router.get("/admin/audit-logs", requireAdmin, async (req, res) => {
     res.status(500).json({ error: "Failed to fetch audit logs" });
   }
 });
-import { logger } from "../lib/logger";
 
 export default router;

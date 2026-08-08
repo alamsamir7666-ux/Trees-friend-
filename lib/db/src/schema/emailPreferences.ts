@@ -1,7 +1,7 @@
 // lib/db/src/schema/emailPreferences.ts
 import { pgTable, serial, text, boolean, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { type z } from "zod/v4";
 
 export const emailPreferencesTable = pgTable("email_preferences", {
   id: serial("id").primaryKey(),

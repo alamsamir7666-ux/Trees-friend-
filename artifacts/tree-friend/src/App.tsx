@@ -191,8 +191,8 @@ if (typeof window !== "undefined") {
 const SCROLL_KEY = (path: string) => `__scroll__${path}`;
 
 // Module-level flag - survives React render batching unlike a ref
-let _isPop = false;
-let _lastScrollY = 0;
+const _isPop = false;
+const _lastScrollY = 0;
 
 function saveScrollPosition(path: string) {
   try {

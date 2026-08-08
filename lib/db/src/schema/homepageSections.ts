@@ -1,6 +1,6 @@
 import { pgTable, serial, text, integer, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { type z } from "zod/v4";
 
 /**
  * Homepage Sections — admin-created tabs for the "Best Plants & Trees" section.

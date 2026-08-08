@@ -178,7 +178,7 @@ export function ChatPage() {
             ?.response?.data?.error;
         const fallback = (err as { message?: string })?.message ?? "Unknown error";
         setSidebarError(serverDetail ?? fallback);
-        // eslint-disable-next-line no-console
+         
         console.error("Failed to fetch conversation list:", err);
       })
       .finally(() => setSidebarLoading(false));

@@ -93,7 +93,7 @@ export function OrdersPage() {
     try {
       const raw = JSON.parse(localStorage.getItem("treefriend_guest_orders") ?? "[]");
       setGuestTrackingIds(
-        (raw as Array<string | GuestOrderEntry>)
+        (raw as (string | GuestOrderEntry)[])
           .filter((o) => (typeof o === "string" ? true : o.type !== "preorder"))
           .map((o) => (typeof o === "string" ? { trackingId: o } : o))
       );
@@ -193,7 +193,7 @@ export function OrdersPage() {
             // response, so we cast through `any` here for ergonomic field
             // access. This is the only place these guest rows are read.
             const g = o as GuestOrderEntry & {
-              items?: Array<{ productName: string; productImage?: string; quantity: number; price: number }>;
+              items?: { productName: string; productImage?: string; quantity: number; price: number }[];
               total?: number | string;
               subtotal?: number | string;
               discount?: number;

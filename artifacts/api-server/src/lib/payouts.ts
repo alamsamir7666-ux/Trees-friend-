@@ -1,5 +1,5 @@
 import { db } from "@workspace/db";
-import { ordersTable, payoutsTable, sellerPayoutAccountsTable } from "@workspace/db";
+import { type ordersTable, payoutsTable, sellerPayoutAccountsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { disburseToSeller, BkashApiError } from "./bkash";
 

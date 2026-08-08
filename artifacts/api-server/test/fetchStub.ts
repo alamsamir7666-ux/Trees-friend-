@@ -50,7 +50,7 @@ let realFetch: typeof fetch;
  * SELECT-existing-shipment checks, so both proceed to INSERT and the DB
  * constraint -- not request ordering -- decides the outcome.
  */
-let barrierResolvers: Array<() => void> = [];
+let barrierResolvers: (() => void)[] = [];
 let barrierExpected = 0;
 
 export function installSteadfastFetchStub(options?: { barrier?: number }): void {

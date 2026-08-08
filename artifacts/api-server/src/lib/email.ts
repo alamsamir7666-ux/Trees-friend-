@@ -48,7 +48,7 @@ export async function sendOrderConfirmation({
   name: string;
   orderId: number;
   trackingId: string;
-  items: Array<{ productName: string; quantity: number; price: number; deliveryCharge?: number; sellerId?: number | null }>;
+  items: { productName: string; quantity: number; price: number; deliveryCharge?: number; sellerId?: number | null }[];
   total: number;
   shippingAddress: any;
   paymentMethod: string;
@@ -263,7 +263,7 @@ export async function sendAbandonedCartEmail({
 }: {
   to: string;
   name: string;
-  items: Array<{ name: string; price: number; quantity: number; image: string }>;
+  items: { name: string; price: number; quantity: number; image: string }[];
 }) {
   const resend = getClient();
   if (!resend) return;

@@ -247,7 +247,7 @@ export function CheckoutPage() {
    * cod-only orders need no bKash call at all and are just navigated to
    * directly.
    */
-  async function payFirstBkashOrderOrGoToOrder(orders: Array<{ id: number; paymentMethod: string }>) {
+  async function payFirstBkashOrderOrGoToOrder(orders: { id: number; paymentMethod: string }[]) {
     const firstBkash = orders.find((o) => o.paymentMethod === "bkash");
     if (!firstBkash) {
       setLocation(`/orders/${orders[0].id}`);

@@ -109,7 +109,7 @@ export function MessagesPage() {
         setFetchError(serverDetail ?? fallback);
         // Still log the full error so it shows up in browser devtools with
         // the request URL, status, and stack trace if available.
-        // eslint-disable-next-line no-console
+         
         console.error("Failed to fetch conversations:", err);
       })
       .finally(() => setIsLoading(false));

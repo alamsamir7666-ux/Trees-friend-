@@ -1,0 +1,26 @@
+# Prettier ignore — files prettier should NOT format.
+# Generated code is reformatted by its own toolchain (orval), not prettier.
+node_modules/
+dist/
+build/
+.next/
+coverage/
+
+# Generated API client + Zod schemas (orval regenerates these)
+lib/api-zod/src/generated/
+lib/api-client-react/src/generated/
+
+# Build output
+artifacts/api-server/dist/
+artifacts/tree-friend/dist/
+
+# Lockfiles (pnpm manages formatting)
+pnpm-lock.yaml
+package-lock.json
+
+# Migration SQL (drizzle-kit generates these)
+*.sql
+
+# Minified/vendor assets
+*.min.js
+*.min.css

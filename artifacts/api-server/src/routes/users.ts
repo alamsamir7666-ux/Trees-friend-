@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { db } from "@workspace/db";
 import { usersTable, addressesTable, reviewsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
@@ -11,6 +11,8 @@ import {
   DeleteAddressParams,
 } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
 
 const router = Router();
 
@@ -42,17 +44,23 @@ function formatAddress(a: typeof addressesTable.$inferSelect) {
   };
 }
 
-router.get("/users/me", requireAuth, async (req: any, res) => {
+router.get("/users/me", requireAuth, async (req: ApiRequest, res: Response) => {
   try {
-    res.json(formatUser(req.dbUser));
+    res.json(formatUser(req.dbUser!));
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch user" });
   }
 });
 
-router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"), async (req: any, res) => {
+// CQ-4: typed req.body via ApiRequest<z.infer<typeof UpdateMeBody>> —
+// replaces `req: any`. req.userId and req.dbUser are now typed (non-optional).
+router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"), async (req: ApiRequest<z.infer<typeof UpdateMeBody>>, res: Response) => {
   try {
-    const { firstName, lastName, phone, email } = req.body;
+    // P0-1: body shape validated by Zod (UpdateMeBody — firstName, lastName,
+    // phone). `email` is read via cast because the OpenAPI spec doesn't
+    // document it but the handler conditionally updates it (spec gap to fix).
+    const { firstName, lastName, phone } = req.body;
+    const email = (req.body as { email?: string }).email;
 
     // P0-1: input shape now validated by Zod (UpdateMeBody). The previous
     // hand-rolled checks (typeof !== "string", phone.length > 20) are
@@ -77,15 +85,15 @@ router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"),
     const [updated] = await db
       .update(usersTable)
       .set(updates)
-      .where(eq(usersTable.id, req.dbUser.id))
+      .where(eq(usersTable.id, req.dbUser!.id))
       .returning();
 
     // Back-fill userName on existing reviews when a real name becomes available
     const newFirst = (
-      (firstName ?? req.dbUser.firstName) ?? ""
+      (firstName ?? req.dbUser!.firstName) ?? ""
     ).trim();
     const newLast = (
-      (lastName ?? req.dbUser.lastName) ?? ""
+      (lastName ?? req.dbUser!.lastName) ?? ""
     ).trim();
     const fullName = `${newFirst} ${newLast}`.trim();
 
@@ -93,7 +101,7 @@ router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"),
       await db
         .update(reviewsTable)
         .set({ userName: fullName })
-        .where(eq(reviewsTable.userId, req.userId));
+        .where(eq(reviewsTable.userId, req.userId!));
     }
 
     res.json(formatUser(updated));
@@ -102,19 +110,19 @@ router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"),
   }
 });
 
-router.get("/users/me/addresses", requireAuth, async (req: any, res) => {
+router.get("/users/me/addresses", requireAuth, async (req: ApiRequest, res: Response) => {
   try {
     const addresses = await db
       .select()
       .from(addressesTable)
-      .where(eq(addressesTable.userId, req.userId));
+      .where(eq(addressesTable.userId, req.userId!));
     res.json(addresses.map(formatAddress));
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch addresses" });
   }
 });
 
-router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "AddAddressBody"), async (req: any, res) => {
+router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "AddAddressBody"), async (req: ApiRequest<z.infer<typeof AddAddressBody>>, res: Response) => {
   try {
     const {
       fullName,
@@ -138,7 +146,7 @@ router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "Ad
     const existing = await db
       .select({ id: addressesTable.id })
       .from(addressesTable)
-      .where(eq(addressesTable.userId, req.userId));
+      .where(eq(addressesTable.userId, req.userId!));
 
     if (existing.length >= 10) {
       res.status(400).json({ error: "Maximum of 10 addresses allowed" });
@@ -149,13 +157,13 @@ router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "Ad
       await db
         .update(addressesTable)
         .set({ isDefault: false })
-        .where(eq(addressesTable.userId, req.userId));
+        .where(eq(addressesTable.userId, req.userId!));
     }
 
     const [address] = await db
       .insert(addressesTable)
       .values({
-        userId: req.userId,
+        userId: req.userId!,
         fullName: fullName.trim(),
         phone: phone?.trim() ?? "",
         street: street.trim(),
@@ -172,9 +180,9 @@ router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "Ad
   }
 });
 
-router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressParams, "UpdateAddressParams"), validateBody(UpdateAddressBody, "UpdateAddressBody"), async (req: any, res) => {
+router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressParams, "UpdateAddressParams"), validateBody(UpdateAddressBody, "UpdateAddressBody"), async (req: ApiRequest<z.infer<typeof UpdateAddressBody>>, res: Response) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number by UpdateAddressParams
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number by UpdateAddressParams
     const {
       fullName,
       phone,
@@ -192,7 +200,7 @@ router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressP
       .where(
         and(
           eq(addressesTable.id, id),
-          eq(addressesTable.userId, req.userId),
+          eq(addressesTable.userId, req.userId!),
         ),
       )
       .limit(1);
@@ -206,7 +214,7 @@ router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressP
       await db
         .update(addressesTable)
         .set({ isDefault: false })
-        .where(eq(addressesTable.userId, req.userId));
+        .where(eq(addressesTable.userId, req.userId!));
     }
 
     const [updated] = await db
@@ -223,7 +231,7 @@ router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressP
       .where(
         and(
           eq(addressesTable.id, id),
-          eq(addressesTable.userId, req.userId),
+          eq(addressesTable.userId, req.userId!),
         ),
       )
       .returning();
@@ -234,15 +242,15 @@ router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressP
   }
 });
 
-router.delete("/users/me/addresses/:id", requireAuth, validateParams(DeleteAddressParams, "DeleteAddressParams"), async (req: any, res) => {
+router.delete("/users/me/addresses/:id", requireAuth, validateParams(DeleteAddressParams, "DeleteAddressParams"), async (req: ApiRequest, res: Response) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number by DeleteAddressParams
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number by DeleteAddressParams
     await db
       .delete(addressesTable)
       .where(
         and(
           eq(addressesTable.id, id),
-          eq(addressesTable.userId, req.userId),
+          eq(addressesTable.userId, req.userId!),
         ),
       );
     res.json({ message: "Address deleted" });

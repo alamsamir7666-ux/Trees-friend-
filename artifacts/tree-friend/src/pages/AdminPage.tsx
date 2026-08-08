@@ -117,7 +117,7 @@ export function AdminPage() {
   const debouncedSearch = useDebounce(search, 300);
   const [productsPage, setProductsPage] = useState(1);
   const { data: productsData, isLoading: productsLoading } = useListProducts({ limit: 25, page: productsPage, search: debouncedSearch || undefined });
-  const [allProducts, setAllProducts] = useState<Array<Product & { [key: string]: unknown }>>([]);
+  const [allProducts, setAllProducts] = useState<(Product & { [key: string]: unknown })[]>([]);
   const productsHasMore = productsData ? allProducts.length < (productsData.total ?? 0) : false;
   useEffect(() => { setProductsPage(1); setAllProducts([]); }, [debouncedSearch]);
   useEffect(() => {
@@ -127,7 +127,7 @@ export function AdminPage() {
       // the runtime shape is identical. The index signature is what lets
       // admin UI components read dynamic fields (homepageTag, images, etc.)
       // without `as any` casts at every access site.
-      const prods = productsData.products as unknown as Array<Product & { [key: string]: unknown }>;
+      const prods = productsData.products as unknown as (Product & { [key: string]: unknown })[];
       if (productsPage === 1) setAllProducts(prods);
       else setAllProducts(prev => [...prev, ...prods]);
     }
@@ -368,9 +368,9 @@ export function AdminPage() {
   // Filtered reviews with search. `allReviews` comes from the generated
   // `useListAllReviews()` hook which returns `AdminReview[]` (with the
   // joined productName field the search filters on).
-  const filteredReviews = useMemo<Array<AdminReview & { productName?: string }>>(
+  const filteredReviews = useMemo<(AdminReview & { productName?: string })[]>(
     () => {
-      const reviews = allReviews as Array<AdminReview & { productName?: string }>;
+      const reviews = allReviews as (AdminReview & { productName?: string })[];
       return !reviewSearch
         ? reviews
         : reviews.filter(r =>

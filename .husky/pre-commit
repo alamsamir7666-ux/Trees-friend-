@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+# Husky pre-commit hook (CQ-2).
+# Runs lint-staged: ESLint --fix + Prettier --write on staged files only.
+# This prevents new lint/format errors from being committed. Existing errors
+# in unstaged files are NOT checked (lint-staged only touches staged files),
+# so the team can fix the existing 531 lint errors incrementally without
+# the hook blocking every commit.
+#
+# The hook also runs TypeScript typecheck on the whole workspace (fast —
+# tsc --build is incremental) to catch type errors before they ship. This
+# is the industry-standard "pre-commit = lint + typecheck" pattern.
+#
+# To bypass the hook in emergencies (NOT recommended): git commit --no-verify
+
+echo "▸ Running lint-staged (ESLint + Prettier on staged files)..."
+pnpm exec lint-staged
+
+echo "▸ Running TypeScript typecheck..."
+pnpm run typecheck
+
+echo "✓ Pre-commit checks passed."

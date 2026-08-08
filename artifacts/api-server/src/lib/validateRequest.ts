@@ -110,7 +110,7 @@ function formatPath(path: (string | number)[]): string {
 function respondValidationError(
   res: Response,
   schemaName: string,
-  issues: Array<{ path: (string | number)[]; message: string }>,
+  issues: { path: (string | number)[]; message: string }[],
 ) {
   const details = issues.map((issue) => ({
     path: formatPath(issue.path),

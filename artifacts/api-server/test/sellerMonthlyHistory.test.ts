@@ -12,7 +12,7 @@ describe("seller-monthly-history routes (HTTP)", () => {
   let sellerId: number;
   let otherSellerClerkId: string;
   let buyerClerkId: string;
-  let ordersCreated: number[] = [];
+  const ordersCreated: number[] = [];
 
   beforeAll(async () => {
     await cleanupAll();

@@ -37,7 +37,7 @@ function writeToStorage(ids: number[]) {
 }
 
 let _compareIds: number[] = readFromStorage();
-let _listeners: Array<() => void> = [];
+let _listeners: (() => void)[] = [];
 
 function notifyListeners() {
   _listeners.forEach((fn) => fn());

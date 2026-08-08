@@ -30,18 +30,9 @@ import giftCardsRouter from "./giftCards";
 import emailPreferencesRouter from "./emailPreferences";
 import searchRouter from "./search";
 import cronRouter from "./cron";
-// flashSales router removed in Phase 2: flash sales were entirely
-// productVariantsTable-based (products tagged homepageTag="flash" with a
-// discounted admin variant) with no seller/marketplace ownership concept
-// at all. Admin no longer creates productVariantsTable rows as of this
-// phase, so this endpoint would have silently returned [] forever going
-// forward. A site-wide "flash sale" also has no clean single-seller owner
-// in a marketplace -- a discount is now a per-seller-listing-variant
-// decision (sellerListingVariantsTable.discountPrice), not a
-// product-wide/platform-wide one. Deleting rather than adapting: see
-// PHASE2_HANDOFF.md for the full reasoning and the frontend components
-// this leaves needing attention (FlashSaleSection.tsx, FlashSaleBanner.tsx,
-// their reference in App.tsx) -- not fixed here, Phase 3's job, flagged.
+// CQ-3: removed 11-line flashSales tombstone comment (Phase 2 deletion is
+// in git history — the comment didn't belong in source). See PHASE2_HANDOFF.md
+// for the full reasoning if needed.
 import blogPostsRouter from "./blogPosts";
 import mobileAuthRouter from "./mobileAuth";
 import assetsRouter from "./assets";

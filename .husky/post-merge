@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+# Husky post-merge hook — runs after `git pull` (merge success).
+# Reinstalls dependencies (lockfile may have changed on the remote) and
+# pushes DB schema changes (drizzle-kit push diffs the live DB against the
+# schema TS files). This mirrors scripts/post-merge.sh which was the
+# previous manual hook (had to be installed via `git config core.hooksPath`).
+# Now wired through husky so it's automatic for every clone.
+echo "▸ post-merge: reinstalling dependencies + pushing DB schema..."
+pnpm install --frozen-lockfile
+pnpm --filter db push
+echo "✓ post-merge complete."

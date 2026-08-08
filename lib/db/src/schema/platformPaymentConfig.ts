@@ -1,6 +1,6 @@
 import { pgTable, serial, text, boolean, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { type z } from "zod/v4";
 
 /**
  * The PLATFORM's own bKash merchant credentials (new payments design,

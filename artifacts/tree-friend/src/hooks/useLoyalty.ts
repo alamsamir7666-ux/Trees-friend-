@@ -5,13 +5,13 @@ import { apiClient } from "@/lib/apiClient";
 interface LoyaltyData {
   points: number;
   takaValue: number;
-  transactions: Array<{
+  transactions: {
     id: number;
     points: number;
     reason: string;
     orderId: number | null;
     createdAt: string;
-  }>;
+  }[];
 }
 
 /**

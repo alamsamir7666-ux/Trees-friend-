@@ -3,7 +3,7 @@ import {
   pgTable, serial, text, numeric, boolean, timestamp, integer,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { type z } from "zod/v4";
 
 export const giftCardsTable = pgTable("gift_cards", {
   id: serial("id").primaryKey(),

@@ -20,7 +20,7 @@ interface GuestOrder {
   paymentStatus: string;
   paymentMethod: string;
   totalAmount: number | string;
-  items?: Array<{ productName: string; productImage?: string; quantity: number; price: number; [k: string]: unknown }>;
+  items?: { productName: string; productImage?: string; quantity: number; price: number; [k: string]: unknown }[];
   shippingAddress?: { fullName?: string; street?: string; line1?: string; city?: string; district?: string; phone?: string } | null;
   createdAt: string;
   [key: string]: unknown;
