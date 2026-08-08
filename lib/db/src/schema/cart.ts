@@ -5,6 +5,7 @@ import {
   integer,
   timestamp,
   unique,
+  index,
 } from "drizzle-orm/pg-core";
 import { productsTable } from "./products";
 import { productVariantsTable } from "./productVariants";
@@ -99,6 +100,14 @@ export const cartItemsTable = pgTable(
       table.userId,
       table.sellerListingVariantId,
     ),
+    // P0-2: index on userId — every cart read (buildCart in routes/cart.ts:45,
+    // 59) filters WHERE user_id = ?. The unique constraints above cover
+    // (user, product, variant) and (user, sellerListingVariant) but NOT a
+    // plain "all this user's cart lines" lookup — Postgres can't use a
+    // composite unique index for a prefix-only scan when NULLs are involved
+    // (variantId is nullable, sellerListingVariantId is nullable). A plain
+    // index on userId is the right tool for this read pattern.
+    index("cart_items_user_id_idx").on(table.userId),
   ],
 );
 

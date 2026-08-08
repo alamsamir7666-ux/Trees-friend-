@@ -5,6 +5,7 @@ import {
   integer,
   timestamp,
   unique,
+  index,
   jsonb,
   check,
 } from "drizzle-orm/pg-core";
@@ -101,6 +102,15 @@ export const reviewsTable = pgTable(
     // being inserted (defense-in-depth at the DB layer, in addition to
     // API-layer validation).
     check("reviews_rating_check", sql`${table.rating} >= 1 AND ${table.rating} <= 5`),
+    // P0-2: index on productId — supports product-detail review aggregation
+    // (routes/products.ts:162, fetchReviewStats) which groups reviews by
+    // product. Without this index, every product page seq-scans reviews.
+    index("reviews_product_id_idx").on(table.productId),
+    // P0-2: index on sellerListingId — supports seller-listing-detail
+    // review aggregation (routes/sellerListings.ts:292) which groups
+    // reviews by listing. Denormalized column (see table doc comment
+    // above) intentionally indexed to serve this aggregation path.
+    index("reviews_seller_listing_id_idx").on(table.sellerListingId),
   ],
 );
 

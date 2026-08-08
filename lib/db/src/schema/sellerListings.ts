@@ -5,6 +5,7 @@ import {
   integer,
   timestamp,
   jsonb,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -68,7 +69,29 @@ export const sellerListingsTable = pgTable("seller_listings", {
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+  },
+  (table) => [
+    // P0-2: index on productId — supports the marketplace cards shown on
+    // product detail pages (routes/sellerListings.ts:284, 357) which filter
+    // WHERE product_id = ? to find every seller listing against a variety.
+    index("seller_listings_product_id_idx").on(table.productId),
+    // P0-2: index on sellerId — supports "my listings" page
+    // (routes/sellerListings.ts:625, /seller-listings/mine) and seller-
+    // dashboard listing overviews, both of which filter
+    // WHERE seller_id = ?.
+    index("seller_listings_seller_id_idx").on(table.sellerId),
+    // P0-2: composite index on (visibility, approvalStatus) — every buyer-
+    // facing listing query filters WHERE visibility = 'public' AND
+    // approval_status = 'approved' (and optionally an active-subscription
+    // check via join). This composite index covers that pattern directly
+    // and turns the shop-all / by-category / by-seller queries from seq
+    // scans into index scans.
+    index("seller_listings_visibility_approval_idx").on(
+      table.visibility,
+      table.approvalStatus,
+    ),
+  ],
+);
 
 export const insertSellerListingSchema = createInsertSchema(sellerListingsTable).omit({
   id: true,

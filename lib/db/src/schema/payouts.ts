@@ -1,4 +1,12 @@
-import { pgTable, serial, integer, text, numeric, timestamp } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  serial,
+  integer,
+  text,
+  numeric,
+  timestamp,
+  index,
+} from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { ordersTable } from "./orders";
@@ -96,34 +104,53 @@ import { sellersTable } from "./sellers";
  * `POST /admin/payouts/:id/retry` admin route share one implementation
  * rather than two copies of the same guard/insert/disburse logic.
  */
-export const payoutsTable = pgTable("payouts", {
-  id: serial("id").primaryKey(),
-  orderId: integer("order_id")
-    .notNull()
-    .references(() => ordersTable.id),
-  sellerId: integer("seller_id")
-    .notNull()
-    .references(() => sellersTable.id),
+export const payoutsTable = pgTable(
+  "payouts",
+  {
+    id: serial("id").primaryKey(),
+    orderId: integer("order_id")
+      .notNull()
+      .references(() => ordersTable.id),
+    sellerId: integer("seller_id")
+      .notNull()
+      .references(() => sellersTable.id),
 
-  amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+    amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
 
-  // "pending" | "success" | "failed" -- see doc comment above; room left
-  // for Part 3/4 to extend this set.
-  status: text("status").notNull().default("pending"),
+    // "pending" | "success" | "failed" -- see doc comment above; room left
+    // for Part 3/4 to extend this set.
+    status: text("status").notNull().default("pending"),
 
-  bkashTransactionId: text("bkash_transaction_id"),
-  failureReason: text("failure_reason"),
+    bkashTransactionId: text("bkash_transaction_id"),
+    failureReason: text("failure_reason"),
 
-  // PART 4 -- manual, case-by-case returns-after-payout bookkeeping only.
-  // See doc comment above: no automated clawback/balance logic reads or
-  // acts on these; they exist purely so an admin can record that a
-  // specific payout needs manual follow-up outside the app.
-  adminNote: text("admin_note"),
-  clawbackNotedAmount: numeric("clawback_noted_amount", { precision: 10, scale: 2 }),
+    // PART 4 -- manual, case-by-case returns-after-payout bookkeeping only.
+    // See doc comment above: no automated clawback/balance logic reads or
+    // acts on these; they exist purely so an admin can record that a
+    // specific payout needs manual follow-up outside the app.
+    adminNote: text("admin_note"),
+    clawbackNotedAmount: numeric("clawback_noted_amount", { precision: 10, scale: 2 }),
 
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // P0-2: index on orderId — the payout idempotency check in
+    // lib/payouts.ts:attemptSellerPayout() looks for an existing
+    // status='success' row for a given orderId before attempting a new
+    // disbursement. Without this index that lookup seq-scans payouts on
+    // every courier-delivered webhook. Also supports the admin
+    // "payouts for this order" lookup in routes/admin.ts.
+    index("payouts_order_id_idx").on(table.orderId),
+    // P0-2: index on sellerId — supports the seller-dashboard payout
+    // history (routes/sellerPayoutAccounts.ts and admin seller-payouts
+    // views) which filter WHERE seller_id = ? ORDER BY created_at DESC.
+    index("payouts_seller_id_created_idx").on(
+      table.sellerId,
+      table.createdAt,
+    ),
+  ],
+);
 
 export const insertPayoutSchema = createInsertSchema(payoutsTable).omit({
   id: true,

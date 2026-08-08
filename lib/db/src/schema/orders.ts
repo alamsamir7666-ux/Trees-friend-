@@ -7,6 +7,7 @@ import {
   timestamp,
   jsonb,
   check,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -127,6 +128,22 @@ export const ordersTable = pgTable(
     // from being inserted (defense-in-depth at the DB layer).
     check("orders_total_amount_check", sql`${table.totalAmount} >= 0`),
     check("orders_discount_amount_check", sql`${table.discountAmount} >= 0`),
+    // P0-2: indexes on the two hottest order-list query paths.
+    // orders.userId is queried on every buyer's order-list call
+    // (routes/orders.ts:60); orders.sellerId is queried on every seller's
+    // order-list call (routes/sellerOrders.ts:74). Without these indexes
+    // both queries seq-scan the orders table, which becomes unusably slow
+    // past ~10k orders. Composite with createdAt DESC so the same index
+    // also serves the common "list a user's/seller's orders, newest first"
+    // pattern without a separate sort step.
+    index("orders_user_id_created_idx").on(
+      table.userId,
+      table.createdAt,
+    ),
+    index("orders_seller_id_created_idx").on(
+      table.sellerId,
+      table.createdAt,
+    ),
   ],
 );
 

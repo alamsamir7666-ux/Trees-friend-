@@ -6,6 +6,7 @@ import {
   numeric,
   timestamp,
   boolean,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -25,43 +26,55 @@ import { sellerListingsTable } from "./sellerListings";
  * not enforce that -- it belongs in the API route/service layer, not the
  * schema.
  */
-export const sellerListingVariantsTable = pgTable("seller_listing_variants", {
-  id: serial("id").primaryKey(),
-  sellerListingId: integer("seller_listing_id")
-    .notNull()
-    .references(() => sellerListingsTable.id, { onDelete: "cascade" }),
+export const sellerListingVariantsTable = pgTable(
+  "seller_listing_variants",
+  {
+    id: serial("id").primaryKey(),
+    sellerListingId: integer("seller_listing_id")
+      .notNull()
+      .references(() => sellerListingsTable.id, { onDelete: "cascade" }),
 
-  form: text("form"), // "seed" | "sapling" | "grafted" | "potted"
+    form: text("form"), // "seed" | "sapling" | "grafted" | "potted"
 
-  // Comparison-critical -- must be a controlled value from
-  // listingAttributeOptionsTable, enforced at the API layer.
-  rootType: text("root_type"),
-  potSize: text("pot_size"),
-  age: text("age"),
-  height: text("height"),
+    // Comparison-critical -- must be a controlled value from
+    // listingAttributeOptionsTable, enforced at the API layer.
+    rootType: text("root_type"),
+    potSize: text("pot_size"),
+    age: text("age"),
+    height: text("height"),
 
-  // Free text -- no standardization needed.
-  condition: text("condition"),
+    // Free text -- no standardization needed.
+    condition: text("condition"),
 
-  price: numeric("price", { precision: 10, scale: 2 }).notNull(),
-  discountPrice: numeric("discount_price", { precision: 10, scale: 2 }),
-  // stock is a mirrored source-of-truth; availableQuantity is the real
-  // purchasability gate checked elsewhere in the codebase (cart.ts,
-  // orders.ts check availableQuantity, not stock).
-  stock: integer("stock").notNull().default(0),
-  availableQuantity: integer("available_quantity").notNull().default(0),
+    price: numeric("price", { precision: 10, scale: 2 }).notNull(),
+    discountPrice: numeric("discount_price", { precision: 10, scale: 2 }),
+    // stock is a mirrored source-of-truth; availableQuantity is the real
+    // purchasability gate checked elsewhere in the codebase (cart.ts,
+    // orders.ts check availableQuantity, not stock).
+    stock: integer("stock").notNull().default(0),
+    availableQuantity: integer("available_quantity").notNull().default(0),
 
-  // Can legitimately differ per variant -- a seed packet and a mature
-  // potted tree of the same listing ship very differently.
-  deliveryCharge: numeric("delivery_charge", { precision: 10, scale: 2 }).notNull().default("0"),
+    // Can legitimately differ per variant -- a seed packet and a mature
+    // potted tree of the same listing ship very differently.
+    deliveryCharge: numeric("delivery_charge", { precision: 10, scale: 2 }).notNull().default("0"),
 
-  // Pre-order is a per-variant flag; one variant of a listing can be
-  // pre-order while another is in stock.
-  isPreOrder: boolean("is_pre_order").notNull().default(false),
+    // Pre-order is a per-variant flag; one variant of a listing can be
+    // pre-order while another is in stock.
+    isPreOrder: boolean("is_pre_order").notNull().default(false),
 
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // P0-2: index on sellerListingId — every list-detail query that loads
+    // a listing's variants (routes/products.ts:294, routes/sellerListings.ts:282)
+    // filters WHERE seller_listing_id = ?. Without this index, fetching a
+    // listing's variants seq-scans seller_listing_variants.
+    index("seller_listing_variants_seller_listing_id_idx").on(
+      table.sellerListingId,
+    ),
+  ],
+);
 
 export const insertSellerListingVariantSchema = createInsertSchema(sellerListingVariantsTable).omit({
   id: true,
