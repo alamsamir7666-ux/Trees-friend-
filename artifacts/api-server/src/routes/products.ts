@@ -20,6 +20,15 @@ import { requireAdmin, requireAuth } from "../middlewares/auth";
 import { notifyStockAlerts } from "./stockAlerts";
 import { notifyPreOrderCustomers } from "./preOrders";
 import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
+import {
+  CreateProductBody,
+  UpdateProductBody,
+  GetProductParams,
+  UpdateProductParams,
+  DeleteProductParams,
+} from "@workspace/api-zod";
+import { validateBody, validateParams } from "../lib/validateRequest";
 
 cloudinaryV2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -516,9 +525,9 @@ router.post("/products/upload-image", requireAuth, requireAdmin, uploadMiddlewar
  * route's doc comment for the full purchasability-filter rationale and the
  * price-sort/qualifying-variant semantics, which are identical here.
  */
-router.get("/products/:id", async (req, res) => {
+router.get("/products/:id", validateParams(GetProductParams, "GetProductParams"), async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-5: validated + coerced
     if (isNaN(id) || id <= 0) {
       res.status(400).json({ error: "Invalid product ID" });
       return;
@@ -662,8 +671,11 @@ router.get("/products", async (req, res) => {
  * as of this phase -- sellers create their own price/stock data via
  * seller-listings.ts instead (plan doc's overall goal for this migration).
  */
-router.post("/products", requireAdmin, async (req: ApiRequest, res) => {
+router.post("/products", requireAdmin, validateBody(CreateProductBody, "CreateProductBody"), async (req: ApiRequest<z.infer<typeof CreateProductBody>>, res) => {
   try {
+    // VAL-MIGRATE-5: Zod validates shape (name: string, categoryId: number,
+    // description: string, all optional fields typed). Manual typeof/isNaN
+    // checks are superseded.
     const {
       name,
       categoryId,
@@ -681,20 +693,11 @@ router.post("/products", requireAdmin, async (req: ApiRequest, res) => {
       keyBenefits,
       bestFor,
       careTips,
-    } = req.body as any;
+    } = req.body as any;  // VAL-MIGRATE-5: cast kept for videoUrl read below
 
-    if (!name || typeof name !== "string" || name.trim().length === 0) {
-      res.status(400).json({ error: "Product name is required" });
-      return;
-    }
-    if (!categoryId || isNaN(Number(categoryId))) {
-      res.status(400).json({ error: "A subcategory is required" });
-      return;
-    }
-    if (!description || typeof description !== "string") {
-      res.status(400).json({ error: "Description is required" });
-      return;
-    }
+    // VAL-MIGRATE-5: manual checks removed — Zod validates name (string),
+    // categoryId (number), description (string) at the schema level.
+    const catId = Number(categoryId);
 
     const slug =
       name
@@ -735,13 +738,9 @@ router.post("/products", requireAdmin, async (req: ApiRequest, res) => {
   }
 });
 
-router.put("/products/:id", requireAdmin, async (req: ApiRequest, res) => {
+router.put("/products/:id", requireAdmin, validateParams(UpdateProductParams, "UpdateProductParams"), validateBody(UpdateProductBody, "UpdateProductBody"), async (req: ApiRequest<z.infer<typeof UpdateProductBody>>, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid product ID" });
-      return;
-    }
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-5: validated + coerced
     const {
       name,
       categoryId,
@@ -859,13 +858,9 @@ router.put("/products/:id", requireAdmin, async (req: ApiRequest, res) => {
   }
 });
 
-router.delete("/products/:id", requireAdmin, async (req: ApiRequest, res) => {
+router.delete("/products/:id", requireAdmin, validateParams(DeleteProductParams, "DeleteProductParams"), async (req: ApiRequest, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid product ID" });
-      return;
-    }
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-5: validated + coerced
 
     // SOFT-DELETE: set deleted_at instead of hard-deleting. This preserves
     // the product row for historical orders/reviews that reference it,
@@ -887,13 +882,9 @@ router.delete("/products/:id", requireAdmin, async (req: ApiRequest, res) => {
   }
 });
 
-router.post("/products/:id/duplicate", requireAdmin, async (req: ApiRequest, res) => {
+router.post("/products/:id/duplicate", requireAdmin, validateParams(GetProductParams, "GetProductParams"), async (req: ApiRequest, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid product ID" });
-      return;
-    }
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-5: validated + coerced
     const [original] = await db
       .select()
       .from(productsTable)
