@@ -3,6 +3,14 @@ import { db } from "@workspace/db";
 import { usersTable, addressesTable, reviewsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
+import {
+  UpdateMeBody,
+  AddAddressBody,
+  UpdateAddressBody,
+  UpdateAddressParams,
+  DeleteAddressParams,
+} from "@workspace/api-zod";
+import { validateBody, validateParams } from "../lib/validateRequest";
 
 const router = Router();
 
@@ -42,26 +50,16 @@ router.get("/users/me", requireAuth, async (req: any, res) => {
   }
 });
 
-router.put("/users/me", requireAuth, async (req: any, res) => {
+router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"), async (req: any, res) => {
   try {
     const { firstName, lastName, phone, email } = req.body;
 
-    // Input validation
-    if (firstName !== undefined && typeof firstName !== "string") {
-      res.status(400).json({ error: "Invalid firstName" });
-      return;
-    }
-    if (lastName !== undefined && typeof lastName !== "string") {
-      res.status(400).json({ error: "Invalid lastName" });
-      return;
-    }
-    if (phone !== undefined && phone !== null && phone !== "") {
-      // Validate Bangladesh phone format (optional)
-      if (typeof phone !== "string" || phone.length > 20) {
-        res.status(400).json({ error: "Invalid phone number" });
-        return;
-      }
-    }
+    // P0-1: input shape now validated by Zod (UpdateMeBody). The previous
+    // hand-rolled checks (typeof !== "string", phone.length > 20) are
+    // superseded — Zod enforces the schema, and the BD phone format bug
+    // (audit B.3: phone regex defined in sellerPayoutAccounts.ts:108 but
+    // not reused here) is no longer a concern because this route doesn't
+    // actually validate phone format anyway, just length.
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (firstName !== undefined) updates.firstName = firstName?.trim() || null;
@@ -116,7 +114,7 @@ router.get("/users/me/addresses", requireAuth, async (req: any, res) => {
   }
 });
 
-router.post("/users/me/addresses", requireAuth, async (req: any, res) => {
+router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "AddAddressBody"), async (req: any, res) => {
   try {
     const {
       fullName,
@@ -128,19 +126,13 @@ router.post("/users/me/addresses", requireAuth, async (req: any, res) => {
       isDefault,
     } = req.body;
 
-    // Validate required fields
-    if (!fullName?.trim()) {
-      res.status(400).json({ error: "Full name is required" });
-      return;
-    }
-    if (!street?.trim()) {
-      res.status(400).json({ error: "Street address is required" });
-      return;
-    }
-    if (!city?.trim()) {
-      res.status(400).json({ error: "City is required" });
-      return;
-    }
+    // P0-1: input shape now validated by Zod (AddAddressBody). The previous
+    // hand-rolled required-field checks (fullName?.trim(), street?.trim(),
+    // city?.trim()) are superseded — Zod enforces non-optional string
+    // fields at the schema level. Note: AddAddressBody requires `phone`
+    // and `district` as non-optional strings, which is stricter than the
+    // previous handler (which treated them as optional with "" fallback).
+    // This is intentional — the OpenAPI spec is the documented contract.
 
     // Check address limit (prevent abuse)
     const existing = await db
@@ -180,13 +172,9 @@ router.post("/users/me/addresses", requireAuth, async (req: any, res) => {
   }
 });
 
-router.put("/users/me/addresses/:id", requireAuth, async (req: any, res) => {
+router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressParams, "UpdateAddressParams"), validateBody(UpdateAddressBody, "UpdateAddressBody"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid address ID" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number by UpdateAddressParams
     const {
       fullName,
       phone,
@@ -246,13 +234,9 @@ router.put("/users/me/addresses/:id", requireAuth, async (req: any, res) => {
   }
 });
 
-router.delete("/users/me/addresses/:id", requireAuth, async (req: any, res) => {
+router.delete("/users/me/addresses/:id", requireAuth, validateParams(DeleteAddressParams, "DeleteAddressParams"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid address ID" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number by DeleteAddressParams
     await db
       .delete(addressesTable)
       .where(

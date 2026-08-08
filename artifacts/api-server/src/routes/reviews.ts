@@ -10,6 +10,8 @@ import { requireAuth, requireAdmin } from "../middlewares/auth";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
 import { deleteCloudinaryAssets } from "../lib/cloudinary";
+import { UpdateReviewBody, UpdateReviewParams, DeleteReviewParams } from "@workspace/api-zod";
+import { validateBody, validateParams } from "../lib/validateRequest";
 
 // ─── Cloudinary config (add to .env.example too) ──────────────────────────
 // CLOUDINARY_CLOUD_NAME=your_cloud
@@ -370,14 +372,14 @@ router.post(
 // care whether it's a product-level or seller-listing-level review, so no
 // separate edit/delete endpoints are needed here.
 
-router.put("/reviews/:reviewId", requireAuth, async (req: any, res) => {
+router.put("/reviews/:reviewId", requireAuth, validateParams(UpdateReviewParams, "UpdateReviewParams"), validateBody(UpdateReviewBody, "UpdateReviewBody"), async (req: any, res) => {
   try {
-    const reviewId = parseInt(req.params.reviewId);
-    if (isNaN(reviewId) || reviewId <= 0) {
-      res.status(400).json({ error: "Invalid review ID" }); return;
-    }
+    const reviewId = req.params.reviewId;  // P0-1: validated + coerced to number
     const { rating, comment } = req.body;
     const ratingNum = Number(rating);
+    // P0-1: shape validated by Zod (UpdateReviewBody). Business rule below
+    // enforces the 1-5 range (Zod schema allows any number; the DB CHECK
+    // constraint at reviews.ts:103 also enforces 1-5 as defense-in-depth).
     if (isNaN(ratingNum) || ratingNum < 1 || ratingNum > 5) {
       res.status(400).json({ error: "Rating must be between 1 and 5" }); return;
     }
@@ -396,12 +398,9 @@ router.put("/reviews/:reviewId", requireAuth, async (req: any, res) => {
   } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to update review" }); }
 });
 
-router.delete("/reviews/:productId/:reviewId", requireAuth, async (req: any, res) => {
+router.delete("/reviews/:productId/:reviewId", requireAuth, validateParams(DeleteReviewParams, "DeleteReviewParams"), async (req: any, res) => {
   try {
-    const reviewId = parseInt(req.params.reviewId);
-    if (isNaN(reviewId) || reviewId <= 0) {
-      res.status(400).json({ error: "Invalid review ID" }); return;
-    }
+    const reviewId = req.params.reviewId;  // P0-1: validated + coerced to number
     const [review] = await db.select().from(reviewsTable).where(eq(reviewsTable.id, reviewId)).limit(1);
     if (!review) { res.status(404).json({ error: "Not found" }); return; }
     if (review.userId !== req.userId && req.dbUser?.role !== "admin") {

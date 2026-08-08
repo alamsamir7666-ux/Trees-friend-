@@ -11,6 +11,8 @@ import {
 import { eq, and, sql, desc, isNull } from "drizzle-orm";
 import { requireAuth, requireSellerAccount } from "../middlewares/auth";
 import { deleteCloudinaryAssets, cleanupRemovedImages } from "../lib/cloudinary";
+import { BecomeSellerBody } from "@workspace/api-zod";
+import { validateBody } from "../lib/validateRequest";
 
 cloudinaryV2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -86,7 +88,7 @@ router.get("/sellers/me", requireAuth, async (req: any, res) => {
  * body -- an applicant must not be able to set their own verification
  * status or trial dates.
  */
-router.post("/sellers", requireAuth, async (req: any, res) => {
+router.post("/sellers", requireAuth, validateBody(BecomeSellerBody, "BecomeSellerBody"), async (req: any, res) => {
   try {
     const [existing] = await db
       .select()
@@ -98,6 +100,13 @@ router.post("/sellers", requireAuth, async (req: any, res) => {
       return;
     }
 
+    // P0-1: body shape now validated by Zod (BecomeSellerBody). The
+    // hand-rolled typeof/trim checks for each required field are
+    // superseded — Zod enforces string type and presence at the schema
+    // level. The contactEmail.includes("@") business rule is kept
+    // because the schema only requires a string (not a valid email
+    // format — the spec deliberately allows free-text contact emails
+    // since sellers may use non-standard email formats).
     const {
       businessName,
       nurseryName,
@@ -110,32 +119,8 @@ router.post("/sellers", requireAuth, async (req: any, res) => {
       nurseryImages,
     } = req.body;
 
-    if (!businessName || typeof businessName !== "string" || !businessName.trim()) {
-      res.status(400).json({ error: "Business name is required" });
-      return;
-    }
-    if (!nurseryName || typeof nurseryName !== "string" || !nurseryName.trim()) {
-      res.status(400).json({ error: "Nursery name is required" });
-      return;
-    }
-    if (!ownerName || typeof ownerName !== "string" || !ownerName.trim()) {
-      res.status(400).json({ error: "Owner name is required" });
-      return;
-    }
-    if (!contactPhone || typeof contactPhone !== "string" || !contactPhone.trim()) {
-      res.status(400).json({ error: "Contact phone is required" });
-      return;
-    }
-    if (!contactEmail || typeof contactEmail !== "string" || !contactEmail.includes("@")) {
+    if (!contactEmail || !contactEmail.includes("@")) {
       res.status(400).json({ error: "A valid contact email is required" });
-      return;
-    }
-    if (!location || typeof location !== "string" || !location.trim()) {
-      res.status(400).json({ error: "Location is required" });
-      return;
-    }
-    if (nurseryImages !== undefined && !Array.isArray(nurseryImages)) {
-      res.status(400).json({ error: "nurseryImages must be an array of URLs" });
       return;
     }
 

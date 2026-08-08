@@ -4,6 +4,8 @@ import { couponsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAdmin, requireSeller } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
+import { ValidateCouponBody, CreateCouponBody } from "@workspace/api-zod";
+import { validateBody } from "../lib/validateRequest";
 
 const router = Router();
 
@@ -23,16 +25,14 @@ function formatCoupon(c: typeof couponsTable.$inferSelect) {
 
 const VALID_DISCOUNT_TYPES = ["percentage", "fixed"];
 
-router.post("/coupons/validate", async (req, res) => {
+router.post("/coupons/validate", validateBody(ValidateCouponBody, "ValidateCouponBody"), async (req, res) => {
   try {
+    // P0-1: body shape now validated by Zod (ValidateCouponBody). The
+    // hand-rolled code/typeof check is superseded; the sanitation step
+    // (uppercase + strip non-alphanumeric) is a business rule kept below.
     const { code, orderAmount, sellerIds } = req.body;
 
-    if (!code || typeof code !== "string") {
-      res.status(400).json({ error: "Coupon code is required" });
-      return;
-    }
-
-    // Sanitize coupon code - only alphanumeric + dashes
+    // Sanitize coupon code - only alphanumeric + dashes (business rule)
     const sanitizedCode = code.toUpperCase().replace(/[^A-Z0-9-]/g, "");
     if (!sanitizedCode) {
       res.status(400).json({ error: "Invalid coupon code format" });
@@ -97,13 +97,17 @@ router.get("/coupons", requireAdmin, async (_req, res) => {
   }
 });
 
-router.post("/coupons", requireAdmin, async (req: any, res) => {
+router.post("/coupons", requireAdmin, validateBody(CreateCouponBody, "CreateCouponBody"), async (req: any, res) => {
   try {
+    // P0-1: body shape now validated by Zod (CreateCouponBody). The
+    // hand-rolled code/discountType/discountValue checks below are kept
+    // as business rules — Zod validates the SHAPE (string/number types),
+    // these enforce the SEMANTICS (non-empty code, valid discount type
+    // enum, positive value, percentage <= 100) the schema can't express.
     const { code, discountType, discountValue, minOrderAmount, expiryDate } =
       req.body;
 
-    // Validate inputs
-    if (!code || typeof code !== "string" || code.trim().length === 0) {
+    if (!code || code.trim().length === 0) {
       res.status(400).json({ error: "Coupon code is required" });
       return;
     }

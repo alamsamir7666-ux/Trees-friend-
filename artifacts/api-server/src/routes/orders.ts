@@ -18,6 +18,8 @@ import { requireAuth } from "../middlewares/auth";
 import { sendOrderConfirmation } from "../lib/email";
 import { logger } from "../lib/logger";
 import { checkoutLimiter, guestCheckoutLimiter } from "../middlewares/rateLimiter";
+import { CreateOrderBody } from "@workspace/api-zod";
+import { validateBody } from "../lib/validateRequest";
 import crypto from "crypto";
 import { awardPoints, redeemPoints, TAKA_PER_POINT } from "./loyalty";
 import type { OrderItem } from "@workspace/db";
@@ -290,8 +292,16 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: any, res) => {
  * required when method === "bkash".
  */
 
-router.post("/orders", requireAuth, checkoutLimiter, async (req: any, res) => {
+router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBody, "CreateOrderBody"), async (req: any, res) => {
   try {
+    // P0-1: body shape now validated by Zod (CreateOrderBody). The
+    // hand-rolled "Incomplete shipping address" check below is kept as a
+    // business rule — Zod validates the SHAPE of shippingAddress (object
+    // with fullName/phone/street/city/district strings), but the route
+    // still needs to enforce that those fields are non-empty for the
+    // order to be valid. The "Payment method is required" check is also
+    // kept because CreateOrderBody.paymentMethod is .optional() in the
+    // schema (the spec allows sellerPaymentMethods as an alternative).
     const {
       paymentMethod,
       sellerPaymentMethods,

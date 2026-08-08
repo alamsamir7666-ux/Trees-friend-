@@ -4,6 +4,8 @@ import { categoriesTable, productsTable } from "@workspace/db";
 import { eq, asc, inArray } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { deleteCloudinaryAssets } from "../lib/cloudinary";
+import { UpdateCategoryParams, DeleteCategoryParams } from "@workspace/api-zod";
+import { validateParams } from "../lib/validateRequest";
 
 const router = Router();
 
@@ -45,8 +47,8 @@ router.post("/categories", requireAdmin, async (req: any, res) => {
   res.status(201).json(toCategory(c));
 });
 
-router.put("/categories/:id", requireAdmin, async (req: any, res) => {
-  const id = parseInt(req.params.id);
+router.put("/categories/:id", requireAdmin, validateParams(UpdateCategoryParams, "UpdateCategoryParams"), async (req: any, res) => {
+  const id = req.params.id;  // P0-1: validated + coerced to number
   const { name, slug, icon, iconImage, image, displayOrder, parentId } = req.body;
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (name !== undefined) updates.name = name;
@@ -90,12 +92,8 @@ router.put("/categories/:id", requireAdmin, async (req: any, res) => {
   res.json(toCategory(c));
 });
 
-router.delete("/categories/:id", requireAdmin, async (req: any, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id) || id <= 0) {
-    res.status(400).json({ error: "Invalid category id" });
-    return;
-  }
+router.delete("/categories/:id", requireAdmin, validateParams(DeleteCategoryParams, "DeleteCategoryParams"), async (req: any, res) => {
+  const id = req.params.id;  // P0-1: validated + coerced to number
 
   const [target] = await db.select().from(categoriesTable).where(eq(categoriesTable.id, id)).limit(1);
   if (!target) {

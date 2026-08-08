@@ -5,6 +5,11 @@ import { eq } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { createPayment, executePayment, queryPayment, BkashApiError } from "../lib/bkash";
 import { checkoutLimiter, guestBkashLimiter } from "../middlewares/rateLimiter";
+import {
+  CreateBkashPaymentBody,
+  CreateBkashPaymentGuestBody,
+} from "@workspace/api-zod";
+import { validateBody } from "../lib/validateRequest";
 
 /**
  * bKash Tokenized Checkout create -> redirect -> callback -> execute cycle
@@ -158,7 +163,7 @@ async function handleCreatePayment(order: typeof ordersTable.$inferSelect, res: 
  * See order-sequencing doc comment at the top of this file for why this
  * acts on an ALREADY-CREATED order rather than creating one itself.
  */
-router.post("/bkash/create-payment", requireAuth, checkoutLimiter, async (req: any, res) => {
+router.post("/bkash/create-payment", requireAuth, checkoutLimiter, validateBody(CreateBkashPaymentBody, "CreateBkashPaymentBody"), async (req: any, res) => {
   try {
     const loaded = await loadOwnOrder(req);
     if ("error" in loaded) {
@@ -183,7 +188,7 @@ router.post("/bkash/create-payment", requireAuth, checkoutLimiter, async (req: a
  * routes/orders.ts (POST /orders/guest vs POST /orders) rather than one
  * route with conditional auth.
  */
-router.post("/bkash/create-payment/guest", guestBkashLimiter, async (req: any, res) => {
+router.post("/bkash/create-payment/guest", guestBkashLimiter, validateBody(CreateBkashPaymentGuestBody, "CreateBkashPaymentGuestBody"), async (req: any, res) => {
   try {
     const loaded = await loadGuestOrder(req);
     if ("error" in loaded) {

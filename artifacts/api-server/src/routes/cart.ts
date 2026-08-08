@@ -11,6 +11,12 @@ import {
 } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
+import {
+  AddToCartBody,
+  UpdateCartItemBody,
+  UpdateCartItemParams,
+} from "@workspace/api-zod";
+import { validateBody, validateParams } from "../lib/validateRequest";
 
 const router = Router();
 
@@ -224,17 +230,19 @@ router.get("/cart", requireAuth, async (req: any, res) => {
  * mismatched sellerListingId in the body can't desync the denormalized
  * column from the variant it's supposed to mirror.
  */
-router.post("/cart/items", requireAuth, async (req: any, res) => {
+router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBody"), async (req: any, res) => {
   try {
+    // P0-1: body shape (productId: number, variantId/sellerListingVariantId:
+    // number|null, quantity: number) now validated by Zod (AddToCartBody).
+    // The hand-rolled productId / quantity / isNaN checks below are
+    // kept as business-rule guards (XOR between variantId and
+    // sellerListingVariantId, qty range 1-99) — Zod validates the SHAPE,
+    // these enforce the SEMANTICS the schema can't express.
     const { productId, quantity } = req.body;
     const variantId = req.body.variantId != null ? Number(req.body.variantId) : null;
     const sellerListingVariantId =
       req.body.sellerListingVariantId != null ? Number(req.body.sellerListingVariantId) : null;
 
-    if (!productId || isNaN(Number(productId))) {
-      res.status(400).json({ error: "Invalid product ID" });
-      return;
-    }
     const hasVariant = variantId != null && !isNaN(variantId);
     const hasListingVariant = sellerListingVariantId != null && !isNaN(sellerListingVariantId);
     if (hasVariant === hasListingVariant) {
@@ -365,13 +373,9 @@ router.post("/cart/items", requireAuth, async (req: any, res) => {
  * line types and was already a stable, unique identifier before this
  * change; this is a routing fix, not a new concept.
  */
-router.put("/cart/items/:id", requireAuth, async (req: any, res) => {
+router.put("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, "UpdateCartItemParams"), validateBody(UpdateCartItemBody, "UpdateCartItemBody"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid cart item ID" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number by UpdateCartItemParams
 
     const { quantity } = req.body;
     const qty = Number(quantity);
@@ -424,13 +428,9 @@ router.put("/cart/items/:id", requireAuth, async (req: any, res) => {
   }
 });
 
-router.delete("/cart/items/:id", requireAuth, async (req: any, res) => {
+router.delete("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, "DeleteCartItemParams"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid cart item ID" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number (reuses UpdateCartItemParams schema)
 
     await db
       .delete(cartItemsTable)

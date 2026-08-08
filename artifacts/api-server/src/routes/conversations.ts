@@ -18,6 +18,8 @@ import { requireAuth } from "../middlewares/auth";
 import { chainRateLimiters, chatMessageBurstLimiter, chatMessageLimiter, conversationCreateLimiter } from "../middlewares/rateLimiter";
 import { logger } from "../lib/logger";
 import { deleteCloudinaryAssets } from "../lib/cloudinary";
+import { CreateConversationBody, SendMessageParams, MarkConversationReadParams } from "@workspace/api-zod";
+import { validateBody, validateParams } from "../lib/validateRequest";
 
 /**
  * Normalize any thrown value (Error, string, object, unknown) into a string
@@ -404,17 +406,14 @@ router.get("/conversations", requireAuth, async (req: any, res) => {
 // conversation already exists for this buyer-seller pair, returns it
 // instead of creating a duplicate. This is the standard pattern used by
 // marketplaces (eBay, Etsy, Daraz) to avoid duplicate threads.
-router.post("/conversations", requireAuth, conversationCreateLimiter, async (req: any, res) => {
+router.post("/conversations", requireAuth, conversationCreateLimiter, validateBody(CreateConversationBody, "CreateConversationBody"), async (req: any, res) => {
   try {
+    // P0-1: body shape now validated by Zod (CreateConversationBody).
+    // sellerId is zod.number() so the hand-rolled parseInt/isNaN check
+    // is superseded — req.body.sellerId is already a number.
     const { sellerId, sellerListingId } = req.body;
     const buyerId = req.userId;
-
-    if (!sellerId || isNaN(parseInt(sellerId))) {
-      res.status(400).json({ error: "sellerId is required" });
-      return;
-    }
-
-    const parsedSellerId = parseInt(sellerId);
+    const parsedSellerId = sellerId;
 
     // Verify seller exists and is active
     const [seller] = await db
@@ -847,13 +846,9 @@ router.get("/conversations/:id/messages", requireAuth, async (req: any, res) => 
 //
 // This JSON endpoint is used by the emoji/text input path and by clients
 // that already have a file URL (e.g. re-using an existing upload).
-router.post("/conversations/:id/messages", requireAuth, chatSendLimiter, async (req: any, res) => {
+router.post("/conversations/:id/messages", requireAuth, chatSendLimiter, validateParams(SendMessageParams, "SendMessageParams"), async (req: any, res) => {
   try {
-    const convId = parseInt(req.params.id);
-    if (isNaN(convId)) {
-      res.status(400).json({ error: "Invalid conversation id" });
-      return;
-    }
+    const convId = req.params.id;  // P0-1: validated + coerced to number
 
     const {
       content,
@@ -1370,13 +1365,9 @@ router.delete("/conversations/:id/messages/:messageId", requireAuth, async (req:
 
 // ─── PUT /conversations/:id/read ───────────────────────────────────────────
 // Mark all messages in a conversation as read by the current user.
-router.put("/conversations/:id/read", requireAuth, async (req: any, res) => {
+router.put("/conversations/:id/read", requireAuth, validateParams(MarkConversationReadParams, "MarkConversationReadParams"), async (req: any, res) => {
   try {
-    const convId = parseInt(req.params.id);
-    if (isNaN(convId)) {
-      res.status(400).json({ error: "Invalid conversation id" });
-      return;
-    }
+    const convId = req.params.id;  // P0-1: validated + coerced to number
 
     const [conv] = await db
       .select()

@@ -37,7 +37,8 @@
     "pino": "^9",
     "pino-http": "^10",
     "resend": "^6.12.2",
-    "twilio": "^6.0.2"
+    "twilio": "^6.0.2",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.7",
