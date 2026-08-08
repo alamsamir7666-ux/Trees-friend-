@@ -6,6 +6,8 @@ import { requireAdmin } from "../middlewares/auth";
 import { deleteCloudinaryAssets } from "../lib/cloudinary";
 import { UpdateCategoryParams, DeleteCategoryParams } from "@workspace/api-zod";
 import { validateParams } from "../lib/validateRequest";
+import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -209,11 +211,14 @@ router.post("/categories/seed", requireAdmin, async (_req, res) => {
         .onConflictDoNothing()
         .returning();
       if (c) inserted.push(toCategory(c));
-    } catch (_) {}
+    } catch (err) {
+        // VAL-4: was catch (_) {} — silently swallowed seed-insert errors.
+        // Log so we can see which categories failed and why (e.g. constraint
+        // violations, type mismatches) without blocking the rest of the seed.
+        logger.warn({ err, cat }, "Category seed insert failed (non-blocking)");
+      }
   }
   res.json({ inserted: inserted.length, categories: inserted });
 });
-import { logger } from "../lib/logger";
-import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

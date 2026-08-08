@@ -690,7 +690,13 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
             isDefault: existing.length === 0,
           });
         }
-      } catch (_) {
+      } catch (err) {
+        // VAL-4: was catch (_) {} — completely swallowed with no logging.
+        // Address auto-save is non-blocking (the order is already committed),
+        // but a silent failure means the buyer's address won't be saved for
+        // next time and we'll never know why. Log it so it's visible in
+        // production logs without failing the checkout response.
+        logger.warn({ err, userId: req.userId! }, "Address auto-save failed (non-blocking)");
       }
     }
 

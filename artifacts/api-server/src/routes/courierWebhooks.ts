@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import { getCourierAdapter } from "../lib/courierAdapters";
 import { sendOrderStatusUpdate } from "../lib/email";
 import { attemptSellerPayout } from "../lib/payouts";
+import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 /**
  * Shared normalized webhook endpoints (plan doc §8: "/webhooks/courier/pathao,
@@ -103,7 +105,9 @@ function safeCompare(a: string, b: string): boolean {
 function requireCourierWebhookSecret(req: ApiRequest, res: any, next: any) {
   const provided = req.get("X-Courier-Webhook-Secret") ?? req.query.secret;
   if (typeof provided !== "string" || !safeCompare(provided, COURIER_WEBHOOK_SECRET as string)) {
-    res.status(401).json({ ok: false, reason: "unauthorized" });
+    // VAL-1: standardized error envelope — was { ok: false, reason: "unauthorized" },
+    // now matches the { error: "..." } shape used everywhere else in the codebase.
+    res.status(401).json({ error: "Unauthorized" });
     return;
   }
   next();
@@ -161,10 +165,13 @@ const ORDER_STATUS_ON_SHIPMENT: Record<string, string | undefined> = {
 
 async function handleCourierWebhook(provider: "pathao" | "steadfast", payload: unknown) {
   const adapter = getCourierAdapter(provider);
-  if (!adapter) return { ok: false, reason: "unknown_provider" as const };
+  // VAL-1: add `error` field alongside `ok: false` for consistency with the
+  // rest of the API. HTTP 200 is correct for webhooks (courier just needs to
+  // know we received it), but the body now includes the standard `error` field.
+  if (!adapter) return { ok: false, error: "Unknown courier provider" };
 
   const trackingId = adapter.extractTrackingId(payload);
-  if (!trackingId) return { ok: false, reason: "no_tracking_id" as const };
+  if (!trackingId) return { ok: false, error: "No tracking ID in webhook payload" };
 
   const normalizedStatus = adapter.normalizeWebhookStatus(payload);
 
@@ -176,7 +183,7 @@ async function handleCourierWebhook(provider: "pathao" | "steadfast", payload: u
 
   if (!shipment) {
     logger.info({ provider, trackingId }, "courier-webhook: no shipment found for tracking id");
-    return { ok: false, reason: "no_matching_shipment" as const };
+    return { ok: false, error: "No shipment found for tracking ID" };
   }
 
   // Always store the raw payload for debugging, even if status couldn't be
@@ -255,7 +262,8 @@ async function handleCourierWebhook(provider: "pathao" | "steadfast", payload: u
 
 router.post("/webhooks/courier/pathao", requireCourierWebhookSecret, async (req, res) => {
   if (!verifyPathaoSignature(req)) {
-    res.status(401).json({ ok: false, reason: "unauthorized" });
+    // VAL-1: standardized error envelope.
+    res.status(401).json({ error: "Unauthorized" });
     return;
   }
   try {
@@ -263,13 +271,15 @@ router.post("/webhooks/courier/pathao", requireCourierWebhookSecret, async (req,
     res.json(result);
   } catch (err) {
     logger.error({ err: err }, "[courier-webhook:pathao] error");
-    res.status(500).json({ ok: false });
+    // VAL-1: standardized error envelope — was { ok: false }.
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
 router.post("/webhooks/courier/steadfast", requireCourierWebhookSecret, async (req, res) => {
   if (!verifySteadfastBearerToken(req)) {
-    res.status(401).json({ ok: false, reason: "unauthorized" });
+    // VAL-1: standardized error envelope.
+    res.status(401).json({ error: "Unauthorized" });
     return;
   }
   try {
@@ -277,10 +287,8 @@ router.post("/webhooks/courier/steadfast", requireCourierWebhookSecret, async (r
     res.json(result);
   } catch (err) {
     logger.error({ err: err }, "[courier-webhook:steadfast] error");
-    res.status(500).json({ ok: false });
+    // VAL-1: standardized error envelope — was { ok: false }.
+    res.status(500).json({ error: "Internal server error" });
   }
 });
-import { logger } from "../lib/logger";
-import type { ApiRequest } from "../types/apiRequest";
-
 export default router;

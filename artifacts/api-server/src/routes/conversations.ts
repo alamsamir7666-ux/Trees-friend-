@@ -20,26 +20,9 @@ import { logger } from "../lib/logger";
 import { deleteCloudinaryAssets } from "../lib/cloudinary";
 import { CreateConversationBody, SendMessageParams, MarkConversationReadParams } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
+import { describeError } from "../lib/describeError";
 import type { ApiRequest } from "../types/apiRequest";
 import type { z } from "zod";
-
-/**
- * Normalize any thrown value (Error, string, object, unknown) into a string
- * suitable for both structured logging and (in non-production) the JSON
- * response body. Without this, thrown non-Error values serialize to `{}`,
- * which is exactly what was producing the empty `Error {}` in the browser
- * console for the /conversations 500.
- */
-function describeError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  try {
-    return JSON.stringify(err);
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    return String(err);
-  }
-}
 
 cloudinaryV2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,

@@ -1,6 +1,6 @@
 import { Router, type Response } from "express";
 import { db } from "@workspace/db";
-import { usersTable, addressesTable, reviewsTable } from "@workspace/db";
+import { usersTable, addressesTable, reviewsTable, isValidBdPhone } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import {
@@ -62,12 +62,17 @@ router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"),
     const { firstName, lastName, phone } = req.body as any;
     const email = (req.body as { email?: string }).email;
 
-    // P0-1: input shape now validated by Zod (UpdateMeBody). The previous
-    // hand-rolled checks (typeof !== "string", phone.length > 20) are
-    // superseded — Zod enforces the schema, and the BD phone format bug
-    // (audit B.3: phone regex defined in sellerPayoutAccounts.ts:108 but
-    // not reused here) is no longer a concern because this route doesn't
-    // actually validate phone format anyway, just length.
+    // P0-1: body shape validated by Zod (UpdateMeBody). VAL-3: now also
+    // validates BD phone format using the shared isValidBdPhone() from
+    // @workspace/db (same function sellerPayoutAccounts.ts uses). The
+    // audit (B.3) flagged that this route had a phone regex defined
+    // elsewhere but never reused — now it's properly validated.
+    if (phone !== undefined && phone !== null && phone.trim() !== "") {
+      if (!isValidBdPhone(phone)) {
+        res.status(400).json({ error: "Phone number must be a valid Bangladeshi mobile number (e.g. 01712345678)" });
+        return;
+      }
+    }
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (firstName !== undefined) updates.firstName = firstName?.trim() || null;
@@ -134,13 +139,13 @@ router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "Ad
       isDefault,
     } = req.body as any;
 
-    // P0-1: input shape now validated by Zod (AddAddressBody). The previous
-    // hand-rolled required-field checks (fullName?.trim(), street?.trim(),
-    // city?.trim()) are superseded — Zod enforces non-optional string
-    // fields at the schema level. Note: AddAddressBody requires `phone`
-    // and `district` as non-optional strings, which is stricter than the
-    // previous handler (which treated them as optional with "" fallback).
-    // This is intentional — the OpenAPI spec is the documented contract.
+    // P0-1: input shape now validated by Zod (AddAddressBody). VAL-3: also
+    // validates BD phone format using the shared isValidBdPhone() (same
+    // function used by sellerPayoutAccounts and PUT /users/me above).
+    if (!isValidBdPhone(phone)) {
+      res.status(400).json({ error: "Phone number must be a valid Bangladeshi mobile number (e.g. 01712345678)" });
+      return;
+    }
 
     // Check address limit (prevent abuse)
     const existing = await db
