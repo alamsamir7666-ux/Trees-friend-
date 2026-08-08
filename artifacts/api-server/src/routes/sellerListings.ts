@@ -342,7 +342,9 @@ router.get("/seller-listings/shop-all", async (req, res) => {
       // If this is a subcategory, its catIds = [gid]; if parent with no subcats, catIds = [gid]
       const catIds = [gid];
 
-      // Fetch listings for this group
+      // Fetch listings for this group — PERF-1: push LIMIT/OFFSET into SQL
+      // instead of fetching ALL rows and slicing in JS. The +1 detects
+      // hasMore without a separate COUNT query.
       const listingRows = await db
         .select({
           listing: sellerListingsTable,
@@ -362,16 +364,21 @@ router.get("/seller-listings/shop-all", async (req, res) => {
             eq(sellersTable.status, "active"),
             inArray(productsTable.categoryId, catIds),
           ),
-        );
+        )
+        .orderBy(desc(sellerListingsTable.createdAt))
+        .limit(batchNum + 1)
+        .offset(offsetNum);
 
-      const allListingIds = listingRows.map((r) => r.listing.id);
+      // PERF-1: hasMore = we fetched batchNum+1 rows (the extra row is the
+      // "has more" sentinel). Only fetch variants/stats for the paginated
+      // subset, not the entire marketplace.
+      const hasMore = listingRows.length > batchNum;
+      const pagedRows = hasMore ? listingRows.slice(0, batchNum) : listingRows;
+      const allListingIds = pagedRows.map((r) => r.listing.id);
       const { variantsByListing, statsMap } = await fetchVariantsAndStats(allListingIds);
-      const allCards = buildCardsFromRows(listingRows, variantsByListing, statsMap);
-      const groupCards = allCards.filter((c) => catIds.includes(c.productCategoryId));
-
-      // Apply offset + batchSize
-      const paged = groupCards.slice(offsetNum, offsetNum + batchNum).map(toPublicCard);
-      const hasMore = offsetNum + batchNum < groupCards.length;
+      const paged = buildCardsFromRows(pagedRows, variantsByListing, statsMap)
+        .filter((c) => catIds.includes(c.productCategoryId))
+        .map(toPublicCard);
 
       return res.json({ groupId: gid, cards: paged, hasMore });
     }
@@ -422,7 +429,12 @@ router.get("/seller-listings/shop-all", async (req, res) => {
       }
     }
 
-    // 3. Fetch all public+approved seller listings with active sellers
+    // 3. Fetch all public+approved seller listings with active sellers.
+    // PERF-1: add a safety LIMIT (200) so a large marketplace doesn't
+    // fetch the entire catalog on initial page load. The per-group slice
+    // below (limitNum, default 6) means we only display a few per group;
+    // 200 total ensures we have enough for ~10+ groups while bounding
+    // the query. orderBy ensures consistent results across page loads.
     const listingRows = await db
       .select({
         listing: sellerListingsTable,
@@ -441,7 +453,9 @@ router.get("/seller-listings/shop-all", async (req, res) => {
           eq(sellerListingsTable.approvalStatus, "approved"),
           eq(sellersTable.status, "active"),
         ),
-      );
+      )
+      .orderBy(desc(sellerListingsTable.createdAt))
+      .limit(200);
 
     // 4. Fetch variants and review stats
     const allListingIds = listingRows.map((r) => r.listing.id);
@@ -521,6 +535,7 @@ router.get("/seller-listings/by-category", async (req, res) => {
       const pid = parseInt(productId);
       if (isNaN(pid)) return res.status(400).json({ error: "Invalid productId" });
 
+      // PERF-1: push LIMIT/OFFSET into SQL instead of fetching ALL rows.
       const listingRows = await db
         .select({
           listing: sellerListingsTable,
@@ -539,24 +554,28 @@ router.get("/seller-listings/by-category", async (req, res) => {
             eq(sellersTable.status, "active"),
             eq(productsTable.id, pid),
           ),
-        );
+        )
+        .orderBy(desc(sellerListingsTable.createdAt))
+        .limit(batchNum + 1)
+        .offset(offsetNum);
 
-      const allListingIds = listingRows.map((r) => r.listing.id);
+      // PERF-1: only fetch variants/stats for the paginated subset.
+      const hasMore = listingRows.length > batchNum;
+      const pagedRows = hasMore ? listingRows.slice(0, batchNum) : listingRows;
+      const allListingIds = pagedRows.map((r) => r.listing.id);
       const { variantsByListing, statsMap } = await fetchVariantsAndStats(allListingIds);
-      const allCards = buildCardsFromRows(
-        listingRows.map((r) => ({ ...r, productCategoryId: catId })),
+      const paged = buildCardsFromRows(
+        pagedRows.map((r) => ({ ...r, productCategoryId: catId })),
         variantsByListing,
         statsMap,
-      );
-
-      const paged = allCards.slice(offsetNum, offsetNum + batchNum).map(toPublicCard);
-      const hasMore = offsetNum + batchNum < allCards.length;
+      ).map(toPublicCard);
 
       return res.json({ productId: pid, cards: paged, hasMore });
     }
 
     // ── MODE 1: Initial load — all products with limited cards ───────────
-    // Fetch all public+approved seller listings in this category
+    // Fetch all public+approved seller listings in this category.
+    // PERF-1: add safety LIMIT (200) + orderBy for consistent results.
     const listingRows = await db
       .select({
         listing: sellerListingsTable,
@@ -575,7 +594,9 @@ router.get("/seller-listings/by-category", async (req, res) => {
           eq(sellersTable.status, "active"),
           eq(productsTable.categoryId, catId),
         ),
-      );
+      )
+      .orderBy(desc(sellerListingsTable.createdAt))
+      .limit(200);
 
     const allListingIds = listingRows.map((r) => r.listing.id);
     const { variantsByListing, statsMap } = await fetchVariantsAndStats(allListingIds);
@@ -1002,6 +1023,12 @@ router.put("/seller-listings/:id", requireSeller, async (req: ApiRequest, res) =
     const existingVariantsById = new Map(existingVariants.map((v) => [v.id, v]));
     const transitionedVariantIds: number[] = [];
 
+    // PERF-3: Batch variant UPDATEs via Promise.all instead of sequential
+    // awaits in a for-loop. Each UPDATE targets a different variant ID so
+    // there's no conflict between them — N serial round-trips become 1
+    // parallel batch. The transitionedVariantIds collection (which reads
+    // pre-update state) runs first, BEFORE any UPDATEs execute.
+    const variantUpdatePromises: Promise<unknown>[] = [];
     for (const v of toUpdate) {
       const variantUpdates: Record<string, unknown> = { updatedAt: new Date() };
       if (v.form !== undefined) variantUpdates.form = v.form || null;
@@ -1031,8 +1058,14 @@ router.put("/seller-listings/:id", requireSeller, async (req: ApiRequest, res) =
         }
       }
 
-      await db.update(sellerListingVariantsTable).set(variantUpdates).where(eq(sellerListingVariantsTable.id, v.id));
+      // Queue the UPDATE (don't await yet — batch them all).
+      variantUpdatePromises.push(
+        db.update(sellerListingVariantsTable).set(variantUpdates).where(eq(sellerListingVariantsTable.id, v.id)),
+      );
     }
+
+    // Execute all variant UPDATEs in parallel.
+    await Promise.all(variantUpdatePromises);
 
     if (transitionedVariantIds.length > 0) {
       const [product] = await db.select().from(productsTable).where(eq(productsTable.id, existing.productId)).limit(1);

@@ -519,21 +519,25 @@ router.get("/products/:id", async (req, res) => {
       res.status(404).json({ error: "Product not found" });
       return;
     }
-    const variants = await db
-      .select()
-      .from(productVariantsTable)
-      .where(eq(productVariantsTable.productId, p.id));
-    const [stats] = await db
-      .select({
-        avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
-        count: sql<string>`COUNT(*)`,
-      })
-      .from(reviewsTable)
-      .where(eq(reviewsTable.productId, p.id));
-    const [marketplaceMap, sellerListingCards] = await Promise.all([
+    // PERF-4: Parallelize variants + stats + marketplace + seller listing
+    // cards — all 4 only depend on p.id (already known). Was 3 sequential
+    // awaits + 1 Promise.all (4 round-trips); now 1 Promise.all (1 round-trip).
+    const [variants, statsResult, marketplaceMap, sellerListingCards] = await Promise.all([
+      db
+        .select()
+        .from(productVariantsTable)
+        .where(eq(productVariantsTable.productId, p.id)),
+      db
+        .select({
+          avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
+          count: sql<string>`COUNT(*)`,
+        })
+        .from(reviewsTable)
+        .where(eq(reviewsTable.productId, p.id)),
       fetchMarketplaceStatsFor([p.id]),
       fetchSellerListingCardsFor(p.id),
     ]);
+    const stats = statsResult[0];
     res.json({
       ...toProduct(
         p,

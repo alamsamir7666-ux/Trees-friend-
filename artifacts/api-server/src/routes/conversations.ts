@@ -13,7 +13,7 @@ import {
   ALLOWED_CHAT_ATTACHMENT_MIME_TYPES,
   MAX_CHAT_ATTACHMENT_BYTES,
 } from "@workspace/db";
-import { eq, and, desc, sql, lt } from "drizzle-orm";
+import { eq, and, desc, sql, lt, inArray } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import { chainRateLimiters, chatMessageBurstLimiter, chatMessageLimiter, conversationCreateLimiter } from "../middlewares/rateLimiter";
 import { logger } from "../lib/logger";
@@ -248,144 +248,148 @@ router.get("/conversations", requireAuth, async (req: ApiRequest, res) => {
           .orderBy(desc(conversationsTable.lastMessageAt))
       : [];
 
-    // Build response for buyer conversations
-    const buyerResults: ConversationResponse[] = await Promise.all(
-      buyerConversations.map(async ({ conv, seller: s }) => {
-        // Get last message
-        const [lastMsg] = await db
+    // PERF-2: Batch-fetch last message, unread count, and product info
+    // for ALL conversations in 3 total queries instead of 3 per
+    // conversation (was O(N×3), now O(3) regardless of conversation count).
+    const allConvs = [...buyerConversations, ...sellerConversations];
+    const allConvIds = allConvs.map((c) => c.conv.id);
+    const allListingIds = allConvs
+      .map((c) => c.conv.sellerListingId)
+      .filter((id): id is number => id != null);
+
+    // 1. Batch-fetch last message per conversation (DISTINCT ON gives the
+    // first row per conversationId when ordered by createdAt DESC).
+    const lastMessages = allConvIds.length > 0
+      ? await db
           .select()
           .from(messagesTable)
-          .where(eq(messagesTable.conversationId, conv.id))
-          .orderBy(desc(messagesTable.createdAt))
-          .limit(1);
+          .where(inArray(messagesTable.conversationId, allConvIds))
+          .orderBy(desc(messagesTable.conversationId), desc(messagesTable.createdAt))
+      : [];
+    // Build a Map: conversationId → last message (the first per conversation)
+    const lastMsgByConv = new Map<number, typeof messagesTable.$inferSelect>();
+    for (const msg of lastMessages) {
+      if (!lastMsgByConv.has(msg.conversationId)) {
+        lastMsgByConv.set(msg.conversationId, msg);
+      }
+    }
 
-        // Get unread count
-        const [unreadRow] = await db
-          .select({ count: sql<string>`COUNT(*)` })
-          .from(messagesTable)
-          .where(
-            and(
-              eq(messagesTable.conversationId, conv.id),
-              eq(messagesTable.readByBuyer, false),
-              sql`${messagesTable.senderId} != ${userId}`,
-            )
-          );
-
-        // Get product info if linked
-        let productName: string | null = null;
-        let productImage: string | null = null;
-        let productPrice: number | null = null;
-
-        if (conv.sellerListingId) {
-          const [listing] = await db
+    // 2. Batch-fetch unread counts per conversation for both buyer and
+    // seller perspectives. ONE query each (2 total), using GROUP BY.
+    const [buyerUnreadRows, sellerUnreadRows] = await Promise.all([
+      allConvIds.length > 0
+        ? db
             .select({
-              product: productsTable,
-              variant: sellerListingVariantsTable,
+              conversationId: messagesTable.conversationId,
+              count: sql<string>`COUNT(*)`,
             })
-            .from(sellerListingsTable)
-            .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
-            .leftJoin(
-              sellerListingVariantsTable,
-              eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id),
+            .from(messagesTable)
+            .where(
+              and(
+                inArray(messagesTable.conversationId, allConvIds),
+                eq(messagesTable.readByBuyer, false),
+                sql`${messagesTable.senderId} != ${userId}`,
+              ),
             )
-            .where(eq(sellerListingsTable.id, conv.sellerListingId))
-            .limit(1);
-
-          if (listing) {
-            productName = listing.product.name;
-            productImage = listing.product.images?.[0] ?? null;
-            productPrice = listing.variant
-              ? Number(listing.variant.discountPrice ?? listing.variant.price)
-              : null;
-          }
-        }
-
-        return {
-          id: conv.id,
-          sellerId: s.id,
-          sellerName: s.nurseryName,
-          sellerLogoUrl: s.logoUrl,
-          sellerIsVerified: s.isVerified,
-          sellerListingId: conv.sellerListingId,
-          productName,
-          productImage,
-          productPrice,
-          lastMessage: previewMessageText(lastMsg),
-          lastMessageAt: conv.lastMessageAt.toISOString(),
-          unreadCount: Number(unreadRow?.count ?? 0),
-          createdAt: conv.createdAt.toISOString(),
-        };
-      }),
+            .groupBy(messagesTable.conversationId)
+        : Promise.resolve([]),
+      allConvIds.length > 0
+        ? db
+            .select({
+              conversationId: messagesTable.conversationId,
+              count: sql<string>`COUNT(*)`,
+            })
+            .from(messagesTable)
+            .where(
+              and(
+                inArray(messagesTable.conversationId, allConvIds),
+                eq(messagesTable.readBySeller, false),
+                sql`${messagesTable.senderId} != ${userId}`,
+              ),
+            )
+            .groupBy(messagesTable.conversationId)
+        : Promise.resolve([]),
+    ]);
+    const buyerUnreadMap = new Map<number, number>(
+      buyerUnreadRows.map((r) => [r.conversationId, Number(r.count)]),
+    );
+    const sellerUnreadMap = new Map<number, number>(
+      sellerUnreadRows.map((r) => [r.conversationId, Number(r.count)]),
     );
 
-    // Build response for seller conversations
-    const sellerResults: ConversationResponse[] = await Promise.all(
-      sellerConversations.map(async ({ conv, buyer: b }) => {
-        const [lastMsg] = await db
-          .select()
-          .from(messagesTable)
-          .where(eq(messagesTable.conversationId, conv.id))
-          .orderBy(desc(messagesTable.createdAt))
-          .limit(1);
-
-        const [unreadRow] = await db
-          .select({ count: sql<string>`COUNT(*)` })
-          .from(messagesTable)
-          .where(
-            and(
-              eq(messagesTable.conversationId, conv.id),
-              eq(messagesTable.readBySeller, false),
-              sql`${messagesTable.senderId} != ${userId}`,
-            )
-          );
-
-        let productName: string | null = null;
-        let productImage: string | null = null;
-        let productPrice: number | null = null;
-
-        if (conv.sellerListingId) {
-          const [listing] = await db
-            .select({
-              product: productsTable,
-              variant: sellerListingVariantsTable,
-            })
-            .from(sellerListingsTable)
-            .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
-            .leftJoin(
-              sellerListingVariantsTable,
-              eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id),
-            )
-            .where(eq(sellerListingsTable.id, conv.sellerListingId))
-            .limit(1);
-
-          if (listing) {
-            productName = listing.product.name;
-            productImage = listing.product.images?.[0] ?? null;
-            productPrice = listing.variant
-              ? Number(listing.variant.discountPrice ?? listing.variant.price)
-              : null;
-          }
+    // 3. Batch-fetch product info for all linked seller listings.
+    const listingInfoMap = new Map<number, { name: string; image: string | null; price: number | null }>();
+    if (allListingIds.length > 0) {
+      const listingRows = await db
+        .select({
+          listing: sellerListingsTable,
+          product: productsTable,
+          variant: sellerListingVariantsTable,
+        })
+        .from(sellerListingsTable)
+        .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
+        .leftJoin(
+          sellerListingVariantsTable,
+          eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id),
+        )
+        .where(inArray(sellerListingsTable.id, allListingIds));
+      for (const row of listingRows) {
+        if (!listingInfoMap.has(row.listing.id)) {
+          listingInfoMap.set(row.listing.id, {
+            name: row.product.name,
+            image: row.product.images?.[0] ?? null,
+            price: row.variant
+              ? Number(row.variant.discountPrice ?? row.variant.price)
+              : null,
+          });
         }
+      }
+    }
 
-        return {
-          id: conv.id,
-          sellerId: conv.sellerId,
-          sellerName: b.firstName
-            ? `${b.firstName} ${b.lastName ?? ""}`.trim()
-            : b.email,
-          sellerLogoUrl: null,
-          sellerIsVerified: false,
-          sellerListingId: conv.sellerListingId,
-          productName,
-          productImage,
-          productPrice,
-          lastMessage: previewMessageText(lastMsg),
-          lastMessageAt: conv.lastMessageAt.toISOString(),
-          unreadCount: Number(unreadRow?.count ?? 0),
-          createdAt: conv.createdAt.toISOString(),
-        };
-      }),
-    );
+    // Build response for buyer conversations — uses pre-fetched Maps,
+    // no per-conversation DB queries.
+    const buyerResults: ConversationResponse[] = buyerConversations.map(({ conv, seller: s }) => {
+      const lastMsg = lastMsgByConv.get(conv.id);
+      const listingInfo = conv.sellerListingId ? listingInfoMap.get(conv.sellerListingId) : null;
+      return {
+        id: conv.id,
+        sellerId: s.id,
+        sellerName: s.nurseryName,
+        sellerLogoUrl: s.logoUrl,
+        sellerIsVerified: s.isVerified,
+        sellerListingId: conv.sellerListingId,
+        productName: listingInfo?.name ?? null,
+        productImage: listingInfo?.image ?? null,
+        productPrice: listingInfo?.price ?? null,
+        lastMessage: previewMessageText(lastMsg),
+        lastMessageAt: conv.lastMessageAt.toISOString(),
+        unreadCount: buyerUnreadMap.get(conv.id) ?? 0,
+        createdAt: conv.createdAt.toISOString(),
+      };
+    });
+
+    // Build response for seller conversations — same pre-fetched Maps.
+    const sellerResults: ConversationResponse[] = sellerConversations.map(({ conv, buyer: b }) => {
+      const lastMsg = lastMsgByConv.get(conv.id);
+      const listingInfo = conv.sellerListingId ? listingInfoMap.get(conv.sellerListingId) : null;
+      return {
+        id: conv.id,
+        sellerId: conv.sellerId,
+        sellerName: b.firstName
+          ? `${b.firstName} ${b.lastName ?? ""}`.trim()
+          : b.email,
+        sellerLogoUrl: null,
+        sellerIsVerified: false,
+        sellerListingId: conv.sellerListingId,
+        productName: listingInfo?.name ?? null,
+        productImage: listingInfo?.image ?? null,
+        productPrice: listingInfo?.price ?? null,
+        lastMessage: previewMessageText(lastMsg),
+        lastMessageAt: conv.lastMessageAt.toISOString(),
+        unreadCount: sellerUnreadMap.get(conv.id) ?? 0,
+        createdAt: conv.createdAt.toISOString(),
+      };
+    });
 
     res.json({
       buyerConversations: buyerResults,

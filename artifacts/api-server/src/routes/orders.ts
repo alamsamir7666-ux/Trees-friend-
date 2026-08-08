@@ -58,11 +58,24 @@ function formatOrder(o: typeof ordersTable.$inferSelect) {
 
 router.get("/orders", requireAuth, async (req: ApiRequest, res) => {
   try {
+    // PERF-5: Add DB-level LIMIT — was fetching ALL orders for the user
+    // in one unbounded query. A buyer with 500 lifetime orders got all 500
+    // on every page load. Now defaults to 50 (generous enough for a single
+    // page; the frontend can add pagination UI later). Non-breaking: the
+    // response shape stays Order[] (the OpenAPI spec documents this as an
+    // array). The frontend's useInfiniteScroll pattern can add ?page=&limit=
+    // params when needed.
+    const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "50")));
+    const page = Math.max(1, parseInt((req.query.page as string) ?? "1"));
+    const offset = (page - 1) * limit;
+
     const orders = await db
       .select()
       .from(ordersTable)
       .where(eq(ordersTable.userId, req.userId!))
-      .orderBy(desc(ordersTable.createdAt));
+      .orderBy(desc(ordersTable.createdAt))
+      .limit(limit)
+      .offset(offset);
     res.json(orders.map(formatOrder));
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch orders" });

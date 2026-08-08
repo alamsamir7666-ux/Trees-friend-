@@ -54,17 +54,20 @@ function formatSellerOrder(
 
 /**
  * Seller: list orders that belong to them (orders.sellerId = their seller
- * id). Optional orderStatus filter for the dashboard's status tabs. Not
- * paginated -- matches the existing GET /orders (buyer) and GET
- * /admin/seller-listings conventions in this codebase, none of which
- * paginate either; a seller-scale order volume (hundreds, not the
- * platform's total) doesn't yet justify introducing pagination as a
- * one-off pattern here.
+ * id). Optional orderStatus filter for the dashboard's status tabs.
+ * PERF-5: Added DB-level LIMIT (default 50, max 100) + optional page param.
+ * Non-breaking: response shape stays Order[]. The doc comment previously
+ * said "not paginated" — that was the audit's PERF weakness #5; now bounded.
  */
 router.get("/seller/orders", requireSeller, async (req, res) => {
   try {
     const { orderStatus } = req.query as { orderStatus?: string };
     const valid = ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"];
+
+    // PERF-5: DB-level LIMIT — was unbounded.
+    const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "50")));
+    const page = Math.max(1, parseInt((req.query.page as string) ?? "1"));
+    const offset = (page - 1) * limit;
 
     const orders = await db
       .select()
@@ -75,7 +78,9 @@ router.get("/seller/orders", requireSeller, async (req, res) => {
           orderStatus && valid.includes(orderStatus) ? eq(ordersTable.orderStatus, orderStatus) : undefined,
         ),
       )
-      .orderBy(desc(ordersTable.createdAt));
+      .orderBy(desc(ordersTable.createdAt))
+      .limit(limit)
+      .offset(offset);
 
     if (orders.length === 0) {
       res.json([]);
