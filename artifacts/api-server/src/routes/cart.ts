@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { db } from "@workspace/db";
 import {
   cartItemsTable,
@@ -17,6 +17,8 @@ import {
   UpdateCartItemParams,
 } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
 
 const router = Router();
 
@@ -203,9 +205,9 @@ async function buildCart(userId: string) {
   return { items, subtotal, discount, deliveryTotal, total: subtotal + deliveryTotal };
 }
 
-router.get("/cart", requireAuth, async (req: any, res) => {
+router.get("/cart", requireAuth, async (req: ApiRequest, res: Response) => {
   try {
-    const cart = await buildCart(req.userId);
+    const cart = await buildCart(req.userId!);
     res.json(cart);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch cart" });
@@ -230,7 +232,7 @@ router.get("/cart", requireAuth, async (req: any, res) => {
  * mismatched sellerListingId in the body can't desync the denormalized
  * column from the variant it's supposed to mirror.
  */
-router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBody"), async (req: any, res) => {
+router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBody"), async (req: ApiRequest<z.infer<typeof AddToCartBody>>, res: Response) => {
   try {
     // P0-1: body shape (productId: number, variantId/sellerListingVariantId:
     // number|null, quantity: number) now validated by Zod (AddToCartBody).
@@ -274,7 +276,7 @@ router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBo
       const existing = await db
         .select()
         .from(cartItemsTable)
-        .where(and(eq(cartItemsTable.userId, req.userId), eq(cartItemsTable.variantId, variantId!)))
+        .where(and(eq(cartItemsTable.userId, req.userId!), eq(cartItemsTable.variantId, variantId!)))
         .limit(1);
 
       const newQty = existing.length > 0 ? existing[0].quantity + qty : qty;
@@ -291,7 +293,7 @@ router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBo
           .where(eq(cartItemsTable.id, existing[0].id));
       } else {
         await db.insert(cartItemsTable).values({
-          userId: req.userId,
+          userId: req.userId!,
           productId: Number(productId),
           variantId,
           quantity: qty,
@@ -327,7 +329,7 @@ router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBo
         .from(cartItemsTable)
         .where(
           and(
-            eq(cartItemsTable.userId, req.userId),
+            eq(cartItemsTable.userId, req.userId!),
             eq(cartItemsTable.sellerListingVariantId, sellerListingVariantId!),
           ),
         )
@@ -347,7 +349,7 @@ router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBo
           .where(eq(cartItemsTable.id, existing[0].id));
       } else {
         await db.insert(cartItemsTable).values({
-          userId: req.userId,
+          userId: req.userId!,
           productId: Number(productId),
           // Denormalized from the variant's own FK, not trusted from the
           // request body -- see route doc comment above.
@@ -358,7 +360,7 @@ router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBo
       }
     }
 
-    const cart = await buildCart(req.userId);
+    const cart = await buildCart(req.userId!);
     res.json(cart);
   } catch (err) {
     res.status(500).json({ error: "Failed to add to cart" });
@@ -373,9 +375,9 @@ router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBo
  * line types and was already a stable, unique identifier before this
  * change; this is a routing fix, not a new concept.
  */
-router.put("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, "UpdateCartItemParams"), validateBody(UpdateCartItemBody, "UpdateCartItemBody"), async (req: any, res) => {
+router.put("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, "UpdateCartItemParams"), validateBody(UpdateCartItemBody, "UpdateCartItemBody"), async (req: ApiRequest<z.infer<typeof UpdateCartItemBody>>, res: Response) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number by UpdateCartItemParams
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
     const { quantity } = req.body;
     const qty = Number(quantity);
@@ -387,7 +389,7 @@ router.put("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, 
     const [line] = await db
       .select()
       .from(cartItemsTable)
-      .where(and(eq(cartItemsTable.id, id), eq(cartItemsTable.userId, req.userId)))
+      .where(and(eq(cartItemsTable.id, id), eq(cartItemsTable.userId, req.userId!)))
       .limit(1);
 
     if (!line) {
@@ -421,32 +423,32 @@ router.put("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, 
       .update(cartItemsTable)
       .set({ quantity: qty, updatedAt: new Date() })
       .where(eq(cartItemsTable.id, id));
-    const cart = await buildCart(req.userId);
+    const cart = await buildCart(req.userId!);
     res.json(cart);
   } catch (err) {
     res.status(500).json({ error: "Failed to update cart" });
   }
 });
 
-router.delete("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, "DeleteCartItemParams"), async (req: any, res) => {
+router.delete("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, "DeleteCartItemParams"), async (req: ApiRequest, res: Response) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number (reuses UpdateCartItemParams schema)
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
     await db
       .delete(cartItemsTable)
-      .where(and(eq(cartItemsTable.id, id), eq(cartItemsTable.userId, req.userId)));
-    const cart = await buildCart(req.userId);
+      .where(and(eq(cartItemsTable.id, id), eq(cartItemsTable.userId, req.userId!)));
+    const cart = await buildCart(req.userId!);
     res.json(cart);
   } catch (err) {
     res.status(500).json({ error: "Failed to remove from cart" });
   }
 });
 
-router.delete("/cart", requireAuth, async (req: any, res) => {
+router.delete("/cart", requireAuth, async (req: ApiRequest, res: Response) => {
   try {
     await db
       .delete(cartItemsTable)
-      .where(eq(cartItemsTable.userId, req.userId));
+      .where(eq(cartItemsTable.userId, req.userId!));
     res.json({ message: "Cart cleared" });
   } catch (err) {
     res.status(500).json({ error: "Failed to clear cart" });

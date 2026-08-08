@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { db } from "@workspace/db";
 import { couponsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
@@ -6,6 +6,8 @@ import { requireAdmin, requireSeller } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
 import { ValidateCouponBody, CreateCouponBody } from "@workspace/api-zod";
 import { validateBody } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
 
 const router = Router();
 
@@ -97,7 +99,7 @@ router.get("/coupons", requireAdmin, async (_req, res) => {
   }
 });
 
-router.post("/coupons", requireAdmin, validateBody(CreateCouponBody, "CreateCouponBody"), async (req: any, res) => {
+router.post("/coupons", requireAdmin, validateBody(CreateCouponBody, "CreateCouponBody"), async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
   try {
     // P0-1: body shape now validated by Zod (CreateCouponBody). The
     // hand-rolled code/discountType/discountValue checks below are kept
@@ -134,7 +136,7 @@ router.post("/coupons", requireAdmin, validateBody(CreateCouponBody, "CreateCoup
         discountType,
         discountValue: String(discountValue),
         minOrderAmount:
-          minOrderAmount != null && minOrderAmount !== ""
+          minOrderAmount != null
             ? String(minOrderAmount)
             : null,
         expiryDate: expiryDate ? new Date(expiryDate) : null,
@@ -151,7 +153,7 @@ router.post("/coupons", requireAdmin, validateBody(CreateCouponBody, "CreateCoup
   }
 });
 
-router.put("/coupons/:id", requireAdmin, async (req: any, res) => {
+router.put("/coupons/:id", requireAdmin, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -173,7 +175,7 @@ router.put("/coupons/:id", requireAdmin, async (req: any, res) => {
         discountType,
         discountValue: String(discountValue),
         minOrderAmount:
-          minOrderAmount != null && minOrderAmount !== ""
+          minOrderAmount != null
             ? String(minOrderAmount)
             : null,
         expiryDate: expiryDate ? new Date(expiryDate) : null,
@@ -191,7 +193,7 @@ router.put("/coupons/:id", requireAdmin, async (req: any, res) => {
   }
 });
 
-router.patch("/coupons/:id/toggle", requireAdmin, async (req: any, res) => {
+router.patch("/coupons/:id/toggle", requireAdmin, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -220,7 +222,7 @@ router.patch("/coupons/:id/toggle", requireAdmin, async (req: any, res) => {
   }
 });
 
-router.delete("/coupons/:id", requireAdmin, async (req: any, res) => {
+router.delete("/coupons/:id", requireAdmin, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -241,7 +243,7 @@ router.delete("/coupons/:id", requireAdmin, async (req: any, res) => {
 //  shifted out of the admin panel and into the seller dashboard so each
 //  seller can manage their own discount codes). All routes require an
 //  active seller account (requireSeller) and scope every read/write to
-//  req.dbSeller.id -- a seller can only ever see / edit / delete coupons
+//  req.dbSeller!.id -- a seller can only ever see / edit / delete coupons
 //  where coupons.seller_id === their own seller id.
 //
 //  Platform-wide coupons (seller_id IS NULL, e.g. welcome codes generated
@@ -249,9 +251,9 @@ router.delete("/coupons/:id", requireAdmin, async (req: any, res) => {
 //  remain managed by the system / admin API.
 // ══════════════════════════════════════════════════════════════════════════
 
-router.get("/sellers/me/coupons", requireSeller, async (req: any, res) => {
+router.get("/sellers/me/coupons", requireSeller, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
   try {
-    const sellerId = req.dbSeller.id;
+    const sellerId = req.dbSeller!.id;
     const coupons = await db
       .select()
       .from(couponsTable)
@@ -263,9 +265,9 @@ router.get("/sellers/me/coupons", requireSeller, async (req: any, res) => {
   }
 });
 
-router.post("/sellers/me/coupons", requireSeller, async (req: any, res) => {
+router.post("/sellers/me/coupons", requireSeller, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
   try {
-    const sellerId = req.dbSeller.id;
+    const sellerId = req.dbSeller!.id;
     const { code, discountType, discountValue, minOrderAmount, expiryDate } =
       req.body;
 
@@ -296,7 +298,7 @@ router.post("/sellers/me/coupons", requireSeller, async (req: any, res) => {
         discountType,
         discountValue: String(discountValue),
         minOrderAmount:
-          minOrderAmount != null && minOrderAmount !== ""
+          minOrderAmount != null
             ? String(minOrderAmount)
             : null,
         expiryDate: expiryDate ? new Date(expiryDate) : null,
@@ -305,7 +307,7 @@ router.post("/sellers/me/coupons", requireSeller, async (req: any, res) => {
       .returning();
 
     await logAudit({
-      adminId: req.userId,
+      adminId: req.userId!,
       adminEmail: req.dbUser?.email,
       action: "seller_coupon.create",
       targetType: "coupon",
@@ -323,9 +325,9 @@ router.post("/sellers/me/coupons", requireSeller, async (req: any, res) => {
   }
 });
 
-router.put("/sellers/me/coupons/:id", requireSeller, async (req: any, res) => {
+router.put("/sellers/me/coupons/:id", requireSeller, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
   try {
-    const sellerId = req.dbSeller.id;
+    const sellerId = req.dbSeller!.id;
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
       res.status(400).json({ error: "Invalid coupon ID" });
@@ -358,7 +360,7 @@ router.put("/sellers/me/coupons/:id", requireSeller, async (req: any, res) => {
         discountType,
         discountValue: String(discountValue),
         minOrderAmount:
-          minOrderAmount != null && minOrderAmount !== ""
+          minOrderAmount != null
             ? String(minOrderAmount)
             : null,
         expiryDate: expiryDate ? new Date(expiryDate) : null,
@@ -367,7 +369,7 @@ router.put("/sellers/me/coupons/:id", requireSeller, async (req: any, res) => {
       .returning();
 
     await logAudit({
-      adminId: req.userId,
+      adminId: req.userId!,
       adminEmail: req.dbUser?.email,
       action: "seller_coupon.update",
       targetType: "coupon",
@@ -381,9 +383,9 @@ router.put("/sellers/me/coupons/:id", requireSeller, async (req: any, res) => {
   }
 });
 
-router.patch("/sellers/me/coupons/:id/toggle", requireSeller, async (req: any, res) => {
+router.patch("/sellers/me/coupons/:id/toggle", requireSeller, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
   try {
-    const sellerId = req.dbSeller.id;
+    const sellerId = req.dbSeller!.id;
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
       res.status(400).json({ error: "Invalid coupon ID" });
@@ -407,7 +409,7 @@ router.patch("/sellers/me/coupons/:id/toggle", requireSeller, async (req: any, r
       .returning();
 
     await logAudit({
-      adminId: req.userId,
+      adminId: req.userId!,
       adminEmail: req.dbUser?.email,
       action: "seller_coupon.toggle",
       targetType: "coupon",
@@ -421,9 +423,9 @@ router.patch("/sellers/me/coupons/:id/toggle", requireSeller, async (req: any, r
   }
 });
 
-router.delete("/sellers/me/coupons/:id", requireSeller, async (req: any, res) => {
+router.delete("/sellers/me/coupons/:id", requireSeller, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
   try {
-    const sellerId = req.dbSeller.id;
+    const sellerId = req.dbSeller!.id;
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
       res.status(400).json({ error: "Invalid coupon ID" });
@@ -443,7 +445,7 @@ router.delete("/sellers/me/coupons/:id", requireSeller, async (req: any, res) =>
     }
 
     await logAudit({
-      adminId: req.userId,
+      adminId: req.userId!,
       adminEmail: req.dbUser?.email,
       action: "seller_coupon.delete",
       targetType: "coupon",
