@@ -20,6 +20,8 @@ import { logger } from "../lib/logger";
 import { checkoutLimiter, guestCheckoutLimiter } from "../middlewares/rateLimiter";
 import { CreateOrderBody } from "@workspace/api-zod";
 import { validateBody } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
 import crypto from "crypto";
 import { awardPoints, redeemPoints, TAKA_PER_POINT } from "./loyalty";
 import type { OrderItem } from "@workspace/db";
@@ -54,12 +56,12 @@ function formatOrder(o: typeof ordersTable.$inferSelect) {
   };
 }
 
-router.get("/orders", requireAuth, async (req: any, res) => {
+router.get("/orders", requireAuth, async (req: ApiRequest, res) => {
   try {
     const orders = await db
       .select()
       .from(ordersTable)
-      .where(eq(ordersTable.userId, req.userId))
+      .where(eq(ordersTable.userId, req.userId!))
       .orderBy(desc(ordersTable.createdAt));
     res.json(orders.map(formatOrder));
   } catch (err) {
@@ -80,9 +82,9 @@ router.get("/orders", requireAuth, async (req: any, res) => {
  * re-exported here so this file's existing export surface is unaffected.
  */
 
-router.post("/orders/guest", guestCheckoutLimiter, async (req: any, res) => {
+router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) => {
   try {
-    const { paymentMethod, transactionId, senderNumber, shippingAddress, items, couponCode, giftWrap, giftMessage } = req.body;
+    const { paymentMethod, transactionId, senderNumber, shippingAddress, items, couponCode, giftWrap, giftMessage } = req.body as Record<string, unknown> & { paymentMethod?: string; transactionId?: string; senderNumber?: string; shippingAddress?: any; items?: any[]; couponCode?: string; giftWrap?: string; giftMessage?: string };
 
     if (!paymentMethod) {
       res.status(400).json({ error: "Payment method is required" });
@@ -292,7 +294,7 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: any, res) => {
  * required when method === "bkash".
  */
 
-router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBody, "CreateOrderBody"), async (req: any, res) => {
+router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBody, "CreateOrderBody"), async (req: ApiRequest<z.infer<typeof CreateOrderBody>>, res) => {
   try {
     // P0-1: body shape now validated by Zod (CreateOrderBody). The
     // hand-rolled "Incomplete shipping address" check below is kept as a
@@ -330,7 +332,7 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
         .from(cartItemsTable)
         .innerJoin(productsTable, eq(cartItemsTable.productId, productsTable.id))
         .innerJoin(productVariantsTable, eq(cartItemsTable.variantId, productVariantsTable.id))
-        .where(eq(cartItemsTable.userId, req.userId)),
+        .where(eq(cartItemsTable.userId, req.userId!)),
       // Phase 2: resolves through sellerListingVariantsTable now, not
       // sellerListingsTable directly -- price/discountPrice/
       // availableQuantity/deliveryCharge all moved to the variant. Still
@@ -342,7 +344,7 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
         .innerJoin(productsTable, eq(cartItemsTable.productId, productsTable.id))
         .innerJoin(sellerListingVariantsTable, eq(cartItemsTable.sellerListingVariantId, sellerListingVariantsTable.id))
         .innerJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
-        .where(eq(cartItemsTable.userId, req.userId)),
+        .where(eq(cartItemsTable.userId, req.userId!)),
     ]);
 
     if (variantLines.length === 0 && listingLines.length === 0) {
@@ -530,7 +532,7 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
         });
         return;
       }
-      const groupSenderNumber: string | undefined = sellerSenderNumbers?.[key] ?? senderNumber;
+      const groupSenderNumber: string | null = (sellerSenderNumbers?.[key] ?? senderNumber) ?? null;
       resolvedPaymentMethods.set(g.sellerId, method);
       resolvedSenderNumbers.set(g.sellerId, groupSenderNumber?.trim() || null);
     }
@@ -581,7 +583,7 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
           .insert(ordersTable)
           .values({
             trackingId: trackingId(),
-            userId: req.userId,
+            userId: req.userId!,
             sellerId: g.sellerId,
             items: g.lines.map((l) => l.orderItem),
             totalAmount: String(groupTotal),
@@ -604,7 +606,7 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
       // Inside the transaction so a stock-decrement failure below rolls
       // back the cart deletion too — without this, a failed checkout would
       // leave the buyer with an empty cart and no orders.
-      await tx.delete(cartItemsTable).where(eq(cartItemsTable.userId, req.userId));
+      await tx.delete(cartItemsTable).where(eq(cartItemsTable.userId, req.userId!));
 
       // Decrement stock on every purchased variant. Inside the transaction
       // so a failure here rolls back the order inserts — without this, a
@@ -641,10 +643,10 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
     // platform-wide concept, not a per-seller one.
     if (pointsToRedeem > 0) {
       const actualPointsToRedeem = Math.ceil(loyaltyDiscount / TAKA_PER_POINT);
-      redeemPoints(req.userId, actualPointsToRedeem, createdOrders[0].id).catch(() => {});
+      redeemPoints(req.userId!, actualPointsToRedeem, createdOrders[0].id).catch(() => {});
     }
     const grandTotal = createdOrders.reduce((s, o) => s + Number(o.totalAmount), 0);
-    awardPoints(req.userId, createdOrders[0].id, grandTotal).catch(() => {});
+    awardPoints(req.userId!, createdOrders[0].id, grandTotal).catch(() => {});
 
     const addr = shippingAddress as {
       fullName?: string;
@@ -659,13 +661,13 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
         const existing = await db
           .select()
           .from(addressesTable)
-          .where(eq(addressesTable.userId, req.userId));
+          .where(eq(addressesTable.userId, req.userId!));
         const alreadySaved = existing.some(
           (a) => a.street === addr.street && a.city === addr.city,
         );
         if (!alreadySaved) {
           await db.insert(addressesTable).values({
-            userId: req.userId,
+            userId: req.userId!,
             fullName: addr.fullName ?? "",
             phone: addr.phone ?? "",
             street: addr.street ?? "",
@@ -686,7 +688,7 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
         lastName: usersTable.lastName,
       })
       .from(usersTable)
-      .where(eq(usersTable.clerkId, req.userId))
+      .where(eq(usersTable.clerkId, req.userId!))
       .limit(1);
 
     if (userRow?.email && !userRow.email.endsWith("@clerk.user")) {
@@ -714,7 +716,7 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
     // cost of every caller expecting an array. See CheckoutPage.tsx.
     res.status(201).json(createdOrders.map(formatOrder));
   } catch (err) {
-    logger.error({ err, userId: req.userId }, "Order creation failed");
+    logger.error({ err, userId: req.userId! }, "Order creation failed");
     res.status(500).json({ error: "Failed to create order" });
   }
 });
@@ -771,7 +773,7 @@ router.get("/orders/track/:trackingId", async (req, res) => {
   }
 });
 
-router.get("/orders/:id", requireAuth, async (req: any, res) => {
+router.get("/orders/:id", requireAuth, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -781,7 +783,7 @@ router.get("/orders/:id", requireAuth, async (req: any, res) => {
     const [order] = await db
       .select()
       .from(ordersTable)
-      .where(and(eq(ordersTable.id, id), eq(ordersTable.userId, req.userId)))
+      .where(and(eq(ordersTable.id, id), eq(ordersTable.userId, req.userId!)))
       .limit(1);
     if (!order) {
       res.status(404).json({ error: "Not found" });
@@ -793,14 +795,14 @@ router.get("/orders/:id", requireAuth, async (req: any, res) => {
   }
 });
 
-router.post("/orders/:id/cancel", requireAuth, async (req: any, res) => {
+router.post("/orders/:id/cancel", requireAuth, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
       res.status(400).json({ error: "Invalid order ID" });
       return;
     }
-    const { reason } = req.body;
+    const { reason } = req.body as { reason?: string };
     if (!reason || reason.trim().length < 3) {
       res.status(400).json({ error: "Cancellation reason is required" });
       return;
@@ -809,7 +811,7 @@ router.post("/orders/:id/cancel", requireAuth, async (req: any, res) => {
     const [order] = await db
       .select()
       .from(ordersTable)
-      .where(and(eq(ordersTable.id, id), eq(ordersTable.userId, req.userId)))
+      .where(and(eq(ordersTable.id, id), eq(ordersTable.userId, req.userId!)))
       .limit(1);
 
     if (!order) {

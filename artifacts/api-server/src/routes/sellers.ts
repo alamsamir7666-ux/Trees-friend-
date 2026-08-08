@@ -13,6 +13,8 @@ import { requireAuth, requireSellerAccount } from "../middlewares/auth";
 import { deleteCloudinaryAssets, cleanupRemovedImages } from "../lib/cloudinary";
 import { BecomeSellerBody } from "@workspace/api-zod";
 import { validateBody } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
 
 cloudinaryV2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -60,12 +62,12 @@ function formatSeller(s: typeof sellersTable.$inferSelect) {
  * applied. Frontend uses this to decide whether to show "Become a Seller",
  * a pending/rejected status banner, or the seller dashboard entry point.
  */
-router.get("/sellers/me", requireAuth, async (req: any, res) => {
+router.get("/sellers/me", requireAuth, async (req: ApiRequest, res) => {
   try {
     const [seller] = await db
       .select()
       .from(sellersTable)
-      .where(eq(sellersTable.userId, req.dbUser.id))
+      .where(eq(sellersTable.userId, req.dbUser!.id))
       .limit(1);
 
     res.json(seller ? formatSeller(seller) : null);
@@ -88,12 +90,12 @@ router.get("/sellers/me", requireAuth, async (req: any, res) => {
  * body -- an applicant must not be able to set their own verification
  * status or trial dates.
  */
-router.post("/sellers", requireAuth, validateBody(BecomeSellerBody, "BecomeSellerBody"), async (req: any, res) => {
+router.post("/sellers", requireAuth, validateBody(BecomeSellerBody, "BecomeSellerBody"), async (req: ApiRequest<z.infer<typeof BecomeSellerBody>>, res) => {
   try {
     const [existing] = await db
       .select()
       .from(sellersTable)
-      .where(eq(sellersTable.userId, req.dbUser.id))
+      .where(eq(sellersTable.userId, req.dbUser!.id))
       .limit(1);
     if (existing) {
       res.status(409).json({ error: "You already have a seller application", seller: formatSeller(existing) });
@@ -128,7 +130,7 @@ router.post("/sellers", requireAuth, validateBody(BecomeSellerBody, "BecomeSelle
     const [seller] = await db
       .insert(sellersTable)
       .values({
-        userId: req.dbUser.id,
+        userId: req.dbUser!.id,
         businessName: businessName.trim(),
         nurseryName: nurseryName.trim(),
         ownerName: ownerName.trim(),
@@ -161,7 +163,7 @@ router.post("/sellers", requireAuth, validateBody(BecomeSellerBody, "BecomeSelle
  * body or a later profile update -- this endpoint does not itself write
  * to the sellers table.
  */
-router.post("/sellers/upload-verification-doc", requireAuth, uploadMiddleware.single("file"), async (req: any, res) => {
+router.post("/sellers/upload-verification-doc", requireAuth, uploadMiddleware.single("file"), async (req: ApiRequest, res) => {
   try {
     const file = req.file as Express.Multer.File | undefined;
     if (!file) {
@@ -201,7 +203,7 @@ router.post("/sellers/upload-verification-doc", requireAuth, uploadMiddleware.si
  * silently ignored rather than erroring, since the client only ever sends
  * the profile-editable subset.
  */
-router.patch("/sellers/me", requireSellerAccount, async (req: any, res) => {
+router.patch("/sellers/me", requireSellerAccount, async (req: ApiRequest, res) => {
   try {
     const {
       businessName,
@@ -214,7 +216,7 @@ router.patch("/sellers/me", requireSellerAccount, async (req: any, res) => {
       nidOrTradeLicenseUrl,
       nurseryImages,
       logoUrl,
-    } = req.body;
+    } = req.body as Partial<typeof sellersTable.$inferInsert>;
 
     if (businessName !== undefined && (typeof businessName !== "string" || !businessName.trim())) {
       res.status(400).json({ error: "Business name cannot be empty" });
@@ -300,9 +302,9 @@ router.patch("/sellers/me", requireSellerAccount, async (req: any, res) => {
  * listings in sellerListings.ts already filters sellers.status = "active",
  * so a vacationing seller's listings stop appearing there automatically.
  */
-router.put("/sellers/me/status", requireSellerAccount, async (req: any, res) => {
+router.put("/sellers/me/status", requireSellerAccount, async (req: ApiRequest, res) => {
   try {
-    const { status } = req.body;
+    const { status } = req.body as { status?: string };
     if (status !== "active" && status !== "vacation") {
       res.status(400).json({ error: 'status must be "active" or "vacation"' });
       return;
@@ -344,7 +346,7 @@ router.put("/sellers/me/status", requireSellerAccount, async (req: any, res) => 
  * CAN re-request (e.g. after fixing whatever the rejection reason called
  * out), which clears the old rejection reason.
  */
-router.post("/sellers/me/request-verification", requireSellerAccount, async (req: any, res) => {
+router.post("/sellers/me/request-verification", requireSellerAccount, async (req: ApiRequest, res) => {
   try {
     const seller = req.dbSeller!;
     if (seller.status !== "active") {
@@ -392,13 +394,13 @@ router.post("/sellers/me/request-verification", requireSellerAccount, async (req
  * the parseInt guard. This is the same static-before-dynamic ordering
  * already used for /sellers/me elsewhere in this file.
  */
-router.get("/sellers/following/mine", requireAuth, async (req: any, res) => {
+router.get("/sellers/following/mine", requireAuth, async (req: ApiRequest, res) => {
   try {
     const rows = await db
       .select({ seller: sellersTable })
       .from(followsTable)
       .innerJoin(sellersTable, eq(followsTable.sellerId, sellersTable.id))
-      .where(and(eq(followsTable.userId, req.userId), eq(sellersTable.status, "active")))
+      .where(and(eq(followsTable.userId, req.userId!), eq(sellersTable.status, "active")))
       .orderBy(desc(followsTable.createdAt));
 
     res.json(
@@ -513,7 +515,7 @@ router.get("/sellers/:id", async (req, res) => {
  * shows the Follow button to guests too (it just prompts sign-in on tap,
  * same pattern as the wishlist heart button elsewhere).
  */
-router.get("/sellers/:id/follow", requireAuth, async (req: any, res) => {
+router.get("/sellers/:id/follow", requireAuth, async (req: ApiRequest, res) => {
   try {
     const sellerId = parseInt(req.params.id);
     if (isNaN(sellerId) || sellerId <= 0) {
@@ -524,7 +526,7 @@ router.get("/sellers/:id/follow", requireAuth, async (req: any, res) => {
     const [existing] = await db
       .select({ id: followsTable.id })
       .from(followsTable)
-      .where(and(eq(followsTable.userId, req.userId), eq(followsTable.sellerId, sellerId)))
+      .where(and(eq(followsTable.userId, req.userId!), eq(followsTable.sellerId, sellerId)))
       .limit(1);
 
     res.json({ isFollowing: !!existing });
@@ -543,7 +545,7 @@ router.get("/sellers/:id/follow", requireAuth, async (req: any, res) => {
  * than a SELECT-then-INSERT check to avoid a race between concurrent
  * requests from the same user.
  */
-router.post("/sellers/:id/follow", requireAuth, async (req: any, res) => {
+router.post("/sellers/:id/follow", requireAuth, async (req: ApiRequest, res) => {
   try {
     const sellerId = parseInt(req.params.id);
     if (isNaN(sellerId) || sellerId <= 0) {
@@ -563,7 +565,7 @@ router.post("/sellers/:id/follow", requireAuth, async (req: any, res) => {
 
     await db
       .insert(followsTable)
-      .values({ userId: req.userId, sellerId })
+      .values({ userId: req.userId!, sellerId })
       .onConflictDoNothing({ target: [followsTable.userId, followsTable.sellerId] });
 
     res.json({ isFollowing: true });
@@ -578,7 +580,7 @@ router.post("/sellers/:id/follow", requireAuth, async (req: any, res) => {
  * follow is a no-op success, not a 404) -- same double-tap/optimistic-UI
  * reasoning as the follow route above.
  */
-router.delete("/sellers/:id/follow", requireAuth, async (req: any, res) => {
+router.delete("/sellers/:id/follow", requireAuth, async (req: ApiRequest, res) => {
   try {
     const sellerId = parseInt(req.params.id);
     if (isNaN(sellerId) || sellerId <= 0) {
@@ -588,7 +590,7 @@ router.delete("/sellers/:id/follow", requireAuth, async (req: any, res) => {
 
     await db
       .delete(followsTable)
-      .where(and(eq(followsTable.userId, req.userId), eq(followsTable.sellerId, sellerId)));
+      .where(and(eq(followsTable.userId, req.userId!), eq(followsTable.sellerId, sellerId)));
 
     res.json({ isFollowing: false });
   } catch (err) {

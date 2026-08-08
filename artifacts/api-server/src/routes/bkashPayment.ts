@@ -10,6 +10,8 @@ import {
   CreateBkashPaymentGuestBody,
 } from "@workspace/api-zod";
 import { validateBody } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
 
 /**
  * bKash Tokenized Checkout create -> redirect -> callback -> execute cycle
@@ -68,7 +70,7 @@ const router = Router();
  * own ownership rule (order.userId === req.userId) in routes/orders.ts.
  */
 async function loadOwnOrder(
-  req: any,
+  req: ApiRequest,
 ): Promise<{ order: typeof ordersTable.$inferSelect } | { error: string; status: number }> {
   const { orderId } = req.body as { orderId?: number };
   if (orderId == null) return { error: "orderId is required", status: 400 };
@@ -90,7 +92,7 @@ async function loadOwnOrder(
  * tracking id here instead of through the authenticated route.
  */
 async function loadGuestOrder(
-  req: any,
+  req: ApiRequest,
 ): Promise<{ order: typeof ordersTable.$inferSelect } | { error: string; status: number }> {
   const { trackingId } = req.body as { trackingId?: string };
   if (!trackingId || !/^[A-Z0-9]{2,20}$/i.test(trackingId)) {
@@ -163,7 +165,7 @@ async function handleCreatePayment(order: typeof ordersTable.$inferSelect, res: 
  * See order-sequencing doc comment at the top of this file for why this
  * acts on an ALREADY-CREATED order rather than creating one itself.
  */
-router.post("/bkash/create-payment", requireAuth, checkoutLimiter, validateBody(CreateBkashPaymentBody, "CreateBkashPaymentBody"), async (req: any, res) => {
+router.post("/bkash/create-payment", requireAuth, checkoutLimiter, validateBody(CreateBkashPaymentBody, "CreateBkashPaymentBody"), async (req: ApiRequest<z.infer<typeof CreateBkashPaymentBody>>, res) => {
   try {
     const loaded = await loadOwnOrder(req);
     if ("error" in loaded) {
@@ -188,7 +190,7 @@ router.post("/bkash/create-payment", requireAuth, checkoutLimiter, validateBody(
  * routes/orders.ts (POST /orders/guest vs POST /orders) rather than one
  * route with conditional auth.
  */
-router.post("/bkash/create-payment/guest", guestBkashLimiter, validateBody(CreateBkashPaymentGuestBody, "CreateBkashPaymentGuestBody"), async (req: any, res) => {
+router.post("/bkash/create-payment/guest", guestBkashLimiter, validateBody(CreateBkashPaymentGuestBody, "CreateBkashPaymentGuestBody"), async (req: ApiRequest<z.infer<typeof CreateBkashPaymentGuestBody>>, res) => {
   try {
     const loaded = await loadGuestOrder(req);
     if ("error" in loaded) {
@@ -361,7 +363,7 @@ router.get("/bkash/callback", async (req, res) => {
  * "refresh the order page," which already reflects whatever the callback
  * last wrote.
  */
-router.get("/bkash/query-payment/:paymentID", requireAdmin, async (req: any, res) => {
+router.get("/bkash/query-payment/:paymentID", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const { paymentID } = req.params;
     const result = await queryPayment({ paymentID });

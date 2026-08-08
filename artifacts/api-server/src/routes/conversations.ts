@@ -20,6 +20,8 @@ import { logger } from "../lib/logger";
 import { deleteCloudinaryAssets } from "../lib/cloudinary";
 import { CreateConversationBody, SendMessageParams, MarkConversationReadParams } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
 
 /**
  * Normalize any thrown value (Error, string, object, unknown) into a string
@@ -198,15 +200,15 @@ function formatMessage(m: typeof messagesTable.$inferSelect): MessageResponse {
 // ─── GET /conversations ────────────────────────────────────────────────────
 // List all conversations for the authenticated user (as buyer or seller).
 // Sorted by lastMessageAt descending (most recent first).
-router.get("/conversations", requireAuth, async (req: any, res) => {
+router.get("/conversations", requireAuth, async (req: ApiRequest, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.userId!;
 
     // Check if the user is a seller
     const [seller] = await db
       .select({ id: sellersTable.id })
       .from(sellersTable)
-      .where(eq(sellersTable.userId, req.dbUser.id))
+      .where(eq(sellersTable.userId, req.dbUser!.id))
       .limit(1);
 
     const isSeller = !!seller;
@@ -406,13 +408,13 @@ router.get("/conversations", requireAuth, async (req: any, res) => {
 // conversation already exists for this buyer-seller pair, returns it
 // instead of creating a duplicate. This is the standard pattern used by
 // marketplaces (eBay, Etsy, Daraz) to avoid duplicate threads.
-router.post("/conversations", requireAuth, conversationCreateLimiter, validateBody(CreateConversationBody, "CreateConversationBody"), async (req: any, res) => {
+router.post("/conversations", requireAuth, conversationCreateLimiter, validateBody(CreateConversationBody, "CreateConversationBody"), async (req: ApiRequest<z.infer<typeof CreateConversationBody>>, res) => {
   try {
     // P0-1: body shape now validated by Zod (CreateConversationBody).
     // sellerId is zod.number() so the hand-rolled parseInt/isNaN check
     // is superseded — req.body.sellerId is already a number.
     const { sellerId, sellerListingId } = req.body;
-    const buyerId = req.userId;
+    const buyerId = req.userId!;
     const parsedSellerId = sellerId;
 
     // Verify seller exists and is active
@@ -434,7 +436,7 @@ router.post("/conversations", requireAuth, conversationCreateLimiter, validateBo
       .where(eq(sellersTable.id, parsedSellerId))
       .limit(1);
 
-    if (sellerUser && sellerUser.userId === req.dbUser.id) {
+    if (sellerUser && sellerUser.userId === req.dbUser!.id) {
       res.status(400).json({ error: "Cannot message yourself" });
       return;
     }
@@ -542,7 +544,7 @@ router.post("/conversations", requireAuth, conversationCreateLimiter, validateBo
 
 // ─── GET /conversations/:id ────────────────────────────────────────────────
 // Get a single conversation with full metadata.
-router.get("/conversations/:id", requireAuth, async (req: any, res) => {
+router.get("/conversations/:id", requireAuth, async (req: ApiRequest, res) => {
   try {
     const convId = parseInt(req.params.id);
     if (isNaN(convId)) {
@@ -565,7 +567,7 @@ router.get("/conversations/:id", requireAuth, async (req: any, res) => {
     const [seller] = await db
       .select({ id: sellersTable.id })
       .from(sellersTable)
-      .where(eq(sellersTable.userId, req.dbUser.id))
+      .where(eq(sellersTable.userId, req.dbUser!.id))
       .limit(1);
 
     const isBuyer = conv.buyerId === req.userId;
@@ -697,7 +699,7 @@ router.get("/conversations/:id", requireAuth, async (req: any, res) => {
 // ─── GET /conversations/:id/messages ───────────────────────────────────────
 // Get messages for a conversation with cursor-based pagination.
 // Query params: ?cursor=<messageId>&limit=<number>&direction=before|after
-router.get("/conversations/:id/messages", requireAuth, async (req: any, res) => {
+router.get("/conversations/:id/messages", requireAuth, async (req: ApiRequest, res) => {
   try {
     const convId = parseInt(req.params.id);
     if (isNaN(convId)) {
@@ -720,7 +722,7 @@ router.get("/conversations/:id/messages", requireAuth, async (req: any, res) => 
     const [seller] = await db
       .select({ id: sellersTable.id })
       .from(sellersTable)
-      .where(eq(sellersTable.userId, req.dbUser.id))
+      .where(eq(sellersTable.userId, req.dbUser!.id))
       .limit(1);
 
     const isBuyer = conv.buyerId === req.userId;
@@ -846,9 +848,9 @@ router.get("/conversations/:id/messages", requireAuth, async (req: any, res) => 
 //
 // This JSON endpoint is used by the emoji/text input path and by clients
 // that already have a file URL (e.g. re-using an existing upload).
-router.post("/conversations/:id/messages", requireAuth, chatSendLimiter, validateParams(SendMessageParams, "SendMessageParams"), async (req: any, res) => {
+router.post("/conversations/:id/messages", requireAuth, chatSendLimiter, validateParams(SendMessageParams, "SendMessageParams"), async (req: ApiRequest, res) => {
   try {
-    const convId = req.params.id;  // P0-1: validated + coerced to number
+    const convId = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
     const {
       content,
@@ -859,7 +861,7 @@ router.post("/conversations/:id/messages", requireAuth, chatSendLimiter, validat
       fileSize,
       fileMimeType,
       replyToId,
-    } = req.body ?? {};
+    } = (req.body ?? {}) as { content?: string; messageType?: string; imageUrl?: string; fileUrl?: string; fileName?: string; fileSize?: number; fileMimeType?: string; replyToId?: number; };
 
     const hasContent = typeof content === "string" && content.trim().length > 0;
     const hasAttachment = typeof fileUrl === "string" && fileUrl.length > 0 || typeof imageUrl === "string" && imageUrl.length > 0;
@@ -926,7 +928,7 @@ router.post("/conversations/:id/messages", requireAuth, chatSendLimiter, validat
     const [seller] = await db
       .select({ id: sellersTable.id })
       .from(sellersTable)
-      .where(eq(sellersTable.userId, req.dbUser.id))
+      .where(eq(sellersTable.userId, req.dbUser!.id))
       .limit(1);
 
     const isBuyer = conv.buyerId === req.userId;
@@ -948,7 +950,7 @@ router.post("/conversations/:id/messages", requireAuth, chatSendLimiter, validat
       .insert(messagesTable)
       .values({
         conversationId: convId,
-        senderId: req.userId,
+        senderId: req.userId!,
         content: hasContent ? content.trim() : "",
         messageType: resolvedMessageType,
         imageUrl: imageUrl || null,
@@ -1006,7 +1008,7 @@ router.post(
   requireAuth,
   chatSendLimiter,
   uploadMiddleware.single("file"),
-  async (req: any, res) => {
+  async (req: ApiRequest, res) => {
     try {
       const convId = parseInt(req.params.id);
       if (isNaN(convId)) {
@@ -1044,7 +1046,7 @@ router.post(
       const [seller] = await db
         .select({ id: sellersTable.id })
         .from(sellersTable)
-        .where(eq(sellersTable.userId, req.dbUser.id))
+        .where(eq(sellersTable.userId, req.dbUser!.id))
         .limit(1);
 
       const isBuyer = conv.buyerId === req.userId;
@@ -1089,7 +1091,7 @@ router.post(
       });
 
       // 4) Insert the message row.
-      const caption = typeof req.body?.caption === "string" ? req.body.caption.trim() : "";
+      const caption = typeof (req.body as { caption?: string })?.caption === "string" ? (req.body as { caption?: string }).caption!.trim() : "";
       const attachmentType = classifyAttachment(file.mimetype);
       const resolvedMessageType = attachmentType === "image" ? "image" : "file";
 
@@ -1098,8 +1100,8 @@ router.post(
       // everything to strings) or absent. Parse + validate against the
       // same rules as the JSON route.
       let validatedReplyToId: number | null = null;
-      const rawReplyToId = req.body?.replyToId;
-      if (rawReplyToId !== undefined && rawReplyToId !== null && rawReplyToId !== "") {
+      const rawReplyToId = (req.body as { replyToId?: number })?.replyToId;
+      if (rawReplyToId !== undefined && rawReplyToId !== null) {
         const parsed = Number.isFinite(Number(rawReplyToId))
           ? Math.floor(Number(rawReplyToId))
           : NaN;
@@ -1127,7 +1129,7 @@ router.post(
         .insert(messagesTable)
         .values({
           conversationId: convId,
-          senderId: req.userId,
+          senderId: req.userId!,
           content: caption,
           messageType: resolvedMessageType,
           imageUrl: isImage ? uploadResult.secure_url : null,
@@ -1176,7 +1178,7 @@ router.post(
 // On success, returns the updated message with editedAt set to NOW.
 // The original content is NOT retained — we expose that the message was
 // edited (transparency), but we don't keep a version history.
-router.patch("/conversations/:id/messages/:messageId", requireAuth, async (req: any, res) => {
+router.patch("/conversations/:id/messages/:messageId", requireAuth, async (req: ApiRequest, res) => {
   try {
     const convId = parseInt(req.params.id);
     const messageId = parseInt(req.params.messageId);
@@ -1185,7 +1187,7 @@ router.patch("/conversations/:id/messages/:messageId", requireAuth, async (req: 
       return;
     }
 
-    const { content } = req.body ?? {};
+    const { content } = (req.body ?? {}) as { content?: string; messageType?: string; imageUrl?: string; fileUrl?: string; fileName?: string; fileSize?: number; fileMimeType?: string; replyToId?: number; };
     if (typeof content !== "string" || content.trim().length === 0) {
       res.status(400).json({ error: "content is required and must be non-empty" });
       return;
@@ -1275,7 +1277,7 @@ router.patch("/conversations/:id/messages/:messageId", requireAuth, async (req: 
 //
 // Returns the updated message (with isDeleted=true, deletedAt set, content
 // and file fields nulled out).
-router.delete("/conversations/:id/messages/:messageId", requireAuth, async (req: any, res) => {
+router.delete("/conversations/:id/messages/:messageId", requireAuth, async (req: ApiRequest, res) => {
   try {
     const convId = parseInt(req.params.id);
     const messageId = parseInt(req.params.messageId);
@@ -1365,9 +1367,9 @@ router.delete("/conversations/:id/messages/:messageId", requireAuth, async (req:
 
 // ─── PUT /conversations/:id/read ───────────────────────────────────────────
 // Mark all messages in a conversation as read by the current user.
-router.put("/conversations/:id/read", requireAuth, validateParams(MarkConversationReadParams, "MarkConversationReadParams"), async (req: any, res) => {
+router.put("/conversations/:id/read", requireAuth, validateParams(MarkConversationReadParams, "MarkConversationReadParams"), async (req: ApiRequest, res) => {
   try {
-    const convId = req.params.id;  // P0-1: validated + coerced to number
+    const convId = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
     const [conv] = await db
       .select()
@@ -1383,7 +1385,7 @@ router.put("/conversations/:id/read", requireAuth, validateParams(MarkConversati
     const [seller] = await db
       .select({ id: sellersTable.id })
       .from(sellersTable)
-      .where(eq(sellersTable.userId, req.dbUser.id))
+      .where(eq(sellersTable.userId, req.dbUser!.id))
       .limit(1);
 
     const isBuyer = conv.buyerId === req.userId;
