@@ -306,3 +306,45 @@ export const conversationCreateLimiter = createRateLimiter({
   message: "Too many conversations started. Please try again later.",
   keyPrefix: "conversation-create",
 });
+
+// ─── Guest-only limiters (P0-3) ─────────────────────────────────────────────
+//
+// Guest endpoints (POST /orders/guest, POST /bkash/create-payment/guest) had
+// NO per-route limiter — only the global apiLimiter (200 req / 15 min / IP)
+// applied. A botnet could create up to 200 guest orders per IP per 15 min,
+// each with empty carts (caught at validation) or bogus data, or trigger
+// 200 bKash Create Payment API calls per IP per 15 min (each consuming a
+// real external API call to bKash). The authenticated equivalents
+// (POST /orders, POST /bkash/create-payment) both have checkoutLimiter
+// (10/15min), so this closes the consistency gap.
+//
+// Separate limiters (not reusing checkoutLimiter) for two reasons:
+//   1. Guest endpoints key on IP only (no userId available pre-auth), so
+//      mixing them into the same counter as authenticated checkout would
+//      let an attacker burn a legitimate signed-in user's checkout budget
+//      by hitting the guest endpoint from the same IP.
+//   2. Tighter limit for guest order creation (5/15min) than authenticated
+//      (10/15min) — guests have less trust capital, and bKash Create
+//      Payment calls cost real money per invocation.
+
+// Guest order creation: POST /orders/guest. 5 orders / 15 min / IP is
+// generous for legitimate guest shoppers (a single guest rarely places
+// more than 1-2 orders in a session) while stopping order-spam attacks.
+export const guestCheckoutLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: "Too many guest checkout attempts from this IP. Please sign in or try again later.",
+  keyPrefix: "guest-checkout",
+});
+
+// Guest bKash payment creation: POST /bkash/create-payment/guest. Each call
+// triggers a real external bKash Create Payment API request (costs money /
+// rate-limit budget on bKash's side), so 3/15min is intentionally tighter
+// than guestCheckoutLimiter. Legitimate guests virtually never need to
+// retry bKash payment creation more than once or twice.
+export const guestBkashLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 3,
+  message: "Too many bKash payment attempts from this IP. Please try again later.",
+  keyPrefix: "guest-bkash",
+});

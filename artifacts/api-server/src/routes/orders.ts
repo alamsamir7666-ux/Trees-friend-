@@ -17,7 +17,7 @@ import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import { sendOrderConfirmation } from "../lib/email";
 import { logger } from "../lib/logger";
-import { checkoutLimiter } from "../middlewares/rateLimiter";
+import { checkoutLimiter, guestCheckoutLimiter } from "../middlewares/rateLimiter";
 import crypto from "crypto";
 import { awardPoints, redeemPoints, TAKA_PER_POINT } from "./loyalty";
 import type { OrderItem } from "@workspace/db";
@@ -78,7 +78,7 @@ router.get("/orders", requireAuth, async (req: any, res) => {
  * re-exported here so this file's existing export surface is unaffected.
  */
 
-router.post("/orders/guest", async (req: any, res) => {
+router.post("/orders/guest", guestCheckoutLimiter, async (req: any, res) => {
   try {
     const { paymentMethod, transactionId, senderNumber, shippingAddress, items, couponCode, giftWrap, giftMessage } = req.body;
 

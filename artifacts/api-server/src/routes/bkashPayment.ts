@@ -4,7 +4,7 @@ import { ordersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { createPayment, executePayment, queryPayment, BkashApiError } from "../lib/bkash";
-import { checkoutLimiter } from "../middlewares/rateLimiter";
+import { checkoutLimiter, guestBkashLimiter } from "../middlewares/rateLimiter";
 
 /**
  * bKash Tokenized Checkout create -> redirect -> callback -> execute cycle
@@ -183,7 +183,7 @@ router.post("/bkash/create-payment", requireAuth, checkoutLimiter, async (req: a
  * routes/orders.ts (POST /orders/guest vs POST /orders) rather than one
  * route with conditional auth.
  */
-router.post("/bkash/create-payment/guest", async (req: any, res) => {
+router.post("/bkash/create-payment/guest", guestBkashLimiter, async (req: any, res) => {
   try {
     const loaded = await loadGuestOrder(req);
     if ("error" in loaded) {
