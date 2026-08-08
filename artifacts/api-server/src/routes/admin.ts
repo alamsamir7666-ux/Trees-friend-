@@ -17,6 +17,29 @@ import { logAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { attemptSellerPayout } from "../lib/payouts";
 import type { ApiRequest } from "../types/apiRequest";
+import { z } from "zod";
+import {
+  UpdateOrderStatusBody,
+  UpdateOrderStatusParams,
+  UpdateOrderPaymentBody,
+  UpdateOrderPaymentParams,
+  ToggleUserBlockBody,
+  ToggleUserBlockParams,
+} from "@workspace/api-zod";
+import { validateBody, validateParams } from "../lib/validateRequest";
+
+// VAL-MIGRATE-3: hand-authored schema for PATCH /admin/payouts/:id/note
+// (OpenAPI spec doesn't cover this route). Matches the existing manual checks:
+// - adminNote: optional string | null
+// - clawbackNotedAmount: optional number | string | null (number validation
+//   is a business rule kept in the handler — Zod validates the union shape)
+const UpdatePayoutNoteBody = z.object({
+  adminNote: z.string().nullish(),
+  clawbackNotedAmount: z.union([z.number(), z.string()]).nullish(),
+});
+const UpdatePayoutNoteParams = z.object({
+  id: z.coerce.number(),
+});
 
 const router = Router();
 
@@ -465,16 +488,15 @@ router.get("/admin/orders", requireAdmin, async (req: ApiRequest, res) => {
   }
 });
 
-router.put("/admin/orders/:id/status", requireAdmin, async (req: ApiRequest, res) => {
+router.put("/admin/orders/:id/status", requireAdmin, validateParams(UpdateOrderStatusParams, "UpdateOrderStatusParams"), validateBody(UpdateOrderStatusBody, "UpdateOrderStatusBody"), async (req: ApiRequest<z.infer<typeof UpdateOrderStatusBody>>, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid order ID" });
-      return;
-    }
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-3: validated + coerced
 
-    const { orderStatus, cancellationReason } = req.body as any;
+    const { orderStatus, cancellationReason } = req.body;
 
+    // VAL-MIGRATE-3: Zod validates shape (orderStatus: string, cancellationReason:
+    // string | null | undefined). The VALID_ORDER_STATUSES check is a business
+    // rule (enum membership) — kept as a semantic check.
     if (!orderStatus || !VALID_ORDER_STATUSES.includes(orderStatus)) {
       res.status(400).json({ error: "Invalid order status" });
       return;
@@ -561,15 +583,13 @@ router.put("/admin/orders/:id/status", requireAdmin, async (req: ApiRequest, res
   }
 });
 
-router.put("/admin/orders/:id/payment", requireAdmin, async (req: ApiRequest, res) => {
+router.put("/admin/orders/:id/payment", requireAdmin, validateParams(UpdateOrderPaymentParams, "UpdateOrderPaymentParams"), validateBody(UpdateOrderPaymentBody, "UpdateOrderPaymentBody"), async (req: ApiRequest<z.infer<typeof UpdateOrderPaymentBody>>, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid order ID" });
-      return;
-    }
-    const { paymentStatus } = req.body as any;
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-3: validated + coerced
+    const { paymentStatus } = req.body;
 
+    // VAL-MIGRATE-3: Zod validates shape (paymentStatus: string). The
+    // VALID_PAYMENT_STATUSES check is a business rule — kept.
     if (!paymentStatus || !VALID_PAYMENT_STATUSES.includes(paymentStatus)) {
       res.status(400).json({ error: "Invalid payment status" });
       return;
@@ -690,18 +710,12 @@ router.get("/admin/users", requireAdmin, async (_req, res) => {
   }
 });
 
-router.put("/admin/users/:id/block", requireAdmin, async (req: ApiRequest, res) => {
+router.put("/admin/users/:id/block", requireAdmin, validateParams(ToggleUserBlockParams, "ToggleUserBlockParams"), validateBody(ToggleUserBlockBody, "ToggleUserBlockBody"), async (req: ApiRequest<z.infer<typeof ToggleUserBlockBody>>, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid user ID" });
-      return;
-    }
-    const { isBlocked } = req.body as any;
-    if (typeof isBlocked !== "boolean") {
-      res.status(400).json({ error: "isBlocked must be a boolean" });
-      return;
-    }
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-3: validated + coerced
+    const { isBlocked } = req.body;
+    // VAL-MIGRATE-3: Zod validates shape (isBlocked: boolean). No manual
+    // check needed — z.boolean() enforces both type and presence.
 
     const [targetUser] = await db
       .select({ clerkId: usersTable.clerkId })
@@ -876,13 +890,9 @@ router.get("/admin/payouts", requireAdmin, async (req: ApiRequest, res) => {
  * and simply return null with nothing recorded, but rejecting it here
  * with a clear 400 is a better experience than a silent no-op).
  */
-router.post("/admin/payouts/:id/retry", requireAdmin, async (req: ApiRequest, res) => {
+router.post("/admin/payouts/:id/retry", requireAdmin, validateParams(UpdatePayoutNoteParams, "UpdatePayoutNoteParams"), async (req: ApiRequest, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid payout ID" });
-      return;
-    }
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-3: validated + coerced
 
     const [existingPayout] = await db.select().from(payoutsTable).where(eq(payoutsTable.id, id)).limit(1);
     if (!existingPayout) {
@@ -985,18 +995,11 @@ router.post("/admin/payouts/:id/retry", requireAdmin, async (req: ApiRequest, re
  * constraining it would assume a shape this deliberately-freeform field
  * doesn't need to have.
  */
-router.patch("/admin/payouts/:id/note", requireAdmin, async (req: ApiRequest, res) => {
+router.patch("/admin/payouts/:id/note", requireAdmin, validateParams(UpdatePayoutNoteParams, "UpdatePayoutNoteParams"), validateBody(UpdatePayoutNoteBody, "UpdatePayoutNoteBody"), async (req: ApiRequest<z.infer<typeof UpdatePayoutNoteBody>>, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid payout ID" });
-      return;
-    }
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-3: validated + coerced
 
-    const { adminNote, clawbackNotedAmount } = req.body as {
-      adminNote?: string | null;
-      clawbackNotedAmount?: number | string | null;
-    };
+    const { adminNote, clawbackNotedAmount } = req.body;
 
     const updateFields: Record<string, unknown> = { updatedAt: new Date() };
 
