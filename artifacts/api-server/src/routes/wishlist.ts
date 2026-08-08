@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import {
@@ -12,12 +12,13 @@ import {
 } from "@workspace/db";
 import { AddToWishlistParams, RemoveFromWishlistParams, AddSellerListingVariantToWishlistParams, RemoveSellerListingVariantFromWishlistParams } from "@workspace/api-zod";
 import { validateParams } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
 import { eq, and, isNull, isNotNull, sql, inArray } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 
 const router = Router();
 
-router.get("/wishlist", requireAuth, async (req: any, res) => {
+router.get("/wishlist", requireAuth, async (req: ApiRequest, res) => {
   // Product-variety rows only (seller_listing_variant_id IS NULL) --
   // seller-listing rows are fetched and shaped separately below, since
   // they need a different join (seller_listings/seller_listing_variants,
@@ -27,7 +28,7 @@ router.get("/wishlist", requireAuth, async (req: any, res) => {
     .select({ wishlist: wishlistTable, product: productsTable })
     .from(wishlistTable)
     .innerJoin(productsTable, eq(wishlistTable.productId, productsTable.id))
-    .where(and(eq(wishlistTable.userId, req.userId), isNull(wishlistTable.sellerListingVariantId)));
+    .where(and(eq(wishlistTable.userId, req.userId!), isNull(wishlistTable.sellerListingVariantId)));
 
   const productIds = items.map(i => i.product.id);
 
@@ -144,7 +145,7 @@ router.get("/wishlist", requireAuth, async (req: any, res) => {
     .innerJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
     .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
     .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
-    .where(and(eq(wishlistTable.userId, req.userId), isNotNull(wishlistTable.sellerListingVariantId)));
+    .where(and(eq(wishlistTable.userId, req.userId!), isNotNull(wishlistTable.sellerListingVariantId)));
 
   const sellerListingResult = listingItems.map(({ wishlist, variant, listing, product, seller }) => ({
     id: wishlist.id,
@@ -160,16 +161,16 @@ router.get("/wishlist", requireAuth, async (req: any, res) => {
   res.json({ products: result, sellerListings: sellerListingResult });
 });
 
-router.post("/wishlist/:productId", requireAuth, validateParams(AddToWishlistParams, "AddToWishlistParams"), async (req: any, res) => {
-  const productId = req.params.productId;  // P0-1: validated + coerced to number
+router.post("/wishlist/:productId", requireAuth, validateParams(AddToWishlistParams, "AddToWishlistParams"), async (req: ApiRequest, res) => {
+  const productId = req.params.productId as unknown as number;  // P0-1: validated + coerced to number
   try {
-    await db.insert(wishlistTable).values({ userId: req.userId, productId });
+    await db.insert(wishlistTable).values({ userId: req.userId!, productId });
   } catch (err) { logger.error({ err }, "Unhandled error in route"); }
   res.json({ message: "Added to wishlist" });
 });
 
-router.delete("/wishlist/:productId", requireAuth, validateParams(RemoveFromWishlistParams, "RemoveFromWishlistParams"), async (req: any, res) => {
-  const productId = req.params.productId;  // P0-1: validated + coerced to number
+router.delete("/wishlist/:productId", requireAuth, validateParams(RemoveFromWishlistParams, "RemoveFromWishlistParams"), async (req: ApiRequest, res) => {
+  const productId = req.params.productId as unknown as number;  // P0-1: validated + coerced to number
   // Scoped to seller_listing_variant_id IS NULL -- this route removes only
   // the plain product-variety wishlist row. Kept explicit (rather than
   // relying on there simply being no other row to match) so this route can
@@ -178,15 +179,15 @@ router.delete("/wishlist/:productId", requireAuth, validateParams(RemoveFromWish
   await db
     .delete(wishlistTable)
     .where(and(
-      eq(wishlistTable.userId, req.userId),
+      eq(wishlistTable.userId, req.userId!),
       eq(wishlistTable.productId, productId),
       isNull(wishlistTable.sellerListingVariantId),
     ));
   res.json({ message: "Removed from wishlist" });
 });
 
-router.post("/wishlist/seller-listing-variant/:variantId", requireAuth, validateParams(AddSellerListingVariantToWishlistParams, "AddSellerListingVariantToWishlistParams"), async (req: any, res) => {
-  const sellerListingVariantId = req.params.variantId;  // P0-1: validated + coerced to number
+router.post("/wishlist/seller-listing-variant/:variantId", requireAuth, validateParams(AddSellerListingVariantToWishlistParams, "AddSellerListingVariantToWishlistParams"), async (req: ApiRequest, res) => {
+  const sellerListingVariantId = req.params.variantId as unknown as number;  // P0-1: validated + coerced to number
   const [variant] = await db.select().from(sellerListingVariantsTable)
     .where(eq(sellerListingVariantsTable.id, sellerListingVariantId));
   if (!variant) {
@@ -201,7 +202,7 @@ router.post("/wishlist/seller-listing-variant/:variantId", requireAuth, validate
   }
   try {
     await db.insert(wishlistTable).values({
-      userId: req.userId,
+      userId: req.userId!,
       productId: listing.productId,
       sellerListingVariantId,
     });
@@ -209,11 +210,11 @@ router.post("/wishlist/seller-listing-variant/:variantId", requireAuth, validate
   res.json({ message: "Added to wishlist" });
 });
 
-router.delete("/wishlist/seller-listing-variant/:variantId", requireAuth, validateParams(RemoveSellerListingVariantFromWishlistParams, "RemoveSellerListingVariantFromWishlistParams"), async (req: any, res) => {
-  const sellerListingVariantId = req.params.variantId;  // P0-1: validated + coerced to number
+router.delete("/wishlist/seller-listing-variant/:variantId", requireAuth, validateParams(RemoveSellerListingVariantFromWishlistParams, "RemoveSellerListingVariantFromWishlistParams"), async (req: ApiRequest, res) => {
+  const sellerListingVariantId = req.params.variantId as unknown as number;  // P0-1: validated + coerced to number
   await db
     .delete(wishlistTable)
-    .where(and(eq(wishlistTable.userId, req.userId), eq(wishlistTable.sellerListingVariantId, sellerListingVariantId)));
+    .where(and(eq(wishlistTable.userId, req.userId!), eq(wishlistTable.sellerListingVariantId, sellerListingVariantId)));
   res.json({ message: "Removed from wishlist" });
 });
 

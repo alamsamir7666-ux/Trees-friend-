@@ -7,6 +7,9 @@ import { logAudit } from "../lib/audit";
 import { createRateLimiter } from "../middlewares/rateLimiter";
 import { UpdateSellerReturnBody, UpdateSellerReturnParams } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
+import type { Response } from "express";
 
 /**
  * Seller-scoped mirror of routes/returns.ts's admin endpoints. Sellers can
@@ -61,7 +64,7 @@ function parsePagination(query: Record<string, string>) {
  * context. Paginated (page/limit query params, matching admin.ts's
  * archived-orders convention) and optionally filtered by ?status=.
  */
-router.get("/seller/returns", requireSeller, async (req: any, res) => {
+router.get("/seller/returns", requireSeller, async (req: ApiRequest, res) => {
   try {
     const { status } = req.query as Record<string, string>;
     if (status !== undefined && !VALID_FILTER_STATUSES.includes(status as any)) {
@@ -135,7 +138,7 @@ router.get("/seller/returns", requireSeller, async (req: any, res) => {
  * (and any future retry/polling) shouldn't have to refetch + refilter the
  * whole paginated list just to see one record's current state.
  */
-router.get("/seller/returns/:id", requireSeller, async (req: any, res) => {
+router.get("/seller/returns/:id", requireSeller, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id) || id <= 0) {
@@ -194,9 +197,9 @@ router.get("/seller/returns/:id", requireSeller, async (req: any, res) => {
  * from a seller-action point of view, matching the admin UI's own gating
  * in ReturnsTab.tsx where only "requested" rows show action buttons).
  */
-router.put("/seller/returns/:id", requireSeller, sellerReturnWriteLimiter, validateParams(UpdateSellerReturnParams, "UpdateSellerReturnParams"), validateBody(UpdateSellerReturnBody, "UpdateSellerReturnBody"), async (req: any, res) => {
+router.put("/seller/returns/:id", requireSeller, sellerReturnWriteLimiter, validateParams(UpdateSellerReturnParams, "UpdateSellerReturnParams"), validateBody(UpdateSellerReturnBody, "UpdateSellerReturnBody"), async (req: ApiRequest<z.infer<typeof UpdateSellerReturnBody>>, res) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
     // P0-1: body shape now validated by Zod (UpdateSellerReturnBody).
     // status is zod.enum(['approved','rejected','completed']), so the
@@ -212,7 +215,7 @@ router.put("/seller/returns/:id", requireSeller, sellerReturnWriteLimiter, valid
 
     let refundAmountNum: number | undefined;
     if (status === "completed") {
-      if (refundAmount === undefined || refundAmount === null || refundAmount === "") {
+      if (refundAmount === undefined || refundAmount === null) {
         res.status(400).json({ error: "refundAmount is required to mark a return as completed" });
         return;
       }
@@ -267,8 +270,8 @@ router.put("/seller/returns/:id", requireSeller, sellerReturnWriteLimiter, valid
     }
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: `seller.return.${status}`,
       targetType: "return",
       targetId: String(id),

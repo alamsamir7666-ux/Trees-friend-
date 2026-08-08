@@ -1,4 +1,4 @@
-import { Router, type Response } from "express";
+import { Router } from "express";
 import { db } from "@workspace/db";
 import { couponsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
@@ -99,7 +99,7 @@ router.get("/coupons", requireAdmin, async (_req, res) => {
   }
 });
 
-router.post("/coupons", requireAdmin, validateBody(CreateCouponBody, "CreateCouponBody"), async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
+router.post("/coupons", requireAdmin, validateBody(CreateCouponBody, "CreateCouponBody"), async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res) => {
   try {
     // P0-1: body shape now validated by Zod (CreateCouponBody). The
     // hand-rolled code/discountType/discountValue checks below are kept
@@ -107,13 +107,13 @@ router.post("/coupons", requireAdmin, validateBody(CreateCouponBody, "CreateCoup
     // these enforce the SEMANTICS (non-empty code, valid discount type
     // enum, positive value, percentage <= 100) the schema can't express.
     const { code, discountType, discountValue, minOrderAmount, expiryDate } =
-      req.body;
+      req.body as Partial<z.infer<typeof CreateCouponBody>>;
 
     if (!code || code.trim().length === 0) {
       res.status(400).json({ error: "Coupon code is required" });
       return;
     }
-    if (!VALID_DISCOUNT_TYPES.includes(discountType)) {
+    if (!discountType || !discountType || !VALID_DISCOUNT_TYPES.includes(discountType)) {
       res.status(400).json({ error: "Discount type must be 'percentage' or 'fixed'" });
       return;
     }
@@ -153,7 +153,7 @@ router.post("/coupons", requireAdmin, validateBody(CreateCouponBody, "CreateCoup
   }
 });
 
-router.put("/coupons/:id", requireAdmin, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
+router.put("/coupons/:id", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -161,9 +161,9 @@ router.put("/coupons/:id", requireAdmin, async (req: ApiRequest<z.infer<typeof C
       return;
     }
     const { code, discountType, discountValue, minOrderAmount, expiryDate } =
-      req.body;
+      req.body as Partial<z.infer<typeof CreateCouponBody>>;
 
-    if (discountType && !VALID_DISCOUNT_TYPES.includes(discountType)) {
+    if (discountType && !discountType || !discountType || !VALID_DISCOUNT_TYPES.includes(discountType)) {
       res.status(400).json({ error: "Invalid discount type" });
       return;
     }
@@ -193,7 +193,7 @@ router.put("/coupons/:id", requireAdmin, async (req: ApiRequest<z.infer<typeof C
   }
 });
 
-router.patch("/coupons/:id/toggle", requireAdmin, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
+router.patch("/coupons/:id/toggle", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -222,7 +222,7 @@ router.patch("/coupons/:id/toggle", requireAdmin, async (req: ApiRequest<z.infer
   }
 });
 
-router.delete("/coupons/:id", requireAdmin, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
+router.delete("/coupons/:id", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -251,7 +251,7 @@ router.delete("/coupons/:id", requireAdmin, async (req: ApiRequest<z.infer<typeo
 //  remain managed by the system / admin API.
 // ══════════════════════════════════════════════════════════════════════════
 
-router.get("/sellers/me/coupons", requireSeller, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
+router.get("/sellers/me/coupons", requireSeller, async (req: ApiRequest, res) => {
   try {
     const sellerId = req.dbSeller!.id;
     const coupons = await db
@@ -265,17 +265,17 @@ router.get("/sellers/me/coupons", requireSeller, async (req: ApiRequest<z.infer<
   }
 });
 
-router.post("/sellers/me/coupons", requireSeller, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
+router.post("/sellers/me/coupons", requireSeller, async (req: ApiRequest, res) => {
   try {
     const sellerId = req.dbSeller!.id;
     const { code, discountType, discountValue, minOrderAmount, expiryDate } =
-      req.body;
+      req.body as Partial<z.infer<typeof CreateCouponBody>>;
 
     if (!code || typeof code !== "string" || code.trim().length === 0) {
       res.status(400).json({ error: "Coupon code is required" });
       return;
     }
-    if (!VALID_DISCOUNT_TYPES.includes(discountType)) {
+    if (!discountType || !discountType || !VALID_DISCOUNT_TYPES.includes(discountType)) {
       res.status(400).json({ error: "Discount type must be 'percentage' or 'fixed'" });
       return;
     }
@@ -325,7 +325,7 @@ router.post("/sellers/me/coupons", requireSeller, async (req: ApiRequest<z.infer
   }
 });
 
-router.put("/sellers/me/coupons/:id", requireSeller, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
+router.put("/sellers/me/coupons/:id", requireSeller, async (req: ApiRequest, res) => {
   try {
     const sellerId = req.dbSeller!.id;
     const id = parseInt(req.params.id);
@@ -346,9 +346,9 @@ router.put("/sellers/me/coupons/:id", requireSeller, async (req: ApiRequest<z.in
     }
 
     const { code, discountType, discountValue, minOrderAmount, expiryDate } =
-      req.body;
+      req.body as Partial<z.infer<typeof CreateCouponBody>>;
 
-    if (discountType && !VALID_DISCOUNT_TYPES.includes(discountType)) {
+    if (discountType && !discountType || !discountType || !VALID_DISCOUNT_TYPES.includes(discountType)) {
       res.status(400).json({ error: "Invalid discount type" });
       return;
     }
@@ -383,7 +383,7 @@ router.put("/sellers/me/coupons/:id", requireSeller, async (req: ApiRequest<z.in
   }
 });
 
-router.patch("/sellers/me/coupons/:id/toggle", requireSeller, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
+router.patch("/sellers/me/coupons/:id/toggle", requireSeller, async (req: ApiRequest, res) => {
   try {
     const sellerId = req.dbSeller!.id;
     const id = parseInt(req.params.id);
@@ -423,7 +423,7 @@ router.patch("/sellers/me/coupons/:id/toggle", requireSeller, async (req: ApiReq
   }
 });
 
-router.delete("/sellers/me/coupons/:id", requireSeller, async (req: ApiRequest<z.infer<typeof CreateCouponBody>>, res: Response) => {
+router.delete("/sellers/me/coupons/:id", requireSeller, async (req: ApiRequest, res) => {
   try {
     const sellerId = req.dbSeller!.id;
     const id = parseInt(req.params.id);

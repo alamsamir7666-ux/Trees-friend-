@@ -44,7 +44,7 @@ function formatAddress(a: typeof addressesTable.$inferSelect) {
   };
 }
 
-router.get("/users/me", requireAuth, async (req: ApiRequest, res: Response) => {
+router.get("/users/me", requireAuth, async (req: ApiRequest, res) => {
   try {
     res.json(formatUser(req.dbUser!));
   } catch (err) {
@@ -52,9 +52,9 @@ router.get("/users/me", requireAuth, async (req: ApiRequest, res: Response) => {
   }
 });
 
-// CQ-4: typed req.body via ApiRequest<z.infer<typeof UpdateMeBody>> —
+// CQ-4: typed req.body via ApiRequest —
 // replaces `req: any`. req.userId and req.dbUser are now typed (non-optional).
-router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"), async (req: ApiRequest<z.infer<typeof UpdateMeBody>>, res: Response) => {
+router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"), async (req: ApiRequest<z.infer<typeof UpdateMeBody>>, res) => {
   try {
     // P0-1: body shape validated by Zod (UpdateMeBody — firstName, lastName,
     // phone). `email` is read via cast because the OpenAPI spec doesn't
@@ -110,7 +110,7 @@ router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"),
   }
 });
 
-router.get("/users/me/addresses", requireAuth, async (req: ApiRequest, res: Response) => {
+router.get("/users/me/addresses", requireAuth, async (req: ApiRequest, res) => {
   try {
     const addresses = await db
       .select()
@@ -122,7 +122,7 @@ router.get("/users/me/addresses", requireAuth, async (req: ApiRequest, res: Resp
   }
 });
 
-router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "AddAddressBody"), async (req: ApiRequest<z.infer<typeof AddAddressBody>>, res: Response) => {
+router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "AddAddressBody"), async (req: ApiRequest<z.infer<typeof AddAddressBody>>, res) => {
   try {
     const {
       fullName,
@@ -180,7 +180,7 @@ router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "Ad
   }
 });
 
-router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressParams, "UpdateAddressParams"), validateBody(UpdateAddressBody, "UpdateAddressBody"), async (req: ApiRequest<z.infer<typeof UpdateAddressBody>>, res: Response) => {
+router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressParams, "UpdateAddressParams"), validateBody(UpdateAddressBody, "UpdateAddressBody"), async (req: ApiRequest<z.infer<typeof UpdateAddressBody>>, res) => {
   try {
     const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number by UpdateAddressParams
     const {
@@ -242,7 +242,7 @@ router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressP
   }
 });
 
-router.delete("/users/me/addresses/:id", requireAuth, validateParams(DeleteAddressParams, "DeleteAddressParams"), async (req: ApiRequest, res: Response) => {
+router.delete("/users/me/addresses/:id", requireAuth, validateParams(DeleteAddressParams, "DeleteAddressParams"), async (req: ApiRequest, res) => {
   try {
     const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number by DeleteAddressParams
     await db

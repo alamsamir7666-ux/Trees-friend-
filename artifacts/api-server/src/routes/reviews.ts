@@ -12,6 +12,8 @@ import { v2 as cloudinary } from "cloudinary";
 import { deleteCloudinaryAssets } from "../lib/cloudinary";
 import { UpdateReviewBody, UpdateReviewParams, DeleteReviewParams } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
 
 // ─── Cloudinary config (add to .env.example too) ──────────────────────────
 // CLOUDINARY_CLOUD_NAME=your_cloud
@@ -83,13 +85,13 @@ router.get("/reviews/:productId", async (req, res) => {
   } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to fetch reviews" }); }
 });
 
-router.get("/reviews/:productId/eligibility", requireAuth, async (req: any, res) => {
+router.get("/reviews/:productId/eligibility", requireAuth, async (req: ApiRequest, res) => {
   try {
     const productId = parseInt(req.params.productId);
     if (isNaN(productId) || productId <= 0) {
       res.status(400).json({ error: "Invalid product ID" }); return;
     }
-    const userId = req.userId as string;
+    const userId = req.userId! as string;
     // Only check product-level reviews (sellerListingId IS NULL) so that a
     // seller-listing-variant review doesn't block the user from writing a
     // separate product-level review — same isNull filter as GET /reviews/:productId.
@@ -119,15 +121,15 @@ router.post(
   "/reviews/:productId",
   requireAuth,
   upload.array("photos", 4),
-  async (req: any, res) => {
+  async (req: ApiRequest, res) => {
     try {
       const productId = parseInt(req.params.productId);
       if (isNaN(productId) || productId <= 0) {
         res.status(400).json({ error: "Invalid product ID" }); return;
       }
 
-      const { rating, comment } = req.body;
-      const userId = req.userId as string;
+      const { rating, comment } = req.body as { rating?: string; comment?: string };
+      const userId = req.userId! as string;
 
       const ratingNum = Number(rating);
       if (isNaN(ratingNum) || ratingNum < 1 || ratingNum > 5) {
@@ -236,7 +238,7 @@ router.get("/seller-listings/:sellerListingId/reviews", async (req, res) => {
   } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to fetch reviews" }); }
 });
 
-router.get("/seller-listings/:sellerListingId/reviews/eligibility", requireAuth, async (req: any, res) => {
+router.get("/seller-listings/:sellerListingId/reviews/eligibility", requireAuth, async (req: ApiRequest, res) => {
   try {
     const sellerListingId = parseInt(req.params.sellerListingId);
     const sellerListingVariantId = parseInt(req.query.variantId as string);
@@ -246,7 +248,7 @@ router.get("/seller-listings/:sellerListingId/reviews/eligibility", requireAuth,
     if (isNaN(sellerListingVariantId) || sellerListingVariantId <= 0) {
       res.status(400).json({ error: "variantId query param is required" }); return;
     }
-    const userId = req.userId as string;
+    const userId = req.userId! as string;
     // Reviews attach to the exact VARIANT a buyer purchased (schema doc
     // comment on reviewsTable, Phase 2) -- a buyer can separately review
     // each variant of a seller's listing they've bought (e.g. Sapling AND
@@ -278,7 +280,7 @@ router.post(
   "/seller-listings/:sellerListingId/reviews",
   requireAuth,
   upload.array("photos", 4),
-  async (req: any, res) => {
+  async (req: ApiRequest, res) => {
     try {
       const sellerListingId = parseInt(req.params.sellerListingId);
       if (isNaN(sellerListingId) || sellerListingId <= 0) {
@@ -288,8 +290,8 @@ router.post(
       const [listing] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, sellerListingId));
       if (!listing) { res.status(404).json({ error: "Listing not found" }); return; }
 
-      const { rating, comment, sellerListingVariantId: rawVariantId } = req.body;
-      const sellerListingVariantId = parseInt(rawVariantId);
+      const { rating, comment, sellerListingVariantId: rawVariantId } = req.body as { rating?: string; comment?: string; sellerListingVariantId?: string };
+      const sellerListingVariantId = parseInt(rawVariantId ?? "");
       if (isNaN(sellerListingVariantId) || sellerListingVariantId <= 0) {
         res.status(400).json({ error: "sellerListingVariantId is required" }); return;
       }
@@ -298,7 +300,7 @@ router.post(
         res.status(400).json({ error: "Variant does not belong to this listing" }); return;
       }
 
-      const userId = req.userId as string;
+      const userId = req.userId! as string;
 
       const ratingNum = Number(rating);
       if (isNaN(ratingNum) || ratingNum < 1 || ratingNum > 5) {
@@ -372,9 +374,9 @@ router.post(
 // care whether it's a product-level or seller-listing-level review, so no
 // separate edit/delete endpoints are needed here.
 
-router.put("/reviews/:reviewId", requireAuth, validateParams(UpdateReviewParams, "UpdateReviewParams"), validateBody(UpdateReviewBody, "UpdateReviewBody"), async (req: any, res) => {
+router.put("/reviews/:reviewId", requireAuth, validateParams(UpdateReviewParams, "UpdateReviewParams"), validateBody(UpdateReviewBody, "UpdateReviewBody"), async (req: ApiRequest<z.infer<typeof UpdateReviewBody>>, res) => {
   try {
-    const reviewId = req.params.reviewId;  // P0-1: validated + coerced to number
+    const reviewId = req.params.reviewId as unknown as number;  // P0-1: validated + coerced to number
     const { rating, comment } = req.body;
     const ratingNum = Number(rating);
     // P0-1: shape validated by Zod (UpdateReviewBody). Business rule below
@@ -398,9 +400,9 @@ router.put("/reviews/:reviewId", requireAuth, validateParams(UpdateReviewParams,
   } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to update review" }); }
 });
 
-router.delete("/reviews/:productId/:reviewId", requireAuth, validateParams(DeleteReviewParams, "DeleteReviewParams"), async (req: any, res) => {
+router.delete("/reviews/:productId/:reviewId", requireAuth, validateParams(DeleteReviewParams, "DeleteReviewParams"), async (req: ApiRequest, res) => {
   try {
-    const reviewId = req.params.reviewId;  // P0-1: validated + coerced to number
+    const reviewId = req.params.reviewId as unknown as number;  // P0-1: validated + coerced to number
     const [review] = await db.select().from(reviewsTable).where(eq(reviewsTable.id, reviewId)).limit(1);
     if (!review) { res.status(404).json({ error: "Not found" }); return; }
     if (review.userId !== req.userId && req.dbUser?.role !== "admin") {
@@ -521,13 +523,13 @@ router.get("/admin/reviews", requireAdmin, async (_req, res) => {
 
 // ─── Order status timeline ────────────────────────────────────────────────────
 // Admin: push a new timeline event to an order
-router.post("/admin/orders/:id/timeline", requireAdmin, async (req: any, res) => {
+router.post("/admin/orders/:id/timeline", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const orderId = parseInt(req.params.id);
-    const { status, note } = req.body;
+    const { status, note } = req.body as { status?: string; note?: string };
 
     const validStatuses = ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"];
-    if (!validStatuses.includes(status)) {
+    if (!status || !validStatuses.includes(status)) {
       res.status(400).json({ error: "Invalid status" }); return;
     }
 

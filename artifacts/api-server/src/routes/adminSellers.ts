@@ -15,6 +15,8 @@ import {
   RejectSellerVerificationBody,
 } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { Response } from "express";
 
 const router = Router();
 
@@ -120,9 +122,9 @@ router.get("/admin/sellers/counts", requireAdmin, async (_req, res) => {
  * review happens by the admin looking at nidOrTradeLicenseUrl/
  * nurseryImages before clicking approve, not inside this endpoint.
  */
-router.put("/admin/sellers/:id/approve", requireAdmin, validateParams(ApproveSellerParams, "ApproveSellerParams"), async (req: any, res) => {
+router.put("/admin/sellers/:id/approve", requireAdmin, validateParams(ApproveSellerParams, "ApproveSellerParams"), async (req: ApiRequest, res) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
     if (!existing) {
@@ -141,8 +143,8 @@ router.put("/admin/sellers/:id/approve", requireAdmin, validateParams(ApproveSel
       .returning();
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "seller.approved",
       targetType: "seller",
       targetId: String(id),
@@ -166,9 +168,9 @@ router.put("/admin/sellers/:id/approve", requireAdmin, validateParams(ApproveSel
  * limbo. Deletion is safe here because a never-approved seller can't yet
  * have any seller_listings rows depending on it.
  */
-router.put("/admin/sellers/:id/reject", requireAdmin, validateParams(RejectSellerParams, "RejectSellerParams"), validateBody(RejectSellerBody, "RejectSellerBody"), async (req: any, res) => {
+router.put("/admin/sellers/:id/reject", requireAdmin, validateParams(RejectSellerParams, "RejectSellerParams"), validateBody(RejectSellerBody, "RejectSellerBody"), async (req: ApiRequest, res) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
     const { reason } = (req.body ?? {}) as { reason?: string };
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
@@ -184,8 +186,8 @@ router.put("/admin/sellers/:id/reject", requireAdmin, validateParams(RejectSelle
     await db.delete(sellersTable).where(eq(sellersTable.id, id));
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "seller.rejected",
       targetType: "seller",
       targetId: String(id),
@@ -209,9 +211,9 @@ router.put("/admin/sellers/:id/reject", requireAdmin, validateParams(RejectSelle
  * of their visibility filter, the same way they'll check
  * seller_listings.visibility.
  */
-router.put("/admin/sellers/:id/suspend", requireAdmin, validateParams(SuspendSellerParams, "SuspendSellerParams"), async (req: any, res) => {
+router.put("/admin/sellers/:id/suspend", requireAdmin, validateParams(SuspendSellerParams, "SuspendSellerParams"), async (req: ApiRequest, res) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
     if (!existing) {
@@ -230,8 +232,8 @@ router.put("/admin/sellers/:id/suspend", requireAdmin, validateParams(SuspendSel
       .returning();
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "seller.suspended",
       targetType: "seller",
       targetId: String(id),
@@ -322,7 +324,7 @@ router.get("/admin/seller-payment-configs", requireAdmin, async (req, res) => {
  * "bkash" checkout requests -- there is no separate propagation step,
  * both routes check isVerified live on every relevant write/checkout.
  */
-router.put("/admin/seller-payment-configs/:id/verify", requireAdmin, async (req: any, res) => {
+router.put("/admin/seller-payment-configs/:id/verify", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -351,8 +353,8 @@ router.put("/admin/seller-payment-configs/:id/verify", requireAdmin, async (req:
       .returning();
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "sellerPaymentConfig.verified",
       targetType: "sellerPaymentConfig",
       targetId: String(id),
@@ -400,7 +402,7 @@ router.put("/admin/seller-payment-configs/:id/verify", requireAdmin, async (req:
  * still means the unverify itself takes effect immediately for new orders
  * even without this reconciliation; this only fixes what a listing shows.
  */
-router.put("/admin/seller-payment-configs/:id/unverify", requireAdmin, async (req: any, res) => {
+router.put("/admin/seller-payment-configs/:id/unverify", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -434,8 +436,8 @@ router.put("/admin/seller-payment-configs/:id/unverify", requireAdmin, async (re
       .where(and(eq(sellerListingsTable.sellerId, existing.sellerId), ne(sellerListingsTable.paymentMethod, "cod")));
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "sellerPaymentConfig.unverified",
       targetType: "sellerPaymentConfig",
       targetId: String(id),
@@ -479,7 +481,7 @@ router.get("/admin/seller-courier-configs", requireAdmin, async (req, res) => {
  * seller to book real courier shipments, not just a dashboard display
  * flag.
  */
-router.put("/admin/seller-courier-configs/:id/verify", requireAdmin, async (req: any, res) => {
+router.put("/admin/seller-courier-configs/:id/verify", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -508,8 +510,8 @@ router.put("/admin/seller-courier-configs/:id/verify", requireAdmin, async (req:
       .returning();
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "sellerCourierConfig.verified",
       targetType: "sellerCourierConfig",
       targetId: String(id),
@@ -527,7 +529,7 @@ router.put("/admin/seller-courier-configs/:id/verify", requireAdmin, async (req:
  * Admin: revoke verification on a courier config. Same rationale as
  * unverify-payment-config above.
  */
-router.put("/admin/seller-courier-configs/:id/unverify", requireAdmin, async (req: any, res) => {
+router.put("/admin/seller-courier-configs/:id/unverify", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -556,8 +558,8 @@ router.put("/admin/seller-courier-configs/:id/unverify", requireAdmin, async (re
       .returning();
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "sellerCourierConfig.unverified",
       targetType: "sellerCourierConfig",
       targetId: String(id),
@@ -609,9 +611,9 @@ router.get("/admin/seller-verification-requests", requireAdmin, async (req, res)
  * approve a request that was never made (or already decided) without first
  * going back through the seller re-requesting.
  */
-router.put("/admin/sellers/:id/verify", requireAdmin, validateParams(VerifySellerParams, "VerifySellerParams"), async (req: any, res) => {
+router.put("/admin/sellers/:id/verify", requireAdmin, validateParams(VerifySellerParams, "VerifySellerParams"), async (req: ApiRequest, res) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
     if (!existing) {
@@ -638,8 +640,8 @@ router.put("/admin/sellers/:id/verify", requireAdmin, validateParams(VerifySelle
       .returning();
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "seller.verified",
       targetType: "seller",
       targetId: String(id),
@@ -660,9 +662,9 @@ router.put("/admin/sellers/:id/verify", requireAdmin, validateParams(VerifySelle
  * verified -- it only records the decision + an optional reason the seller
  * can see on their dashboard before deciding whether to re-request.
  */
-router.put("/admin/sellers/:id/reject-verification", requireAdmin, validateParams(RejectSellerVerificationParams, "RejectSellerVerificationParams"), validateBody(RejectSellerVerificationBody, "RejectSellerVerificationBody"), async (req: any, res) => {
+router.put("/admin/sellers/:id/reject-verification", requireAdmin, validateParams(RejectSellerVerificationParams, "RejectSellerVerificationParams"), validateBody(RejectSellerVerificationBody, "RejectSellerVerificationBody"), async (req: ApiRequest, res) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
     const { reason } = (req.body ?? {}) as { reason?: string };
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
@@ -690,8 +692,8 @@ router.put("/admin/sellers/:id/reject-verification", requireAdmin, validateParam
       .returning();
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "seller.verificationRejected",
       targetType: "seller",
       targetId: String(id),

@@ -13,6 +13,9 @@ import {
   AnswerSellerListingQuestionParams,
 } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
+import type { Response } from "express";
 
 const router = Router();
 
@@ -56,9 +59,9 @@ router.get("/products/:productId/qa", async (req, res) => {
   }
 });
 
-router.post("/products/:productId/qa", requireAuth, validateParams(CreateProductQuestionParams, "CreateProductQuestionParams"), validateBody(CreateProductQuestionBody, "CreateProductQuestionBody"), async (req: any, res) => {
+router.post("/products/:productId/qa", requireAuth, validateParams(CreateProductQuestionParams, "CreateProductQuestionParams"), validateBody(CreateProductQuestionBody, "CreateProductQuestionBody"), async (req: ApiRequest<z.infer<typeof CreateProductQuestionBody>>, res) => {
   try {
-    const productId = req.params.productId;  // P0-1: validated + coerced to number
+    const productId = req.params.productId as unknown as number;  // P0-1: validated + coerced to number
     const { question } = req.body;
     // P0-1: shape validated by Zod. Business rule: min 5 chars (semantic).
     if (!question || question.trim().length < 5) {
@@ -74,7 +77,7 @@ router.post("/products/:productId/qa", requireAuth, validateParams(CreateProduct
     // 1-hour cooldown per user
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     const [recentQ] = await db.select().from(productQATable)
-      .where(and(eq(productQATable.userId, req.userId), gt(productQATable.createdAt, oneHourAgo)))
+      .where(and(eq(productQATable.userId, req.userId!), gt(productQATable.createdAt, oneHourAgo)))
       .orderBy(desc(productQATable.createdAt)).limit(1);
     if (recentQ) {
       const waitMin = Math.ceil((recentQ.createdAt.getTime() + 3600000 - Date.now()) / 60000);
@@ -90,7 +93,7 @@ router.post("/products/:productId/qa", requireAuth, validateParams(CreateProduct
       .insert(productQATable)
       .values({
         productId,
-        userId: req.userId,
+        userId: req.userId!,
         userName,
         question: question.trim(),
       })
@@ -154,9 +157,9 @@ router.get("/seller-listings/:sellerListingId/qa", async (req, res) => {
   }
 });
 
-router.post("/seller-listings/:sellerListingId/qa", requireAuth, validateParams(CreateSellerListingQuestionParams, "CreateSellerListingQuestionParams"), validateBody(CreateSellerListingQuestionBody, "CreateSellerListingQuestionBody"), async (req: any, res) => {
+router.post("/seller-listings/:sellerListingId/qa", requireAuth, validateParams(CreateSellerListingQuestionParams, "CreateSellerListingQuestionParams"), validateBody(CreateSellerListingQuestionBody, "CreateSellerListingQuestionBody"), async (req: ApiRequest<z.infer<typeof CreateSellerListingQuestionBody>>, res) => {
   try {
-    const sellerListingId = req.params.sellerListingId;  // P0-1: validated + coerced
+    const sellerListingId = req.params.sellerListingId as unknown as number;  // P0-1: validated + coerced
     const { question } = req.body;
     if (!question || question.trim().length < 5) {
       res.status(400).json({ error: "Question must be at least 5 characters" });
@@ -177,7 +180,7 @@ router.post("/seller-listings/:sellerListingId/qa", requireAuth, validateParams(
     // above the "Seller-listing Q&A" section header.
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     const [recentQ] = await db.select().from(productQATable)
-      .where(and(eq(productQATable.userId, req.userId), gt(productQATable.createdAt, oneHourAgo)))
+      .where(and(eq(productQATable.userId, req.userId!), gt(productQATable.createdAt, oneHourAgo)))
       .orderBy(desc(productQATable.createdAt)).limit(1);
     if (recentQ) {
       const waitMin = Math.ceil((recentQ.createdAt.getTime() + 3600000 - Date.now()) / 60000);
@@ -195,7 +198,7 @@ router.post("/seller-listings/:sellerListingId/qa", requireAuth, validateParams(
         productId: listing.productId,
         sellerListingId,
         sellerId: listing.sellerId,
-        userId: req.userId,
+        userId: req.userId!,
         userName,
         question: question.trim(),
       })
@@ -220,9 +223,9 @@ router.post("/seller-listings/:sellerListingId/qa", requireAuth, validateParams(
 // req.dbSeller (an active seller row); the ownership check below is what
 // actually stops a seller answering on someone else's listing -- being
 // merely "a seller" isn't enough.
-router.put("/seller/qa/:id/answer", requireSeller, validateParams(AnswerSellerListingQuestionParams, "AnswerSellerListingQuestionParams"), validateBody(AnswerSellerListingQuestionBody, "AnswerSellerListingQuestionBody"), async (req: any, res) => {
+router.put("/seller/qa/:id/answer", requireSeller, validateParams(AnswerSellerListingQuestionParams, "AnswerSellerListingQuestionParams"), validateBody(AnswerSellerListingQuestionBody, "AnswerSellerListingQuestionBody"), async (req: ApiRequest<z.infer<typeof AnswerSellerListingQuestionBody>>, res) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
     const { answer } = req.body;
     if (!answer || answer.trim().length < 2) {
       res.status(400).json({ error: "Answer is required" });
@@ -238,7 +241,7 @@ router.put("/seller/qa/:id/answer", requireSeller, validateParams(AnswerSellerLi
       res.status(404).json({ error: "Question not found" });
       return;
     }
-    if (existing.sellerId !== req.dbSeller.id) {
+    if (existing.sellerId !== req.dbSeller!.id) {
       res.status(403).json({ error: "You can only answer questions on your own listings" });
       return;
     }
@@ -264,9 +267,9 @@ router.put("/seller/qa/:id/answer", requireSeller, validateParams(AnswerSellerLi
   }
 });
 
-router.put("/admin/qa/:id/answer", requireAdmin, validateParams(AnswerSellerListingQuestionParams, "AnswerSellerListingQuestionParams"), validateBody(AnswerSellerListingQuestionBody, "AnswerSellerListingQuestionBody"), async (req: any, res) => {
+router.put("/admin/qa/:id/answer", requireAdmin, validateParams(AnswerSellerListingQuestionParams, "AnswerSellerListingQuestionParams"), validateBody(AnswerSellerListingQuestionBody, "AnswerSellerListingQuestionBody"), async (req: ApiRequest<z.infer<typeof AnswerSellerListingQuestionBody>>, res) => {
   try {
-    const id = req.params.id;  // P0-1: validated + coerced to number
+    const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
     const { answer } = req.body;
     if (!answer || answer.trim().length < 2) {
       res.status(400).json({ error: "Answer is required" });
@@ -294,7 +297,7 @@ router.put("/admin/qa/:id/answer", requireAdmin, validateParams(AnswerSellerList
   }
 });
 
-router.delete("/admin/qa/:id", requireAdmin, async (req: any, res) => {
+router.delete("/admin/qa/:id", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {

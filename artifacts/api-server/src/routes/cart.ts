@@ -205,7 +205,7 @@ async function buildCart(userId: string) {
   return { items, subtotal, discount, deliveryTotal, total: subtotal + deliveryTotal };
 }
 
-router.get("/cart", requireAuth, async (req: ApiRequest, res: Response) => {
+router.get("/cart", requireAuth, async (req: ApiRequest, res) => {
   try {
     const cart = await buildCart(req.userId!);
     res.json(cart);
@@ -232,7 +232,7 @@ router.get("/cart", requireAuth, async (req: ApiRequest, res: Response) => {
  * mismatched sellerListingId in the body can't desync the denormalized
  * column from the variant it's supposed to mirror.
  */
-router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBody"), async (req: ApiRequest<z.infer<typeof AddToCartBody>>, res: Response) => {
+router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBody"), async (req: ApiRequest<z.infer<typeof AddToCartBody>>, res) => {
   try {
     // P0-1: body shape (productId: number, variantId/sellerListingVariantId:
     // number|null, quantity: number) now validated by Zod (AddToCartBody).
@@ -375,7 +375,7 @@ router.post("/cart/items", requireAuth, validateBody(AddToCartBody, "AddToCartBo
  * line types and was already a stable, unique identifier before this
  * change; this is a routing fix, not a new concept.
  */
-router.put("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, "UpdateCartItemParams"), validateBody(UpdateCartItemBody, "UpdateCartItemBody"), async (req: ApiRequest<z.infer<typeof UpdateCartItemBody>>, res: Response) => {
+router.put("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, "UpdateCartItemParams"), validateBody(UpdateCartItemBody, "UpdateCartItemBody"), async (req: ApiRequest<z.infer<typeof UpdateCartItemBody>>, res) => {
   try {
     const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
@@ -430,7 +430,7 @@ router.put("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, 
   }
 });
 
-router.delete("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, "DeleteCartItemParams"), async (req: ApiRequest, res: Response) => {
+router.delete("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParams, "DeleteCartItemParams"), async (req: ApiRequest, res) => {
   try {
     const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
@@ -444,7 +444,7 @@ router.delete("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParam
   }
 });
 
-router.delete("/cart", requireAuth, async (req: ApiRequest, res: Response) => {
+router.delete("/cart", requireAuth, async (req: ApiRequest, res) => {
   try {
     await db
       .delete(cartItemsTable)
