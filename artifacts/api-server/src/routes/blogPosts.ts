@@ -12,6 +12,7 @@ import {
 import { eq, desc, and, inArray, sql } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -135,9 +136,9 @@ router.get("/blog-posts/:slug", async (req, res) => {
 });
 
 // POST /admin/blog-posts — create
-router.post("/admin/blog-posts", requireAdmin, async (req: any, res) => {
+router.post("/admin/blog-posts", requireAdmin, async (req: ApiRequest, res) => {
   try {
-    const { slug, title, excerpt, content, category, readTime, image, featured, publishedAt, linkedProductIds } = req.body;
+    const { slug, title, excerpt, content, category, readTime, image, featured, publishedAt, linkedProductIds } = req.body as any;
     if (!slug?.trim() || !title?.trim() || !excerpt?.trim() || !category?.trim()) {
       res.status(400).json({ error: "slug, title, excerpt and category are required" }); return;
     }
@@ -165,11 +166,11 @@ router.post("/admin/blog-posts", requireAdmin, async (req: any, res) => {
 });
 
 // PATCH /admin/blog-posts/:id — update
-router.patch("/admin/blog-posts/:id", requireAdmin, async (req: any, res) => {
+router.patch("/admin/blog-posts/:id", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
-    const { slug, title, excerpt, content, category, readTime, image, featured, publishedAt, linkedProductIds } = req.body;
+    const { slug, title, excerpt, content, category, readTime, image, featured, publishedAt, linkedProductIds } = req.body as any;
     if (linkedProductIds !== undefined && (!Array.isArray(linkedProductIds) || linkedProductIds.length > 3)) {
       res.status(400).json({ error: "linkedProductIds must be an array of at most 3 product ids" }); return;
     }
@@ -192,7 +193,7 @@ router.patch("/admin/blog-posts/:id", requireAdmin, async (req: any, res) => {
 });
 
 // DELETE /admin/blog-posts/:id — delete
-router.delete("/admin/blog-posts/:id", requireAdmin, async (req: any, res) => {
+router.delete("/admin/blog-posts/:id", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }

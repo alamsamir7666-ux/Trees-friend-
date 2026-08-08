@@ -11,6 +11,7 @@ import { eq, lt, and, isNull } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { sendAbandonedCartEmail } from "../lib/email";
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -18,20 +19,20 @@ const router = Router();
  * Called by the frontend whenever cart changes (add/remove).
  * Upserts the abandoned cart snapshot for this user.
  */
-router.post("/abandoned-cart/sync", requireAuth, async (req: any, res) => {
+router.post("/abandoned-cart/sync", requireAuth, async (req: ApiRequest, res) => {
   try {
     const items = await db
       .select({ cart: cartItemsTable, product: productsTable, variant: productVariantsTable })
       .from(cartItemsTable)
       .innerJoin(productsTable, eq(cartItemsTable.productId, productsTable.id))
       .innerJoin(productVariantsTable, eq(cartItemsTable.variantId, productVariantsTable.id))
-      .where(eq(cartItemsTable.userId, req.userId));
+      .where(eq(cartItemsTable.userId, req.userId!));
 
     if (items.length === 0) {
       // Cart empty — remove abandoned cart record
       await db
         .delete(abandonedCartsTable)
-        .where(eq(abandonedCartsTable.userId, req.userId));
+        .where(eq(abandonedCartsTable.userId, req.userId!));
       res.json({ ok: true });
       return;
     }
@@ -45,14 +46,15 @@ router.post("/abandoned-cart/sync", requireAuth, async (req: any, res) => {
       image: (product.images as string[])[0] ?? "",
     }));
 
-    const email = req.dbUser?.email?.endsWith("@clerk.user")
+    const rawEmail = req.dbUser?.email;
+    const email = rawEmail && rawEmail.endsWith("@clerk.user")
       ? null
-      : req.dbUser?.email ?? null;
+      : rawEmail ?? null;
 
     await db
       .insert(abandonedCartsTable)
       .values({
-        userId: req.userId,
+        userId: req.userId!,
         email,
         items: snapshot,
         recovered: false,
@@ -79,12 +81,12 @@ router.post("/abandoned-cart/sync", requireAuth, async (req: any, res) => {
 /**
  * Mark abandoned cart as recovered (called when order is placed).
  */
-router.post("/abandoned-cart/recover", requireAuth, async (req: any, res) => {
+router.post("/abandoned-cart/recover", requireAuth, async (req: ApiRequest, res) => {
   try {
     await db
       .update(abandonedCartsTable)
       .set({ recovered: true })
-      .where(eq(abandonedCartsTable.userId, req.userId));
+      .where(eq(abandonedCartsTable.userId, req.userId!));
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err }, "Failed to mark abandoned cart recovered");

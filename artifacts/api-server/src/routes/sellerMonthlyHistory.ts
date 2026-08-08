@@ -30,7 +30,7 @@ const router = Router();
 const DEFAULT_MONTHS = 12;
 const MAX_MONTHS = 60;
 
-router.get("/seller/monthly-history", requireSeller, async (req: any, res) => {
+router.get("/seller/monthly-history", requireSeller, async (req: ApiRequest, res) => {
   try {
     const { months: monthsRaw } = req.query as Record<string, string>;
     const monthsParsed = parseInt(monthsRaw ?? String(DEFAULT_MONTHS), 10);
@@ -70,5 +70,6 @@ router.get("/seller/monthly-history", requireSeller, async (req: any, res) => {
   }
 });
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

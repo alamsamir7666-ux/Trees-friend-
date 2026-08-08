@@ -3,6 +3,7 @@ import multerPkg from "multer";
 import { v2 as cloudinaryV2 } from "cloudinary";
 import { requireAdmin, requireAuth } from "../middlewares/auth";
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 cloudinaryV2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -24,7 +25,7 @@ const router = Router();
  * asset uploads get their own endpoint instead of a conditional flag on
  * the product route.
  */
-router.post("/assets/upload", requireAuth, requireAdmin, uploadMiddleware.single("file"), async (req: any, res) => {
+router.post("/assets/upload", requireAuth, requireAdmin, uploadMiddleware.single("file"), async (req: ApiRequest, res) => {
   try {
     const file = req.file as Express.Multer.File | undefined;
     if (!file) {

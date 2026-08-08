@@ -107,7 +107,7 @@ router.get("/seller/orders", requireSeller, async (req, res) => {
   }
 });
 
-router.get("/seller/orders/:id", requireSeller, async (req: any, res) => {
+router.get("/seller/orders/:id", requireSeller, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -151,7 +151,7 @@ router.get("/seller/orders/:id", requireSeller, async (req: any, res) => {
  * legitimate action their dashboard should allow, not something to gate
  * behind a state machine that doesn't exist elsewhere in this codebase.
  */
-router.put("/seller/orders/:id/status", requireSeller, async (req: any, res) => {
+router.put("/seller/orders/:id/status", requireSeller, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -214,5 +214,6 @@ router.put("/seller/orders/:id/status", requireSeller, async (req: any, res) => 
   }
 });
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

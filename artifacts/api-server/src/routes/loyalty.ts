@@ -63,18 +63,18 @@ export async function redeemPoints(userId: string, pointsToRedeem: number, order
   });
 }
 
-router.get("/loyalty/me", requireAuth, async (req: any, res) => {
+router.get("/loyalty/me", requireAuth, async (req: ApiRequest, res) => {
   try {
     const [balance] = await db
       .select()
       .from(loyaltyPointsTable)
-      .where(eq(loyaltyPointsTable.userId, req.userId))
+      .where(eq(loyaltyPointsTable.userId, req.userId!))
       .limit(1);
 
     const transactions = await db
       .select()
       .from(loyaltyTransactionsTable)
-      .where(eq(loyaltyTransactionsTable.userId, req.userId))
+      .where(eq(loyaltyTransactionsTable.userId, req.userId!))
       .orderBy(desc(loyaltyTransactionsTable.createdAt))
       .limit(20);
 
@@ -95,5 +95,6 @@ router.get("/loyalty/me", requireAuth, async (req: any, res) => {
   }
 });
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

@@ -37,8 +37,8 @@ router.get("/categories", async (_req, res) => {
   logger.info({ serializeMs: t2 - t1, totalMs: t2 - t0 }, "categories serialize+send timing");
 });
 
-router.post("/categories", requireAdmin, async (req: any, res) => {
-  const { name, slug, icon, iconImage, image, displayOrder, parentId } = req.body;
+router.post("/categories", requireAdmin, async (req: ApiRequest, res) => {
+  const { name, slug, icon, iconImage, image, displayOrder, parentId } = req.body as any;
   const generatedSlug = slug || name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
   const [c] = await db
     .insert(categoriesTable)
@@ -47,9 +47,9 @@ router.post("/categories", requireAdmin, async (req: any, res) => {
   res.status(201).json(toCategory(c));
 });
 
-router.put("/categories/:id", requireAdmin, validateParams(UpdateCategoryParams, "UpdateCategoryParams"), async (req: any, res) => {
-  const id = req.params.id;  // P0-1: validated + coerced to number
-  const { name, slug, icon, iconImage, image, displayOrder, parentId } = req.body;
+router.put("/categories/:id", requireAdmin, validateParams(UpdateCategoryParams, "UpdateCategoryParams"), async (req: ApiRequest, res) => {
+  const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
+  const { name, slug, icon, iconImage, image, displayOrder, parentId } = req.body as any;
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (name !== undefined) updates.name = name;
   if (slug !== undefined) updates.slug = slug;
@@ -92,8 +92,8 @@ router.put("/categories/:id", requireAdmin, validateParams(UpdateCategoryParams,
   res.json(toCategory(c));
 });
 
-router.delete("/categories/:id", requireAdmin, validateParams(DeleteCategoryParams, "DeleteCategoryParams"), async (req: any, res) => {
-  const id = req.params.id;  // P0-1: validated + coerced to number
+router.delete("/categories/:id", requireAdmin, validateParams(DeleteCategoryParams, "DeleteCategoryParams"), async (req: ApiRequest, res) => {
+  const id = req.params.id as unknown as number;  // P0-1: validated + coerced to number
 
   const [target] = await db.select().from(categoriesTable).where(eq(categoriesTable.id, id)).limit(1);
   if (!target) {
@@ -211,5 +211,6 @@ router.post("/categories/seed", requireAdmin, async (_req, res) => {
   res.json({ inserted: inserted.length, categories: inserted });
 });
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

@@ -5,6 +5,7 @@ import { db } from "@workspace/db";
 import { emailPreferencesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -21,12 +22,12 @@ function formatPrefs(p: typeof emailPreferencesTable.$inferSelect) {
 }
 
 // GET /email-preferences
-router.get("/email-preferences", requireAuth, async (req: any, res) => {
+router.get("/email-preferences", requireAuth, async (req: ApiRequest, res) => {
   try {
     const [prefs] = await db
       .select()
       .from(emailPreferencesTable)
-      .where(eq(emailPreferencesTable.userId, req.userId))
+      .where(eq(emailPreferencesTable.userId, req.userId!))
       .limit(1);
 
     if (!prefs) {
@@ -51,18 +52,18 @@ router.get("/email-preferences", requireAuth, async (req: any, res) => {
 });
 
 // PUT /email-preferences — upsert
-router.put("/email-preferences", requireAuth, async (req: any, res) => {
+router.put("/email-preferences", requireAuth, async (req: ApiRequest, res) => {
   try {
     const {
       orderUpdates, promotions, restockAlerts,
       newsletter, abandonedCart, loyaltyUpdates,
-    } = req.body;
+    } = req.body as any;
 
     const boolOrDefault = (v: unknown, def: boolean) =>
       typeof v === "boolean" ? v : def;
 
     const values = {
-      userId: req.userId,
+      userId: req.userId!,
       orderUpdates: boolOrDefault(orderUpdates, true),
       promotions: boolOrDefault(promotions, true),
       restockAlerts: boolOrDefault(restockAlerts, true),

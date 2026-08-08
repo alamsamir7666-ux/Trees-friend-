@@ -3,10 +3,11 @@ import { db } from "@workspace/db";
 import { monthlyRecordsTable, ordersTable } from "@workspace/db";
 import { desc, sql, and, eq } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
-router.get("/admin/monthly-records", requireAdmin, async (req: any, res) => {
+router.get("/admin/monthly-records", requireAdmin, async (req: ApiRequest, res) => {
   const records = await db
     .select()
     .from(monthlyRecordsTable)
@@ -24,7 +25,7 @@ router.get("/admin/monthly-records", requireAdmin, async (req: any, res) => {
   );
 });
 
-router.post("/admin/monthly-records/archive", requireAdmin, async (req: any, res) => {
+router.post("/admin/monthly-records/archive", requireAdmin, async (req: ApiRequest, res) => {
   const result = await archiveLastMonth();
   res.json(result);
 });

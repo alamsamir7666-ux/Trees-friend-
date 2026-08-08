@@ -4,6 +4,7 @@ import { runSellerSubscriptionExpiryJob, runSellerSubscriptionReminderJob } from
 import { runLowStockAlert } from "../jobs/lowStockJob";
 import { archiveLastMonth } from "./monthlyRecords";
 import { runAbandonedCartJob } from "./abandonedCart";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -71,7 +72,7 @@ function safeCompare(a: string, b: string): boolean {
  * (and sends a 401) otherwise. If CRON_SECRET is not set, allows the
  * request in development but blocks it in production (fail-closed).
  */
-function requireCronAuth(req: any, res: any): boolean {
+function requireCronAuth(req: ApiRequest, res: any): boolean {
   if (!CRON_SECRET) {
     if (process.env.NODE_ENV === "production") {
       logger.error("CRON_SECRET env var is not set — cron jobs cannot be authenticated. Set it in your Vercel project env vars.");

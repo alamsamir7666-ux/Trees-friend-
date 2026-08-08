@@ -7,6 +7,7 @@ import { encryptCredential, maskCredential } from "../lib/credentialEncryption";
 import { grantToken, clearCachedToken, BkashApiError } from "../lib/bkash";
 import { logAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 /**
  * Admin-only: the PLATFORM's single bKash merchant config (Part 1 of 4 --
@@ -242,7 +243,7 @@ router.post("/platform-payment-config", requireAdmin, async (req, res) => {
  * caught by the outer try/catch and reported generically, same as every
  * other route in this file.
  */
-router.post("/admin/platform-payment-config/verify", requireAdmin, async (req: any, res) => {
+router.post("/admin/platform-payment-config/verify", requireAdmin, async (req: ApiRequest, res) => {
   try {
     await grantToken();
 
@@ -261,8 +262,8 @@ router.post("/admin/platform-payment-config/verify", requireAdmin, async (req: a
       .returning();
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "platform_payment_config.verified",
       targetType: "platform_payment_config",
       targetId: config ? String(config.id) : undefined,

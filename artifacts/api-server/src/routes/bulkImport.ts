@@ -6,6 +6,7 @@ import { requireAdmin } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
 import { eq, or } from "drizzle-orm";
 import crypto from "crypto";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -62,9 +63,9 @@ function parseList(val: string): string[] {
  * first row of each group and are NOT used to overwrite an existing product
  * — only new variants are appended to it.
  */
-router.post("/admin/products/bulk-import", requireAdmin, async (req: any, res) => {
+router.post("/admin/products/bulk-import", requireAdmin, async (req: ApiRequest, res) => {
   try {
-    const { csv } = req.body;
+    const { csv } = req.body as any;
     if (!csv || typeof csv !== "string") {
       res.status(400).json({ error: "CSV content is required" });
       return;
@@ -266,7 +267,7 @@ router.post("/admin/products/bulk-import", requireAdmin, async (req: any, res) =
 
           productId = p.id;
           productsCreated++;
-          await logAudit({ adminId: req.userId, action: "product.created", targetType: "product", targetId: String(productId), after: { name: first.name } });
+          await logAudit({ adminId: req.userId!, action: "product.created", targetType: "product", targetId: String(productId), after: { name: first.name } });
         }
 
         /**

@@ -4,6 +4,7 @@ import { sellersTable, sellerListingsTable, sellerSubscriptionsTable } from "@wo
 import { eq, and, desc } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -69,7 +70,7 @@ router.get("/admin/seller-subscriptions", requireAdmin, async (req, res) => {
  * matches the plan's actual money flow (seller pays admin outside the
  * system; admin confirms it here).
  */
-router.post("/admin/seller-subscriptions/:sellerId/mark-paid", requireAdmin, async (req: any, res) => {
+router.post("/admin/seller-subscriptions/:sellerId/mark-paid", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const sellerId = parseInt(req.params.sellerId);
     if (isNaN(sellerId) || sellerId <= 0) {
@@ -141,8 +142,8 @@ router.post("/admin/seller-subscriptions/:sellerId/mark-paid", requireAdmin, asy
       .returning({ id: sellerListingsTable.id });
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "seller_subscription.marked_paid",
       targetType: "seller",
       targetId: String(sellerId),

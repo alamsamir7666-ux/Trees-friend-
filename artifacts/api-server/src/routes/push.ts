@@ -3,6 +3,7 @@ import { logger } from "../lib/logger";
 import { requireAuth } from "../middlewares/auth";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -18,9 +19,9 @@ const router = Router();
  */
 
 // Store push subscription
-router.post("/push/subscribe", requireAuth, async (req: any, res) => {
+router.post("/push/subscribe", requireAuth, async (req: ApiRequest, res) => {
   try {
-    const { subscription } = req.body;
+    const { subscription } = req.body as any;
     if (!subscription?.endpoint) {
       res.status(400).json({ error: "Invalid subscription object" });
       return;
@@ -42,9 +43,9 @@ router.post("/push/subscribe", requireAuth, async (req: any, res) => {
   }
 });
 
-router.post("/push/unsubscribe", requireAuth, async (req: any, res) => {
+router.post("/push/unsubscribe", requireAuth, async (req: ApiRequest, res) => {
   try {
-    const { endpoint } = req.body;
+    const { endpoint } = req.body as any;
     if (!endpoint) {
       res.status(400).json({ error: "Endpoint is required" });
       return;

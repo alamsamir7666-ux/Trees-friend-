@@ -59,7 +59,7 @@ router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"),
     // P0-1: body shape validated by Zod (UpdateMeBody — firstName, lastName,
     // phone). `email` is read via cast because the OpenAPI spec doesn't
     // document it but the handler conditionally updates it (spec gap to fix).
-    const { firstName, lastName, phone } = req.body;
+    const { firstName, lastName, phone } = req.body as any;
     const email = (req.body as { email?: string }).email;
 
     // P0-1: input shape now validated by Zod (UpdateMeBody). The previous
@@ -132,7 +132,7 @@ router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "Ad
       district,
       postalCode,
       isDefault,
-    } = req.body;
+    } = req.body as any;
 
     // P0-1: input shape now validated by Zod (AddAddressBody). The previous
     // hand-rolled required-field checks (fullName?.trim(), street?.trim(),
@@ -191,7 +191,7 @@ router.put("/users/me/addresses/:id", requireAuth, validateParams(UpdateAddressP
       district,
       postalCode,
       isDefault,
-    } = req.body;
+    } = req.body as any;
 
     // Verify ownership
     const [existing] = await db

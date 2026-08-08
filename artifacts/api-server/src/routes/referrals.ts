@@ -9,6 +9,7 @@ import {
 import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import crypto from "crypto";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -19,20 +20,20 @@ function generateReferralCode(userId: string): string {
 /**
  * Get or create the current user's referral code.
  */
-router.get("/referrals/my-code", requireAuth, async (req: any, res) => {
+router.get("/referrals/my-code", requireAuth, async (req: ApiRequest, res) => {
   try {
-    const code = generateReferralCode(req.userId);
+    const code = generateReferralCode(req.userId!);
 
     // Upsert referral record
     const existing = await db
       .select()
       .from(referralsTable)
-      .where(eq(referralsTable.referrerId, req.userId))
+      .where(eq(referralsTable.referrerId, req.userId!))
       .limit(1);
 
     if (existing.length === 0) {
       await db.insert(referralsTable).values({
-        referrerId: req.userId,
+        referrerId: req.userId!,
         referralCode: code,
       }).onConflictDoNothing();
     }
@@ -41,7 +42,7 @@ router.get("/referrals/my-code", requireAuth, async (req: any, res) => {
     const allReferrals = await db
       .select()
       .from(referralsTable)
-      .where(eq(referralsTable.referrerId, req.userId));
+      .where(eq(referralsTable.referrerId, req.userId!));
 
     const used = allReferrals.filter((r) => r.used).length;
 
@@ -62,9 +63,9 @@ router.get("/referrals/my-code", requireAuth, async (req: any, res) => {
  * Apply a referral code when a new user signs up.
  * Called from ProfileSync after first login.
  */
-router.post("/referrals/apply", requireAuth, async (req: any, res) => {
+router.post("/referrals/apply", requireAuth, async (req: ApiRequest, res) => {
   try {
-    const { code } = req.body;
+    const { code } = req.body as any;
     if (!code || typeof code !== "string") {
       res.status(400).json({ error: "Referral code is required" });
       return;
