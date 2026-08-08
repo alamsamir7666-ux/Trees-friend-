@@ -245,7 +245,9 @@ export function HomePage() {
       <section className="relative overflow-hidden pt-4 pb-4 bg-background">
         <div className="absolute inset-0 flex items-start justify-end pr-2 lg:pr-16 pointer-events-none">
           <img
-            src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783747272/IMG_20260711_111454-removebg-preview_11zon_wsnwgd.png"
+            // PERF-6b: f_auto,q_auto — Cloudinary serves WebP/AVIF (30-50%
+            // smaller than PNG) and picks optimal quality automatically.
+            src="https://res.cloudinary.com/dcfbtdp6r/image/upload/f_auto,q_auto/v1783747272/IMG_20260711_111454-removebg-preview_11zon_wsnwgd.png"
             alt="Potted tree sapling"
             className="h-full max-h-[380px] lg:max-h-[480px] w-auto object-contain opacity-90"
             fetchPriority="high"

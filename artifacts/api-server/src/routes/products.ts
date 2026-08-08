@@ -378,6 +378,12 @@ async function fetchSellerListingCardsFor(productId: number) {
 
 router.get("/products/featured", async (_req, res) => {
   try {
+    // PERF-6a: Cache-Control 5 min — featured products change only when an
+    // admin edits product homepageTag. The browser/proxy cache eliminates
+    // repeat DB queries on every page load. Stale-while-revalidate lets
+    // the browser serve a stale response while fetching a fresh one in the
+    // background (better UX than blocking on a cache-miss).
+    res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
     const products = await db
       .select()
       .from(productsTable)
@@ -402,6 +408,9 @@ router.get("/products/featured", async (_req, res) => {
 
 router.get("/products/tag-counts", async (_req, res) => {
   try {
+    // PERF-6a: Cache-Control 5 min — tag counts change only when an admin
+    // edits product homepageTag. Same rationale as /products/featured.
+    res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
     const { isNotNull } = await import("drizzle-orm");
     const rows = await db
       .select({ tag: productsTable.homepageTag, count: sql<number>`cast(count(*) as int)` })
@@ -419,6 +428,9 @@ router.get("/products/tag-counts", async (_req, res) => {
 
 router.get("/products/homepage", async (_req, res) => {
   try {
+    // PERF-6a: Cache-Control 5 min — homepage products change only when an
+    // admin edits product homepageTag. Same rationale as /products/featured.
+    res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
     const [topProducts, bottomProducts] = await Promise.all([
       db
         .select()

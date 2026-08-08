@@ -20,6 +20,10 @@ function toSection(s: typeof homepageSectionsTable.$inferSelect) {
 
 // ── GET /homepage-sections — public, used by homepage + product modal ─────────
 router.get("/homepage-sections", async (_req, res) => {
+  // PERF-6a: Cache-Control 5 min — sections change only when an admin
+  // creates/reorders/deletes them. Browser cache eliminates repeat DB
+  // queries on every page load.
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
   const sections = await db
     .select()
     .from(homepageSectionsTable)

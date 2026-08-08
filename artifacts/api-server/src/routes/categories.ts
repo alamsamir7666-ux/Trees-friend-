@@ -25,6 +25,9 @@ function toCategory(c: typeof categoriesTable.$inferSelect) {
 }
 
 router.get("/categories", async (_req, res) => {
+  // PERF-6a: Cache-Control 5 min — categories change rarely (admin only).
+  // Browser cache eliminates repeat DB queries on every page load.
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
   const t0 = Date.now();
   const cats = await db
     .select()

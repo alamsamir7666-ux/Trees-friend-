@@ -76,8 +76,12 @@
     <link rel="preconnect" href="https://treefriend-api.onrender.com" crossorigin />
     <link rel="dns-prefetch" href="https://clerk.treefriend.com" />
 
-    <!-- Preload LCP hero image so browser fetches it immediately -->
-    <link rel="preload" as="image" href="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783747272/IMG_20260711_111454-removebg-preview_11zon_wsnwgd.png" fetchpriority="high" />
+    <!-- Preload LCP hero image so browser fetches it immediately.
+         PERF-6b: added f_auto,q_auto Cloudinary transformations — f_auto
+         serves WebP/AVIF to supporting browsers (30-50% smaller than PNG),
+         q_auto picks the optimal quality level. The original was a raw
+         .png with no transformations. -->
+    <link rel="preload" as="image" href="https://res.cloudinary.com/dcfbtdp6r/image/upload/f_auto,q_auto/v1783747272/IMG_20260711_111454-removebg-preview_11zon_wsnwgd.png" fetchpriority="high" />
 
     <!-- Fonts: DM Sans (body) + DM Serif Display (headings) — matches index.css @theme.
          Previously this block also loaded Jost, Lora, and Outfit for the
