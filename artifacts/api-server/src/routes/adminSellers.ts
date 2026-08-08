@@ -5,6 +5,16 @@ import { eq, desc, and, ne, count } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
 import { maskCredential } from "../lib/credentialEncryption";
+import {
+  ApproveSellerParams,
+  RejectSellerParams,
+  RejectSellerBody,
+  SuspendSellerParams,
+  VerifySellerParams,
+  RejectSellerVerificationParams,
+  RejectSellerVerificationBody,
+} from "@workspace/api-zod";
+import { validateBody, validateParams } from "../lib/validateRequest";
 
 const router = Router();
 
@@ -110,13 +120,9 @@ router.get("/admin/sellers/counts", requireAdmin, async (_req, res) => {
  * review happens by the admin looking at nidOrTradeLicenseUrl/
  * nurseryImages before clicking approve, not inside this endpoint.
  */
-router.put("/admin/sellers/:id/approve", requireAdmin, async (req: any, res) => {
+router.put("/admin/sellers/:id/approve", requireAdmin, validateParams(ApproveSellerParams, "ApproveSellerParams"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
     if (!existing) {
@@ -160,13 +166,9 @@ router.put("/admin/sellers/:id/approve", requireAdmin, async (req: any, res) => 
  * limbo. Deletion is safe here because a never-approved seller can't yet
  * have any seller_listings rows depending on it.
  */
-router.put("/admin/sellers/:id/reject", requireAdmin, async (req: any, res) => {
+router.put("/admin/sellers/:id/reject", requireAdmin, validateParams(RejectSellerParams, "RejectSellerParams"), validateBody(RejectSellerBody, "RejectSellerBody"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number
     const { reason } = (req.body ?? {}) as { reason?: string };
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
@@ -207,13 +209,9 @@ router.put("/admin/sellers/:id/reject", requireAdmin, async (req: any, res) => {
  * of their visibility filter, the same way they'll check
  * seller_listings.visibility.
  */
-router.put("/admin/sellers/:id/suspend", requireAdmin, async (req: any, res) => {
+router.put("/admin/sellers/:id/suspend", requireAdmin, validateParams(SuspendSellerParams, "SuspendSellerParams"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
     if (!existing) {
@@ -611,13 +609,9 @@ router.get("/admin/seller-verification-requests", requireAdmin, async (req, res)
  * approve a request that was never made (or already decided) without first
  * going back through the seller re-requesting.
  */
-router.put("/admin/sellers/:id/verify", requireAdmin, async (req: any, res) => {
+router.put("/admin/sellers/:id/verify", requireAdmin, validateParams(VerifySellerParams, "VerifySellerParams"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);
     if (!existing) {
@@ -666,13 +660,9 @@ router.put("/admin/sellers/:id/verify", requireAdmin, async (req: any, res) => {
  * verified -- it only records the decision + an optional reason the seller
  * can see on their dashboard before deciding whether to re-request.
  */
-router.put("/admin/sellers/:id/reject-verification", requireAdmin, async (req: any, res) => {
+router.put("/admin/sellers/:id/reject-verification", requireAdmin, validateParams(RejectSellerVerificationParams, "RejectSellerVerificationParams"), validateBody(RejectSellerVerificationBody, "RejectSellerVerificationBody"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number
     const { reason } = (req.body ?? {}) as { reason?: string };
 
     const [existing] = await db.select().from(sellersTable).where(eq(sellersTable.id, id)).limit(1);

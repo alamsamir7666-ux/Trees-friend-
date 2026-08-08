@@ -5,6 +5,8 @@ import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { requireSeller } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
 import { createRateLimiter } from "../middlewares/rateLimiter";
+import { UpdateSellerReturnBody, UpdateSellerReturnParams } from "@workspace/api-zod";
+import { validateBody, validateParams } from "../lib/validateRequest";
 
 /**
  * Seller-scoped mirror of routes/returns.ts's admin endpoints. Sellers can
@@ -192,23 +194,17 @@ router.get("/seller/returns/:id", requireSeller, async (req: any, res) => {
  * from a seller-action point of view, matching the admin UI's own gating
  * in ReturnsTab.tsx where only "requested" rows show action buttons).
  */
-router.put("/seller/returns/:id", requireSeller, sellerReturnWriteLimiter, async (req: any, res) => {
+router.put("/seller/returns/:id", requireSeller, sellerReturnWriteLimiter, validateParams(UpdateSellerReturnParams, "UpdateSellerReturnParams"), validateBody(UpdateSellerReturnBody, "UpdateSellerReturnBody"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid return ID" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number
 
+    // P0-1: body shape now validated by Zod (UpdateSellerReturnBody).
+    // status is zod.enum(['approved','rejected','completed']), so the
+    // hand-rolled VALID_RETURN_STATUSES check is superseded. The
+    // adminNote/rejection-reason and refundAmount business rules below
+    // are kept as semantic checks (Zod validates shape, not conditional
+    // requirements like "adminNote required when status=rejected").
     const { status, adminNote, refundAmount } = req.body ?? {};
-    if (!status || typeof status !== "string" || !VALID_RETURN_STATUSES.includes(status as any)) {
-      res.status(400).json({ error: `status must be one of: ${VALID_RETURN_STATUSES.join(", ")}` });
-      return;
-    }
-    if (adminNote !== undefined && adminNote !== null && typeof adminNote !== "string") {
-      res.status(400).json({ error: "adminNote must be a string" });
-      return;
-    }
     if (status === "rejected" && (!adminNote || adminNote.trim().length < 3)) {
       res.status(400).json({ error: "A rejection reason (adminNote) of at least 3 characters is required" });
       return;

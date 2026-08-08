@@ -33,25 +33,50 @@
  *   });
  *   ```
  *
+ * ─── Gap #4 fix: backward-compatible error envelope ─────────────────────────
+ *
+ * The error response shape is backward-compatible with the existing
+ * `{ error: "..." }` envelope that the frontend expects. The `error` field
+ * contains the FIRST issue's human-readable message (e.g.
+ * `"Payment method is required"`) — NOT a generic "Validation failed" — so
+ * old clients reading `err.error` get a useful, field-specific message.
+ * The `details` array provides the full structured breakdown for new clients
+ * that want field-level error info.
+ *
  * Error response shape (returned with status 400):
  *
  *   ```json
  *   {
- *     "error": "Validation failed",
+ *     "error": "Payment method is required",
  *     "details": [
- *       { "path": ["shippingAddress", "phone"], "message": "Required" },
- *       { "path": ["items", 0, "quantity"], "message": "Expected number, received string" }
+ *       { "path": "paymentMethod", "message": "Required" },
+ *       { "path": "shippingAddress.phone", "message": "Expected string, received number" }
  *     ]
  *   }
  *   ```
  *
- * Why a middleware (not a wrapper):
- *   The codebase's existing pattern is `router.METHOD(path, ...middleware,
- *   handler)`. A middleware composes naturally with `requireAuth`,
- *   `checkoutLimiter`, etc. without forcing a rewrite of every handler.
- *   Handlers stay async functions that read `req.body` / `req.query` /
- *   `req.params` exactly as before — just now with the runtime guarantee
- *   that those fields match the schema.
+ * The generated API client's `buildErrorMessage` (custom-fetch.ts) reads
+ * `data.error` as the message, so `err.message` becomes
+ * `"HTTP 400 Bad Request: Payment method is required"` — useful for toasts.
+ *
+ * ─── Gap #5 fix: strict mode (reject unknown keys) ──────────────────────────
+ *
+ * By default, Zod's `z.object()` PASSES THROUGH unknown keys — a request
+ * body with extra fields like `{ paymentMethod: "cod", hackField: "xss" }`
+ * would validate successfully and `hackField` would land in `req.body`.
+ * This is a mass-assignment risk.
+ *
+ * All validation in this module applies `.strict()` to the schema before
+ * parsing, which REJECTS unknown keys with a Zod error. This is
+ * defense-in-depth: even if a route spreads `req.body` into a DB write,
+ * unknown keys can't sneak through. The `.strict()` call is applied here
+ * (not in the generated schemas) so it doesn't affect the generated
+ * OpenAPI client types.
+ *
+ * Why not just use `z.object().strict()` in the generated schemas? Because
+ * orval regenerates those files — any manual edits would be overwritten on
+ * the next `pnpm --filter api-spec run generate`. Applying `.strict()` at
+ * the validation call site is the stable, maintainable approach.
  */
 
 import type { Request, Response, NextFunction } from "express";
@@ -76,6 +101,11 @@ function formatPath(path: (string | number)[]): string {
 /**
  * Shared 400 responder. Logs the validation failure (so it shows up in
  * production logs for debugging) and returns a structured error envelope.
+ *
+ * Gap #4 fix: the `error` field contains the FIRST issue's human-readable
+ * message (not a generic "Validation failed"), so existing clients that
+ * read `err.error` get a useful, field-specific message. The `details`
+ * array provides the full breakdown for new clients.
  */
 function respondValidationError(
   res: Response,
@@ -86,11 +116,38 @@ function respondValidationError(
     path: formatPath(issue.path),
     message: issue.message,
   }));
+  // Gap #4: use the first issue's message as the top-level `error` string.
+  // This keeps backward compat with clients that read `err.error` while
+  // giving them a useful, field-specific message instead of "Validation failed".
+  const primaryError = issues.length > 0 ? issues[0].message : "Validation failed";
   logger.warn({ schemaName, details }, "Request validation failed");
   res.status(400).json({
-    error: "Validation failed",
+    error: primaryError,
     details,
   });
+}
+
+/**
+ * Gap #5 fix: apply `.strict()` to a Zod schema so unknown keys are rejected.
+ *
+ * Zod's `z.object()` passes through unknown keys by default — a mass-assignment
+ * risk. `.strict()` rejects them with a Zod error. This helper applies
+ * `.strict()` if the schema supports it (object schemas do; coerce/record
+ * schemas may not). The `.strict()` call is defensive: if the schema doesn't
+ * have a `.strict()` method (e.g. it's a `z.coerce.number()`), we skip it.
+ *
+ * We use `any` here because Zod's `.strict()` is only on `ZodObject`, and
+ * TypeScript can't narrow that from `ZodTypeAny` without a runtime check.
+ */
+function makeStrict<T extends ZodTypeAny>(schema: T): T {
+  // `.strict()` exists on ZodObject. For other schema types (coerce, record,
+  // array, etc.), calling it would throw at runtime. We check at runtime
+  // whether the method exists before calling it.
+  const s = schema as unknown as { strict?: () => unknown };
+  if (typeof s.strict === "function") {
+    return s.strict() as T;
+  }
+  return schema;
 }
 
 /**
@@ -99,15 +156,18 @@ function respondValidationError(
  * On success, replaces `req.body` with the parsed (and coerced) value.
  * On failure, responds 400 and halts the middleware chain.
  *
+ * Gap #5: applies `.strict()` to reject unknown keys (mass-assignment defense).
+ *
  * @param schema A Zod object schema (e.g. `CreateOrderBody` from `@workspace/api-zod`).
- * @param schemaName Human-readable name for logging (defaults to schema's inferred name).
+ * @param schemaName Human-readable name for logging (defaults to "body").
  */
 export function validateBody<T extends ZodTypeAny>(
   schema: T,
   schemaName = "body",
 ) {
+  const strictSchema = makeStrict(schema);
   return async (req: Request, _res: Response, next: NextFunction) => {
-    const result = schema.safeParse(req.body);
+    const result = strictSchema.safeParse(req.body);
     if (!result.success) {
       respondValidationError(
         _res,
@@ -133,13 +193,16 @@ export function validateBody<T extends ZodTypeAny>(
  *
  * Query params arrive as strings (from the URL), so schemas typically use
  * `z.coerce.number()`, `z.coerce.boolean()`, etc. to convert them.
+ *
+ * Gap #5: applies `.strict()` to reject unknown query params.
  */
 export function validateQuery<T extends ZodTypeAny>(
   schema: T,
   schemaName = "query",
 ) {
+  const strictSchema = makeStrict(schema);
   return async (req: Request, _res: Response, next: NextFunction) => {
-    const result = schema.safeParse(req.query);
+    const result = strictSchema.safeParse(req.query);
     if (!result.success) {
       respondValidationError(
         _res,
@@ -161,13 +224,17 @@ export function validateQuery<T extends ZodTypeAny>(
  *
  * Path params arrive as strings, so schemas typically use
  * `z.coerce.number()` for numeric IDs.
+ *
+ * Gap #5: applies `.strict()` to reject unknown path params (rare, but
+ * consistent with body/query validation).
  */
 export function validateParams<T extends ZodTypeAny>(
   schema: T,
   schemaName = "params",
 ) {
+  const strictSchema = makeStrict(schema);
   return async (req: Request, _res: Response, next: NextFunction) => {
-    const result = schema.safeParse(req.params);
+    const result = strictSchema.safeParse(req.params);
     if (!result.success) {
       respondValidationError(
         _res,

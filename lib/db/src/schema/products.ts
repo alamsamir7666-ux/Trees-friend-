@@ -9,6 +9,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { sql } from "drizzle-orm";
 import { categoriesTable } from "./categories";
 
 /**
@@ -65,17 +66,20 @@ export const productsTable = pgTable(
     // category-products page (routes/products.ts:570-578). Without this
     // index the category filter seq-scans the products table.
     index("products_category_id_idx").on(table.categoryId),
-    // P0-2: composite index on homepageTag + deletedAt — supports the
-    // featured-products and homepage-products queries
-    // (routes/products.ts:383, 425, 430) which filter
-    // WHERE homepage_tag = ? AND deleted_at IS NULL. A partial index scoped
-    // to non-deleted rows would be marginally faster, but a plain composite
-    // also serves admin queries that filter by homepage_tag without the
-    // soft-delete filter.
-    index("products_homepage_tag_deleted_idx").on(
-      table.homepageTag,
-      table.deletedAt,
-    ),
+    // P0-2 (gap #2 fix): PARTIAL index on homepage_tag scoped to non-deleted
+    // rows. The common buyer-facing query pattern is
+    //   WHERE homepage_tag = ? AND deleted_at IS NULL
+    // (routes/products.ts:383, 425, 430 — featured + homepage queries).
+    // A partial index is smaller (only covers live rows) and faster than
+    // the previous composite (homepage_tag, deleted_at) because it skips
+    // deleted rows entirely. Matches the partial-index pattern already used
+    // in wishlist.ts. Admin queries that filter by homepage_tag without the
+    // soft-delete filter will fall back to a seq scan (rare; acceptable).
+    // Drizzle doesn't have a .where() on index() yet, so we use a raw
+    // partial index via sql (same pattern as wishlist.ts:51-56).
+    index("products_homepage_tag_active_idx")
+      .on(table.homepageTag)
+      .where(sql`deleted_at IS NULL`),
   ],
 );
 

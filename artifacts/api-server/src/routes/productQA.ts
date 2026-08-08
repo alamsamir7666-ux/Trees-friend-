@@ -4,6 +4,15 @@ import { db } from "@workspace/db";
 import { productQATable, ordersTable, sellerListingsTable } from "@workspace/db";
 import { eq, and, sql, desc, gt, isNull } from "drizzle-orm";
 import { requireAuth, requireAdmin, requireSeller } from "../middlewares/auth";
+import {
+  CreateProductQuestionBody,
+  CreateProductQuestionParams,
+  CreateSellerListingQuestionBody,
+  CreateSellerListingQuestionParams,
+  AnswerSellerListingQuestionBody,
+  AnswerSellerListingQuestionParams,
+} from "@workspace/api-zod";
+import { validateBody, validateParams } from "../lib/validateRequest";
 
 const router = Router();
 
@@ -47,14 +56,11 @@ router.get("/products/:productId/qa", async (req, res) => {
   }
 });
 
-router.post("/products/:productId/qa", requireAuth, async (req: any, res) => {
+router.post("/products/:productId/qa", requireAuth, validateParams(CreateProductQuestionParams, "CreateProductQuestionParams"), validateBody(CreateProductQuestionBody, "CreateProductQuestionBody"), async (req: any, res) => {
   try {
-    const productId = parseInt(req.params.productId);
-    if (isNaN(productId) || productId <= 0) {
-      res.status(400).json({ error: "Invalid product ID" });
-      return;
-    }
+    const productId = req.params.productId;  // P0-1: validated + coerced to number
     const { question } = req.body;
+    // P0-1: shape validated by Zod. Business rule: min 5 chars (semantic).
     if (!question || question.trim().length < 5) {
       res.status(400).json({ error: "Question must be at least 5 characters" });
       return;
@@ -148,21 +154,17 @@ router.get("/seller-listings/:sellerListingId/qa", async (req, res) => {
   }
 });
 
-router.post("/seller-listings/:sellerListingId/qa", requireAuth, async (req: any, res) => {
+router.post("/seller-listings/:sellerListingId/qa", requireAuth, validateParams(CreateSellerListingQuestionParams, "CreateSellerListingQuestionParams"), validateBody(CreateSellerListingQuestionBody, "CreateSellerListingQuestionBody"), async (req: any, res) => {
   try {
-    const sellerListingId = parseInt(req.params.sellerListingId);
-    if (isNaN(sellerListingId) || sellerListingId <= 0) {
-      res.status(400).json({ error: "Invalid seller listing ID" });
+    const sellerListingId = req.params.sellerListingId;  // P0-1: validated + coerced
+    const { question } = req.body;
+    if (!question || question.trim().length < 5) {
+      res.status(400).json({ error: "Question must be at least 5 characters" });
       return;
     }
     const [listing] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, sellerListingId));
     if (!listing) {
       res.status(404).json({ error: "Listing not found" });
-      return;
-    }
-    const { question } = req.body;
-    if (!question || question.trim().length < 5) {
-      res.status(400).json({ error: "Question must be at least 5 characters" });
       return;
     }
     if (question.trim().length > 500) {
@@ -218,13 +220,9 @@ router.post("/seller-listings/:sellerListingId/qa", requireAuth, async (req: any
 // req.dbSeller (an active seller row); the ownership check below is what
 // actually stops a seller answering on someone else's listing -- being
 // merely "a seller" isn't enough.
-router.put("/seller/qa/:id/answer", requireSeller, async (req: any, res) => {
+router.put("/seller/qa/:id/answer", requireSeller, validateParams(AnswerSellerListingQuestionParams, "AnswerSellerListingQuestionParams"), validateBody(AnswerSellerListingQuestionBody, "AnswerSellerListingQuestionBody"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid Q&A ID" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number
     const { answer } = req.body;
     if (!answer || answer.trim().length < 2) {
       res.status(400).json({ error: "Answer is required" });
@@ -266,13 +264,9 @@ router.put("/seller/qa/:id/answer", requireSeller, async (req: any, res) => {
   }
 });
 
-router.put("/admin/qa/:id/answer", requireAdmin, async (req: any, res) => {
+router.put("/admin/qa/:id/answer", requireAdmin, validateParams(AnswerSellerListingQuestionParams, "AnswerSellerListingQuestionParams"), validateBody(AnswerSellerListingQuestionBody, "AnswerSellerListingQuestionBody"), async (req: any, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid Q&A ID" });
-      return;
-    }
+    const id = req.params.id;  // P0-1: validated + coerced to number
     const { answer } = req.body;
     if (!answer || answer.trim().length < 2) {
       res.status(400).json({ error: "Answer is required" });

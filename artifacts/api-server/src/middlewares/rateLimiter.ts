@@ -142,7 +142,14 @@ export function createRateLimiter(options: {
           res.setHeader("X-RateLimit-Reset", Math.ceil(result.reset / 1000));
 
           if (!result.success) {
-            res.status(429).json({ error: message });
+            // Gap #3 fix: Retry-After header (RFC 9110 §10.2.3). Tells
+            // clients exactly how many seconds to wait before retrying.
+            // All major APIs (GitHub, Stripe, Twitter, AWS) include this
+            // on 429 responses. Without it, clients have to guess or poll.
+            // Upstash's result.reset is a Unix timestamp in ms.
+            const retryAfterSeconds = Math.max(1, Math.ceil((result.reset - Date.now()) / 1000));
+            res.setHeader("Retry-After", retryAfterSeconds);
+            res.status(429).json({ error: message, retryAfter: retryAfterSeconds });
             return;
           }
           next();
@@ -188,7 +195,11 @@ export function createRateLimiter(options: {
     res.setHeader("X-RateLimit-Reset", Math.ceil(entry.resetAt / 1000));
 
     if (entry.count > max) {
-      res.status(429).json({ error: message });
+      // Gap #3 fix: Retry-After header for the in-memory fallback path too.
+      // entry.resetAt is a Unix timestamp in ms.
+      const retryAfterSeconds = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+      res.setHeader("Retry-After", retryAfterSeconds);
+      res.status(429).json({ error: message, retryAfter: retryAfterSeconds });
       return;
     }
     next();
