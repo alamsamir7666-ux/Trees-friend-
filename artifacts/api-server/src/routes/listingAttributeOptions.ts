@@ -26,7 +26,7 @@ function toOption(o: typeof listingAttributeOptionsTable.$inferSelect) {
  * trust level as GET /categories, since this is just taxonomy data, not
  * anything seller- or order-specific.
  */
-router.get("/categories/:categoryId/listing-attribute-options", async (req: any, res) => {
+router.get("/categories/:categoryId/listing-attribute-options", async (req: ApiRequest, res) => {
   try {
     const categoryId = parseInt(req.params.categoryId);
     if (isNaN(categoryId) || categoryId <= 0) {
@@ -105,7 +105,7 @@ router.post("/admin/listing-attribute-options", requireAdmin, async (req, res) =
   }
 });
 
-router.put("/admin/listing-attribute-options/:id", requireAdmin, async (req: any, res) => {
+router.put("/admin/listing-attribute-options/:id", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -146,7 +146,7 @@ router.put("/admin/listing-attribute-options/:id", requireAdmin, async (req: any
  * dropdowns/validation, matching how removing a coupon doesn't unwind past
  * orders that used it.
  */
-router.delete("/admin/listing-attribute-options/:id", requireAdmin, async (req: any, res) => {
+router.delete("/admin/listing-attribute-options/:id", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -160,5 +160,6 @@ router.delete("/admin/listing-attribute-options/:id", requireAdmin, async (req: 
   }
 });
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

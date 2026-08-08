@@ -5,6 +5,7 @@ import { db } from "@workspace/db";
 import { returnsTable, ordersTable, sellersTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -25,9 +26,9 @@ function fmt(r: typeof returnsTable.$inferSelect) {
 }
 
 // User: Request a return
-router.post("/returns", requireAuth, async (req: any, res) => {
+router.post("/returns", requireAuth, async (req: ApiRequest, res) => {
   try {
-    const { orderId, reason } = req.body;
+    const { orderId, reason } = req.body as any;
     if (!orderId || isNaN(Number(orderId))) {
       res.status(400).json({ error: "Valid order ID is required" });
       return;
@@ -41,7 +42,7 @@ router.post("/returns", requireAuth, async (req: any, res) => {
     const [order] = await db
       .select({ id: ordersTable.id, orderStatus: ordersTable.orderStatus, userId: ordersTable.userId, updatedAt: ordersTable.updatedAt })
       .from(ordersTable)
-      .where(and(eq(ordersTable.id, Number(orderId)), eq(ordersTable.userId, req.userId)))
+      .where(and(eq(ordersTable.id, Number(orderId)), eq(ordersTable.userId, req.userId!)))
       .limit(1);
 
     if (!order) {
@@ -75,7 +76,7 @@ router.post("/returns", requireAuth, async (req: any, res) => {
 
     const [returnReq] = await db
       .insert(returnsTable)
-      .values({ orderId: Number(orderId), userId: req.userId, reason: reason.trim() })
+      .values({ orderId: Number(orderId), userId: req.userId!, reason: reason.trim() })
       .returning();
 
     res.status(201).json(fmt(returnReq));
@@ -86,12 +87,12 @@ router.post("/returns", requireAuth, async (req: any, res) => {
 });
 
 // User: Get own returns
-router.get("/returns/me", requireAuth, async (req: any, res) => {
+router.get("/returns/me", requireAuth, async (req: ApiRequest, res) => {
   try {
     const returns = await db
       .select()
       .from(returnsTable)
-      .where(eq(returnsTable.userId, req.userId))
+      .where(eq(returnsTable.userId, req.userId!))
       .orderBy(desc(returnsTable.createdAt));
     res.json(returns.map(fmt));
   } catch (err) {
@@ -149,14 +150,14 @@ router.get("/admin/returns", requireAdmin, async (_req, res) => {
 });
 
 // Admin: Update return status
-router.put("/admin/returns/:id", requireAdmin, async (req: any, res) => {
+router.put("/admin/returns/:id", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
       res.status(400).json({ error: "Invalid return ID" });
       return;
     }
-    const { status, adminNote, refundAmount } = req.body;
+    const { status, adminNote, refundAmount } = req.body as any;
     if (!status || !VALID_RETURN_STATUSES.includes(status)) {
       res.status(400).json({ error: "Invalid return status" });
       return;
@@ -188,7 +189,7 @@ router.put("/admin/returns/:id", requireAdmin, async (req: any, res) => {
         .where(eq(ordersTable.id, updated.orderId));
     }
 
-    await logAudit({ adminId: req.userId, adminEmail: req.dbUser?.email, action: "return.updated", targetType: "return", targetId: String(id) });
+    await logAudit({ adminId: req.userId!, adminEmail: req.dbUser?.email ?? undefined, action: "return.updated", targetType: "return", targetId: String(id) });
     res.json(fmt(updated));
   } catch (err) {
     logger.error({ err }, "Route handler error");

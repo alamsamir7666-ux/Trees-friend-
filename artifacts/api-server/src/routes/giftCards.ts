@@ -6,6 +6,7 @@ import { giftCardsTable, giftCardTransactionsTable } from "@workspace/db";
 import { eq, and, gte } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import crypto from "crypto";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -66,12 +67,12 @@ router.get("/gift-cards/check/:code", async (req, res) => {
 });
 
 // GET /gift-cards/my — cards purchased by current user
-router.get("/gift-cards/my", requireAuth, async (req: any, res) => {
+router.get("/gift-cards/my", requireAuth, async (req: ApiRequest, res) => {
   try {
     const cards = await db
       .select()
       .from(giftCardsTable)
-      .where(eq(giftCardsTable.purchasedByUserId, req.userId));
+      .where(eq(giftCardsTable.purchasedByUserId, req.userId!));
     res.json(cards.map(formatCard));
   } catch (err) {
     logger.error({ err }, "Route handler error");
@@ -80,9 +81,9 @@ router.get("/gift-cards/my", requireAuth, async (req: any, res) => {
 });
 
 // POST /gift-cards — purchase a gift card
-router.post("/gift-cards", requireAuth, async (req: any, res) => {
+router.post("/gift-cards", requireAuth, async (req: ApiRequest, res) => {
   try {
-    const { amount, recipientEmail, recipientName, message, expiryDays } = req.body;
+    const { amount, recipientEmail, recipientName, message, expiryDays } = req.body as any;
 
     const amountNum = Number(amount);
     if (isNaN(amountNum) || amountNum < 100) {
@@ -129,9 +130,9 @@ router.post("/gift-cards", requireAuth, async (req: any, res) => {
 
 // POST /gift-cards/redeem — apply to an order (called internally from orders route)
 // Body: { code, amount, orderId, userId }
-router.post("/gift-cards/redeem", requireAuth, async (req: any, res) => {
+router.post("/gift-cards/redeem", requireAuth, async (req: ApiRequest, res) => {
   try {
-    const { code, amount } = req.body;
+    const { code, amount } = req.body as any;
     const debitAmount = Number(amount);
 
     if (!code || isNaN(debitAmount) || debitAmount <= 0) {
@@ -173,7 +174,7 @@ router.post("/gift-cards/redeem", requireAuth, async (req: any, res) => {
 
     await db.insert(giftCardTransactionsTable).values({
       giftCardId: card.id,
-      userId: req.userId,
+      userId: req.userId!,
       amount: (-debitAmount).toFixed(2),
       balanceAfter: newBalance.toFixed(2),
       note: "Order redemption",

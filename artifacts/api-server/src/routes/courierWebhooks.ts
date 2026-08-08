@@ -100,7 +100,7 @@ function safeCompare(a: string, b: string): boolean {
  * Rejects with 401 before the request reaches handleCourierWebhook() at
  * all -- no shipment/order lookup, no DB write, on a failed check.
  */
-function requireCourierWebhookSecret(req: any, res: any, next: any) {
+function requireCourierWebhookSecret(req: ApiRequest, res: any, next: any) {
   const provided = req.get("X-Courier-Webhook-Secret") ?? req.query.secret;
   if (typeof provided !== "string" || !safeCompare(provided, COURIER_WEBHOOK_SECRET as string)) {
     res.status(401).json({ ok: false, reason: "unauthorized" });
@@ -120,7 +120,7 @@ function requireCourierWebhookSecret(req: any, res: any, next: any) {
  * PATHAO_WEBHOOK_SECRET is set, since the mandatory shared secret above
  * already covers this route either way.
  */
-function verifyPathaoSignature(req: any): boolean {
+function verifyPathaoSignature(req: ApiRequest): boolean {
   const configured = process.env.PATHAO_WEBHOOK_SECRET;
   if (!configured) return true; // not configured -- shared secret above still applies
   const signature = req.get("X-PATHAO-Signature");
@@ -136,7 +136,7 @@ function verifyPathaoSignature(req: any): boolean {
  * STEADFAST_WEBHOOK_BEARER_TOKEN is set, since the mandatory shared secret
  * above already covers this route either way.
  */
-function verifySteadfastBearerToken(req: any): boolean {
+function verifySteadfastBearerToken(req: ApiRequest): boolean {
   const configured = process.env.STEADFAST_WEBHOOK_BEARER_TOKEN;
   if (!configured) return true; // not configured -- shared secret above still applies
   const header = req.get("Authorization");
@@ -281,5 +281,6 @@ router.post("/webhooks/courier/steadfast", requireCourierWebhookSecret, async (r
   }
 });
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

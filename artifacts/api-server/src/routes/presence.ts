@@ -4,6 +4,7 @@ import { usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 /**
  * Presence route — tracks user online/offline/last-seen status for chat.
@@ -56,12 +57,12 @@ const router = Router();
 // ─── POST /presence/heartbeat ──────────────────────────────────────────────
 // Updates the caller's last_seen_at to NOW(). Called by the frontend every
 // 30 seconds while the user is active, and on visibilitychange/focus events.
-router.post("/presence/heartbeat", requireAuth, async (req: any, res) => {
+router.post("/presence/heartbeat", requireAuth, async (req: ApiRequest, res) => {
   try {
     await db
       .update(usersTable)
       .set({ lastSeenAt: new Date(), updatedAt: new Date() })
-      .where(eq(usersTable.clerkId, req.userId));
+      .where(eq(usersTable.clerkId, req.userId!));
 
     res.json({ ok: true });
   } catch (err) {
@@ -79,12 +80,12 @@ router.post("/presence/heartbeat", requireAuth, async (req: any, res) => {
 // Uses fire-and-forget semantics — the response is not awaited by the
 // client (the page is unloading). The `keepalive` flag on the fetch
 // ensures the request completes even after the page is gone.
-router.post("/presence/offline", requireAuth, async (req: any, res) => {
+router.post("/presence/offline", requireAuth, async (req: ApiRequest, res) => {
   try {
     await db
       .update(usersTable)
       .set({ lastSeenAt: new Date(), updatedAt: new Date() })
-      .where(eq(usersTable.clerkId, req.userId));
+      .where(eq(usersTable.clerkId, req.userId!));
 
     res.json({ ok: true });
   } catch (err) {
@@ -96,7 +97,7 @@ router.post("/presence/offline", requireAuth, async (req: any, res) => {
 // ─── GET /presence/:clerkUserId ────────────────────────────────────────────
 // Returns the presence status of another user. Used by the chat header to
 // show "Online" or "last seen at <time>" for the other party.
-router.get("/presence/:clerkUserId", requireAuth, async (req: any, res) => {
+router.get("/presence/:clerkUserId", requireAuth, async (req: ApiRequest, res) => {
   try {
     const { clerkUserId } = req.params;
     if (!clerkUserId || typeof clerkUserId !== "string") {

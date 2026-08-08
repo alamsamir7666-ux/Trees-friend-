@@ -6,6 +6,7 @@ import { subscriptionsTable, productsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import type { SubscriptionItem, SubscriptionAddress } from "@workspace/db";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -43,12 +44,12 @@ function formatSub(s: typeof subscriptionsTable.$inferSelect) {
 }
 
 // GET /subscriptions — list user's subscriptions
-router.get("/subscriptions", requireAuth, async (req: any, res) => {
+router.get("/subscriptions", requireAuth, async (req: ApiRequest, res) => {
   try {
     const subs = await db
       .select()
       .from(subscriptionsTable)
-      .where(eq(subscriptionsTable.userId, req.userId));
+      .where(eq(subscriptionsTable.userId, req.userId!));
     res.json(subs.map(formatSub));
   } catch (err) {
     logger.error({ err }, "Route handler error");
@@ -57,13 +58,13 @@ router.get("/subscriptions", requireAuth, async (req: any, res) => {
 });
 
 // GET /subscriptions/:id — single subscription
-router.get("/subscriptions/:id", requireAuth, async (req: any, res) => {
+router.get("/subscriptions/:id", requireAuth, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     const [sub] = await db
       .select()
       .from(subscriptionsTable)
-      .where(and(eq(subscriptionsTable.id, id), eq(subscriptionsTable.userId, req.userId)))
+      .where(and(eq(subscriptionsTable.id, id), eq(subscriptionsTable.userId, req.userId!)))
       .limit(1);
     if (!sub) { res.status(404).json({ error: "Not found" }); return; }
     res.json(formatSub(sub));
@@ -74,9 +75,9 @@ router.get("/subscriptions/:id", requireAuth, async (req: any, res) => {
 });
 
 // POST /subscriptions — create a new subscription
-router.post("/subscriptions", requireAuth, async (req: any, res) => {
+router.post("/subscriptions", requireAuth, async (req: ApiRequest, res) => {
   try {
-    const { items, frequency, shippingAddress, paymentMethod, notes } = req.body;
+    const { items, frequency, shippingAddress, paymentMethod, notes } = req.body as any;
 
     if (!items?.length) {
       res.status(400).json({ error: "At least one item is required" });
@@ -107,7 +108,7 @@ router.post("/subscriptions", requireAuth, async (req: any, res) => {
     const [sub] = await db
       .insert(subscriptionsTable)
       .values({
-        userId: req.userId,
+        userId: req.userId!,
         status: "active",
         frequency,
         items,
@@ -128,15 +129,15 @@ router.post("/subscriptions", requireAuth, async (req: any, res) => {
 });
 
 // PATCH /subscriptions/:id — pause, resume, cancel, or update frequency
-router.patch("/subscriptions/:id", requireAuth, async (req: any, res) => {
+router.patch("/subscriptions/:id", requireAuth, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
-    const { status, frequency, shippingAddress, notes } = req.body;
+    const { status, frequency, shippingAddress, notes } = req.body as any;
 
     const [sub] = await db
       .select()
       .from(subscriptionsTable)
-      .where(and(eq(subscriptionsTable.id, id), eq(subscriptionsTable.userId, req.userId)))
+      .where(and(eq(subscriptionsTable.id, id), eq(subscriptionsTable.userId, req.userId!)))
       .limit(1);
 
     if (!sub) { res.status(404).json({ error: "Not found" }); return; }
@@ -173,13 +174,13 @@ router.patch("/subscriptions/:id", requireAuth, async (req: any, res) => {
 });
 
 // DELETE /subscriptions/:id — hard cancel
-router.delete("/subscriptions/:id", requireAuth, async (req: any, res) => {
+router.delete("/subscriptions/:id", requireAuth, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     const [sub] = await db
       .select()
       .from(subscriptionsTable)
-      .where(and(eq(subscriptionsTable.id, id), eq(subscriptionsTable.userId, req.userId)))
+      .where(and(eq(subscriptionsTable.id, id), eq(subscriptionsTable.userId, req.userId!)))
       .limit(1);
     if (!sub) { res.status(404).json({ error: "Not found" }); return; }
 

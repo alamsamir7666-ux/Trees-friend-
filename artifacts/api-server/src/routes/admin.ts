@@ -16,6 +16,7 @@ import { sendOrderStatusUpdate } from "../lib/email";
 import { logAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { attemptSellerPayout } from "../lib/payouts";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -245,7 +246,7 @@ router.get("/admin/orders/stats", requireAdmin, async (_req, res) => {
   }
 });
 
-router.get("/admin/orders/archived", requireAdmin, async (req: any, res) => {
+router.get("/admin/orders/archived", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const { page = "1" } = req.query as Record<string, string>;
     const pageNum = Math.max(1, parseInt(page));
@@ -380,7 +381,7 @@ router.get("/admin/orders/archived", requireAdmin, async (req: any, res) => {
   }
 });
 
-router.get("/admin/orders", requireAdmin, async (req: any, res) => {
+router.get("/admin/orders", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const { status, page = "1" } = req.query as Record<string, string>;
     const pageNum = Math.max(1, parseInt(page));
@@ -464,7 +465,7 @@ router.get("/admin/orders", requireAdmin, async (req: any, res) => {
   }
 });
 
-router.put("/admin/orders/:id/status", requireAdmin, async (req: any, res) => {
+router.put("/admin/orders/:id/status", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -472,7 +473,7 @@ router.put("/admin/orders/:id/status", requireAdmin, async (req: any, res) => {
       return;
     }
 
-    const { orderStatus, cancellationReason } = req.body;
+    const { orderStatus, cancellationReason } = req.body as any;
 
     if (!orderStatus || !VALID_ORDER_STATUSES.includes(orderStatus)) {
       res.status(400).json({ error: "Invalid order status" });
@@ -553,21 +554,21 @@ router.put("/admin/orders/:id/status", requireAdmin, async (req: any, res) => {
       }
     }
 
-    await logAudit({ adminId: req.userId, adminEmail: req.dbUser?.email, action: "order.status_changed", targetType: "order", targetId: String(id), after: { status: orderStatus } });
+    await logAudit({ adminId: req.userId!, adminEmail: req.dbUser?.email ?? undefined, action: "order.status_changed", targetType: "order", targetId: String(id), after: { status: orderStatus } });
     res.json(formatOrder(order));
   } catch (err) {
     res.status(500).json({ error: "Failed to update order status" });
   }
 });
 
-router.put("/admin/orders/:id/payment", requireAdmin, async (req: any, res) => {
+router.put("/admin/orders/:id/payment", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
       res.status(400).json({ error: "Invalid order ID" });
       return;
     }
-    const { paymentStatus } = req.body;
+    const { paymentStatus } = req.body as any;
 
     if (!paymentStatus || !VALID_PAYMENT_STATUSES.includes(paymentStatus)) {
       res.status(400).json({ error: "Invalid payment status" });
@@ -585,7 +586,7 @@ router.put("/admin/orders/:id/payment", requireAdmin, async (req: any, res) => {
       return;
     }
 
-    await logAudit({ adminId: req.userId, adminEmail: req.dbUser?.email, action: "order.payment_updated", targetType: "order", targetId: String(id), after: { paymentStatus } });
+    await logAudit({ adminId: req.userId!, adminEmail: req.dbUser?.email ?? undefined, action: "order.payment_updated", targetType: "order", targetId: String(id), after: { paymentStatus } });
     res.json(formatOrder(order));
   } catch (err) {
     res.status(500).json({ error: "Failed to update payment status" });
@@ -689,14 +690,14 @@ router.get("/admin/users", requireAdmin, async (_req, res) => {
   }
 });
 
-router.put("/admin/users/:id/block", requireAdmin, async (req: any, res) => {
+router.put("/admin/users/:id/block", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
       res.status(400).json({ error: "Invalid user ID" });
       return;
     }
-    const { isBlocked } = req.body;
+    const { isBlocked } = req.body as any;
     if (typeof isBlocked !== "boolean") {
       res.status(400).json({ error: "isBlocked must be a boolean" });
       return;
@@ -792,7 +793,7 @@ function formatPayout(p: PayoutWithContext) {
  * timestamped historical record rather than something evolving over time
  * the way an order's orderStatus does.
  */
-router.get("/admin/payouts", requireAdmin, async (req: any, res) => {
+router.get("/admin/payouts", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const { status, page = "1" } = req.query as Record<string, string>;
     const pageNum = Math.max(1, parseInt(page));
@@ -875,7 +876,7 @@ router.get("/admin/payouts", requireAdmin, async (req: any, res) => {
  * and simply return null with nothing recorded, but rejecting it here
  * with a clear 400 is a better experience than a silent no-op).
  */
-router.post("/admin/payouts/:id/retry", requireAdmin, async (req: any, res) => {
+router.post("/admin/payouts/:id/retry", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -907,8 +908,8 @@ router.post("/admin/payouts/:id/retry", requireAdmin, async (req: any, res) => {
     const result = await attemptSellerPayout(order);
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "payout.manual_retry",
       targetType: "payout",
       targetId: String(id),
@@ -984,7 +985,7 @@ router.post("/admin/payouts/:id/retry", requireAdmin, async (req: any, res) => {
  * constraining it would assume a shape this deliberately-freeform field
  * doesn't need to have.
  */
-router.patch("/admin/payouts/:id/note", requireAdmin, async (req: any, res) => {
+router.patch("/admin/payouts/:id/note", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -1029,8 +1030,8 @@ router.patch("/admin/payouts/:id/note", requireAdmin, async (req: any, res) => {
     }
 
     await logAudit({
-      adminId: req.userId,
-      adminEmail: req.dbUser?.email,
+      adminId: req.userId!,
+      adminEmail: req.dbUser?.email ?? undefined,
       action: "payout.note_updated",
       targetType: "payout",
       targetId: String(id),

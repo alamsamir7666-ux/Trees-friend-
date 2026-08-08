@@ -685,7 +685,7 @@ router.post("/seller-listings", requireSeller, async (req, res) => {
       offerText,
       certification,
       tags,
-    } = req.body;
+    } = req.body as any;
 
     if (!productId || isNaN(Number(productId))) {
       res.status(400).json({ error: "productId is required" });
@@ -798,7 +798,7 @@ router.post("/seller-listings", requireSeller, async (req, res) => {
 
 /**
  * Seller: update their own listing, and manage its variants. Ownership is
- * checked explicitly (sellerId must match req.dbSeller.id) -- requireSeller
+ * checked explicitly (sellerId must match req.dbSeller!.id) -- requireSeller
  * only confirms the caller IS an active seller, not that they own THIS
  * listing.
  *
@@ -825,7 +825,7 @@ router.post("/seller-listings", requireSeller, async (req, res) => {
  * (same "a listing needs >=1 variant to be purchasable" rule as POST) --
  * rejected if deletions would leave zero.
  */
-router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
+router.put("/seller-listings/:id", requireSeller, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -847,7 +847,7 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
       deliveryTimeDays, warrantyDays, returnPolicyText,
       paymentMethod, images, videoUrl, description, offerText, certification, tags, visibility,
       variants, deletedVariantIds,
-    } = req.body;
+    } = req.body as any;
 
     if (paymentMethod !== undefined && !["cod", "advance", "both"].includes(paymentMethod)) {
       res.status(400).json({ error: 'paymentMethod must be "cod", "advance", or "both"' });
@@ -1095,7 +1095,7 @@ router.put("/seller-listings/:id", requireSeller, async (req: any, res) => {
  * in this codebase (no soft-delete convention exists here to follow
  * instead).
  */
-router.delete("/seller-listings/:id", requireSeller, async (req: any, res) => {
+router.delete("/seller-listings/:id", requireSeller, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -1196,7 +1196,7 @@ router.post("/seller-listings/upload-image", requireSeller, uploadMiddleware.arr
  * built here since the plan doesn't define its filter set -- flagging
  * rather than guessing which fields it should filter on.
  */
-router.get("/products/:productId/seller-listings", async (req: any, res) => {
+router.get("/products/:productId/seller-listings", async (req: ApiRequest, res) => {
   try {
     const productId = parseInt(req.params.productId);
     if (isNaN(productId) || productId <= 0) {
@@ -1399,7 +1399,7 @@ router.get("/seller-listings/:id", async (req, res) => {
  * clutter a seller's product grid, though its detail page is still
  * independently reachable.
  */
-router.get("/sellers/:id/listings", async (req: any, res) => {
+router.get("/sellers/:id/listings", async (req: ApiRequest, res) => {
   try {
     const sellerId = parseInt(req.params.id);
     if (isNaN(sellerId) || sellerId <= 0) {
@@ -1516,15 +1516,15 @@ router.get("/sellers/:id/listings", async (req: any, res) => {
  * today's catalog. (If the seller itself is suspended/deleted, the page
  * calling this is unreachable in the first place -- see GET /sellers/:id.)
  */
-router.get("/sellers/:id/reviews", async (req: any, res) => {
+router.get("/sellers/:id/reviews", async (req: ApiRequest, res) => {
   try {
     const sellerId = parseInt(req.params.id);
     if (isNaN(sellerId) || sellerId <= 0) {
       res.status(400).json({ error: "Invalid seller id" });
       return;
     }
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 10));
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 10));
     const offset = (page - 1) * limit;
 
     const [reviews, totalRow, breakdownRows] = await Promise.all([
@@ -1626,7 +1626,7 @@ router.get("/admin/seller-listings", requireAdmin, async (req, res) => {
   }
 });
 
-router.put("/admin/seller-listings/:id/approve", requireAdmin, async (req: any, res) => {
+router.put("/admin/seller-listings/:id/approve", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -1652,7 +1652,7 @@ router.put("/admin/seller-listings/:id/approve", requireAdmin, async (req: any, 
   }
 });
 
-router.put("/admin/seller-listings/:id/reject", requireAdmin, async (req: any, res) => {
+router.put("/admin/seller-listings/:id/reject", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -1679,5 +1679,6 @@ router.put("/admin/seller-listings/:id/reject", requireAdmin, async (req: any, r
   }
 });
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

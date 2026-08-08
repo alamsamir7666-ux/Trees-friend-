@@ -19,6 +19,7 @@ import type { SQL } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../middlewares/auth";
 import { notifyStockAlerts } from "./stockAlerts";
 import { notifyPreOrderCustomers } from "./preOrders";
+import type { ApiRequest } from "../types/apiRequest";
 
 cloudinaryV2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -455,20 +456,20 @@ router.get("/products/homepage", async (_req, res) => {
   }
 });
 
-router.post("/products/upload-image", requireAuth, requireAdmin, uploadMiddleware.array("images", 4), async (req: any, res) => {
+router.post("/products/upload-image", requireAuth, requireAdmin, uploadMiddleware.array("images", 4), async (req: ApiRequest, res) => {
   try {
     const files = req.files as Express.Multer.File[];
     if (!files || files.length === 0) {
       res.status(400).json({ error: "No files uploaded" }); return;
     }
-    const rawName = req.body.productName;
+    const rawName = (req.body as any).productName;
     const productName = Array.isArray(rawName) ? String(rawName[0] ?? "") : String(rawName ?? "");
     const slug = productName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
       .slice(0, 60);
-    const startIndex = parseInt(req.body.startIndex ?? "0") || 0;
+    const startIndex = parseInt((req.body as any).startIndex ?? "0") || 0;
     const urls = await Promise.all(files.map((file, idx) => new Promise<string>((resolve, reject) => {
       const absoluteIdx = startIndex + idx;
       const publicId = slug ? `${slug}-${absoluteIdx + 1}-${Date.now()}` : undefined;
@@ -645,7 +646,7 @@ router.get("/products", async (req, res) => {
  * as of this phase -- sellers create their own price/stock data via
  * seller-listings.ts instead (plan doc's overall goal for this migration).
  */
-router.post("/products", requireAdmin, async (req: any, res) => {
+router.post("/products", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const {
       name,
@@ -664,7 +665,7 @@ router.post("/products", requireAdmin, async (req: any, res) => {
       keyBenefits,
       bestFor,
       careTips,
-    } = req.body;
+    } = req.body as any;
 
     if (!name || typeof name !== "string" || name.trim().length === 0) {
       res.status(400).json({ error: "Product name is required" });
@@ -705,7 +706,7 @@ router.post("/products", requireAdmin, async (req: any, res) => {
         keyBenefits: keyBenefits ?? [],
         bestFor: bestFor ?? [],
         careTips: careTips ?? [],
-        videoUrl: req.body.videoUrl ?? null,
+        videoUrl: (req.body as any).videoUrl ?? null,
         images: images ?? [],
         homepageTag: homepageTag || null,
       })
@@ -718,7 +719,7 @@ router.post("/products", requireAdmin, async (req: any, res) => {
   }
 });
 
-router.put("/products/:id", requireAdmin, async (req: any, res) => {
+router.put("/products/:id", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -742,7 +743,7 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
       keyBenefits,
       bestFor,
       careTips,
-    } = req.body;
+    } = req.body as any;
 
     // Phase 2: a `variants` field in the body, if present, is silently
     // ignored -- same rationale as POST /products above. admin no longer
@@ -763,7 +764,7 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
     if (keyBenefits !== undefined) updates.keyBenefits = keyBenefits;
     if (bestFor !== undefined) updates.bestFor = bestFor;
     if (careTips !== undefined) updates.careTips = careTips;
-    if (req.body.videoUrl !== undefined) updates.videoUrl = req.body.videoUrl;
+    if ((req.body as any).videoUrl !== undefined) updates.videoUrl = (req.body as any).videoUrl;
     if (images !== undefined) updates.images = images;
     if (homepageTag !== undefined) updates.homepageTag = homepageTag || null;
     // Phase 5: productStatus is no longer admin-settable. There is no
@@ -842,7 +843,7 @@ router.put("/products/:id", requireAdmin, async (req: any, res) => {
   }
 });
 
-router.delete("/products/:id", requireAdmin, async (req: any, res) => {
+router.delete("/products/:id", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -870,7 +871,7 @@ router.delete("/products/:id", requireAdmin, async (req: any, res) => {
   }
 });
 
-router.post("/products/:id/duplicate", requireAdmin, async (req: any, res) => {
+router.post("/products/:id/duplicate", requireAdmin, async (req: ApiRequest, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {

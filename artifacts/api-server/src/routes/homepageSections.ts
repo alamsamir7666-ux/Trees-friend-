@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { homepageSectionsTable } from "@workspace/db";
 import { eq, asc } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
+import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
@@ -27,7 +28,7 @@ router.get("/homepage-sections", async (_req, res) => {
 });
 
 // ── POST /homepage-sections — admin creates a new section ────────────────────
-router.post("/homepage-sections", requireAdmin, async (req: any, res) => {
+router.post("/homepage-sections", requireAdmin, async (req: ApiRequest, res) => {
   const { label } = req.body as { label: string };
   if (!label?.trim()) {
     res.status(400).json({ error: "label is required" });
@@ -57,7 +58,7 @@ router.post("/homepage-sections", requireAdmin, async (req: any, res) => {
 
 // ── PATCH /homepage-sections/reorder — admin drag-reorders tabs ──────────────
 // Body: { ids: number[] }  — ordered array of section ids
-router.patch("/homepage-sections/reorder", requireAdmin, async (req: any, res) => {
+router.patch("/homepage-sections/reorder", requireAdmin, async (req: ApiRequest, res) => {
   const { ids } = req.body as { ids: number[] };
   if (!Array.isArray(ids) || ids.length === 0) {
     res.status(400).json({ error: "ids array is required" });
@@ -82,7 +83,7 @@ router.patch("/homepage-sections/reorder", requireAdmin, async (req: any, res) =
 });
 
 // ── DELETE /homepage-sections/:id — admin deletes a section ─────────────────
-router.delete("/homepage-sections/:id", requireAdmin, async (req: any, res) => {
+router.delete("/homepage-sections/:id", requireAdmin, async (req: ApiRequest, res) => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) {
     res.status(400).json({ error: "invalid id" });

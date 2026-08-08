@@ -59,7 +59,7 @@ function estimateWeightKg(items: OrderItem[]): number {
  * check via orders.sellerId, same pattern as sellerListings.ts's
  * "You don't own this listing" 403.
  */
-router.get("/seller/orders/:orderId/shipment", requireSeller, async (req: any, res) => {
+router.get("/seller/orders/:orderId/shipment", requireSeller, async (req: ApiRequest, res) => {
   try {
     const orderId = parseInt(req.params.orderId);
     if (isNaN(orderId) || orderId <= 0) {
@@ -105,7 +105,7 @@ router.get("/seller/orders/:orderId/shipment", requireSeller, async (req: any, r
  * payment configs. Previously this check didn't exist at all (see prior
  * comment, now stale); that gap is closed.
  */
-router.post("/seller/orders/:orderId/book-courier", requireSeller, async (req: any, res) => {
+router.post("/seller/orders/:orderId/book-courier", requireSeller, async (req: ApiRequest, res) => {
   try {
     const orderId = parseInt(req.params.orderId);
     if (isNaN(orderId) || orderId <= 0) {
@@ -242,7 +242,7 @@ router.post("/seller/orders/:orderId/book-courier", requireSeller, async (req: a
  * the plan doc doesn't say manual updates are exclusive to manual-only
  * sellers, just that manual-only sellers have no other option.
  */
-router.put("/seller/orders/:orderId/shipment-status", requireSeller, async (req: any, res) => {
+router.put("/seller/orders/:orderId/shipment-status", requireSeller, async (req: ApiRequest, res) => {
   try {
     const orderId = parseInt(req.params.orderId);
     if (isNaN(orderId) || orderId <= 0) {
@@ -298,7 +298,7 @@ router.put("/seller/orders/:orderId/shipment-status", requireSeller, async (req:
  * in that response, since not every order has a shipment yet and orders.ts
  * is Part 3 scope this session shouldn't be reshaping.
  */
-router.get("/orders/:orderId/shipment", requireAuth, async (req: any, res) => {
+router.get("/orders/:orderId/shipment", requireAuth, async (req: ApiRequest, res) => {
   try {
     const orderId = parseInt(req.params.orderId);
     if (isNaN(orderId) || orderId <= 0) {
@@ -308,7 +308,7 @@ router.get("/orders/:orderId/shipment", requireAuth, async (req: any, res) => {
     const [order] = await db
       .select()
       .from(ordersTable)
-      .where(and(eq(ordersTable.id, orderId), eq(ordersTable.userId, req.userId)))
+      .where(and(eq(ordersTable.id, orderId), eq(ordersTable.userId, req.userId!)))
       .limit(1);
     if (!order) {
       res.status(404).json({ error: "Order not found" });
@@ -326,5 +326,6 @@ router.get("/orders/:orderId/shipment", requireAuth, async (req: any, res) => {
   }
 });
 import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
 
 export default router;
