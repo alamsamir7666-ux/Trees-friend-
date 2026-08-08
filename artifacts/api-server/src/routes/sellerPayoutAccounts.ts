@@ -3,6 +3,19 @@ import { db } from "@workspace/db";
 import { sellerPayoutAccountsTable, isValidBdPhone } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireSeller } from "../middlewares/auth";
+import { z } from "zod";
+import { validateBody } from "../lib/validateRequest";
+import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
+
+// VAL-MIGRATE-1: hand-authored schema (OpenAPI spec doesn't cover this POST body).
+// Matches the existing manual checks exactly:
+// - bkashNumber: required string (isValidBdPhone format check is a business rule below)
+// - accountHolderName: optional string
+const CreateSellerPayoutAccountBody = z.object({
+  bkashNumber: z.string(),
+  accountHolderName: z.string().optional(),
+});
 
 /**
  * Seller-only: register/update/remove the plain bKash NUMBER a seller gets
@@ -67,14 +80,14 @@ router.get("/seller-payout-accounts/mine", requireSeller, async (req, res) => {
  * table has none -- a payout number isn't "verified" the way merchant API
  * credentials are, there's no live check being gated).
  */
-router.post("/seller-payout-accounts", requireSeller, async (req, res) => {
+router.post("/seller-payout-accounts", requireSeller, validateBody(CreateSellerPayoutAccountBody, "CreateSellerPayoutAccountBody"), async (req: ApiRequest<z.infer<typeof CreateSellerPayoutAccountBody>>, res) => {
   try {
-    const { bkashNumber, accountHolderName } = req.body as {
-      bkashNumber?: string;
-      accountHolderName?: string;
-    };
+    const { bkashNumber, accountHolderName } = req.body;
 
-    if (!bkashNumber || typeof bkashNumber !== "string" || !bkashNumber.trim()) {
+    // VAL-MIGRATE-1: Zod validates shape (bkashNumber: string, accountHolderName:
+    // string | undefined). isValidBdPhone is a business rule (BD phone format
+    // check) — kept as a semantic check, same as sellerPayoutAccounts has always done.
+    if (!bkashNumber.trim()) {
       res.status(400).json({ error: "bkashNumber is required" });
       return;
     }
@@ -82,10 +95,6 @@ router.post("/seller-payout-accounts", requireSeller, async (req, res) => {
       res.status(400).json({
         error: "bkashNumber doesn't look like a valid Bangladeshi mobile number (e.g. 01712345678)",
       });
-      return;
-    }
-    if (accountHolderName !== undefined && typeof accountHolderName !== "string") {
-      res.status(400).json({ error: "accountHolderName must be a string" });
       return;
     }
 
@@ -128,6 +137,5 @@ router.delete("/seller-payout-accounts/mine", requireSeller, async (req, res) =>
     res.status(500).json({ error: "Failed to delete payout account" });
   }
 });
-import { logger } from "../lib/logger";
 
 export default router;
