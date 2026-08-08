@@ -4,6 +4,11 @@ import { ordersTable, orderShipmentsTable, usersTable } from "@workspace/db";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { requireSeller } from "../middlewares/auth";
 import { sendOrderStatusUpdate } from "../lib/email";
+import { GetSellerOrderParams, UpdateSellerOrderStatusParams, UpdateSellerOrderStatusBody } from "@workspace/api-zod";
+import { validateBody, validateParams } from "../lib/validateRequest";
+import { logger } from "../lib/logger";
+import type { ApiRequest } from "../types/apiRequest";
+import type { z } from "zod";
 
 /**
  * Seller "Manage Orders" (plan doc §4). Deliberately a separate file from
@@ -112,13 +117,9 @@ router.get("/seller/orders", requireSeller, async (req, res) => {
   }
 });
 
-router.get("/seller/orders/:id", requireSeller, async (req: ApiRequest, res) => {
+router.get("/seller/orders/:id", requireSeller, validateParams(GetSellerOrderParams, "GetSellerOrderParams"), async (req: ApiRequest, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid order id" });
-      return;
-    }
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-4: validated + coerced
     const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, id)).limit(1);
     if (!order) {
       res.status(404).json({ error: "Order not found" });
@@ -156,19 +157,14 @@ router.get("/seller/orders/:id", requireSeller, async (req: ApiRequest, res) => 
  * legitimate action their dashboard should allow, not something to gate
  * behind a state machine that doesn't exist elsewhere in this codebase.
  */
-router.put("/seller/orders/:id/status", requireSeller, async (req: ApiRequest, res) => {
+router.put("/seller/orders/:id/status", requireSeller, validateParams(UpdateSellerOrderStatusParams, "UpdateSellerOrderStatusParams"), validateBody(UpdateSellerOrderStatusBody, "UpdateSellerOrderStatusBody"), async (req: ApiRequest<z.infer<typeof UpdateSellerOrderStatusBody>>, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid order id" });
-      return;
-    }
-    const { orderStatus, cancellationReason } = req.body as { orderStatus?: string; cancellationReason?: string };
-    const valid = ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"];
-    if (!orderStatus || !valid.includes(orderStatus)) {
-      res.status(400).json({ error: `orderStatus must be one of: ${valid.join(", ")}` });
-      return;
-    }
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-4: validated + coerced
+    const { orderStatus, cancellationReason } = req.body;
+    // VAL-MIGRATE-4: Zod validates shape — orderStatus is
+    // zod.enum(['pending','confirmed','processing','shipped','delivered','cancelled']),
+    // so the manual valid.includes() check is superseded.
+    // Business rule kept: cancellationReason required when cancelling.
     if (orderStatus === "cancelled" && (!cancellationReason || cancellationReason.trim().length < 3)) {
       res.status(400).json({ error: "cancellationReason is required when cancelling" });
       return;
@@ -218,7 +214,5 @@ router.put("/seller/orders/:id/status", requireSeller, async (req: ApiRequest, r
     res.status(500).json({ error: "Failed to update order status" });
   }
 });
-import { logger } from "../lib/logger";
-import type { ApiRequest } from "../types/apiRequest";
 
 export default router;
