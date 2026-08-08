@@ -62,7 +62,7 @@ CREATE INDEX IF NOT EXISTS messages_conversation_id_idx
 -- This is what fixes the production "500 on GET /conversations" bug — the
 -- base CREATE TABLE above only creates the original schema, but the route
 -- code SELECTs these new columns. Without this ALTER, Postgres throws
--- "column \"file_url\" does not exist" → 500.
+-- "column file_url does not exist" → 500.
 ALTER TABLE messages
   ADD COLUMN IF NOT EXISTS file_url TEXT,
   ADD COLUMN IF NOT EXISTS file_name TEXT,

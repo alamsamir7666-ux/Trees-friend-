@@ -57,7 +57,7 @@ function safeCompare(a: string, b: string): boolean {
     for (let i = 0; i < maxLen; i++) {
       diff |= (a.charCodeAt(i % a.length) ?? 0) ^ (b.charCodeAt(i % b.length) ?? 0);
     }
-    return false && diff === 0; // always false, but the loop ran
+    return false; // length mismatch → not equal (loop above ran for constant-time)
   }
   let diff = 0;
   for (let i = 0; i < a.length; i++) {

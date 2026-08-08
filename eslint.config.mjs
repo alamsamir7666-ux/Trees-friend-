@@ -42,6 +42,12 @@ export default tseslint.config(
       "artifacts/api-server/dist/**",
       // Migration SQL files
       "**/*.sql",
+      // Service worker — has its own global scope (self, caches, clients,
+      // fetch) that doesn't match Node or browser globals. Linting it
+      // requires a dedicated config; not worth the complexity for one file.
+      "artifacts/tree-friend/public/sw.js",
+      // Build scripts (esbuild config) — Node globals, not production code
+      "artifacts/api-server/build.mjs",
     ],
   },
 
@@ -98,12 +104,21 @@ export default tseslint.config(
       "@typescript-eslint/array-type": ["error", { default: "array" }],
       // No `require` in ESM — the codebase is fully ESM.
       "@typescript-eslint/no-require-imports": "error",
+      // Allow `declare global { namespace Express { ... } }` — the standard
+      // TypeScript global augmentation pattern. The rule is designed to
+      // discourage legacy namespace usage, but global augmentation is a
+      // legitimate use case that the rule doesn't distinguish from.
+      "@typescript-eslint/no-namespace": "off",
       // Enforce `const` where variables are never reassigned.
       "prefer-const": "error",
       // No var — use let/const.
       "no-var": "error",
       // Enforce === over == (catches subtle type coercion bugs).
-      eqeqeq: ["error", "always"],
+      // "smart" mode allows == null (the common TS pattern for checking
+      // both null and undefined in one comparison) but enforces === everywhere
+      // else. This is what TypeScript itself recommends — `== null` is
+      // idiomatic in TS because `=== null` doesn't catch `undefined`.
+      eqeqeq: ["error", "smart"],
       // No console.log in production code — use the logger (api-server) or
       // remove (frontend). Warn so existing uses are visible but not blocking.
       "no-console": "warn",
