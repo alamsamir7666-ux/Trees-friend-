@@ -1,3 +1,5 @@
+import { asyncHandler } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { listingAttributeOptionsTable } from "@workspace/db";
@@ -26,38 +28,33 @@ function toOption(o: typeof listingAttributeOptionsTable.$inferSelect) {
  * trust level as GET /categories, since this is just taxonomy data, not
  * anything seller- or order-specific.
  */
-router.get("/categories/:categoryId/listing-attribute-options", async (req: ApiRequest, res) => {
-  try {
-    const categoryId = parseInt(req.params.categoryId);
-    if (isNaN(categoryId) || categoryId <= 0) {
-      res.status(400).json({ error: "Invalid category id" });
-      return;
-    }
-    const { attributeName } = req.query as { attributeName?: string };
-    if (attributeName !== undefined && !VALID_ATTRIBUTE_NAMES.includes(attributeName)) {
-      res.status(400).json({ error: `attributeName must be one of ${VALID_ATTRIBUTE_NAMES.join(", ")}` });
-      return;
-    }
-
-    const rows = await db
-      .select()
-      .from(listingAttributeOptionsTable)
-      .where(
-        attributeName
-          ? and(
-              eq(listingAttributeOptionsTable.categoryId, categoryId),
-              eq(listingAttributeOptionsTable.attributeName, attributeName),
-            )
-          : eq(listingAttributeOptionsTable.categoryId, categoryId),
-      )
-      .orderBy(asc(listingAttributeOptionsTable.attributeName), asc(listingAttributeOptionsTable.displayOrder));
-
-    res.json(rows.map(toOption));
-  } catch (err) {
-    logger.error({ err: err }, "List listing attribute options error");
-    res.status(500).json({ error: "Failed to fetch listing attribute options" });
+router.get("/categories/:categoryId/listing-attribute-options", asyncHandler(async (req: ApiRequest, res) => {
+  const categoryId = parseInt(req.params.categoryId);
+  if (isNaN(categoryId) || categoryId <= 0) {
+    res.status(400).json({ error: "Invalid category id" });
+    return;
   }
-});
+  const { attributeName } = req.query as { attributeName?: string };
+  if (attributeName !== undefined && !VALID_ATTRIBUTE_NAMES.includes(attributeName)) {
+    res.status(400).json({ error: `attributeName must be one of ${VALID_ATTRIBUTE_NAMES.join(", ")}` });
+    return;
+  }
+
+  const rows = await db
+    .select()
+    .from(listingAttributeOptionsTable)
+    .where(
+      attributeName
+        ? and(
+            eq(listingAttributeOptionsTable.categoryId, categoryId),
+            eq(listingAttributeOptionsTable.attributeName, attributeName),
+          )
+        : eq(listingAttributeOptionsTable.categoryId, categoryId),
+    )
+    .orderBy(asc(listingAttributeOptionsTable.attributeName), asc(listingAttributeOptionsTable.displayOrder));
+
+  res.json(rows.map(toOption));
+}));
 
 /**
  * Admin: add a single option value to a category/attribute pair (e.g. add
@@ -66,78 +63,68 @@ router.get("/categories/:categoryId/listing-attribute-options", async (req: ApiR
  * this endpoint is the one-at-a-time primitive that a bulk-seed UI or script
  * would call repeatedly, not a bulk endpoint itself.
  */
-router.post("/admin/listing-attribute-options", requireAdmin, async (req, res) => {
-  try {
-    const { categoryId, attributeName, value, displayOrder } = req.body as {
-      categoryId?: number;
-      attributeName?: string;
-      value?: string;
-      displayOrder?: number;
-    };
+router.post("/admin/listing-attribute-options", requireAdmin, asyncHandler(async (req, res) => {
+  const { categoryId, attributeName, value, displayOrder } = req.body as {
+    categoryId?: number;
+    attributeName?: string;
+    value?: string;
+    displayOrder?: number;
+  };
 
-    if (!categoryId || isNaN(Number(categoryId))) {
-      res.status(400).json({ error: "categoryId is required" });
-      return;
-    }
-    if (!attributeName || !VALID_ATTRIBUTE_NAMES.includes(attributeName)) {
-      res.status(400).json({ error: `attributeName must be one of ${VALID_ATTRIBUTE_NAMES.join(", ")}` });
-      return;
-    }
-    if (!value || typeof value !== "string" || !value.trim()) {
-      res.status(400).json({ error: "value is required" });
-      return;
-    }
-
-    const [o] = await db
-      .insert(listingAttributeOptionsTable)
-      .values({
-        categoryId: Number(categoryId),
-        attributeName,
-        value: value.trim(),
-        displayOrder: displayOrder ?? 0,
-      })
-      .returning();
-
-    res.status(201).json(toOption(o));
-  } catch (err) {
-    logger.error({ err: err }, "Create listing attribute option error");
-    res.status(500).json({ error: "Failed to create listing attribute option" });
+  if (!categoryId || isNaN(Number(categoryId))) {
+    res.status(400).json({ error: "categoryId is required" });
+    return;
   }
-});
-
-router.put("/admin/listing-attribute-options/:id", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid option id" });
-      return;
-    }
-    const { value, displayOrder } = req.body as { value?: string; displayOrder?: number };
-    const updates: Record<string, unknown> = {};
-    if (value !== undefined) {
-      if (typeof value !== "string" || !value.trim()) {
-        res.status(400).json({ error: "value cannot be empty" });
-        return;
-      }
-      updates.value = value.trim();
-    }
-    if (displayOrder !== undefined) updates.displayOrder = displayOrder;
-
-    const [o] = await db
-      .update(listingAttributeOptionsTable)
-      .set(updates)
-      .where(eq(listingAttributeOptionsTable.id, id))
-      .returning();
-    if (!o) {
-      res.status(404).json({ error: "Option not found" });
-      return;
-    }
-    res.json(toOption(o));
-  } catch (err) {
-    logger.error({ err: err }, "Update listing attribute option error");
-    res.status(500).json({ error: "Failed to update listing attribute option" });
+  if (!attributeName || !VALID_ATTRIBUTE_NAMES.includes(attributeName)) {
+    res.status(400).json({ error: `attributeName must be one of ${VALID_ATTRIBUTE_NAMES.join(", ")}` });
+    return;
   }
-});
+  if (!value || typeof value !== "string" || !value.trim()) {
+    res.status(400).json({ error: "value is required" });
+    return;
+  }
+
+  const [o] = await db
+    .insert(listingAttributeOptionsTable)
+    .values({
+      categoryId: Number(categoryId),
+      attributeName,
+      value: value.trim(),
+      displayOrder: displayOrder ?? 0,
+    })
+    .returning();
+
+  res.status(201).json(toOption(o));
+}));
+
+router.put("/admin/listing-attribute-options/:id", requireAdmin, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid option id" });
+    return;
+  }
+  const { value, displayOrder } = req.body as { value?: string; displayOrder?: number };
+  const updates: Record<string, unknown> = {};
+  if (value !== undefined) {
+    if (typeof value !== "string" || !value.trim()) {
+      res.status(400).json({ error: "value cannot be empty" });
+      return;
+    }
+    updates.value = value.trim();
+  }
+  if (displayOrder !== undefined) updates.displayOrder = displayOrder;
+
+  const [o] = await db
+    .update(listingAttributeOptionsTable)
+    .set(updates)
+    .where(eq(listingAttributeOptionsTable.id, id))
+    .returning();
+  if (!o) {
+    res.status(404).json({ error: "Option not found" });
+    return;
+  }
+  res.json(toOption(o));
+}));
 
 /**
  * Admin: delete an option value. Existing seller_listings rows that already
@@ -146,20 +133,15 @@ router.put("/admin/listing-attribute-options/:id", requireAdmin, async (req: Api
  * dropdowns/validation, matching how removing a coupon doesn't unwind past
  * orders that used it.
  */
-router.delete("/admin/listing-attribute-options/:id", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid option id" });
-      return;
-    }
-    await db.delete(listingAttributeOptionsTable).where(eq(listingAttributeOptionsTable.id, id));
-    res.json({ message: "Option deleted" });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to delete listing attribute option" });
+router.delete("/admin/listing-attribute-options/:id", requireAdmin, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid option id" });
+    return;
   }
-});
-import { logger } from "../lib/logger";
+  await db.delete(listingAttributeOptionsTable).where(eq(listingAttributeOptionsTable.id, id));
+  res.json({ message: "Option deleted" });
+}));
 import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

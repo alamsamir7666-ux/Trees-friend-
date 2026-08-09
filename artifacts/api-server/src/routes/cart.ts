@@ -1,3 +1,4 @@
+import { asyncHandler } from "../lib/errors";
 import { Router, type Response } from "express";
 import { db } from "@workspace/db";
 import {
@@ -205,14 +206,10 @@ async function buildCart(userId: string) {
   return { items, subtotal, discount, deliveryTotal, total: subtotal + deliveryTotal };
 }
 
-router.get("/cart", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const cart = await buildCart(req.userId!);
-    res.json(cart);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch cart" });
-  }
-});
+router.get("/cart", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  const cart = await buildCart(req.userId!);
+  res.json(cart);
+}));
 
 /**
  * Add to cart. Body must specify EXACTLY ONE of variantId (admin-direct
@@ -444,15 +441,11 @@ router.delete("/cart/items/:id", requireAuth, validateParams(UpdateCartItemParam
   }
 });
 
-router.delete("/cart", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    await db
-      .delete(cartItemsTable)
-      .where(eq(cartItemsTable.userId, req.userId!));
-    res.json({ message: "Cart cleared" });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to clear cart" });
-  }
-});
+router.delete("/cart", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  await db
+    .delete(cartItemsTable)
+    .where(eq(cartItemsTable.userId, req.userId!));
+  res.json({ message: "Cart cleared" });
+}));
 
 export default router;

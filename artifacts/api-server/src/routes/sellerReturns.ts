@@ -1,3 +1,5 @@
+import { asyncHandler } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { returnsTable, ordersTable, usersTable } from "@workspace/db";
@@ -64,89 +66,22 @@ function parsePagination(query: Record<string, string>) {
  * context. Paginated (page/limit query params, matching admin.ts's
  * archived-orders convention) and optionally filtered by ?status=.
  */
-router.get("/seller/returns", requireSeller, async (req: ApiRequest, res) => {
-  try {
-    const { status } = req.query as Record<string, string>;
-    if (status !== undefined && !VALID_FILTER_STATUSES.includes(status as any)) {
-      res.status(400).json({ error: `status filter must be one of: ${VALID_FILTER_STATUSES.join(", ")}` });
-      return;
-    }
-    const { page, limit, offset } = parsePagination(req.query as Record<string, string>);
-    const sellerId = req.dbSeller!.id;
-
-    const whereClause = and(
-      eq(ordersTable.sellerId, sellerId),
-      status ? eq(returnsTable.status, status as any) : undefined,
-    );
-
-    const [rows, [{ total }]] = await Promise.all([
-      db
-        .select({
-          ret: returnsTable,
-          orderItems: ordersTable.items,
-          orderTotal: ordersTable.totalAmount,
-          orderUpdatedAt: ordersTable.updatedAt,
-          orderStatus: ordersTable.orderStatus,
-          shippingAddress: ordersTable.shippingAddress,
-        })
-        .from(returnsTable)
-        .innerJoin(ordersTable, eq(ordersTable.id, returnsTable.orderId))
-        .where(whereClause)
-        .orderBy(desc(returnsTable.createdAt))
-        .limit(limit)
-        .offset(offset),
-      db
-        .select({ total: sql<string>`COUNT(*)` })
-        .from(returnsTable)
-        .innerJoin(ordersTable, eq(ordersTable.id, returnsTable.orderId))
-        .where(whereClause),
-    ]);
-
-    if (rows.length === 0) {
-      res.json({ returns: [], page, limit, total: Number(total), totalPages: Math.max(1, Math.ceil(Number(total) / limit)) });
-      return;
-    }
-
-    // Buyer email lookup, same clerkId-join pattern as sellerOrders.ts
-    const clerkIds = [...new Set(rows.map((r) => r.ret.userId))];
-    const buyers = await db.select().from(usersTable).where(inArray(usersTable.clerkId, clerkIds));
-    const emailMap = new Map(buyers.map((u) => [u.clerkId, u.email]));
-
-    const result = rows.map(({ ret, orderItems, orderTotal, orderUpdatedAt, orderStatus, shippingAddress }) => {
-      const buyerEmail = emailMap.get(ret.userId);
-      return {
-        ...fmt(ret),
-        orderItems: orderItems ?? [],
-        orderTotal: orderTotal ? Number(orderTotal) : null,
-        orderDeliveredAt: orderUpdatedAt ? orderUpdatedAt.toISOString() : null,
-        orderStatus,
-        customerName: (shippingAddress as any)?.fullName ?? null,
-        customerEmail: buyerEmail && !buyerEmail.endsWith("@clerk.user") ? buyerEmail : null,
-      };
-    });
-
-    res.json({ returns: result, page, limit, total: Number(total), totalPages: Math.max(1, Math.ceil(Number(total) / limit)) });
-  } catch (err) {
-    logger.error({ err: err }, "List seller returns error");
-    res.status(500).json({ error: "Failed to fetch returns" });
+router.get("/seller/returns", requireSeller, asyncHandler(async (req: ApiRequest, res) => {
+  const { status } = req.query as Record<string, string>;
+  if (status !== undefined && !VALID_FILTER_STATUSES.includes(status as any)) {
+    res.status(400).json({ error: `status filter must be one of: ${VALID_FILTER_STATUSES.join(", ")}` });
+    return;
   }
-});
+  const { page, limit, offset } = parsePagination(req.query as Record<string, string>);
+  const sellerId = req.dbSeller!.id;
 
-/**
- * Seller: get a single return for one of their own orders. Same ownership
- * check as the PUT below, split out because the dashboard's detail view
- * (and any future retry/polling) shouldn't have to refetch + refilter the
- * whole paginated list just to see one record's current state.
- */
-router.get("/seller/returns/:id", requireSeller, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid return ID" });
-      return;
-    }
+  const whereClause = and(
+    eq(ordersTable.sellerId, sellerId),
+    status ? eq(returnsTable.status, status as any) : undefined,
+  );
 
-    const [row] = await db
+  const [rows, [{ total }]] = await Promise.all([
+    db
       .select({
         ret: returnsTable,
         orderItems: ordersTable.items,
@@ -154,39 +89,96 @@ router.get("/seller/returns/:id", requireSeller, async (req: ApiRequest, res) =>
         orderUpdatedAt: ordersTable.updatedAt,
         orderStatus: ordersTable.orderStatus,
         shippingAddress: ordersTable.shippingAddress,
-        orderSellerId: ordersTable.sellerId,
       })
       .from(returnsTable)
       .innerJoin(ordersTable, eq(ordersTable.id, returnsTable.orderId))
-      .where(eq(returnsTable.id, id))
-      .limit(1);
+      .where(whereClause)
+      .orderBy(desc(returnsTable.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ total: sql<string>`COUNT(*)` })
+      .from(returnsTable)
+      .innerJoin(ordersTable, eq(ordersTable.id, returnsTable.orderId))
+      .where(whereClause),
+  ]);
 
-    if (!row) {
-      res.status(404).json({ error: "Return not found" });
-      return;
-    }
-    if (row.orderSellerId !== req.dbSeller!.id) {
-      res.status(403).json({ error: "You don't own the order for this return" });
-      return;
-    }
-
-    const [buyer] = await db.select().from(usersTable).where(eq(usersTable.clerkId, row.ret.userId)).limit(1);
-    const buyerEmail = buyer?.email && !buyer.email.endsWith("@clerk.user") ? buyer.email : null;
-
-    res.json({
-      ...fmt(row.ret),
-      orderItems: row.orderItems ?? [],
-      orderTotal: row.orderTotal ? Number(row.orderTotal) : null,
-      orderDeliveredAt: row.orderUpdatedAt ? row.orderUpdatedAt.toISOString() : null,
-      orderStatus: row.orderStatus,
-      customerName: (row.shippingAddress as any)?.fullName ?? null,
-      customerEmail: buyerEmail,
-    });
-  } catch (err) {
-    logger.error({ err: err }, "Get seller return error");
-    res.status(500).json({ error: "Failed to fetch return" });
+  if (rows.length === 0) {
+    res.json({ returns: [], page, limit, total: Number(total), totalPages: Math.max(1, Math.ceil(Number(total) / limit)) });
+    return;
   }
-});
+
+  // Buyer email lookup, same clerkId-join pattern as sellerOrders.ts
+  const clerkIds = [...new Set(rows.map((r) => r.ret.userId))];
+  const buyers = await db.select().from(usersTable).where(inArray(usersTable.clerkId, clerkIds));
+  const emailMap = new Map(buyers.map((u) => [u.clerkId, u.email]));
+
+  const result = rows.map(({ ret, orderItems, orderTotal, orderUpdatedAt, orderStatus, shippingAddress }) => {
+    const buyerEmail = emailMap.get(ret.userId);
+    return {
+      ...fmt(ret),
+      orderItems: orderItems ?? [],
+      orderTotal: orderTotal ? Number(orderTotal) : null,
+      orderDeliveredAt: orderUpdatedAt ? orderUpdatedAt.toISOString() : null,
+      orderStatus,
+      customerName: (shippingAddress as any)?.fullName ?? null,
+      customerEmail: buyerEmail && !buyerEmail.endsWith("@clerk.user") ? buyerEmail : null,
+    };
+  });
+
+  res.json({ returns: result, page, limit, total: Number(total), totalPages: Math.max(1, Math.ceil(Number(total) / limit)) });
+}));
+
+/**
+ * Seller: get a single return for one of their own orders. Same ownership
+ * check as the PUT below, split out because the dashboard's detail view
+ * (and any future retry/polling) shouldn't have to refetch + refilter the
+ * whole paginated list just to see one record's current state.
+ */
+router.get("/seller/returns/:id", requireSeller, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid return ID" });
+    return;
+  }
+
+  const [row] = await db
+    .select({
+      ret: returnsTable,
+      orderItems: ordersTable.items,
+      orderTotal: ordersTable.totalAmount,
+      orderUpdatedAt: ordersTable.updatedAt,
+      orderStatus: ordersTable.orderStatus,
+      shippingAddress: ordersTable.shippingAddress,
+      orderSellerId: ordersTable.sellerId,
+    })
+    .from(returnsTable)
+    .innerJoin(ordersTable, eq(ordersTable.id, returnsTable.orderId))
+    .where(eq(returnsTable.id, id))
+    .limit(1);
+
+  if (!row) {
+    res.status(404).json({ error: "Return not found" });
+    return;
+  }
+  if (row.orderSellerId !== req.dbSeller!.id) {
+    res.status(403).json({ error: "You don't own the order for this return" });
+    return;
+  }
+
+  const [buyer] = await db.select().from(usersTable).where(eq(usersTable.clerkId, row.ret.userId)).limit(1);
+  const buyerEmail = buyer?.email && !buyer.email.endsWith("@clerk.user") ? buyer.email : null;
+
+  res.json({
+    ...fmt(row.ret),
+    orderItems: row.orderItems ?? [],
+    orderTotal: row.orderTotal ? Number(row.orderTotal) : null,
+    orderDeliveredAt: row.orderUpdatedAt ? row.orderUpdatedAt.toISOString() : null,
+    orderStatus: row.orderStatus,
+    customerName: (row.shippingAddress as any)?.fullName ?? null,
+    customerEmail: buyerEmail,
+  });
+}));
 
 /**
  * Seller: update status on a return for one of their own orders (approve /
@@ -285,6 +277,5 @@ router.put("/seller/returns/:id", requireSeller, sellerReturnWriteLimiter, valid
     res.status(500).json({ error: "Failed to update return" });
   }
 });
-import { logger } from "../lib/logger";
 
 export default router;

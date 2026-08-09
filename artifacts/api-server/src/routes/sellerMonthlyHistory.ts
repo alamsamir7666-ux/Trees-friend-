@@ -1,3 +1,5 @@
+import { asyncHandler } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
@@ -30,46 +32,40 @@ const router = Router();
 const DEFAULT_MONTHS = 12;
 const MAX_MONTHS = 60;
 
-router.get("/seller/monthly-history", requireSeller, async (req: ApiRequest, res) => {
-  try {
-    const { months: monthsRaw } = req.query as Record<string, string>;
-    const monthsParsed = parseInt(monthsRaw ?? String(DEFAULT_MONTHS), 10);
-    if (monthsRaw !== undefined && (isNaN(monthsParsed) || monthsParsed <= 0)) {
-      res.status(400).json({ error: "months must be a positive integer" });
-      return;
-    }
-    const months = Math.min(MAX_MONTHS, monthsParsed || DEFAULT_MONTHS);
-
-    const sellerId = req.dbSeller!.id;
-
-    const rows = await db.execute(sql`
-      SELECT
-        EXTRACT(YEAR FROM created_at)::int AS year,
-        EXTRACT(MONTH FROM created_at)::int AS month,
-        COUNT(*)::int AS total_orders,
-        COALESCE(SUM(total_amount) FILTER (WHERE order_status = 'delivered'), 0) AS total_revenue
-      FROM orders
-      WHERE seller_id = ${sellerId}
-      GROUP BY 1, 2
-      ORDER BY 1 DESC, 2 DESC
-      LIMIT ${months}
-    `);
-
-    const records = (rows.rows as any[]).map((r, idx) => ({
-      id: idx + 1,
-      year: Number(r.year),
-      month: Number(r.month),
-      totalOrders: Number(r.total_orders),
-      totalRevenue: Number(r.total_revenue),
-    }));
-
-    res.json({ records, months });
-  } catch (err) {
-    logger.error({ err: err }, "Seller monthly history error");
-    res.status(500).json({ error: "Failed to fetch monthly history" });
+router.get("/seller/monthly-history", requireSeller, asyncHandler(async (req: ApiRequest, res) => {
+  const { months: monthsRaw } = req.query as Record<string, string>;
+  const monthsParsed = parseInt(monthsRaw ?? String(DEFAULT_MONTHS), 10);
+  if (monthsRaw !== undefined && (isNaN(monthsParsed) || monthsParsed <= 0)) {
+    res.status(400).json({ error: "months must be a positive integer" });
+    return;
   }
-});
-import { logger } from "../lib/logger";
+  const months = Math.min(MAX_MONTHS, monthsParsed || DEFAULT_MONTHS);
+
+  const sellerId = req.dbSeller!.id;
+
+  const rows = await db.execute(sql`
+    SELECT
+      EXTRACT(YEAR FROM created_at)::int AS year,
+      EXTRACT(MONTH FROM created_at)::int AS month,
+      COUNT(*)::int AS total_orders,
+      COALESCE(SUM(total_amount) FILTER (WHERE order_status = 'delivered'), 0) AS total_revenue
+    FROM orders
+    WHERE seller_id = ${sellerId}
+    GROUP BY 1, 2
+    ORDER BY 1 DESC, 2 DESC
+    LIMIT ${months}
+  `);
+
+  const records = (rows.rows as any[]).map((r, idx) => ({
+    id: idx + 1,
+    year: Number(r.year),
+    month: Number(r.month),
+    totalOrders: Number(r.total_orders),
+    totalRevenue: Number(r.total_revenue),
+  }));
+
+  res.json({ records, months });
+}));
 import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

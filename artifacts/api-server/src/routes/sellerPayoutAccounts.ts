@@ -1,3 +1,4 @@
+import { asyncHandler } from "../lib/errors";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { sellerPayoutAccountsTable, isValidBdPhone } from "@workspace/db";
@@ -54,23 +55,18 @@ const router = Router();
  * treats the response as successful data and caches it normally, instead of
  * refetching on every Clerk token refresh and flooding the Network tab.
  */
-router.get("/seller-payout-accounts/mine", requireSeller, async (req, res) => {
-  try {
-    const [account] = await db
-      .select()
-      .from(sellerPayoutAccountsTable)
-      .where(eq(sellerPayoutAccountsTable.sellerId, req.dbSeller!.id))
-      .limit(1);
-    if (!account) {
-      res.status(200).json(null);
-      return;
-    }
-    res.json(account);
-  } catch (err) {
-    logger.error({ err: err }, "Get seller payout account error");
-    res.status(500).json({ error: "Failed to fetch payout account" });
+router.get("/seller-payout-accounts/mine", requireSeller, asyncHandler(async (req, res) => {
+  const [account] = await db
+    .select()
+    .from(sellerPayoutAccountsTable)
+    .where(eq(sellerPayoutAccountsTable.sellerId, req.dbSeller!.id))
+    .limit(1);
+  if (!account) {
+    res.status(200).json(null);
+    return;
   }
-});
+  res.json(account);
+}));
 
 /**
  * Seller: create or replace their payout account (upsert by sellerId,
@@ -121,21 +117,16 @@ router.post("/seller-payout-accounts", requireSeller, validateBody(CreateSellerP
  * deliberately no reconciliation side effect, unlike sellerPaymentConfigs.ts's
  * DELETE, because nothing downstream reads this table's existence yet.
  */
-router.delete("/seller-payout-accounts/mine", requireSeller, async (req, res) => {
-  try {
-    const deleted = await db
-      .delete(sellerPayoutAccountsTable)
-      .where(eq(sellerPayoutAccountsTable.sellerId, req.dbSeller!.id))
-      .returning();
-    if (deleted.length === 0) {
-      res.status(404).json({ error: "No payout account to delete" });
-      return;
-    }
-    res.json({ message: "Payout account removed." });
-  } catch (err) {
-    logger.error({ err: err }, "Delete seller payout account error");
-    res.status(500).json({ error: "Failed to delete payout account" });
+router.delete("/seller-payout-accounts/mine", requireSeller, asyncHandler(async (req, res) => {
+  const deleted = await db
+    .delete(sellerPayoutAccountsTable)
+    .where(eq(sellerPayoutAccountsTable.sellerId, req.dbSeller!.id))
+    .returning();
+  if (deleted.length === 0) {
+    res.status(404).json({ error: "No payout account to delete" });
+    return;
   }
-});
+  res.json({ message: "Payout account removed." });
+}));
 
 export default router;

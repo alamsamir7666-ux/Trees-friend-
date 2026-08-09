@@ -1,18 +1,24 @@
 import { Router } from "express";
 import multerPkg from "multer";
-import { v2 as cloudinaryV2 } from "cloudinary";
 import { requireAdmin, requireAuth } from "../middlewares/auth";
-import { logger } from "../lib/logger";
+import { cloudinary } from "../lib/cloudinary";
+import { asyncHandler, HttpError } from "../lib/errors";
 import type { ApiRequest } from "../types/apiRequest";
 
-cloudinaryV2.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
 const uploadStorage = multerPkg.memoryStorage();
-const uploadMiddleware = multerPkg({ storage: uploadStorage, limits: { fileSize: 5 * 1024 * 1024 } });
+const uploadMiddleware = multerPkg({
+  storage: uploadStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  // MIME filter: only allow image uploads (defense-in-depth before Cloudinary
+  // sees the file — saves bandwidth + blocks malicious payload upload attempts).
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new HttpError(400, "Only image files are allowed"));
+    }
+  },
+});
 
 const router = Router();
 
@@ -25,28 +31,30 @@ const router = Router();
  * asset uploads get their own endpoint instead of a conditional flag on
  * the product route.
  */
-router.post("/assets/upload", requireAuth, requireAdmin, uploadMiddleware.single("file"), async (req: ApiRequest, res) => {
-  try {
+router.post(
+  "/assets/upload",
+  requireAuth,
+  requireAdmin,
+  uploadMiddleware.single("file"),
+  asyncHandler(async (req: ApiRequest, res) => {
     const file = req.file as Express.Multer.File | undefined;
     if (!file) {
-      res.status(400).json({ error: "No file uploaded" });
-      return;
+      throw new HttpError(400, "No file uploaded");
     }
     const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
-      const stream = cloudinaryV2.uploader.upload_stream(
+      const stream = cloudinary.uploader.upload_stream(
         { folder: "envyenhance/assets" },
         (err, result) => {
-          if (err || !result) { logger.error({ err: err }, "Cloudinary error"); return reject(err ?? new Error("Upload failed")); }
+          if (err || !result) {
+            return reject(err ?? new HttpError(500, "Upload failed"));
+          }
           resolve(result as { secure_url: string });
         }
       );
       stream.end(file.buffer);
     });
     res.json({ url: result.secure_url });
-  } catch (err) {
-    logger.error({ err }, "Asset upload failed");
-    res.status(500).json({ error: "Upload failed" });
-  }
-});
+  }),
+);
 
 export default router;

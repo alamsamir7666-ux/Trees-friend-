@@ -1,3 +1,5 @@
+import { asyncHandler } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import {
@@ -59,33 +61,28 @@ function estimateWeightKg(items: OrderItem[]): number {
  * check via orders.sellerId, same pattern as sellerListings.ts's
  * "You don't own this listing" 403.
  */
-router.get("/seller/orders/:orderId/shipment", requireSeller, async (req: ApiRequest, res) => {
-  try {
-    const orderId = parseInt(req.params.orderId);
-    if (isNaN(orderId) || orderId <= 0) {
-      res.status(400).json({ error: "Invalid order id" });
-      return;
-    }
-    const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, orderId)).limit(1);
-    if (!order) {
-      res.status(404).json({ error: "Order not found" });
-      return;
-    }
-    if (order.sellerId !== req.dbSeller!.id) {
-      res.status(403).json({ error: "You don't own this order" });
-      return;
-    }
-    const [shipment] = await db
-      .select()
-      .from(orderShipmentsTable)
-      .where(eq(orderShipmentsTable.orderId, orderId))
-      .limit(1);
-    res.json(shipment ? formatShipment(shipment) : null);
-  } catch (err) {
-    logger.error({ err: err }, "Get shipment error");
-    res.status(500).json({ error: "Failed to fetch shipment" });
+router.get("/seller/orders/:orderId/shipment", requireSeller, asyncHandler(async (req: ApiRequest, res) => {
+  const orderId = parseInt(req.params.orderId);
+  if (isNaN(orderId) || orderId <= 0) {
+    res.status(400).json({ error: "Invalid order id" });
+    return;
   }
-});
+  const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, orderId)).limit(1);
+  if (!order) {
+    res.status(404).json({ error: "Order not found" });
+    return;
+  }
+  if (order.sellerId !== req.dbSeller!.id) {
+    res.status(403).json({ error: "You don't own this order" });
+    return;
+  }
+  const [shipment] = await db
+    .select()
+    .from(orderShipmentsTable)
+    .where(eq(orderShipmentsTable.orderId, orderId))
+    .limit(1);
+  res.json(shipment ? formatShipment(shipment) : null);
+}));
 
 /**
  * Seller: "Book Courier" action (plan doc §8). Requires a verified
@@ -105,135 +102,130 @@ router.get("/seller/orders/:orderId/shipment", requireSeller, async (req: ApiReq
  * payment configs. Previously this check didn't exist at all (see prior
  * comment, now stale); that gap is closed.
  */
-router.post("/seller/orders/:orderId/book-courier", requireSeller, async (req: ApiRequest, res) => {
-  try {
-    const orderId = parseInt(req.params.orderId);
-    if (isNaN(orderId) || orderId <= 0) {
-      res.status(400).json({ error: "Invalid order id" });
-      return;
-    }
-
-    const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, orderId)).limit(1);
-    if (!order) {
-      res.status(404).json({ error: "Order not found" });
-      return;
-    }
-    if (order.sellerId !== req.dbSeller!.id) {
-      res.status(403).json({ error: "You don't own this order" });
-      return;
-    }
-
-    const [existingShipment] = await db
-      .select()
-      .from(orderShipmentsTable)
-      .where(eq(orderShipmentsTable.orderId, orderId))
-      .limit(1);
-    if (existingShipment && existingShipment.courierTrackingId) {
-      res.status(400).json({ error: "This order already has a courier booking", shipment: formatShipment(existingShipment) });
-      return;
-    }
-
-    const [config] = await db
-      .select()
-      .from(sellerCourierConfigsTable)
-      .where(eq(sellerCourierConfigsTable.sellerId, req.dbSeller!.id))
-      .limit(1);
-    if (!config) {
-      res.status(400).json({
-        error: "No courier account configured. Add your Pathao or Steadfast credentials in Courier Settings, or use manual status updates for this order.",
-      });
-      return;
-    }
-    if (!config.isVerified) {
-      res.status(400).json({
-        error: "Your courier account hasn't been verified yet. An admin needs to verify your Courier Settings before you can book through Pathao/Steadfast — use manual status updates for this order in the meantime.",
-      });
-      return;
-    }
-
-    const adapter = getCourierAdapter(config.provider);
-    if (!adapter) {
-      res.status(400).json({ error: `Unsupported courier provider "${config.provider}"` });
-      return;
-    }
-
-    const seller = req.dbSeller!;
-    const shippingAddress = order.shippingAddress as {
-      fullName?: string;
-      phone?: string;
-      street?: string;
-      city?: string;
-      district?: string;
-    };
-    if (!shippingAddress?.fullName || !shippingAddress?.phone || !shippingAddress?.street) {
-      res.status(400).json({ error: "Order is missing a complete shipping address" });
-      return;
-    }
-
-    const items = order.items as OrderItem[];
-    const itemDescription = items.map((i) => `${i.productName} x${i.quantity}`).join(", ").slice(0, 250);
-    const codAmount = order.paymentMethod === "cod" ? Number(order.totalAmount) : 0;
-
-    let bookingResult;
-    try {
-      bookingResult = await adapter.bookShipment({
-        credentials: {
-          apiKey: decryptCredential(config.apiKey),
-          apiSecret: decryptCredential(config.apiSecret),
-          storeId: config.storeId,
-        },
-        merchantOrderId: order.trackingId,
-        senderName: seller.ownerName || seller.businessName,
-        senderPhone: seller.contactPhone,
-        recipientName: shippingAddress.fullName,
-        recipientPhone: shippingAddress.phone,
-        recipientAddress: `${shippingAddress.street}, ${shippingAddress.city ?? ""}`,
-        recipientCity: shippingAddress.city ?? shippingAddress.district ?? "",
-        codAmount,
-        itemDescription: itemDescription || "Plant order",
-        itemQuantity: items.reduce((s, i) => s + i.quantity, 0),
-        itemWeightKg: estimateWeightKg(items),
-      });
-    } catch (err) {
-      const message = err instanceof CourierBookingError ? err.message : "Courier booking failed";
-      logger.error({ err: err instanceof CourierBookingError ? { message: err.message, provider: err.provider, raw: err.raw } : err }, "Courier booking error");
-      res.status(502).json({ error: message });
-      return;
-    }
-
-    let shipment;
-    if (existingShipment) {
-      [shipment] = await db
-        .update(orderShipmentsTable)
-        .set({
-          courierProvider: config.provider,
-          courierTrackingId: bookingResult.courierTrackingId,
-          status: bookingResult.status,
-          lastSyncedAt: new Date(),
-          rawWebhookPayload: bookingResult.raw as any,
-        })
-        .where(eq(orderShipmentsTable.id, existingShipment.id))
-        .returning();
-    } else {
-      [shipment] = await db
-        .insert(orderShipmentsTable)
-        .values({
-          orderId,
-          courierProvider: config.provider,
-          courierTrackingId: bookingResult.courierTrackingId,
-          status: bookingResult.status,
-          lastSyncedAt: new Date(),
-          rawWebhookPayload: bookingResult.raw as any,
-        })
-        .returning();
-    }
-
-    res.status(201).json(formatShipment(shipment));
-  } catch (err) {
-    logger.error({ err: err }, "Book courier error");
-    res.status(500).json({ error: "Failed to book courier" });
+router.post("/seller/orders/:orderId/book-courier", requireSeller, asyncHandler(async (req: ApiRequest, res) => {
+  const orderId = parseInt(req.params.orderId);
+  if (isNaN(orderId) || orderId <= 0) {
+    res.status(400).json({ error: "Invalid order id" });
+    return;
   }
-});
+
+  const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, orderId)).limit(1);
+  if (!order) {
+    res.status(404).json({ error: "Order not found" });
+    return;
+  }
+  if (order.sellerId !== req.dbSeller!.id) {
+    res.status(403).json({ error: "You don't own this order" });
+    return;
+  }
+
+  const [existingShipment] = await db
+    .select()
+    .from(orderShipmentsTable)
+    .where(eq(orderShipmentsTable.orderId, orderId))
+    .limit(1);
+  if (existingShipment && existingShipment.courierTrackingId) {
+    res.status(400).json({ error: "This order already has a courier booking", shipment: formatShipment(existingShipment) });
+    return;
+  }
+
+  const [config] = await db
+    .select()
+    .from(sellerCourierConfigsTable)
+    .where(eq(sellerCourierConfigsTable.sellerId, req.dbSeller!.id))
+    .limit(1);
+  if (!config) {
+    res.status(400).json({
+      error: "No courier account configured. Add your Pathao or Steadfast credentials in Courier Settings, or use manual status updates for this order.",
+    });
+    return;
+  }
+  if (!config.isVerified) {
+    res.status(400).json({
+      error: "Your courier account hasn't been verified yet. An admin needs to verify your Courier Settings before you can book through Pathao/Steadfast — use manual status updates for this order in the meantime.",
+    });
+    return;
+  }
+
+  const adapter = getCourierAdapter(config.provider);
+  if (!adapter) {
+    res.status(400).json({ error: `Unsupported courier provider "${config.provider}"` });
+    return;
+  }
+
+  const seller = req.dbSeller!;
+  const shippingAddress = order.shippingAddress as {
+    fullName?: string;
+    phone?: string;
+    street?: string;
+    city?: string;
+    district?: string;
+  };
+  if (!shippingAddress?.fullName || !shippingAddress?.phone || !shippingAddress?.street) {
+    res.status(400).json({ error: "Order is missing a complete shipping address" });
+    return;
+  }
+
+  const items = order.items as OrderItem[];
+  const itemDescription = items.map((i) => `${i.productName} x${i.quantity}`).join(", ").slice(0, 250);
+  const codAmount = order.paymentMethod === "cod" ? Number(order.totalAmount) : 0;
+
+  let bookingResult;
+  try {
+    bookingResult = await adapter.bookShipment({
+      credentials: {
+        apiKey: decryptCredential(config.apiKey),
+        apiSecret: decryptCredential(config.apiSecret),
+        storeId: config.storeId,
+      },
+      merchantOrderId: order.trackingId,
+      senderName: seller.ownerName || seller.businessName,
+      senderPhone: seller.contactPhone,
+      recipientName: shippingAddress.fullName,
+      recipientPhone: shippingAddress.phone,
+      recipientAddress: `${shippingAddress.street}, ${shippingAddress.city ?? ""}`,
+      recipientCity: shippingAddress.city ?? shippingAddress.district ?? "",
+      codAmount,
+      itemDescription: itemDescription || "Plant order",
+      itemQuantity: items.reduce((s, i) => s + i.quantity, 0),
+      itemWeightKg: estimateWeightKg(items),
+    });
+  } catch (err) {
+    const message = err instanceof CourierBookingError ? err.message : "Courier booking failed";
+    logger.error({ err: err instanceof CourierBookingError ? { message: err.message, provider: err.provider, raw: err.raw } : err }, "Courier booking error");
+    res.status(502).json({ error: message });
+    return;
+  }
+
+  let shipment;
+  if (existingShipment) {
+    [shipment] = await db
+      .update(orderShipmentsTable)
+      .set({
+        courierProvider: config.provider,
+        courierTrackingId: bookingResult.courierTrackingId,
+        status: bookingResult.status,
+        lastSyncedAt: new Date(),
+        rawWebhookPayload: bookingResult.raw as any,
+      })
+      .where(eq(orderShipmentsTable.id, existingShipment.id))
+      .returning();
+  } else {
+    [shipment] = await db
+      .insert(orderShipmentsTable)
+      .values({
+        orderId,
+        courierProvider: config.provider,
+        courierTrackingId: bookingResult.courierTrackingId,
+        status: bookingResult.status,
+        lastSyncedAt: new Date(),
+        rawWebhookPayload: bookingResult.raw as any,
+      })
+      .returning();
+  }
+
+  res.status(201).json(formatShipment(shipment));
+}));
 
 /**
  * Seller: manual status update (plan doc §8's "no verified courier config
@@ -242,55 +234,50 @@ router.post("/seller/orders/:orderId/book-courier", requireSeller, async (req: A
  * the plan doc doesn't say manual updates are exclusive to manual-only
  * sellers, just that manual-only sellers have no other option.
  */
-router.put("/seller/orders/:orderId/shipment-status", requireSeller, async (req: ApiRequest, res) => {
-  try {
-    const orderId = parseInt(req.params.orderId);
-    if (isNaN(orderId) || orderId <= 0) {
-      res.status(400).json({ error: "Invalid order id" });
-      return;
-    }
-    const { status } = req.body as { status?: string };
-    if (!status || !MANUAL_STATUSES.includes(status as any)) {
-      res.status(400).json({ error: `status must be one of: ${MANUAL_STATUSES.join(", ")}` });
-      return;
-    }
-
-    const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, orderId)).limit(1);
-    if (!order) {
-      res.status(404).json({ error: "Order not found" });
-      return;
-    }
-    if (order.sellerId !== req.dbSeller!.id) {
-      res.status(403).json({ error: "You don't own this order" });
-      return;
-    }
-
-    const [existing] = await db
-      .select()
-      .from(orderShipmentsTable)
-      .where(eq(orderShipmentsTable.orderId, orderId))
-      .limit(1);
-
-    let shipment;
-    if (existing) {
-      [shipment] = await db
-        .update(orderShipmentsTable)
-        .set({ status, lastSyncedAt: new Date() })
-        .where(eq(orderShipmentsTable.id, existing.id))
-        .returning();
-    } else {
-      [shipment] = await db
-        .insert(orderShipmentsTable)
-        .values({ orderId, courierProvider: "manual", courierTrackingId: null, status, lastSyncedAt: new Date() })
-        .returning();
-    }
-
-    res.json(formatShipment(shipment));
-  } catch (err) {
-    logger.error({ err: err }, "Update shipment status error");
-    res.status(500).json({ error: "Failed to update shipment status" });
+router.put("/seller/orders/:orderId/shipment-status", requireSeller, asyncHandler(async (req: ApiRequest, res) => {
+  const orderId = parseInt(req.params.orderId);
+  if (isNaN(orderId) || orderId <= 0) {
+    res.status(400).json({ error: "Invalid order id" });
+    return;
   }
-});
+  const { status } = req.body as { status?: string };
+  if (!status || !MANUAL_STATUSES.includes(status as any)) {
+    res.status(400).json({ error: `status must be one of: ${MANUAL_STATUSES.join(", ")}` });
+    return;
+  }
+
+  const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, orderId)).limit(1);
+  if (!order) {
+    res.status(404).json({ error: "Order not found" });
+    return;
+  }
+  if (order.sellerId !== req.dbSeller!.id) {
+    res.status(403).json({ error: "You don't own this order" });
+    return;
+  }
+
+  const [existing] = await db
+    .select()
+    .from(orderShipmentsTable)
+    .where(eq(orderShipmentsTable.orderId, orderId))
+    .limit(1);
+
+  let shipment;
+  if (existing) {
+    [shipment] = await db
+      .update(orderShipmentsTable)
+      .set({ status, lastSyncedAt: new Date() })
+      .where(eq(orderShipmentsTable.id, existing.id))
+      .returning();
+  } else {
+    [shipment] = await db
+      .insert(orderShipmentsTable)
+      .values({ orderId, courierProvider: "manual", courierTrackingId: null, status, lastSyncedAt: new Date() })
+      .returning();
+  }
+
+  res.json(formatShipment(shipment));
+}));
 
 /**
  * Buyer-facing: read shipment status for an order they own. Deliberately
@@ -298,34 +285,28 @@ router.put("/seller/orders/:orderId/shipment-status", requireSeller, async (req:
  * in that response, since not every order has a shipment yet and orders.ts
  * is Part 3 scope this session shouldn't be reshaping.
  */
-router.get("/orders/:orderId/shipment", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const orderId = parseInt(req.params.orderId);
-    if (isNaN(orderId) || orderId <= 0) {
-      res.status(400).json({ error: "Invalid order id" });
-      return;
-    }
-    const [order] = await db
-      .select()
-      .from(ordersTable)
-      .where(and(eq(ordersTable.id, orderId), eq(ordersTable.userId, req.userId!)))
-      .limit(1);
-    if (!order) {
-      res.status(404).json({ error: "Order not found" });
-      return;
-    }
-    const [shipment] = await db
-      .select()
-      .from(orderShipmentsTable)
-      .where(eq(orderShipmentsTable.orderId, orderId))
-      .limit(1);
-    res.json(shipment ? formatShipment(shipment) : null);
-  } catch (err) {
-    logger.error({ err: err }, "Get buyer shipment error");
-    res.status(500).json({ error: "Failed to fetch shipment" });
+router.get("/orders/:orderId/shipment", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  const orderId = parseInt(req.params.orderId);
+  if (isNaN(orderId) || orderId <= 0) {
+    res.status(400).json({ error: "Invalid order id" });
+    return;
   }
-});
-import { logger } from "../lib/logger";
+  const [order] = await db
+    .select()
+    .from(ordersTable)
+    .where(and(eq(ordersTable.id, orderId), eq(ordersTable.userId, req.userId!)))
+    .limit(1);
+  if (!order) {
+    res.status(404).json({ error: "Order not found" });
+    return;
+  }
+  const [shipment] = await db
+    .select()
+    .from(orderShipmentsTable)
+    .where(eq(orderShipmentsTable.orderId, orderId))
+    .limit(1);
+  res.json(shipment ? formatShipment(shipment) : null);
+}));
 import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

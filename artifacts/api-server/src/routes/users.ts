@@ -1,3 +1,4 @@
+import { asyncHandler } from "../lib/errors";
 import { Router, type Response } from "express";
 import { db } from "@workspace/db";
 import { usersTable, addressesTable, reviewsTable, isValidBdPhone } from "@workspace/db";
@@ -44,13 +45,9 @@ function formatAddress(a: typeof addressesTable.$inferSelect) {
   };
 }
 
-router.get("/users/me", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    res.json(formatUser(req.dbUser!));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch user" });
-  }
-});
+router.get("/users/me", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  res.json(formatUser(req.dbUser!));
+}));
 
 // CQ-4: typed req.body via ApiRequest —
 // replaces `req: any`. req.userId and req.dbUser are now typed (non-optional).
@@ -115,17 +112,13 @@ router.put("/users/me", requireAuth, validateBody(UpdateMeBody, "UpdateMeBody"),
   }
 });
 
-router.get("/users/me/addresses", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const addresses = await db
-      .select()
-      .from(addressesTable)
-      .where(eq(addressesTable.userId, req.userId!));
-    res.json(addresses.map(formatAddress));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch addresses" });
-  }
-});
+router.get("/users/me/addresses", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  const addresses = await db
+    .select()
+    .from(addressesTable)
+    .where(eq(addressesTable.userId, req.userId!));
+  res.json(addresses.map(formatAddress));
+}));
 
 router.post("/users/me/addresses", requireAuth, validateBody(AddAddressBody, "AddAddressBody"), async (req: ApiRequest<z.infer<typeof AddAddressBody>>, res) => {
   try {

@@ -1,3 +1,4 @@
+import { asyncHandler } from "../lib/errors";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { sellerPaymentConfigsTable, sellerListingsTable } from "@workspace/db";
@@ -61,23 +62,18 @@ function toMasked(c: PaymentConfigRow) {
  * doesn't get refetched on every Clerk token refresh (which was flooding
  * the seller dashboard's Network tab with ~12 identical 404s per session).
  */
-router.get("/seller-payment-configs/mine", requireSeller, async (req, res) => {
-  try {
-    const [config] = await db
-      .select()
-      .from(sellerPaymentConfigsTable)
-      .where(eq(sellerPaymentConfigsTable.sellerId, req.dbSeller!.id))
-      .limit(1);
-    if (!config) {
-      res.status(200).json(null);
-      return;
-    }
-    res.json(toMasked(config));
-  } catch (err) {
-    logger.error({ err: err }, "Get seller payment config error");
-    res.status(500).json({ error: "Failed to fetch payment config" });
+router.get("/seller-payment-configs/mine", requireSeller, asyncHandler(async (req, res) => {
+  const [config] = await db
+    .select()
+    .from(sellerPaymentConfigsTable)
+    .where(eq(sellerPaymentConfigsTable.sellerId, req.dbSeller!.id))
+    .limit(1);
+  if (!config) {
+    res.status(200).json(null);
+    return;
   }
-});
+  res.json(toMasked(config));
+}));
 
 /**
  * Seller: create or replace their payment config (one per seller -- upsert
@@ -147,27 +143,22 @@ router.post("/seller-payment-configs", requireSeller, validateBody(CreateSellerP
  * route's doc comment for the fuller rationale on why this is preferred
  * over anything fancier.
  */
-router.delete("/seller-payment-configs/mine", requireSeller, async (req, res) => {
-  try {
-    const deleted = await db
-      .delete(sellerPaymentConfigsTable)
-      .where(eq(sellerPaymentConfigsTable.sellerId, req.dbSeller!.id))
-      .returning();
-    if (deleted.length === 0) {
-      res.status(404).json({ error: "No payment config to delete" });
-      return;
-    }
-
-    await db
-      .update(sellerListingsTable)
-      .set({ paymentMethod: "cod" })
-      .where(and(eq(sellerListingsTable.sellerId, req.dbSeller!.id), ne(sellerListingsTable.paymentMethod, "cod")));
-
-    res.json({ message: "Payment config removed. Your listings will fall back to COD-only." });
-  } catch (err) {
-    logger.error({ err: err }, "Delete seller payment config error");
-    res.status(500).json({ error: "Failed to delete payment config" });
+router.delete("/seller-payment-configs/mine", requireSeller, asyncHandler(async (req, res) => {
+  const deleted = await db
+    .delete(sellerPaymentConfigsTable)
+    .where(eq(sellerPaymentConfigsTable.sellerId, req.dbSeller!.id))
+    .returning();
+  if (deleted.length === 0) {
+    res.status(404).json({ error: "No payment config to delete" });
+    return;
   }
-});
+
+  await db
+    .update(sellerListingsTable)
+    .set({ paymentMethod: "cod" })
+    .where(and(eq(sellerListingsTable.sellerId, req.dbSeller!.id), ne(sellerListingsTable.paymentMethod, "cod")));
+
+  res.json({ message: "Payment config removed. Your listings will fall back to COD-only." });
+}));
 
 export default router;

@@ -1,8 +1,15 @@
 import { Router } from "express";
+import type { z } from "zod";
 import { clerkClient } from "@clerk/express";
-import { signMobileJwt, signTokenPair, verifyRefreshToken } from "../middlewares/mobileJwt";
+import { signTokenPair, verifyRefreshToken } from "../middlewares/mobileJwt";
 import { authLimiter } from "../middlewares/rateLimiter";
-import { logger } from "../lib/logger";
+import { validateBody } from "../lib/validateRequest";
+import { asyncHandler, HttpError } from "../lib/errors";
+import {
+  MobileSignInBody,
+  MobileSignUpBody,
+  MobileRefreshBody,
+} from "../lib/schemas";
 
 const router = Router();
 
@@ -14,14 +21,12 @@ const router = Router();
  * should store the refresh token securely (Keychain/Keystore) and call
  * /mobile-auth/refresh before the access token expires.
  */
-router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
-  try {
-    const { email, password } = req.body ?? {};
-    if (typeof email !== "string" || typeof password !== "string" || !email || !password) {
-      res.status(400).json({ error: "Email and password are required" });
-      return;
-    }
-
+router.post(
+  "/mobile-auth/sign-in",
+  authLimiter,
+  validateBody(MobileSignInBody, "MobileSignInBody"),
+  asyncHandler(async (req, res) => {
+    const { email, password } = req.body as z.infer<typeof MobileSignInBody>;
     const normalizedEmail = email.trim().toLowerCase();
 
     const { data: users } = await clerkClient.users.getUserList({
@@ -31,8 +36,7 @@ router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
 
     const user = users[0];
     if (!user) {
-      res.status(401).json({ error: "Invalid email or password" });
-      return;
+      throw new HttpError(401, "Invalid email or password");
     }
 
     try {
@@ -41,8 +45,7 @@ router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
         password,
       });
     } catch {
-      res.status(401).json({ error: "Invalid email or password" });
-      return;
+      throw new HttpError(401, "Invalid email or password");
     }
 
     const primaryEmail =
@@ -65,11 +68,8 @@ router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
         lastName: user.lastName,
       },
     });
-  } catch (err) {
-    logger.error({ err }, "Mobile sign-in error");
-    res.status(500).json({ error: "Sign-in failed. Please try again." });
-  }
-});
+  }),
+);
 
 /**
  * POST /api/mobile-auth/refresh
@@ -89,18 +89,16 @@ router.post("/mobile-auth/sign-in", authLimiter, async (req, res) => {
  *
  * Rate-limited at 20/15min (same as sign-in) to prevent brute-force.
  */
-router.post("/mobile-auth/refresh", authLimiter, async (req, res) => {
-  try {
-    const { refreshToken } = req.body ?? {};
-    if (typeof refreshToken !== "string" || !refreshToken) {
-      res.status(400).json({ error: "Refresh token is required" });
-      return;
-    }
+router.post(
+  "/mobile-auth/refresh",
+  authLimiter,
+  validateBody(MobileRefreshBody, "MobileRefreshBody"),
+  asyncHandler(async (req, res) => {
+    const { refreshToken } = req.body as z.infer<typeof MobileRefreshBody>;
 
     const payload = verifyRefreshToken(refreshToken);
     if (!payload) {
-      res.status(401).json({ error: "Invalid or expired refresh token" });
-      return;
+      throw new HttpError(401, "Invalid or expired refresh token");
     }
 
     // Issue a new token pair (rotation)
@@ -114,11 +112,8 @@ router.post("/mobile-auth/refresh", authLimiter, async (req, res) => {
       refreshToken: newRefreshToken,
       expiresIn,
     });
-  } catch (err) {
-    logger.error({ err }, "Token refresh error");
-    res.status(500).json({ error: "Token refresh failed" });
-  }
-});
+  }),
+);
 
 /**
  * POST /api/mobile-auth/sign-up
@@ -126,48 +121,51 @@ router.post("/mobile-auth/refresh", authLimiter, async (req, res) => {
  *
  * Returns an access token (1h) + refresh token (30d), same as sign-in.
  */
-router.post("/mobile-auth/sign-up", authLimiter, async (req, res) => {
-  try {
-    const { email, password, firstName, lastName } = req.body ?? {};
-    if (typeof email !== "string" || typeof password !== "string" || !email || !password) {
-      res.status(400).json({ error: "Email and password are required" });
-      return;
-    }
-    if (password.length < 8) {
-      res.status(400).json({ error: "Password must be at least 8 characters" });
-      return;
-    }
-
+router.post(
+  "/mobile-auth/sign-up",
+  authLimiter,
+  validateBody(MobileSignUpBody, "MobileSignUpBody"),
+  asyncHandler(async (req, res) => {
+    const { email, password, firstName, lastName } = req.body as z.infer<typeof MobileSignUpBody>;
     const normalizedEmail = email.trim().toLowerCase();
 
-    const user = await clerkClient.users.createUser({
-      emailAddress: [normalizedEmail],
-      password,
-      firstName: typeof firstName === "string" ? firstName : undefined,
-      lastName: typeof lastName === "string" ? lastName : undefined,
-    });
+    try {
+      const user = await clerkClient.users.createUser({
+        emailAddress: [normalizedEmail],
+        password,
+        firstName: firstName ?? undefined,
+        lastName: lastName ?? undefined,
+      });
 
-    const { accessToken, refreshToken, expiresIn } = signTokenPair({
-      clerkId: user.id,
-      email: normalizedEmail,
-    });
-
-    res.status(201).json({
-      token: accessToken,
-      refreshToken,
-      expiresIn,
-      user: {
-        id: user.id,
+      const { accessToken, refreshToken, expiresIn } = signTokenPair({
+        clerkId: user.id,
         email: normalizedEmail,
-        firstName: user.firstName,
-        lastName: user.lastName,
-      },
-    });
-  } catch (err: any) {
-    logger.error({ err }, "Mobile sign-up error");
-    const clerkMessage = err?.errors?.[0]?.message;
-    res.status(400).json({ error: clerkMessage ?? "Sign-up failed. Please try again." });
-  }
-});
+      });
+
+      res.status(201).json({
+        token: accessToken,
+        refreshToken,
+        expiresIn,
+        user: {
+          id: user.id,
+          email: normalizedEmail,
+          firstName: user.firstName,
+          lastName: user.lastName,
+        },
+      });
+    } catch (err) {
+      // Clerk's error shape: { errors: [{ message, code }] }
+      const clerkErr = err as { errors?: { message?: string; code?: string }[] };
+      const clerkMessage = clerkErr?.errors?.[0]?.message;
+      // Re-throw as a 400 HttpError so the global handler logs + responds uniformly.
+      // Expose the Clerk message (it's user-facing: "Email already in use", etc.)
+      throw new HttpError(400, clerkMessage ?? "Sign-up failed. Please try again.", {
+        code: clerkErr?.errors?.[0]?.code,
+        expose: true,
+        cause: err,
+      });
+    }
+  }),
+);
 
 export default router;

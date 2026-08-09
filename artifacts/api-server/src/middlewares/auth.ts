@@ -101,15 +101,23 @@ function resolveIdentity(req: Request): {
   };
 }
 
-export const requireAuth = async (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-) => {
+/**
+ * Core authentication logic — shared by requireAuth, requireAdmin,
+ * requireSellerAccount, and requireSeller.
+ *
+ * Extracted so the higher-level middlewares don't need the obscure
+ * `await new Promise<void>((resolve) => requireAuth(req, res, () => resolve())); if (res.headersSent) return;`
+ * pattern to call requireAuth from within another middleware.
+ *
+ * On success: sets `req.userId` and `req.dbUser`, returns `true`.
+ * On failure: sends the appropriate error response (401 or 403), returns `false`.
+ * The caller should check the return value and `return` early if `false`.
+ */
+async function authenticate(req: Request, res: Response): Promise<boolean> {
   const identity = resolveIdentity(req);
   if (!identity) {
     res.status(401).json({ error: "Unauthorized" });
-    return;
+    return false;
   }
   const { clerkId, claimedEmail, claimedFirst, claimedLast } = identity;
   req.userId = clerkId;
@@ -175,10 +183,19 @@ export const requireAuth = async (
 
   if (user.isBlocked) {
     res.status(403).json({ error: "Account is blocked" });
-    return;
+    return false;
   }
 
   req.dbUser = user;
+  return true;
+}
+
+export const requireAuth = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (!(await authenticate(req, res))) return;
   next();
 };
 
@@ -187,8 +204,7 @@ export const requireAdmin = async (
   res: Response,
   next: NextFunction,
 ) => {
-  await new Promise<void>((resolve) => requireAuth(req, res, () => resolve()));
-  if (res.headersSent) return;
+  if (!(await authenticate(req, res))) return;
   if (req.dbUser?.role !== "admin") {
     res.status(403).json({ error: "Admin access required" });
     return;
@@ -219,8 +235,7 @@ export const requireSellerAccount = async (
   res: Response,
   next: NextFunction,
 ) => {
-  await new Promise<void>((resolve) => requireAuth(req, res, () => resolve()));
-  if (res.headersSent) return;
+  if (!(await authenticate(req, res))) return;
 
   const [seller] = await db
     .select()
@@ -255,8 +270,7 @@ export const requireSeller = async (
   res: Response,
   next: NextFunction,
 ) => {
-  await new Promise<void>((resolve) => requireAuth(req, res, () => resolve()));
-  if (res.headersSent) return;
+  if (!(await authenticate(req, res))) return;
 
   const [seller] = await db
     .select()

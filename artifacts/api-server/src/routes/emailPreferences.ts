@@ -1,10 +1,13 @@
 // artifacts/api-server/src/routes/emailPreferences.ts
 import { Router } from "express";
-import { logger } from "../lib/logger";
+import type { z } from "zod";
 import { db } from "@workspace/db";
 import { emailPreferencesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
+import { validateBody } from "../lib/validateRequest";
+import { asyncHandler } from "../lib/errors";
+import { UpdateEmailPreferencesBody } from "../lib/schemas";
 import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
@@ -22,8 +25,10 @@ function formatPrefs(p: typeof emailPreferencesTable.$inferSelect) {
 }
 
 // GET /email-preferences
-router.get("/email-preferences", requireAuth, async (req: ApiRequest, res) => {
-  try {
+router.get(
+  "/email-preferences",
+  requireAuth,
+  asyncHandler(async (req: ApiRequest, res) => {
     const [prefs] = await db
       .select()
       .from(emailPreferencesTable)
@@ -45,31 +50,25 @@ router.get("/email-preferences", requireAuth, async (req: ApiRequest, res) => {
     }
 
     res.json(formatPrefs(prefs));
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to fetch preferences" });
-  }
-});
+  }),
+);
 
 // PUT /email-preferences — upsert
-router.put("/email-preferences", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const {
-      orderUpdates, promotions, restockAlerts,
-      newsletter, abandonedCart, loyaltyUpdates,
-    } = req.body as any;
-
-    const boolOrDefault = (v: unknown, def: boolean) =>
-      typeof v === "boolean" ? v : def;
-
+router.put(
+  "/email-preferences",
+  requireAuth,
+  validateBody(UpdateEmailPreferencesBody, "UpdateEmailPreferencesBody"),
+  asyncHandler(async (req: ApiRequest<z.infer<typeof UpdateEmailPreferencesBody>>, res) => {
+    const body = req.body;
+    // Default unspecified fields to true (opt-out model).
     const values = {
       userId: req.userId!,
-      orderUpdates: boolOrDefault(orderUpdates, true),
-      promotions: boolOrDefault(promotions, true),
-      restockAlerts: boolOrDefault(restockAlerts, true),
-      newsletter: boolOrDefault(newsletter, true),
-      abandonedCart: boolOrDefault(abandonedCart, true),
-      loyaltyUpdates: boolOrDefault(loyaltyUpdates, true),
+      orderUpdates: body.orderUpdates ?? true,
+      promotions: body.promotions ?? true,
+      restockAlerts: body.restockAlerts ?? true,
+      newsletter: body.newsletter ?? true,
+      abandonedCart: body.abandonedCart ?? true,
+      loyaltyUpdates: body.loyaltyUpdates ?? true,
       updatedAt: new Date(),
     };
 
@@ -83,10 +82,7 @@ router.put("/email-preferences", requireAuth, async (req: ApiRequest, res) => {
       .returning();
 
     res.json(formatPrefs(prefs));
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to save preferences" });
-  }
-});
+  }),
+);
 
 export default router;

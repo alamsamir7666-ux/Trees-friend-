@@ -1,3 +1,4 @@
+import { asyncHandler } from "../lib/errors";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { ordersTable, orderShipmentsTable, usersTable } from "@workspace/db";
@@ -64,58 +65,53 @@ function formatSellerOrder(
  * Non-breaking: response shape stays Order[]. The doc comment previously
  * said "not paginated" — that was the audit's PERF weakness #5; now bounded.
  */
-router.get("/seller/orders", requireSeller, async (req, res) => {
-  try {
-    const { orderStatus } = req.query as { orderStatus?: string };
-    const valid = ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"];
+router.get("/seller/orders", requireSeller, asyncHandler(async (req, res) => {
+  const { orderStatus } = req.query as { orderStatus?: string };
+  const valid = ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"];
 
-    // PERF-5: DB-level LIMIT — was unbounded.
-    const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "50")));
-    const page = Math.max(1, parseInt((req.query.page as string) ?? "1"));
-    const offset = (page - 1) * limit;
+  // PERF-5: DB-level LIMIT — was unbounded.
+  const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "50")));
+  const page = Math.max(1, parseInt((req.query.page as string) ?? "1"));
+  const offset = (page - 1) * limit;
 
-    const orders = await db
-      .select()
-      .from(ordersTable)
-      .where(
-        and(
-          eq(ordersTable.sellerId, req.dbSeller!.id),
-          orderStatus && valid.includes(orderStatus) ? eq(ordersTable.orderStatus, orderStatus) : undefined,
-        ),
-      )
-      .orderBy(desc(ordersTable.createdAt))
-      .limit(limit)
-      .offset(offset);
-
-    if (orders.length === 0) {
-      res.json([]);
-      return;
-    }
-
-    const orderIds = orders.map((o) => o.id);
-    const shipments = await db
-      .select()
-      .from(orderShipmentsTable)
-      .where(inArray(orderShipmentsTable.orderId, orderIds));
-    const shipmentMap = new Map(shipments.map((s) => [s.orderId, s]));
-
-    // Buyer email lookup: orders.userId is a Clerk id, not our own users.id
-    // FK -- same join-by-clerkId pattern used elsewhere in this codebase
-    // (e.g. orders.ts).
-    const clerkIds = [...new Set(orders.map((o) => o.userId))];
-    const users = await db.select().from(usersTable).where(inArray(usersTable.clerkId, clerkIds));
-    const emailMap = new Map(users.map((u) => [u.clerkId, u.email]));
-
-    res.json(
-      orders.map((o) =>
-        formatSellerOrder(o, shipmentMap.get(o.id), emailMap.get(o.userId)?.endsWith("@clerk.user") ? null : emailMap.get(o.userId) ?? null),
+  const orders = await db
+    .select()
+    .from(ordersTable)
+    .where(
+      and(
+        eq(ordersTable.sellerId, req.dbSeller!.id),
+        orderStatus && valid.includes(orderStatus) ? eq(ordersTable.orderStatus, orderStatus) : undefined,
       ),
-    );
-  } catch (err) {
-    logger.error({ err: err }, "List seller orders error");
-    res.status(500).json({ error: "Failed to fetch orders" });
+    )
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  if (orders.length === 0) {
+    res.json([]);
+    return;
   }
-});
+
+  const orderIds = orders.map((o) => o.id);
+  const shipments = await db
+    .select()
+    .from(orderShipmentsTable)
+    .where(inArray(orderShipmentsTable.orderId, orderIds));
+  const shipmentMap = new Map(shipments.map((s) => [s.orderId, s]));
+
+  // Buyer email lookup: orders.userId is a Clerk id, not our own users.id
+  // FK -- same join-by-clerkId pattern used elsewhere in this codebase
+  // (e.g. orders.ts).
+  const clerkIds = [...new Set(orders.map((o) => o.userId))];
+  const users = await db.select().from(usersTable).where(inArray(usersTable.clerkId, clerkIds));
+  const emailMap = new Map(users.map((u) => [u.clerkId, u.email]));
+
+  res.json(
+    orders.map((o) =>
+      formatSellerOrder(o, shipmentMap.get(o.id), emailMap.get(o.userId)?.endsWith("@clerk.user") ? null : emailMap.get(o.userId) ?? null),
+    ),
+  );
+}));
 
 router.get("/seller/orders/:id", requireSeller, validateParams(GetSellerOrderParams, "GetSellerOrderParams"), async (req: ApiRequest, res) => {
   try {

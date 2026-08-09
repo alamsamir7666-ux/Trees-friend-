@@ -1,13 +1,16 @@
 import { Router } from "express";
+import { z } from "zod";
 import { db } from "@workspace/db";
 import { stockAlertsTable, productsTable, productVariantsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { sendStockAlertEmail } from "../lib/email";
-import { sendWhatsAppStockAlert } from "../lib/whatsapp";
 import { stockAlertLimiter } from "../middlewares/rateLimiter";
-import { z } from "zod";
 import { validateBody } from "../lib/validateRequest";
-import { logger } from "../lib/logger";
+import { asyncHandler, HttpError } from "../lib/errors";
+import { notifyStockAlerts } from "../lib/stockAlerts";
+
+// Re-export for backward compat — routes/products.ts imports this from
+// "./stockAlerts". New code should import from "../lib/stockAlerts".
+export { notifyStockAlerts };
 
 const router = Router();
 
@@ -23,18 +26,15 @@ const CreateStockAlertBody = z.object({
   email: z.string(),
 });
 
-router.post("/stock-alerts", stockAlertLimiter, validateBody(CreateStockAlertBody, "CreateStockAlertBody"), async (req, res) => {
-  try {
-    // P0-1: body shape now validated by Zod (CreateStockAlertBody).
-    // productId/variantId are coerced to numbers; email is a string.
-    // The hand-rolled isNaN checks are superseded. The email format
-    // business rule (email must contain @ or end with @phone.notify) is
-    // kept below — Zod validates shape, this validates semantics.
+router.post(
+  "/stock-alerts",
+  stockAlertLimiter,
+  validateBody(CreateStockAlertBody, "CreateStockAlertBody"),
+  asyncHandler(async (req, res) => {
     const { productId, variantId, email } = req.body;
     const isPhone = email.endsWith("@phone.notify");
     if (!isPhone && !email.includes("@")) {
-      res.status(400).json({ error: "Valid email is required" });
-      return;
+      throw new HttpError(400, "Valid email is required");
     }
 
     const [product] = await db
@@ -43,10 +43,7 @@ router.post("/stock-alerts", stockAlertLimiter, validateBody(CreateStockAlertBod
       .where(eq(productsTable.id, productId))
       .limit(1);
 
-    if (!product) {
-      res.status(404).json({ error: "Product not found" });
-      return;
-    }
+    if (!product) throw new HttpError(404, "Product not found");
 
     const [variant] = await db
       .select({ id: productVariantsTable.id, stock: productVariantsTable.stock, productId: productVariantsTable.productId })
@@ -55,12 +52,10 @@ router.post("/stock-alerts", stockAlertLimiter, validateBody(CreateStockAlertBod
       .limit(1);
 
     if (!variant || variant.productId !== product.id) {
-      res.status(404).json({ error: "Variant not found for this product" });
-      return;
+      throw new HttpError(404, "Variant not found for this product");
     }
     if (variant.stock > 0) {
-      res.status(400).json({ error: "This option is already in stock" });
-      return;
+      throw new HttpError(400, "This option is already in stock");
     }
 
     // Prevent duplicate alerts
@@ -88,45 +83,7 @@ router.post("/stock-alerts", stockAlertLimiter, validateBody(CreateStockAlertBod
     });
 
     res.status(201).json({ message: "You will be notified when this option is back in stock" });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to register stock alert" });
-  }
-});
-
-/**
- * Called whenever admin updates a product's variant stock to > 0.
- * Notifies all subscribers waiting on that specific variant.
- */
-export async function notifyStockAlerts(productId: number, productName: string, variantId?: number) {
-  try {
-    const conditions = variantId != null
-      ? and(eq(stockAlertsTable.productId, productId), eq(stockAlertsTable.variantId, variantId), eq(stockAlertsTable.notified, false))
-      : and(eq(stockAlertsTable.productId, productId), eq(stockAlertsTable.notified, false));
-
-    const alerts = await db
-      .select()
-      .from(stockAlertsTable)
-      .where(conditions);
-
-    for (const alert of alerts) {
-      logger.info({ data: alert.email }, "[stock-alert] Processing alert");
-      if (alert.email.endsWith("@phone.notify")) {
-        const phone = alert.email.replace("@phone.notify", "");
-        logger.info({ data: phone }, "[stock-alert] Sending WhatsApp to");
-        await sendWhatsAppStockAlert({ phone, productName, productId });
-      } else {
-        await sendStockAlertEmail({ to: alert.email, productName });
-      }
-      await db
-        .update(stockAlertsTable)
-        .set({ notified: true })
-        .where(eq(stockAlertsTable.id, alert.id));
-    }
-  } catch (err) {
-    logger.error({ err: err }, "[stock-alert] notifyStockAlerts failed");
-    throw err;
-  }
-}
+  }),
+);
 
 export default router;

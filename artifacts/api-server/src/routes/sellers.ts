@@ -1,6 +1,9 @@
+import { asyncHandler } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { Router } from "express";
 import multerPkg from "multer";
-import { v2 as cloudinaryV2 } from "cloudinary";
+import { cloudinary, deleteCloudinaryAssets, cleanupRemovedImages } from "../lib/cloudinary";
+import { formatSeller } from "../lib/formatters";
 import { db } from "@workspace/db";
 import {
   sellersTable,
@@ -10,71 +13,47 @@ import {
 } from "@workspace/db";
 import { eq, and, sql, desc, isNull } from "drizzle-orm";
 import { requireAuth, requireSellerAccount } from "../middlewares/auth";
-import { deleteCloudinaryAssets, cleanupRemovedImages } from "../lib/cloudinary";
 import { BecomeSellerBody } from "@workspace/api-zod";
 import { validateBody } from "../lib/validateRequest";
 import type { ApiRequest } from "../types/apiRequest";
 import type { z } from "zod";
 
-cloudinaryV2.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+// Use the shared Cloudinary singleton from lib/cloudinary.ts (configured once
+// at module load).
 
 const uploadStorage = multerPkg.memoryStorage();
-const uploadMiddleware = multerPkg({ storage: uploadStorage, limits: { fileSize: 5 * 1024 * 1024 } });
+const uploadMiddleware = multerPkg({
+  storage: uploadStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  // MIME filter: allow images + PDFs for verification docs (NID, trade license).
+  fileFilter: (_req, file, cb) => {
+    const ok = file.mimetype.startsWith("image/") || file.mimetype === "application/pdf";
+    if (ok) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image or PDF files are allowed"));
+    }
+  },
+});
 
 const router = Router();
 
 const TRIAL_LENGTH_MS = 6 * 30 * 24 * 60 * 60 * 1000; // 6 months (plan doc §1.1, §5.2)
-
-function formatSeller(s: typeof sellersTable.$inferSelect) {
-  return {
-    id: s.id,
-    userId: s.userId,
-    businessName: s.businessName,
-    nurseryName: s.nurseryName,
-    ownerName: s.ownerName,
-    nidOrTradeLicenseUrl: s.nidOrTradeLicenseUrl,
-    contactPhone: s.contactPhone,
-    contactEmail: s.contactEmail,
-    location: s.location,
-    description: s.description,
-    nurseryImages: s.nurseryImages,
-    logoUrl: s.logoUrl,
-    status: s.status,
-    isVerified: s.isVerified,
-    verificationRequestStatus: s.verificationRequestStatus,
-    verificationRequestedAt: s.verificationRequestedAt?.toISOString() ?? null,
-    verificationDecidedAt: s.verificationDecidedAt?.toISOString() ?? null,
-    verificationRejectionReason: s.verificationRejectionReason,
-    subscriptionStatus: s.subscriptionStatus,
-    trialEndsAt: s.trialEndsAt?.toISOString() ?? null,
-    subscriptionExpiresAt: s.subscriptionExpiresAt?.toISOString() ?? null,
-    createdAt: s.createdAt.toISOString(),
-    updatedAt: s.updatedAt.toISOString(),
-  };
-}
 
 /**
  * Returns the current user's seller record, or null if they've never
  * applied. Frontend uses this to decide whether to show "Become a Seller",
  * a pending/rejected status banner, or the seller dashboard entry point.
  */
-router.get("/sellers/me", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const [seller] = await db
-      .select()
-      .from(sellersTable)
-      .where(eq(sellersTable.userId, req.dbUser!.id))
-      .limit(1);
+router.get("/sellers/me", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  const [seller] = await db
+    .select()
+    .from(sellersTable)
+    .where(eq(sellersTable.userId, req.dbUser!.id))
+    .limit(1);
 
-    res.json(seller ? formatSeller(seller) : null);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch seller status" });
-  }
-});
+  res.json(seller ? formatSeller(seller) : null);
+}));
 
 /**
  * Apply to become a seller. Per plan doc §5.1-2: additive to the user (does
@@ -171,8 +150,8 @@ router.post("/sellers/upload-verification-doc", requireAuth, uploadMiddleware.si
       return;
     }
     const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
-      const stream = cloudinaryV2.uploader.upload_stream(
-        { folder: "treefriend/seller-verification" },
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: "treefriend/seller-verification", resource_type: "auto" },
         (err, result) => {
           if (err || !result) { logger.error({ err: err }, "Cloudinary error"); return reject(err ?? new Error("Upload failed")); }
           resolve(result as { secure_url: string });
@@ -203,87 +182,82 @@ router.post("/sellers/upload-verification-doc", requireAuth, uploadMiddleware.si
  * silently ignored rather than erroring, since the client only ever sends
  * the profile-editable subset.
  */
-router.patch("/sellers/me", requireSellerAccount, async (req: ApiRequest, res) => {
-  try {
-    const {
-      businessName,
-      nurseryName,
-      ownerName,
-      contactPhone,
-      contactEmail,
-      location,
-      description,
-      nidOrTradeLicenseUrl,
-      nurseryImages,
-      logoUrl,
-    } = req.body as Partial<typeof sellersTable.$inferInsert>;
+router.patch("/sellers/me", requireSellerAccount, asyncHandler(async (req: ApiRequest, res) => {
+  const {
+    businessName,
+    nurseryName,
+    ownerName,
+    contactPhone,
+    contactEmail,
+    location,
+    description,
+    nidOrTradeLicenseUrl,
+    nurseryImages,
+    logoUrl,
+  } = req.body as Partial<typeof sellersTable.$inferInsert>;
 
-    if (businessName !== undefined && (typeof businessName !== "string" || !businessName.trim())) {
-      res.status(400).json({ error: "Business name cannot be empty" });
-      return;
-    }
-    if (nurseryName !== undefined && (typeof nurseryName !== "string" || !nurseryName.trim())) {
-      res.status(400).json({ error: "Nursery name cannot be empty" });
-      return;
-    }
-    if (ownerName !== undefined && (typeof ownerName !== "string" || !ownerName.trim())) {
-      res.status(400).json({ error: "Owner name cannot be empty" });
-      return;
-    }
-    if (contactPhone !== undefined && (typeof contactPhone !== "string" || !contactPhone.trim())) {
-      res.status(400).json({ error: "Contact phone cannot be empty" });
-      return;
-    }
-    if (contactEmail !== undefined && (typeof contactEmail !== "string" || !contactEmail.includes("@"))) {
-      res.status(400).json({ error: "A valid contact email is required" });
-      return;
-    }
-    if (location !== undefined && (typeof location !== "string" || !location.trim())) {
-      res.status(400).json({ error: "Location cannot be empty" });
-      return;
-    }
-    if (nurseryImages !== undefined && !Array.isArray(nurseryImages)) {
-      res.status(400).json({ error: "nurseryImages must be an array of URLs" });
-      return;
-    }
-
-    const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (businessName !== undefined) updates.businessName = businessName.trim();
-    if (nurseryName !== undefined) updates.nurseryName = nurseryName.trim();
-    if (ownerName !== undefined) updates.ownerName = ownerName.trim();
-    if (contactPhone !== undefined) updates.contactPhone = contactPhone.trim();
-    if (contactEmail !== undefined) updates.contactEmail = contactEmail.trim();
-    if (location !== undefined) updates.location = location.trim();
-    if (description !== undefined) updates.description = description?.trim() || null;
-    if (nidOrTradeLicenseUrl !== undefined) updates.nidOrTradeLicenseUrl = nidOrTradeLicenseUrl || null;
-    if (nurseryImages !== undefined) updates.nurseryImages = nurseryImages;
-    if (logoUrl !== undefined) updates.logoUrl = logoUrl || null;
-
-    const previousNurseryImages = req.dbSeller!.nurseryImages ?? [];
-    const previousLogoUrl = req.dbSeller!.logoUrl ?? null;
-
-    const [updated] = await db
-      .update(sellersTable)
-      .set(updates)
-      .where(eq(sellersTable.id, req.dbSeller!.id))
-      .returning();
-
-    // Best-effort cleanup after the DB write succeeds. Runs only for the
-    // fields this request actually touched, and never blocks/fails the
-    // response -- the profile is already saved either way.
-    if (nurseryImages !== undefined) {
-      cleanupRemovedImages(previousNurseryImages, nurseryImages).catch(() => {});
-    }
-    if (logoUrl !== undefined && previousLogoUrl && previousLogoUrl !== logoUrl) {
-      deleteCloudinaryAssets([previousLogoUrl]).catch(() => {});
-    }
-
-    res.json(formatSeller(updated));
-  } catch (err) {
-    logger.error({ err: err }, "Update seller profile error");
-    res.status(500).json({ error: "Failed to update profile" });
+  if (businessName !== undefined && (typeof businessName !== "string" || !businessName.trim())) {
+    res.status(400).json({ error: "Business name cannot be empty" });
+    return;
   }
-});
+  if (nurseryName !== undefined && (typeof nurseryName !== "string" || !nurseryName.trim())) {
+    res.status(400).json({ error: "Nursery name cannot be empty" });
+    return;
+  }
+  if (ownerName !== undefined && (typeof ownerName !== "string" || !ownerName.trim())) {
+    res.status(400).json({ error: "Owner name cannot be empty" });
+    return;
+  }
+  if (contactPhone !== undefined && (typeof contactPhone !== "string" || !contactPhone.trim())) {
+    res.status(400).json({ error: "Contact phone cannot be empty" });
+    return;
+  }
+  if (contactEmail !== undefined && (typeof contactEmail !== "string" || !contactEmail.includes("@"))) {
+    res.status(400).json({ error: "A valid contact email is required" });
+    return;
+  }
+  if (location !== undefined && (typeof location !== "string" || !location.trim())) {
+    res.status(400).json({ error: "Location cannot be empty" });
+    return;
+  }
+  if (nurseryImages !== undefined && !Array.isArray(nurseryImages)) {
+    res.status(400).json({ error: "nurseryImages must be an array of URLs" });
+    return;
+  }
+
+  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  if (businessName !== undefined) updates.businessName = businessName.trim();
+  if (nurseryName !== undefined) updates.nurseryName = nurseryName.trim();
+  if (ownerName !== undefined) updates.ownerName = ownerName.trim();
+  if (contactPhone !== undefined) updates.contactPhone = contactPhone.trim();
+  if (contactEmail !== undefined) updates.contactEmail = contactEmail.trim();
+  if (location !== undefined) updates.location = location.trim();
+  if (description !== undefined) updates.description = description?.trim() || null;
+  if (nidOrTradeLicenseUrl !== undefined) updates.nidOrTradeLicenseUrl = nidOrTradeLicenseUrl || null;
+  if (nurseryImages !== undefined) updates.nurseryImages = nurseryImages;
+  if (logoUrl !== undefined) updates.logoUrl = logoUrl || null;
+
+  const previousNurseryImages = req.dbSeller!.nurseryImages ?? [];
+  const previousLogoUrl = req.dbSeller!.logoUrl ?? null;
+
+  const [updated] = await db
+    .update(sellersTable)
+    .set(updates)
+    .where(eq(sellersTable.id, req.dbSeller!.id))
+    .returning();
+
+  // Best-effort cleanup after the DB write succeeds. Runs only for the
+  // fields this request actually touched, and never blocks/fails the
+  // response -- the profile is already saved either way.
+  if (nurseryImages !== undefined) {
+    cleanupRemovedImages(previousNurseryImages, nurseryImages).catch(() => {});
+  }
+  if (logoUrl !== undefined && previousLogoUrl && previousLogoUrl !== logoUrl) {
+    deleteCloudinaryAssets([previousLogoUrl]).catch(() => {});
+  }
+
+  res.json(formatSeller(updated));
+}));
 
 /**
  * Seller: toggle own vacation mode (plan §4 item 3). Only "active" and
@@ -302,38 +276,33 @@ router.patch("/sellers/me", requireSellerAccount, async (req: ApiRequest, res) =
  * listings in sellerListings.ts already filters sellers.status = "active",
  * so a vacationing seller's listings stop appearing there automatically.
  */
-router.put("/sellers/me/status", requireSellerAccount, async (req: ApiRequest, res) => {
-  try {
-    const { status } = req.body as { status?: string };
-    if (status !== "active" && status !== "vacation") {
-      res.status(400).json({ error: 'status must be "active" or "vacation"' });
-      return;
-    }
-
-    const current = req.dbSeller!.status;
-    if (current !== "active" && current !== "vacation") {
-      res.status(400).json({
-        error: `Cannot change status from "${current}" here. This toggle only switches between "active" and "vacation".`,
-      });
-      return;
-    }
-    if (current === status) {
-      res.status(400).json({ error: `Seller is already "${status}"` });
-      return;
-    }
-
-    const [updated] = await db
-      .update(sellersTable)
-      .set({ status, updatedAt: new Date() })
-      .where(eq(sellersTable.id, req.dbSeller!.id))
-      .returning();
-
-    res.json(formatSeller(updated));
-  } catch (err) {
-    logger.error({ err: err }, "Update seller status error");
-    res.status(500).json({ error: "Failed to update status" });
+router.put("/sellers/me/status", requireSellerAccount, asyncHandler(async (req: ApiRequest, res) => {
+  const { status } = req.body as { status?: string };
+  if (status !== "active" && status !== "vacation") {
+    res.status(400).json({ error: 'status must be "active" or "vacation"' });
+    return;
   }
-});
+
+  const current = req.dbSeller!.status;
+  if (current !== "active" && current !== "vacation") {
+    res.status(400).json({
+      error: `Cannot change status from "${current}" here. This toggle only switches between "active" and "vacation".`,
+    });
+    return;
+  }
+  if (current === status) {
+    res.status(400).json({ error: `Seller is already "${status}"` });
+    return;
+  }
+
+  const [updated] = await db
+    .update(sellersTable)
+    .set({ status, updatedAt: new Date() })
+    .where(eq(sellersTable.id, req.dbSeller!.id))
+    .returning();
+
+  res.json(formatSeller(updated));
+}));
 
 /**
  * Seller: request the public "verified seller" badge (separate from
@@ -346,40 +315,35 @@ router.put("/sellers/me/status", requireSellerAccount, async (req: ApiRequest, r
  * CAN re-request (e.g. after fixing whatever the rejection reason called
  * out), which clears the old rejection reason.
  */
-router.post("/sellers/me/request-verification", requireSellerAccount, async (req: ApiRequest, res) => {
-  try {
-    const seller = req.dbSeller!;
-    if (seller.status !== "active") {
-      res.status(400).json({ error: "Only active sellers can request verification" });
-      return;
-    }
-    if (seller.verificationRequestStatus === "requested") {
-      res.status(400).json({ error: "Verification request already pending" });
-      return;
-    }
-    if (seller.verificationRequestStatus === "approved") {
-      res.status(400).json({ error: "Seller is already verified" });
-      return;
-    }
-
-    const [updated] = await db
-      .update(sellersTable)
-      .set({
-        verificationRequestStatus: "requested",
-        verificationRequestedAt: new Date(),
-        verificationDecidedAt: null,
-        verificationRejectionReason: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(sellersTable.id, seller.id))
-      .returning();
-
-    res.json(formatSeller(updated));
-  } catch (err) {
-    logger.error({ err: err }, "Request seller verification error");
-    res.status(500).json({ error: "Failed to submit verification request" });
+router.post("/sellers/me/request-verification", requireSellerAccount, asyncHandler(async (req: ApiRequest, res) => {
+  const seller = req.dbSeller!;
+  if (seller.status !== "active") {
+    res.status(400).json({ error: "Only active sellers can request verification" });
+    return;
   }
-});
+  if (seller.verificationRequestStatus === "requested") {
+    res.status(400).json({ error: "Verification request already pending" });
+    return;
+  }
+  if (seller.verificationRequestStatus === "approved") {
+    res.status(400).json({ error: "Seller is already verified" });
+    return;
+  }
+
+  const [updated] = await db
+    .update(sellersTable)
+    .set({
+      verificationRequestStatus: "requested",
+      verificationRequestedAt: new Date(),
+      verificationDecidedAt: null,
+      verificationRejectionReason: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(sellersTable.id, seller.id))
+    .returning();
+
+  res.json(formatSeller(updated));
+}));
 
 /**
  * The current authenticated buyer's followed-sellers list, for the
@@ -394,30 +358,25 @@ router.post("/sellers/me/request-verification", requireSellerAccount, async (req
  * the parseInt guard. This is the same static-before-dynamic ordering
  * already used for /sellers/me elsewhere in this file.
  */
-router.get("/sellers/following/mine", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const rows = await db
-      .select({ seller: sellersTable })
-      .from(followsTable)
-      .innerJoin(sellersTable, eq(followsTable.sellerId, sellersTable.id))
-      .where(and(eq(followsTable.userId, req.userId!), eq(sellersTable.status, "active")))
-      .orderBy(desc(followsTable.createdAt));
+router.get("/sellers/following/mine", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  const rows = await db
+    .select({ seller: sellersTable })
+    .from(followsTable)
+    .innerJoin(sellersTable, eq(followsTable.sellerId, sellersTable.id))
+    .where(and(eq(followsTable.userId, req.userId!), eq(sellersTable.status, "active")))
+    .orderBy(desc(followsTable.createdAt));
 
-    res.json(
-      rows.map(({ seller }) => ({
-        id: seller.id,
-        businessName: seller.businessName,
-        nurseryName: seller.nurseryName,
-        location: seller.location,
-        isVerified: seller.isVerified,
-        logoUrl: seller.logoUrl,
-      })),
-    );
-  } catch (err) {
-    logger.error({ err: err }, "List followed sellers error");
-    res.status(500).json({ error: "Failed to fetch followed sellers" });
-  }
-});
+  res.json(
+    rows.map(({ seller }) => ({
+      id: seller.id,
+      businessName: seller.businessName,
+      nurseryName: seller.nurseryName,
+      location: seller.location,
+      isVerified: seller.isVerified,
+      logoUrl: seller.logoUrl,
+    })),
+  );
+}));
 
 /**
  * Public, unauthenticated seller profile for the buyer-facing Seller Store
@@ -441,70 +400,65 @@ router.get("/sellers/following/mine", requireAuth, async (req: ApiRequest, res) 
  * the logged-in viewer's own follow state, kept as a separate authed call
  * the same way review eligibility is split from the public review list.
  */
-router.get("/sellers/:id", async (req, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
-
-    const [seller] = await db
-      .select()
-      .from(sellersTable)
-      .where(and(eq(sellersTable.id, id), eq(sellersTable.status, "active"), isNull(sellersTable.deletedAt)))
-      .limit(1);
-
-    if (!seller) {
-      res.status(404).json({ error: "Seller not found" });
-      return;
-    }
-
-    const [productCountRow, reviewStatsRow, followerCountRow] = await Promise.all([
-      db
-        .select({ count: sql<string>`COUNT(*)` })
-        .from(sellerListingsTable)
-        .where(
-          and(
-            eq(sellerListingsTable.sellerId, id),
-            eq(sellerListingsTable.visibility, "public"),
-            eq(sellerListingsTable.approvalStatus, "approved"),
-          ),
-        ),
-      db
-        .select({ avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`, count: sql<string>`COUNT(*)` })
-        .from(reviewsTable)
-        .where(eq(reviewsTable.sellerId, id)),
-      db
-        .select({ count: sql<string>`COUNT(*)` })
-        .from(followsTable)
-        .where(eq(followsTable.sellerId, id)),
-    ]);
-
-    res.json({
-      id: seller.id,
-      businessName: seller.businessName,
-      nurseryName: seller.nurseryName,
-      location: seller.location,
-      description: seller.description,
-      isVerified: seller.isVerified,
-      logoUrl: seller.logoUrl,
-      // Expose nurseryImages so the buyer-facing Seller Store Page can render
-      // the first one as a cover image. Falls back to a gradient on the
-      // client when the array is empty (most sellers won't have uploaded
-      // nursery photos yet). See SellerStorePage.tsx hero block.
-      nurseryImages: seller.nurseryImages ?? [],
-      createdAt: seller.createdAt.toISOString(),
-      productCount: Number(productCountRow[0]?.count ?? 0),
-      rating: Number(Number(reviewStatsRow[0]?.avg ?? 0).toFixed(1)),
-      reviewCount: Number(reviewStatsRow[0]?.count ?? 0),
-      followerCount: Number(followerCountRow[0]?.count ?? 0),
-    });
-  } catch (err) {
-    logger.error({ err: err }, "Get public seller error");
-    res.status(500).json({ error: "Failed to fetch seller" });
+router.get("/sellers/:id", asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid seller id" });
+    return;
   }
-});
+
+  const [seller] = await db
+    .select()
+    .from(sellersTable)
+    .where(and(eq(sellersTable.id, id), eq(sellersTable.status, "active"), isNull(sellersTable.deletedAt)))
+    .limit(1);
+
+  if (!seller) {
+    res.status(404).json({ error: "Seller not found" });
+    return;
+  }
+
+  const [productCountRow, reviewStatsRow, followerCountRow] = await Promise.all([
+    db
+      .select({ count: sql<string>`COUNT(*)` })
+      .from(sellerListingsTable)
+      .where(
+        and(
+          eq(sellerListingsTable.sellerId, id),
+          eq(sellerListingsTable.visibility, "public"),
+          eq(sellerListingsTable.approvalStatus, "approved"),
+        ),
+      ),
+    db
+      .select({ avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`, count: sql<string>`COUNT(*)` })
+      .from(reviewsTable)
+      .where(eq(reviewsTable.sellerId, id)),
+    db
+      .select({ count: sql<string>`COUNT(*)` })
+      .from(followsTable)
+      .where(eq(followsTable.sellerId, id)),
+  ]);
+
+  res.json({
+    id: seller.id,
+    businessName: seller.businessName,
+    nurseryName: seller.nurseryName,
+    location: seller.location,
+    description: seller.description,
+    isVerified: seller.isVerified,
+    logoUrl: seller.logoUrl,
+    // Expose nurseryImages so the buyer-facing Seller Store Page can render
+    // the first one as a cover image. Falls back to a gradient on the
+    // client when the array is empty (most sellers won't have uploaded
+    // nursery photos yet). See SellerStorePage.tsx hero block.
+    nurseryImages: seller.nurseryImages ?? [],
+    createdAt: seller.createdAt.toISOString(),
+    productCount: Number(productCountRow[0]?.count ?? 0),
+    rating: Number(Number(reviewStatsRow[0]?.avg ?? 0).toFixed(1)),
+    reviewCount: Number(reviewStatsRow[0]?.count ?? 0),
+    followerCount: Number(followerCountRow[0]?.count ?? 0),
+  });
+}));
 
 /**
  * The logged-in viewer's own follow state for this seller -- split out
@@ -515,26 +469,21 @@ router.get("/sellers/:id", async (req, res) => {
  * shows the Follow button to guests too (it just prompts sign-in on tap,
  * same pattern as the wishlist heart button elsewhere).
  */
-router.get("/sellers/:id/follow", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const sellerId = parseInt(req.params.id);
-    if (isNaN(sellerId) || sellerId <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
-
-    const [existing] = await db
-      .select({ id: followsTable.id })
-      .from(followsTable)
-      .where(and(eq(followsTable.userId, req.userId!), eq(followsTable.sellerId, sellerId)))
-      .limit(1);
-
-    res.json({ isFollowing: !!existing });
-  } catch (err) {
-    logger.error({ err: err }, "Get follow status error");
-    res.status(500).json({ error: "Failed to fetch follow status" });
+router.get("/sellers/:id/follow", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  const sellerId = parseInt(req.params.id);
+  if (isNaN(sellerId) || sellerId <= 0) {
+    res.status(400).json({ error: "Invalid seller id" });
+    return;
   }
-});
+
+  const [existing] = await db
+    .select({ id: followsTable.id })
+    .from(followsTable)
+    .where(and(eq(followsTable.userId, req.userId!), eq(followsTable.sellerId, sellerId)))
+    .limit(1);
+
+  res.json({ isFollowing: !!existing });
+}));
 
 /**
  * Follow a seller. Idempotent -- following an already-followed seller
@@ -545,59 +494,48 @@ router.get("/sellers/:id/follow", requireAuth, async (req: ApiRequest, res) => {
  * than a SELECT-then-INSERT check to avoid a race between concurrent
  * requests from the same user.
  */
-router.post("/sellers/:id/follow", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const sellerId = parseInt(req.params.id);
-    if (isNaN(sellerId) || sellerId <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
-
-    const [seller] = await db
-      .select({ id: sellersTable.id })
-      .from(sellersTable)
-      .where(and(eq(sellersTable.id, sellerId), eq(sellersTable.status, "active")))
-      .limit(1);
-    if (!seller) {
-      res.status(404).json({ error: "Seller not found" });
-      return;
-    }
-
-    await db
-      .insert(followsTable)
-      .values({ userId: req.userId!, sellerId })
-      .onConflictDoNothing({ target: [followsTable.userId, followsTable.sellerId] });
-
-    res.json({ isFollowing: true });
-  } catch (err) {
-    logger.error({ err: err }, "Follow seller error");
-    res.status(500).json({ error: "Failed to follow seller" });
+router.post("/sellers/:id/follow", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  const sellerId = parseInt(req.params.id);
+  if (isNaN(sellerId) || sellerId <= 0) {
+    res.status(400).json({ error: "Invalid seller id" });
+    return;
   }
-});
+
+  const [seller] = await db
+    .select({ id: sellersTable.id })
+    .from(sellersTable)
+    .where(and(eq(sellersTable.id, sellerId), eq(sellersTable.status, "active")))
+    .limit(1);
+  if (!seller) {
+    res.status(404).json({ error: "Seller not found" });
+    return;
+  }
+
+  await db
+    .insert(followsTable)
+    .values({ userId: req.userId!, sellerId })
+    .onConflictDoNothing({ target: [followsTable.userId, followsTable.sellerId] });
+
+  res.json({ isFollowing: true });
+}));
 
 /**
  * Unfollow a seller. Also idempotent (unfollowing a seller you don't
  * follow is a no-op success, not a 404) -- same double-tap/optimistic-UI
  * reasoning as the follow route above.
  */
-router.delete("/sellers/:id/follow", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const sellerId = parseInt(req.params.id);
-    if (isNaN(sellerId) || sellerId <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
-
-    await db
-      .delete(followsTable)
-      .where(and(eq(followsTable.userId, req.userId!), eq(followsTable.sellerId, sellerId)));
-
-    res.json({ isFollowing: false });
-  } catch (err) {
-    logger.error({ err: err }, "Unfollow seller error");
-    res.status(500).json({ error: "Failed to unfollow seller" });
+router.delete("/sellers/:id/follow", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  const sellerId = parseInt(req.params.id);
+  if (isNaN(sellerId) || sellerId <= 0) {
+    res.status(400).json({ error: "Invalid seller id" });
+    return;
   }
-});
-import { logger } from "../lib/logger";
+
+  await db
+    .delete(followsTable)
+    .where(and(eq(followsTable.userId, req.userId!), eq(followsTable.sellerId, sellerId)));
+
+  res.json({ isFollowing: false });
+}));
 
 export default router;

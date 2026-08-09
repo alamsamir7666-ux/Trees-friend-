@@ -1,9 +1,15 @@
 import { Router } from "express";
-import { logger } from "../lib/logger";
+import type { z } from "zod";
 import { requireAuth } from "../middlewares/auth";
+import { validateBody } from "../lib/validateRequest";
+import { asyncHandler } from "../lib/errors";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import type { ApiRequest } from "../types/apiRequest";
+import {
+  PushSubscribeBody,
+  PushUnsubscribeBody,
+} from "../lib/schemas";
 
 const router = Router();
 
@@ -19,45 +25,41 @@ const router = Router();
  */
 
 // Store push subscription
-router.post("/push/subscribe", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const { subscription } = req.body as any;
-    if (!subscription?.endpoint) {
-      res.status(400).json({ error: "Invalid subscription object" });
-      return;
-    }
+router.post(
+  "/push/subscribe",
+  requireAuth,
+  validateBody(PushSubscribeBody, "PushSubscribeBody"),
+  asyncHandler(async (req: ApiRequest<z.infer<typeof PushSubscribeBody>>, res) => {
+    const { endpoint, keys } = req.body;
 
     // Store subscription in DB (using raw SQL since we haven't created a typed table)
-    await db.execute(sql`
-      INSERT INTO push_subscriptions (user_id, endpoint, keys)
-      VALUES (${req.userId}, ${subscription.endpoint}, ${JSON.stringify(subscription.keys)})
-      ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, keys = EXCLUDED.keys
-    `).catch(() => {
-      // Table may not exist yet — gracefully skip
-    });
+    await db
+      .execute(sql`
+        INSERT INTO push_subscriptions (user_id, endpoint, keys)
+        VALUES (${req.userId}, ${endpoint}, ${JSON.stringify(keys)})
+        ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, keys = EXCLUDED.keys
+      `)
+      .catch(() => {
+        // Table may not exist yet — gracefully skip
+      });
 
     res.json({ ok: true });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to save subscription" });
-  }
-});
+  }),
+);
 
-router.post("/push/unsubscribe", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const { endpoint } = req.body as any;
-    if (!endpoint) {
-      res.status(400).json({ error: "Endpoint is required" });
-      return;
-    }
-    await db.execute(sql`
-      DELETE FROM push_subscriptions WHERE endpoint = ${endpoint}
-    `).catch(() => {});
+router.post(
+  "/push/unsubscribe",
+  requireAuth,
+  validateBody(PushUnsubscribeBody, "PushUnsubscribeBody"),
+  asyncHandler(async (req: ApiRequest<z.infer<typeof PushUnsubscribeBody>>, res) => {
+    const { endpoint } = req.body;
+    await db
+      .execute(sql`
+        DELETE FROM push_subscriptions WHERE endpoint = ${endpoint}
+      `)
+      .catch(() => {});
     res.json({ ok: true });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to remove subscription" });
-  }
-});
+  }),
+);
 
 export default router;

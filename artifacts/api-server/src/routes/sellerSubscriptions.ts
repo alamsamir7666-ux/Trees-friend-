@@ -1,3 +1,4 @@
+import { asyncHandler } from "../lib/errors";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { sellersTable, sellerListingsTable, sellerSubscriptionsTable } from "@workspace/db";
@@ -18,38 +19,34 @@ const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
  * upcoming deadline) since "expired" sellers are the ones admin most needs
  * to see and action.
  */
-router.get("/admin/seller-subscriptions", requireAdmin, async (req, res) => {
-  try {
-    const { status } = req.query as { status?: string };
-    const validStatuses = ["trial", "active", "expired"];
+router.get("/admin/seller-subscriptions", requireAdmin, asyncHandler(async (req, res) => {
+  const { status } = req.query as { status?: string };
+  const validStatuses = ["trial", "active", "expired"];
 
-    const sellers = await db
-      .select()
-      .from(sellersTable)
-      .where(
-        status && validStatuses.includes(status)
-          ? eq(sellersTable.subscriptionStatus, status)
-          : undefined,
-      )
-      .orderBy(desc(sellersTable.updatedAt));
+  const sellers = await db
+    .select()
+    .from(sellersTable)
+    .where(
+      status && validStatuses.includes(status)
+        ? eq(sellersTable.subscriptionStatus, status)
+        : undefined,
+    )
+    .orderBy(desc(sellersTable.updatedAt));
 
-    res.json(
-      sellers.map((s) => ({
-        id: s.id,
-        businessName: s.businessName,
-        contactEmail: s.contactEmail,
-        contactPhone: s.contactPhone,
-        status: s.status,
-        subscriptionStatus: s.subscriptionStatus,
-        trialEndsAt: s.trialEndsAt?.toISOString() ?? null,
-        subscriptionExpiresAt: s.subscriptionExpiresAt?.toISOString() ?? null,
-        reminderSentAt: s.reminderSentAt?.toISOString() ?? null,
-      })),
-    );
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch seller subscriptions" });
-  }
-});
+  res.json(
+    sellers.map((s) => ({
+      id: s.id,
+      businessName: s.businessName,
+      contactEmail: s.contactEmail,
+      contactPhone: s.contactPhone,
+      status: s.status,
+      subscriptionStatus: s.subscriptionStatus,
+      trialEndsAt: s.trialEndsAt?.toISOString() ?? null,
+      subscriptionExpiresAt: s.subscriptionExpiresAt?.toISOString() ?? null,
+      reminderSentAt: s.reminderSentAt?.toISOString() ?? null,
+    })),
+  );
+}));
 
 /**
  * Admin: confirm a seller's 500 taka/year payment was received (outside
@@ -70,103 +67,99 @@ router.get("/admin/seller-subscriptions", requireAdmin, async (req, res) => {
  * matches the plan's actual money flow (seller pays admin outside the
  * system; admin confirms it here).
  */
-router.post("/admin/seller-subscriptions/:sellerId/mark-paid", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const sellerId = parseInt(req.params.sellerId);
-    if (isNaN(sellerId) || sellerId <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
-
-    const { year, note } = req.body as { year?: number; note?: string };
-    const targetYear = year ?? new Date().getFullYear();
-
-    const [seller] = await db.select().from(sellersTable).where(eq(sellersTable.id, sellerId)).limit(1);
-    if (!seller) {
-      res.status(404).json({ error: "Seller not found" });
-      return;
-    }
-
-    const before = {
-      subscriptionStatus: seller.subscriptionStatus,
-      subscriptionExpiresAt: seller.subscriptionExpiresAt,
-    };
-
-    const now = new Date();
-    const newExpiresAt = new Date(now.getTime() + YEAR_MS);
-
-    // Upsert the seller_subscriptions row for this year.
-    const [existingSub] = await db
-      .select()
-      .from(sellerSubscriptionsTable)
-      .where(and(eq(sellerSubscriptionsTable.sellerId, sellerId), eq(sellerSubscriptionsTable.year, targetYear)))
-      .limit(1);
-
-    if (existingSub) {
-      await db
-        .update(sellerSubscriptionsTable)
-        .set({ status: "paid", paidAt: now, amount: SUBSCRIPTION_FEE })
-        .where(eq(sellerSubscriptionsTable.id, existingSub.id));
-    } else {
-      await db.insert(sellerSubscriptionsTable).values({
-        sellerId,
-        year: targetYear,
-        amount: SUBSCRIPTION_FEE,
-        status: "paid",
-        paidAt: now,
-      });
-    }
-
-    await db
-      .update(sellersTable)
-      .set({
-        subscriptionStatus: "active",
-        subscriptionExpiresAt: newExpiresAt,
-        reminderSentAt: null,
-        updatedAt: now,
-      })
-      .where(eq(sellersTable.id, sellerId));
-
-    // Restore only listings THIS system hid for expiry, not ones the
-    // seller hid themselves or via vacation mode.
-    const restored = await db
-      .update(sellerListingsTable)
-      .set({ visibility: "public", hiddenReason: null, updatedAt: now })
-      .where(
-        and(
-          eq(sellerListingsTable.sellerId, sellerId),
-          eq(sellerListingsTable.visibility, "hidden"),
-          eq(sellerListingsTable.hiddenReason, "subscription_expired"),
-        ),
-      )
-      .returning({ id: sellerListingsTable.id });
-
-    await logAudit({
-      adminId: req.userId!,
-      adminEmail: req.dbUser?.email ?? undefined,
-      action: "seller_subscription.marked_paid",
-      targetType: "seller",
-      targetId: String(sellerId),
-      before,
-      after: {
-        subscriptionStatus: "active",
-        subscriptionExpiresAt: newExpiresAt,
-        year: targetYear,
-        amount: SUBSCRIPTION_FEE,
-        note: note ?? null,
-        listingsRestored: restored.length,
-      },
-    });
-
-    res.json({
-      ok: true,
-      subscriptionStatus: "active",
-      subscriptionExpiresAt: newExpiresAt.toISOString(),
-      listingsRestored: restored.length,
-    });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to mark subscription as paid" });
+router.post("/admin/seller-subscriptions/:sellerId/mark-paid", requireAdmin, asyncHandler(async (req: ApiRequest, res) => {
+  const sellerId = parseInt(req.params.sellerId);
+  if (isNaN(sellerId) || sellerId <= 0) {
+    res.status(400).json({ error: "Invalid seller id" });
+    return;
   }
-});
+
+  const { year, note } = req.body as { year?: number; note?: string };
+  const targetYear = year ?? new Date().getFullYear();
+
+  const [seller] = await db.select().from(sellersTable).where(eq(sellersTable.id, sellerId)).limit(1);
+  if (!seller) {
+    res.status(404).json({ error: "Seller not found" });
+    return;
+  }
+
+  const before = {
+    subscriptionStatus: seller.subscriptionStatus,
+    subscriptionExpiresAt: seller.subscriptionExpiresAt,
+  };
+
+  const now = new Date();
+  const newExpiresAt = new Date(now.getTime() + YEAR_MS);
+
+  // Upsert the seller_subscriptions row for this year.
+  const [existingSub] = await db
+    .select()
+    .from(sellerSubscriptionsTable)
+    .where(and(eq(sellerSubscriptionsTable.sellerId, sellerId), eq(sellerSubscriptionsTable.year, targetYear)))
+    .limit(1);
+
+  if (existingSub) {
+    await db
+      .update(sellerSubscriptionsTable)
+      .set({ status: "paid", paidAt: now, amount: SUBSCRIPTION_FEE })
+      .where(eq(sellerSubscriptionsTable.id, existingSub.id));
+  } else {
+    await db.insert(sellerSubscriptionsTable).values({
+      sellerId,
+      year: targetYear,
+      amount: SUBSCRIPTION_FEE,
+      status: "paid",
+      paidAt: now,
+    });
+  }
+
+  await db
+    .update(sellersTable)
+    .set({
+      subscriptionStatus: "active",
+      subscriptionExpiresAt: newExpiresAt,
+      reminderSentAt: null,
+      updatedAt: now,
+    })
+    .where(eq(sellersTable.id, sellerId));
+
+  // Restore only listings THIS system hid for expiry, not ones the
+  // seller hid themselves or via vacation mode.
+  const restored = await db
+    .update(sellerListingsTable)
+    .set({ visibility: "public", hiddenReason: null, updatedAt: now })
+    .where(
+      and(
+        eq(sellerListingsTable.sellerId, sellerId),
+        eq(sellerListingsTable.visibility, "hidden"),
+        eq(sellerListingsTable.hiddenReason, "subscription_expired"),
+      ),
+    )
+    .returning({ id: sellerListingsTable.id });
+
+  await logAudit({
+    adminId: req.userId!,
+    adminEmail: req.dbUser?.email ?? undefined,
+    action: "seller_subscription.marked_paid",
+    targetType: "seller",
+    targetId: String(sellerId),
+    before,
+    after: {
+      subscriptionStatus: "active",
+      subscriptionExpiresAt: newExpiresAt,
+      year: targetYear,
+      amount: SUBSCRIPTION_FEE,
+      note: note ?? null,
+      listingsRestored: restored.length,
+    },
+  });
+
+  res.json({
+    ok: true,
+    subscriptionStatus: "active",
+    subscriptionExpiresAt: newExpiresAt.toISOString(),
+    listingsRestored: restored.length,
+  });
+}));
 
 export default router;

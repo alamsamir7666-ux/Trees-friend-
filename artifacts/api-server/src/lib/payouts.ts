@@ -1,3 +1,4 @@
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { type ordersTable, payoutsTable, sellerPayoutAccountsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
@@ -178,4 +179,3 @@ export async function attemptSellerPayout(
     return { payoutId: payoutRow.id, status: "failed" };
   }
 }
-import { logger } from "../lib/logger";

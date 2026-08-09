@@ -3,14 +3,11 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import cookieParser from "cookie-parser";
 import { clerkMiddleware } from "@clerk/express";
-import { publishableKeyFromHost } from "@clerk/shared/keys";
-import {
-  CLERK_PROXY_PATH,
-  clerkProxyMiddleware,
-  getClerkProxyHost,
-} from "./middlewares/clerkProxyMiddleware";
+import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { errorHandler } from "./lib/errors";
+import { responseHelpersMiddleware } from "./lib/responses";
 import { ensureConversationsTables } from "./lib/ensureConversationsTables";
 import { ensurePresenceTables } from "./lib/ensurePresenceTables";
 import { apiLimiter } from "./middlewares/rateLimiter";
@@ -121,6 +118,11 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use(cookieParser());
 
+// ─── Response helpers (res.ok(), res.created(), res.noContent(), res.message()) ──
+// See lib/responses.ts for the full contract. Mount after body parsers, before
+// routes, so every handler has access to the helpers.
+app.use(responseHelpersMiddleware);
+
 // ─── Clerk proxy ─────────────────────────────────────────────────────────────
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
@@ -137,9 +139,27 @@ app.use(clerkMiddleware({ publishableKey: process.env.CLERK_PUBLISHABLE_KEY }));
 // addition to IP — see routes/orders.ts, routes/mobileAuth.ts, etc.
 // Mounting them here (before requireAuth) would make req.userId always
 // undefined, defeating the per-user keying.
-app.use("/api", apiLimiter);
+app.use("/api", apiLimiter);  // covers both /api and /api/v1 (since /api/v1 starts with /api)
 
-// ─── API routes ───────────────────────────────────────────────────────────────
+// ─── API routes (versioned + backward-compat alias) ──────────────────────────
+//
+// The API is mounted under TWO prefixes:
+//
+//   1. `/api/v1`  — the canonical, versioned path going forward. New clients
+//                   (Flutter app, future SDKs) should use this. When a v2 is
+//                   needed, mount the new router under `/api/v2` and leave
+//                   `/api/v1` untouched — old clients keep working.
+//
+//   2. `/api`     — backward-compat alias for the existing frontend + any
+//                   third-party callers already integrated against `/api/*`.
+//                   Routes a request to `/api/orders` to the same handler as
+//                   `/api/v1/orders`. This alias will be deprecated in a
+//                   future release (add a `Deprecation: true` header + log a
+//                   warning), but for now it's transparent.
+//
+// Both prefixes share the same router instance, so there's zero duplication —
+// adding a new route automatically makes it available under both paths.
+app.use("/api/v1", router);
 app.use("/api", router);
 
 // ─── 404 handler ─────────────────────────────────────────────────────────────
@@ -148,17 +168,10 @@ app.use((_req: Request, res: Response) => {
 });
 
 // ─── Global error handler ─────────────────────────────────────────────────────
- 
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  logger.error({ err }, "Unhandled error");
-
-  // Don't expose internal error details in production
-  const message =
-    process.env.NODE_ENV === "production"
-      ? "Internal server error"
-      : err.message;
-
-  res.status(500).json({ error: message });
-});
+// Replaces the prior inline handler. See `lib/errors.ts` for the full
+// behavior contract (HttpError → status + optional exposed message;
+// ZodError → 400 with details[]; unknown → 500 with details hidden in prod).
+// Every error is logged with method + url + userId context attached.
+app.use(errorHandler);
 
 export default app;

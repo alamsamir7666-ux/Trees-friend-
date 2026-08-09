@@ -1,3 +1,5 @@
+import { logger } from "../lib/logger";
+import { describeError } from "./describeError";
 import twilio from "twilio";
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -39,8 +41,7 @@ export async function sendWhatsAppStockAlert({
       body: message,
     });
     logger.info(`[whatsapp] Sent stock alert to ${to}`);
-  } catch (err: any) {
-    logger.error({ err: err?.message ?? err }, "[whatsapp] Failed to send");
+  } catch (err) {
+    logger.error({ err: describeError(err) }, "[whatsapp] Failed to send");
   }
 }
-import { logger } from "../lib/logger";

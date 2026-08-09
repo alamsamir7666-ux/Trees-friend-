@@ -1,13 +1,15 @@
 import { Router } from "express";
-import { logger } from "../lib/logger";
+import type { z } from "zod";
 import { db } from "@workspace/db";
 import {
   referralsTable,
   couponsTable,
-  usersTable,
 } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
+import { validateBody } from "../lib/validateRequest";
+import { asyncHandler, HttpError } from "../lib/errors";
+import { RedeemReferralBody } from "../lib/schemas";
 import crypto from "crypto";
 import type { ApiRequest } from "../types/apiRequest";
 
@@ -20,8 +22,10 @@ function generateReferralCode(userId: string): string {
 /**
  * Get or create the current user's referral code.
  */
-router.get("/referrals/my-code", requireAuth, async (req: ApiRequest, res) => {
-  try {
+router.get(
+  "/referrals/my-code",
+  requireAuth,
+  asyncHandler(async (req: ApiRequest, res) => {
     const code = generateReferralCode(req.userId!);
 
     // Upsert referral record
@@ -53,24 +57,19 @@ router.get("/referrals/my-code", requireAuth, async (req: ApiRequest, res) => {
       earnedPoints: used * 100, // 100 points per successful referral
       shareUrl: `${process.env.APP_URL ?? "https://treefriend.com"}/?ref=${code}`,
     });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to get referral code" });
-  }
-});
+  }),
+);
 
 /**
  * Apply a referral code when a new user signs up.
  * Called from ProfileSync after first login.
  */
-router.post("/referrals/apply", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const { code } = req.body as any;
-    if (!code || typeof code !== "string") {
-      res.status(400).json({ error: "Referral code is required" });
-      return;
-    }
-
+router.post(
+  "/referrals/apply",
+  requireAuth,
+  validateBody(RedeemReferralBody, "RedeemReferralBody"),
+  asyncHandler(async (req: ApiRequest<z.infer<typeof RedeemReferralBody>>, res) => {
+    const { code } = req.body;
     const sanitized = code.toUpperCase().trim();
 
     // Find referral record
@@ -80,17 +79,12 @@ router.post("/referrals/apply", requireAuth, async (req: ApiRequest, res) => {
       .where(eq(referralsTable.referralCode, sanitized))
       .limit(1);
 
-    if (!referral) {
-      res.status(404).json({ error: "Invalid referral code" });
-      return;
-    }
+    if (!referral) throw new HttpError(404, "Invalid referral code");
     if (referral.referrerId === req.userId) {
-      res.status(400).json({ error: "You cannot use your own referral code" });
-      return;
+      throw new HttpError(400, "You cannot use your own referral code");
     }
     if (referral.referredId) {
-      res.status(400).json({ error: "This referral code has already been used" });
-      return;
+      throw new HttpError(400, "This referral code has already been used");
     }
 
     // Generate a one-time coupon for the new user
@@ -113,10 +107,7 @@ router.post("/referrals/apply", requireAuth, async (req: ApiRequest, res) => {
       couponCode,
       message: "Referral applied! You get ৳100 off your first order.",
     });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to apply referral" });
-  }
-});
+  }),
+);
 
 export default router;

@@ -1,6 +1,5 @@
 import { Router } from "express";
 import multerPkg from "multer";
-import { v2 as cloudinaryV2 } from "cloudinary";
 import { db } from "@workspace/db";
 import {
   conversationsTable,
@@ -17,18 +16,15 @@ import { eq, and, desc, sql, lt, inArray } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import { chainRateLimiters, chatMessageBurstLimiter, chatMessageLimiter, conversationCreateLimiter } from "../middlewares/rateLimiter";
 import { logger } from "../lib/logger";
-import { deleteCloudinaryAssets } from "../lib/cloudinary";
+import { cloudinary, deleteCloudinaryAssets } from "../lib/cloudinary";
 import { CreateConversationBody, SendMessageParams, MarkConversationReadParams } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
 import { describeError } from "../lib/describeError";
 import type { ApiRequest } from "../types/apiRequest";
 import type { z } from "zod";
 
-cloudinaryV2.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+// Use the shared Cloudinary singleton from lib/cloudinary.ts (configured once
+// at module load).
 
 // Memory storage so we can pipe straight to Cloudinary without touching disk.
 // 10MB hard cap matches MAX_CHAT_ATTACHMENT_BYTES; multer enforces it before
@@ -37,6 +33,17 @@ const uploadStorage = multerPkg.memoryStorage();
 const uploadMiddleware = multerPkg({
   storage: uploadStorage,
   limits: { fileSize: MAX_CHAT_ATTACHMENT_BYTES },
+  // MIME filter: defense-in-depth — even though conversations.ts verifies
+  // the MIME type against ALLOWED_CHAT_ATTACHMENT_MIME_TYPES in the route
+  // handler, blocking at multer time saves bandwidth + rejects malicious
+  // payload upload attempts before they reach Cloudinary.
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_CHAT_ATTACHMENT_MIME_TYPES.includes(file.mimetype as never)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Unsupported file type: ${file.mimetype}`));
+    }
+  },
 });
 
 const router = Router();
@@ -1064,7 +1071,7 @@ router.post(
       }
 
       const uploadResult = await new Promise<{ secure_url: string }>((resolve, reject) => {
-        const stream = cloudinaryV2.uploader.upload_stream(
+        const stream = cloudinary.uploader.upload_stream(
           uploadOptions,
           (err, result) => {
             if (err || !result) {

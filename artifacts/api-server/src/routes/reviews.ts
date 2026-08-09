@@ -2,28 +2,18 @@
 // REPLACES existing reviews.ts — adds photo upload via Cloudinary + order timeline
 // Also adds GET /orders/:id/timeline PATCH for admins to push status events.
 
+import { logger } from "../lib/logger";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { reviewsTable, ordersTable, productsTable, sellerListingsTable, sellerListingVariantsTable, sellersTable } from "@workspace/db";
 import { eq, and, sql, desc, isNull } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import multer from "multer";
-import { v2 as cloudinary } from "cloudinary";
-import { deleteCloudinaryAssets } from "../lib/cloudinary";
+import { cloudinary, deleteCloudinaryAssets } from "../lib/cloudinary";
 import { UpdateReviewBody, UpdateReviewParams, DeleteReviewParams } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
 import type { ApiRequest } from "../types/apiRequest";
 import type { z } from "zod";
-
-// ─── Cloudinary config (add to .env.example too) ──────────────────────────
-// CLOUDINARY_CLOUD_NAME=your_cloud
-// CLOUDINARY_API_KEY=your_key
-// CLOUDINARY_API_SECRET=your_secret
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
 
 // multer: store in memory (we stream straight to Cloudinary)
 const upload = multer({
@@ -556,7 +546,6 @@ router.post("/admin/orders/:id/timeline", requireAdmin, async (req: ApiRequest, 
     res.json({ timeline });
   } catch (err) { logger.error({ err }, "Route handler error"); res.status(500).json({ error: "Failed to update order timeline" }); }
 });
-import { logger } from "../lib/logger";
 
 export default router;
 

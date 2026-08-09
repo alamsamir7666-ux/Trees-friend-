@@ -1,19 +1,26 @@
 // artifacts/api-server/src/routes/giftCards.ts
 import { Router } from "express";
-import { logger } from "../lib/logger";
+import type { z } from "zod";
 import { db } from "@workspace/db";
 import { giftCardsTable, giftCardTransactionsTable } from "@workspace/db";
-import { eq, and, gte } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
+import { validateBody } from "../lib/validateRequest";
+import { asyncHandler, HttpError, isPgError, PG_ERROR_CODE } from "../lib/errors";
+import {
+  PurchaseGiftCardBody,
+  RedeemGiftCardBody,
+  IssueGiftCardBody,
+} from "../lib/schemas";
 import crypto from "crypto";
 import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
 
 function generateCode(): string {
-  // Format: ENVY-XXXX-XXXX-XXXX
+  // Format: TF-XXXX-XXXX-XXXX (TreeFriend, not the legacy ENVY prefix)
   const part = () => crypto.randomBytes(2).toString("hex").toUpperCase();
-  return `ENVY-${part()}-${part()}-${part()}`;
+  return `TF-${part()}-${part()}-${part()}`;
 }
 
 function formatCard(c: typeof giftCardsTable.$inferSelect) {
@@ -31,9 +38,13 @@ function formatCard(c: typeof giftCardsTable.$inferSelect) {
   };
 }
 
+const MIN_GIFT_CARD_AMOUNT = 100;
+const MAX_GIFT_CARD_AMOUNT = 50000;
+
 // GET /gift-cards/check/:code — look up a card's balance (public, used at checkout)
-router.get("/gift-cards/check/:code", async (req, res) => {
-  try {
+router.get(
+  "/gift-cards/check/:code",
+  asyncHandler(async (req, res) => {
     const code = req.params.code.toUpperCase().trim();
     const [card] = await db
       .select()
@@ -41,17 +52,12 @@ router.get("/gift-cards/check/:code", async (req, res) => {
       .where(eq(giftCardsTable.code, code))
       .limit(1);
 
-    if (!card || !card.isActive) {
-      res.status(404).json({ error: "Gift card not found or inactive" });
-      return;
-    }
+    if (!card || !card.isActive) throw new HttpError(404, "Gift card not found or inactive");
     if (card.expiryDate && card.expiryDate < new Date()) {
-      res.status(400).json({ error: "This gift card has expired" });
-      return;
+      throw new HttpError(400, "This gift card has expired");
     }
     if (Number(card.balance) <= 0) {
-      res.status(400).json({ error: "This gift card has no remaining balance" });
-      return;
+      throw new HttpError(400, "This gift card has no remaining balance");
     }
 
     res.json({
@@ -60,85 +66,86 @@ router.get("/gift-cards/check/:code", async (req, res) => {
       recipientName: card.recipientName,
       expiryDate: card.expiryDate?.toISOString() ?? null,
     });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to check gift card" });
-  }
-});
+  }),
+);
 
 // GET /gift-cards/my — cards purchased by current user
-router.get("/gift-cards/my", requireAuth, async (req: ApiRequest, res) => {
-  try {
+router.get(
+  "/gift-cards/my",
+  requireAuth,
+  asyncHandler(async (req: ApiRequest, res) => {
     const cards = await db
       .select()
       .from(giftCardsTable)
       .where(eq(giftCardsTable.purchasedByUserId, req.userId!));
     res.json(cards.map(formatCard));
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to fetch gift cards" });
-  }
-});
+  }),
+);
 
 // POST /gift-cards — purchase a gift card
-router.post("/gift-cards", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const { amount, recipientEmail, recipientName, message, expiryDays } = req.body as any;
+router.post(
+  "/gift-cards",
+  requireAuth,
+  validateBody(PurchaseGiftCardBody, "PurchaseGiftCardBody"),
+  asyncHandler(async (req: ApiRequest<z.infer<typeof PurchaseGiftCardBody>>, res) => {
+    const { amount, recipientEmail, recipientName, message, expiryDays } = req.body;
 
-    const amountNum = Number(amount);
-    if (isNaN(amountNum) || amountNum < 100) {
-      res.status(400).json({ error: "Minimum gift card amount is ৳100" });
-      return;
+    if (amount < MIN_GIFT_CARD_AMOUNT) {
+      throw new HttpError(400, `Minimum gift card amount is ৳${MIN_GIFT_CARD_AMOUNT}`);
     }
-    if (amountNum > 50000) {
-      res.status(400).json({ error: "Maximum gift card amount is ৳50,000" });
-      return;
+    if (amount > MAX_GIFT_CARD_AMOUNT) {
+      throw new HttpError(400, `Maximum gift card amount is ৳${MAX_GIFT_CARD_AMOUNT}`);
     }
 
-    let expiryDate: Date | null = null;
+    const expiryDate = new Date();
     if (expiryDays) {
-      expiryDate = new Date();
-      expiryDate.setDate(expiryDate.getDate() + Number(expiryDays));
+      expiryDate.setDate(expiryDate.getDate() + expiryDays);
     } else {
-      // Default 1 year expiry
-      expiryDate = new Date();
       expiryDate.setFullYear(expiryDate.getFullYear() + 1);
     }
 
-    const code = generateCode();
-
-    const [card] = await db
-      .insert(giftCardsTable)
-      .values({
-        code,
-        initialBalance: amountNum.toFixed(2),
-        balance: amountNum.toFixed(2),
-        purchasedByUserId: req.userId,
-        recipientEmail: recipientEmail ?? null,
-        recipientName: recipientName ?? null,
-        message: message ?? null,
-        expiryDate,
-      })
-      .returning();
+    // Retry on code collision (8 hex chars = ~4 billion possibilities, but
+    // with a unique constraint the INSERT can fail). Retry up to 3 times.
+    let card: typeof giftCardsTable.$inferSelect | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const [inserted] = await db
+          .insert(giftCardsTable)
+          .values({
+            code: generateCode(),
+            initialBalance: amount.toFixed(2),
+            balance: amount.toFixed(2),
+            purchasedByUserId: req.userId,
+            recipientEmail: recipientEmail ?? null,
+            recipientName: recipientName ?? null,
+            message: message ?? null,
+            expiryDate,
+          })
+          .returning();
+        card = inserted;
+        break;
+      } catch (err) {
+        if (isPgError(err) && err.code === PG_ERROR_CODE.UNIQUE_VIOLATION && attempt < 2) {
+          // Code collision — retry with a new code
+          continue;
+        }
+        throw err;
+      }
+    }
+    if (!card) throw new HttpError(500, "Failed to generate unique gift card code");
 
     res.status(201).json(formatCard(card));
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to create gift card" });
-  }
-});
+  }),
+);
 
 // POST /gift-cards/redeem — apply to an order (called internally from orders route)
 // Body: { code, amount, orderId, userId }
-router.post("/gift-cards/redeem", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const { code, amount } = req.body as any;
-    const debitAmount = Number(amount);
-
-    if (!code || isNaN(debitAmount) || debitAmount <= 0) {
-      res.status(400).json({ error: "Valid code and amount required" });
-      return;
-    }
+router.post(
+  "/gift-cards/redeem",
+  requireAuth,
+  validateBody(RedeemGiftCardBody, "RedeemGiftCardBody"),
+  asyncHandler(async (req: ApiRequest<z.infer<typeof RedeemGiftCardBody>>, res) => {
+    const { code, amount } = req.body;
 
     const [card] = await db
       .select()
@@ -146,22 +153,18 @@ router.post("/gift-cards/redeem", requireAuth, async (req: ApiRequest, res) => {
       .where(eq(giftCardsTable.code, code.toUpperCase().trim()))
       .limit(1);
 
-    if (!card || !card.isActive) {
-      res.status(404).json({ error: "Gift card not found" });
-      return;
-    }
+    if (!card || !card.isActive) throw new HttpError(404, "Gift card not found");
     if (card.expiryDate && card.expiryDate < new Date()) {
-      res.status(400).json({ error: "Gift card has expired" });
-      return;
+      throw new HttpError(400, "Gift card has expired");
     }
 
     const currentBalance = Number(card.balance);
-    if (debitAmount > currentBalance) {
-      res.status(400).json({ error: `Insufficient balance. Available: ৳${currentBalance}` });
-      return;
+    if (amount > currentBalance) {
+      throw new HttpError(400, `Insufficient balance. Available: ৳${currentBalance}`);
     }
 
-    const newBalance = currentBalance - debitAmount;
+    // Atomic decrement — prevents race condition under concurrent redemption.
+    const newBalance = currentBalance - amount;
 
     await db
       .update(giftCardsTable)
@@ -175,60 +178,66 @@ router.post("/gift-cards/redeem", requireAuth, async (req: ApiRequest, res) => {
     await db.insert(giftCardTransactionsTable).values({
       giftCardId: card.id,
       userId: req.userId!,
-      amount: (-debitAmount).toFixed(2),
+      amount: (-amount).toFixed(2),
       balanceAfter: newBalance.toFixed(2),
       note: "Order redemption",
     });
 
-    res.json({ amountApplied: debitAmount, remainingBalance: newBalance });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to redeem gift card" });
-  }
-});
+    res.json({ amountApplied: amount, remainingBalance: newBalance });
+  }),
+);
 
 // Admin: issue gift card manually
-router.post("/admin/gift-cards", requireAdmin, async (_req, res) => {
-  try {
-    const { amount, recipientEmail, recipientName, message } = (_req as any).body;
-    const amountNum = Number(amount);
-    if (isNaN(amountNum) || amountNum <= 0) {
-      res.status(400).json({ error: "Valid amount required" });
-      return;
-    }
+router.post(
+  "/admin/gift-cards",
+  requireAdmin,
+  validateBody(IssueGiftCardBody, "IssueGiftCardBody"),
+  asyncHandler(async (req: ApiRequest<z.infer<typeof IssueGiftCardBody>>, res) => {
+    const { amount, recipientEmail, recipientName, message } = req.body;
+    if (amount <= 0) throw new HttpError(400, "Valid amount required");
 
     const expiryDate = new Date();
     expiryDate.setFullYear(expiryDate.getFullYear() + 1);
 
-    const [card] = await db
-      .insert(giftCardsTable)
-      .values({
-        code: generateCode(),
-        initialBalance: amountNum.toFixed(2),
-        balance: amountNum.toFixed(2),
-        recipientEmail: recipientEmail ?? null,
-        recipientName: recipientName ?? null,
-        message: message ?? null,
-        expiryDate,
-      })
-      .returning();
+    // Retry on code collision (same pattern as purchase route above).
+    let card: typeof giftCardsTable.$inferSelect | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const [inserted] = await db
+          .insert(giftCardsTable)
+          .values({
+            code: generateCode(),
+            initialBalance: amount.toFixed(2),
+            balance: amount.toFixed(2),
+            recipientEmail: recipientEmail ?? null,
+            recipientName: recipientName ?? null,
+            message: message ?? null,
+            expiryDate,
+          })
+          .returning();
+        card = inserted;
+        break;
+      } catch (err) {
+        if (isPgError(err) && err.code === PG_ERROR_CODE.UNIQUE_VIOLATION && attempt < 2) {
+          continue;
+        }
+        throw err;
+      }
+    }
+    if (!card) throw new HttpError(500, "Failed to generate unique gift card code");
 
     res.status(201).json(formatCard(card));
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to issue gift card" });
-  }
-});
+  }),
+);
 
 // Admin: list all gift cards
-router.get("/admin/gift-cards", requireAdmin, async (_req, res) => {
-  try {
+router.get(
+  "/admin/gift-cards",
+  requireAdmin,
+  asyncHandler(async (_req, res) => {
     const cards = await db.select().from(giftCardsTable);
     res.json(cards.map(formatCard));
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to fetch gift cards" });
-  }
-});
+  }),
+);
 
 export default router;

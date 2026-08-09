@@ -17,9 +17,12 @@ import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import { sendOrderConfirmation } from "../lib/email";
 import { logger } from "../lib/logger";
+import { formatOrder } from "../lib/formatters";
+import { asyncHandler, HttpError, generateId } from "../lib/errors";
 import { checkoutLimiter, guestCheckoutLimiter } from "../middlewares/rateLimiter";
 import { CreateOrderBody } from "@workspace/api-zod";
 import { validateBody } from "../lib/validateRequest";
+import { CancelOrderBody } from "../lib/schemas";
 import type { ApiRequest } from "../types/apiRequest";
 import type { z } from "zod";
 import crypto from "crypto";
@@ -31,56 +34,27 @@ export { groupBySellerAndAllocateDiscount };
 
 const router = Router();
 
-function formatOrder(o: typeof ordersTable.$inferSelect) {
-  return {
-    id: o.id,
-    trackingId: o.trackingId,
-    userId: o.userId,
-    sellerId: o.sellerId ?? null,
-    items: o.items as any[],
-    totalAmount: Number(o.totalAmount),
-    paymentMethod: o.paymentMethod,
-    paymentStatus: o.paymentStatus,
-    senderNumber: o.senderNumber,
-    paidAt: o.paidAt,
-    orderStatus: o.orderStatus,
-    transactionId: o.transactionId,
-    shippingAddress: o.shippingAddress as any,
-    couponCode: o.couponCode,
-    discountAmount: Number(o.discountAmount),
-    cancellationReason: o.cancellationReason ?? null,
-    giftWrap: o.giftWrap ?? "false",
-    giftMessage: o.giftMessage ?? null,
-    createdAt: o.createdAt.toISOString(),
-    updatedAt: o.updatedAt.toISOString(),
-  };
-}
+router.get("/orders", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  // PERF-5: Add DB-level LIMIT — was fetching ALL orders for the user
+  // in one unbounded query. A buyer with 500 lifetime orders got all 500
+  // on every page load. Now defaults to 50 (generous enough for a single
+  // page; the frontend can add pagination UI later). Non-breaking: the
+  // response shape stays Order[] (the OpenAPI spec documents this as an
+  // array). The frontend's useInfiniteScroll pattern can add ?page=&limit=
+  // params when needed.
+  const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "50")));
+  const page = Math.max(1, parseInt((req.query.page as string) ?? "1"));
+  const offset = (page - 1) * limit;
 
-router.get("/orders", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    // PERF-5: Add DB-level LIMIT — was fetching ALL orders for the user
-    // in one unbounded query. A buyer with 500 lifetime orders got all 500
-    // on every page load. Now defaults to 50 (generous enough for a single
-    // page; the frontend can add pagination UI later). Non-breaking: the
-    // response shape stays Order[] (the OpenAPI spec documents this as an
-    // array). The frontend's useInfiniteScroll pattern can add ?page=&limit=
-    // params when needed.
-    const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "50")));
-    const page = Math.max(1, parseInt((req.query.page as string) ?? "1"));
-    const offset = (page - 1) * limit;
-
-    const orders = await db
-      .select()
-      .from(ordersTable)
-      .where(eq(ordersTable.userId, req.userId!))
-      .orderBy(desc(ordersTable.createdAt))
-      .limit(limit)
-      .offset(offset);
-    res.json(orders.map(formatOrder));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch orders" });
-  }
-});
+  const orders = await db
+    .select()
+    .from(ordersTable)
+    .where(eq(ordersTable.userId, req.userId!))
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(limit)
+    .offset(offset);
+  res.json(orders.map(formatOrder));
+}));
 
 /**
  * Shared helper used by both the guest and authenticated checkout paths
@@ -212,7 +186,9 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
     }
 
     const totalAmount = Math.max(0, subtotal - discountAmount + deliveryFee);
-    const trackingId = "EE" + crypto.randomBytes(4).toString("hex").toUpperCase();
+    // 6 bytes (48 bits) = ~281 trillion possibilities. Collision-safe at
+    // marketplace scale; previously was 4 bytes (32 bits = ~4 billion).
+    const trackingId = generateId("EE", 6);
     // See the authenticated /orders route's matching doc comment for why
     // "bkash" now maps to "payment_pending" instead of the old
     // "pending_verification".
@@ -245,8 +221,8 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
     );
 
     res.status(201).json({ id: order.id, trackingId: order.trackingId });
-  } catch (err: any) {
-    logger.error({ err: err }, "guest order error");
+  } catch (err) {
+    logger.error({ err }, "guest order error");
     res.status(500).json({ error: "Failed to place order" });
   }
 });
@@ -550,7 +526,9 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
       resolvedSenderNumbers.set(g.sellerId, groupSenderNumber?.trim() || null);
     }
 
-    const trackingId = () => "EE" + crypto.randomBytes(4).toString("hex").toUpperCase();
+    // 6 bytes (48 bits) = ~281 trillion possibilities. Collision-safe at
+    // marketplace scale; previously was 4 bytes (32 bits = ~4 billion).
+    const trackingId = () => generateId("EE", 6);
 
     // ─── ATOMIC CHECKOUT TRANSACTION ────────────────────────────────────────
     // All order writes (insert orders, delete cart, decrement stock) MUST be
@@ -740,91 +718,84 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
   }
 });
 
-router.get("/orders/track/:trackingId", async (req, res) => {
-  try {
-    const rawId = req.params.trackingId;
-    if (!/^[A-Z0-9]{2,20}$/i.test(rawId)) {
-      res.status(400).json({ error: "Invalid tracking ID format" });
-      return;
-    }
-
-    const [order] = await db
-      .select()
-      .from(ordersTable)
-      .where(eq(ordersTable.trackingId, rawId.toUpperCase()))
-      .limit(1);
-
-    if (!order) {
-      res.status(404).json({ error: "Order not found" });
-      return;
-    }
-
-    const statuses = [
-      "pending",
-      "confirmed",
-      "processing",
-      "shipped",
-      "delivered",
-    ];
-    const labels: Record<string, string> = {
-      pending: "Order Placed",
-      confirmed: "Order Confirmed",
-      processing: "Processing",
-      shipped: "Shipped",
-      delivered: "Delivered",
-    };
-
-    const currentIdx = statuses.indexOf(order.orderStatus);
-    const timeline = statuses.map((s, i) => ({
-      status: s,
-      label: labels[s] ?? s,
-      timestamp: i <= currentIdx ? order.updatedAt.toISOString() : null,
-      completed: i <= currentIdx,
-    }));
-
-    res.json({
-      ...formatOrder(order),
-      subtotal: (order.items as any[]).reduce((s, i) => s + Number(i.price) * i.quantity, 0),
-      timeline,
-    });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to track order" });
+router.get("/orders/track/:trackingId", asyncHandler(async (req, res) => {
+  const rawId = req.params.trackingId;
+  if (!/^[A-Z0-9]{2,20}$/i.test(rawId)) {
+    res.status(400).json({ error: "Invalid tracking ID format" });
+    return;
   }
-});
 
-router.get("/orders/:id", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid order ID" });
-      return;
-    }
-    const [order] = await db
-      .select()
-      .from(ordersTable)
-      .where(and(eq(ordersTable.id, id), eq(ordersTable.userId, req.userId!)))
-      .limit(1);
-    if (!order) {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
-    res.json(formatOrder(order));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch order" });
+  const [order] = await db
+    .select()
+    .from(ordersTable)
+    .where(eq(ordersTable.trackingId, rawId.toUpperCase()))
+    .limit(1);
+
+  if (!order) {
+    res.status(404).json({ error: "Order not found" });
+    return;
   }
-});
 
-router.post("/orders/:id/cancel", requireAuth, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
+  const statuses = [
+    "pending",
+    "confirmed",
+    "processing",
+    "shipped",
+    "delivered",
+  ];
+  const labels: Record<string, string> = {
+    pending: "Order Placed",
+    confirmed: "Order Confirmed",
+    processing: "Processing",
+    shipped: "Shipped",
+    delivered: "Delivered",
+  };
+
+  const currentIdx = statuses.indexOf(order.orderStatus);
+  const timeline = statuses.map((s, i) => ({
+    status: s,
+    label: labels[s] ?? s,
+    timestamp: i <= currentIdx ? order.updatedAt.toISOString() : null,
+    completed: i <= currentIdx,
+  }));
+
+  res.json({
+    ...formatOrder(order),
+    subtotal: (order.items as any[]).reduce((s, i) => s + Number(i.price) * i.quantity, 0),
+    timeline,
+  });
+}));
+
+router.get("/orders/:id", requireAuth, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid order ID" });
+    return;
+  }
+  const [order] = await db
+    .select()
+    .from(ordersTable)
+    .where(and(eq(ordersTable.id, id), eq(ordersTable.userId, req.userId!)))
+    .limit(1);
+  if (!order) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  res.json(formatOrder(order));
+}));
+
+router.post(
+  "/orders/:id/cancel",
+  requireAuth,
+  validateBody(CancelOrderBody, "CancelOrderBody"),
+  asyncHandler(async (req: ApiRequest<z.infer<typeof CancelOrderBody>>, res) => {
+    const id = parseInt(req.params.id, 10);
     if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid order ID" });
-      return;
+      throw new HttpError(400, "Invalid order ID");
     }
-    const { reason } = req.body as { reason?: string };
+    const { reason } = req.body;
     if (!reason || reason.trim().length < 3) {
-      res.status(400).json({ error: "Cancellation reason is required" });
-      return;
+      throw new HttpError(400, "Cancellation reason is required");
     }
 
     const [order] = await db
@@ -833,15 +804,12 @@ router.post("/orders/:id/cancel", requireAuth, async (req: ApiRequest, res) => {
       .where(and(eq(ordersTable.id, id), eq(ordersTable.userId, req.userId!)))
       .limit(1);
 
-    if (!order) {
-      res.status(404).json({ error: "Order not found" });
-      return;
-    }
+    if (!order) throw new HttpError(404, "Order not found");
     if (!["pending"].includes(order.orderStatus)) {
-      res.status(400).json({
-        error: `Cannot cancel an order that is already "${order.orderStatus}". Please contact support.`,
-      });
-      return;
+      throw new HttpError(
+        400,
+        `Cannot cancel an order that is already "${order.orderStatus}". Please contact support.`,
+      );
     }
 
     const [updated] = await db
@@ -855,9 +823,7 @@ router.post("/orders/:id/cancel", requireAuth, async (req: ApiRequest, res) => {
       .returning();
 
     res.json(formatOrder(updated));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to cancel order" });
-  }
-});
+  }),
+);
 
 export default router;

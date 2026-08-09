@@ -1,3 +1,4 @@
+import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { auditLogsTable } from "@workspace/db";
 
@@ -33,4 +34,3 @@ export async function logAudit({
     logger.error({ err: e }, "Audit log failed");
   }
 }
-import { logger } from "../lib/logger";

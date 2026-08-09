@@ -1,3 +1,4 @@
+import { asyncHandler } from "../lib/errors";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { sellersTable, sellerPaymentConfigsTable, sellerCourierConfigsTable, sellerListingsTable } from "@workspace/db";
@@ -5,6 +6,7 @@ import { eq, desc, and, ne, count } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
 import { maskCredential } from "../lib/credentialEncryption";
+import { formatSeller } from "../lib/formatters";
 import {
   ApproveSellerParams,
   RejectSellerParams,
@@ -16,39 +18,10 @@ import {
 } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
 import type { ApiRequest } from "../types/apiRequest";
-import type { Response } from "express";
 
 const router = Router();
 
 const VALID_SELLER_STATUSES = ["pending_verification", "active", "suspended", "vacation"];
-
-function formatSeller(s: typeof sellersTable.$inferSelect) {
-  return {
-    id: s.id,
-    userId: s.userId,
-    businessName: s.businessName,
-    nurseryName: s.nurseryName,
-    ownerName: s.ownerName,
-    nidOrTradeLicenseUrl: s.nidOrTradeLicenseUrl,
-    contactPhone: s.contactPhone,
-    contactEmail: s.contactEmail,
-    location: s.location,
-    description: s.description,
-    nurseryImages: s.nurseryImages,
-    logoUrl: s.logoUrl,
-    status: s.status,
-    isVerified: s.isVerified,
-    verificationRequestStatus: s.verificationRequestStatus,
-    verificationRequestedAt: s.verificationRequestedAt?.toISOString() ?? null,
-    verificationDecidedAt: s.verificationDecidedAt?.toISOString() ?? null,
-    verificationRejectionReason: s.verificationRejectionReason,
-    subscriptionStatus: s.subscriptionStatus,
-    trialEndsAt: s.trialEndsAt?.toISOString() ?? null,
-    subscriptionExpiresAt: s.subscriptionExpiresAt?.toISOString() ?? null,
-    createdAt: s.createdAt.toISOString(),
-    updatedAt: s.updatedAt.toISOString(),
-  };
-}
 
 /**
  * Admin: list sellers, optionally filtered by status. Defaults to no
@@ -62,27 +35,23 @@ function formatSeller(s: typeof sellersTable.$inferSelect) {
  * array -- keeps the response shape compatible with the orval-generated
  * client which types this as Seller[].
  */
-router.get("/admin/sellers", requireAdmin, async (req, res) => {
-  try {
-    const { status } = req.query as { status?: string };
-    const rawLimit = parseInt(req.query.limit as string, 10);
-    const rawOffset = parseInt(req.query.offset as string, 10);
-    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 20;
-    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
+router.get("/admin/sellers", requireAdmin, asyncHandler(async (req, res) => {
+  const { status } = req.query as { status?: string };
+  const rawLimit = parseInt(req.query.limit as string, 10);
+  const rawOffset = parseInt(req.query.offset as string, 10);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 20;
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
 
-    const sellers = await db
-      .select()
-      .from(sellersTable)
-      .where(status && VALID_SELLER_STATUSES.includes(status) ? eq(sellersTable.status, status) : undefined)
-      .orderBy(desc(sellersTable.createdAt))
-      .limit(limit)
-      .offset(offset);
+  const sellers = await db
+    .select()
+    .from(sellersTable)
+    .where(status && VALID_SELLER_STATUSES.includes(status) ? eq(sellersTable.status, status) : undefined)
+    .orderBy(desc(sellersTable.createdAt))
+    .limit(limit)
+    .offset(offset);
 
-    res.json(sellers.map(formatSeller));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch sellers" });
-  }
-});
+  res.json(sellers.map(formatSeller));
+}));
 
 /**
  * Admin: per-status seller counts in a single request. Returns
@@ -92,28 +61,24 @@ router.get("/admin/sellers", requireAdmin, async (req, res) => {
  * unexpected status is excluded (defensive -- the schema enum should
  * make this impossible, but the DB is the source of truth).
  */
-router.get("/admin/sellers/counts", requireAdmin, async (_req, res) => {
-  try {
-    const rows = await db
-      .select({ status: sellersTable.status, n: count() })
-      .from(sellersTable)
-      .groupBy(sellersTable.status);
-    const out: Record<string, number> = {
-      pending_verification: 0,
-      active: 0,
-      suspended: 0,
-      vacation: 0,
-    };
-    for (const r of rows) {
-      if (VALID_SELLER_STATUSES.includes(r.status)) {
-        out[r.status] = Number(r.n) || 0;
-      }
+router.get("/admin/sellers/counts", requireAdmin, asyncHandler(async (_req, res) => {
+  const rows = await db
+    .select({ status: sellersTable.status, n: count() })
+    .from(sellersTable)
+    .groupBy(sellersTable.status);
+  const out: Record<string, number> = {
+    pending_verification: 0,
+    active: 0,
+    suspended: 0,
+    vacation: 0,
+  };
+  for (const r of rows) {
+    if (VALID_SELLER_STATUSES.includes(r.status)) {
+      out[r.status] = Number(r.n) || 0;
     }
-    res.json(out);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch seller counts" });
   }
-});
+  res.json(out);
+}));
 
 /**
  * Admin: approve a pending_verification seller -> active. This is a manual
@@ -298,22 +263,18 @@ function formatCourierConfig(c: typeof sellerCourierConfigsTable.$inferSelect) {
  * so the same list endpoint can back both an "awaiting review" and an
  * "already verified" admin view without two separate routes.
  */
-router.get("/admin/seller-payment-configs", requireAdmin, async (req, res) => {
-  try {
-    const { verified } = req.query as { verified?: string };
-    const wantVerified = verified === "true";
+router.get("/admin/seller-payment-configs", requireAdmin, asyncHandler(async (req, res) => {
+  const { verified } = req.query as { verified?: string };
+  const wantVerified = verified === "true";
 
-    const configs = await db
-      .select()
-      .from(sellerPaymentConfigsTable)
-      .where(eq(sellerPaymentConfigsTable.isVerified, wantVerified))
-      .orderBy(desc(sellerPaymentConfigsTable.updatedAt));
+  const configs = await db
+    .select()
+    .from(sellerPaymentConfigsTable)
+    .where(eq(sellerPaymentConfigsTable.isVerified, wantVerified))
+    .orderBy(desc(sellerPaymentConfigsTable.updatedAt));
 
-    res.json(configs.map(formatPaymentConfig));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch payment configs" });
-  }
-});
+  res.json(configs.map(formatPaymentConfig));
+}));
 
 /**
  * Admin: mark a seller's bKash payment config as verified. This is the
@@ -324,49 +285,45 @@ router.get("/admin/seller-payment-configs", requireAdmin, async (req, res) => {
  * "bkash" checkout requests -- there is no separate propagation step,
  * both routes check isVerified live on every relevant write/checkout.
  */
-router.put("/admin/seller-payment-configs/:id/verify", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid payment config id" });
-      return;
-    }
-
-    const [existing] = await db
-      .select()
-      .from(sellerPaymentConfigsTable)
-      .where(eq(sellerPaymentConfigsTable.id, id))
-      .limit(1);
-    if (!existing) {
-      res.status(404).json({ error: "Payment config not found" });
-      return;
-    }
-    if (existing.isVerified) {
-      res.status(400).json({ error: "Payment config is already verified" });
-      return;
-    }
-
-    const [config] = await db
-      .update(sellerPaymentConfigsTable)
-      .set({ isVerified: true, updatedAt: new Date() })
-      .where(eq(sellerPaymentConfigsTable.id, id))
-      .returning();
-
-    await logAudit({
-      adminId: req.userId!,
-      adminEmail: req.dbUser?.email ?? undefined,
-      action: "sellerPaymentConfig.verified",
-      targetType: "sellerPaymentConfig",
-      targetId: String(id),
-      before: { isVerified: false, sellerId: existing.sellerId },
-      after: { isVerified: true },
-    });
-
-    res.json(formatPaymentConfig(config));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to verify payment config" });
+router.put("/admin/seller-payment-configs/:id/verify", requireAdmin, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid payment config id" });
+    return;
   }
-});
+
+  const [existing] = await db
+    .select()
+    .from(sellerPaymentConfigsTable)
+    .where(eq(sellerPaymentConfigsTable.id, id))
+    .limit(1);
+  if (!existing) {
+    res.status(404).json({ error: "Payment config not found" });
+    return;
+  }
+  if (existing.isVerified) {
+    res.status(400).json({ error: "Payment config is already verified" });
+    return;
+  }
+
+  const [config] = await db
+    .update(sellerPaymentConfigsTable)
+    .set({ isVerified: true, updatedAt: new Date() })
+    .where(eq(sellerPaymentConfigsTable.id, id))
+    .returning();
+
+  await logAudit({
+    adminId: req.userId!,
+    adminEmail: req.dbUser?.email ?? undefined,
+    action: "sellerPaymentConfig.verified",
+    targetType: "sellerPaymentConfig",
+    targetId: String(id),
+    before: { isVerified: false, sellerId: existing.sellerId },
+    after: { isVerified: true },
+  });
+
+  res.json(formatPaymentConfig(config));
+}));
 
 /**
  * Admin: revoke verification on a payment config (e.g. a later complaint,
@@ -402,75 +359,67 @@ router.put("/admin/seller-payment-configs/:id/verify", requireAdmin, async (req:
  * still means the unverify itself takes effect immediately for new orders
  * even without this reconciliation; this only fixes what a listing shows.
  */
-router.put("/admin/seller-payment-configs/:id/unverify", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid payment config id" });
-      return;
-    }
-
-    const [existing] = await db
-      .select()
-      .from(sellerPaymentConfigsTable)
-      .where(eq(sellerPaymentConfigsTable.id, id))
-      .limit(1);
-    if (!existing) {
-      res.status(404).json({ error: "Payment config not found" });
-      return;
-    }
-    if (!existing.isVerified) {
-      res.status(400).json({ error: "Payment config is not currently verified" });
-      return;
-    }
-
-    const [config] = await db
-      .update(sellerPaymentConfigsTable)
-      .set({ isVerified: false, updatedAt: new Date() })
-      .where(eq(sellerPaymentConfigsTable.id, id))
-      .returning();
-
-    await db
-      .update(sellerListingsTable)
-      .set({ paymentMethod: "cod" })
-      .where(and(eq(sellerListingsTable.sellerId, existing.sellerId), ne(sellerListingsTable.paymentMethod, "cod")));
-
-    await logAudit({
-      adminId: req.userId!,
-      adminEmail: req.dbUser?.email ?? undefined,
-      action: "sellerPaymentConfig.unverified",
-      targetType: "sellerPaymentConfig",
-      targetId: String(id),
-      before: { isVerified: true, sellerId: existing.sellerId },
-      after: { isVerified: false },
-    });
-
-    res.json(formatPaymentConfig(config));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to unverify payment config" });
+router.put("/admin/seller-payment-configs/:id/unverify", requireAdmin, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid payment config id" });
+    return;
   }
-});
+
+  const [existing] = await db
+    .select()
+    .from(sellerPaymentConfigsTable)
+    .where(eq(sellerPaymentConfigsTable.id, id))
+    .limit(1);
+  if (!existing) {
+    res.status(404).json({ error: "Payment config not found" });
+    return;
+  }
+  if (!existing.isVerified) {
+    res.status(400).json({ error: "Payment config is not currently verified" });
+    return;
+  }
+
+  const [config] = await db
+    .update(sellerPaymentConfigsTable)
+    .set({ isVerified: false, updatedAt: new Date() })
+    .where(eq(sellerPaymentConfigsTable.id, id))
+    .returning();
+
+  await db
+    .update(sellerListingsTable)
+    .set({ paymentMethod: "cod" })
+    .where(and(eq(sellerListingsTable.sellerId, existing.sellerId), ne(sellerListingsTable.paymentMethod, "cod")));
+
+  await logAudit({
+    adminId: req.userId!,
+    adminEmail: req.dbUser?.email ?? undefined,
+    action: "sellerPaymentConfig.unverified",
+    targetType: "sellerPaymentConfig",
+    targetId: String(id),
+    before: { isVerified: true, sellerId: existing.sellerId },
+    after: { isVerified: false },
+  });
+
+  res.json(formatPaymentConfig(config));
+}));
 
 /**
  * Admin: list courier configs pending review / already verified. Same
  * shape and defaulting convention as the payment-config list above.
  */
-router.get("/admin/seller-courier-configs", requireAdmin, async (req, res) => {
-  try {
-    const { verified } = req.query as { verified?: string };
-    const wantVerified = verified === "true";
+router.get("/admin/seller-courier-configs", requireAdmin, asyncHandler(async (req, res) => {
+  const { verified } = req.query as { verified?: string };
+  const wantVerified = verified === "true";
 
-    const configs = await db
-      .select()
-      .from(sellerCourierConfigsTable)
-      .where(eq(sellerCourierConfigsTable.isVerified, wantVerified))
-      .orderBy(desc(sellerCourierConfigsTable.createdAt));
+  const configs = await db
+    .select()
+    .from(sellerCourierConfigsTable)
+    .where(eq(sellerCourierConfigsTable.isVerified, wantVerified))
+    .orderBy(desc(sellerCourierConfigsTable.createdAt));
 
-    res.json(configs.map(formatCourierConfig));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch courier configs" });
-  }
-});
+  res.json(configs.map(formatCourierConfig));
+}));
 
 /**
  * Admin: mark a seller's courier config as verified. Same manual-toggle
@@ -481,97 +430,89 @@ router.get("/admin/seller-courier-configs", requireAdmin, async (req, res) => {
  * seller to book real courier shipments, not just a dashboard display
  * flag.
  */
-router.put("/admin/seller-courier-configs/:id/verify", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid courier config id" });
-      return;
-    }
-
-    const [existing] = await db
-      .select()
-      .from(sellerCourierConfigsTable)
-      .where(eq(sellerCourierConfigsTable.id, id))
-      .limit(1);
-    if (!existing) {
-      res.status(404).json({ error: "Courier config not found" });
-      return;
-    }
-    if (existing.isVerified) {
-      res.status(400).json({ error: "Courier config is already verified" });
-      return;
-    }
-
-    const [config] = await db
-      .update(sellerCourierConfigsTable)
-      .set({ isVerified: true })
-      .where(eq(sellerCourierConfigsTable.id, id))
-      .returning();
-
-    await logAudit({
-      adminId: req.userId!,
-      adminEmail: req.dbUser?.email ?? undefined,
-      action: "sellerCourierConfig.verified",
-      targetType: "sellerCourierConfig",
-      targetId: String(id),
-      before: { isVerified: false, sellerId: existing.sellerId },
-      after: { isVerified: true },
-    });
-
-    res.json(formatCourierConfig(config));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to verify courier config" });
+router.put("/admin/seller-courier-configs/:id/verify", requireAdmin, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid courier config id" });
+    return;
   }
-});
+
+  const [existing] = await db
+    .select()
+    .from(sellerCourierConfigsTable)
+    .where(eq(sellerCourierConfigsTable.id, id))
+    .limit(1);
+  if (!existing) {
+    res.status(404).json({ error: "Courier config not found" });
+    return;
+  }
+  if (existing.isVerified) {
+    res.status(400).json({ error: "Courier config is already verified" });
+    return;
+  }
+
+  const [config] = await db
+    .update(sellerCourierConfigsTable)
+    .set({ isVerified: true })
+    .where(eq(sellerCourierConfigsTable.id, id))
+    .returning();
+
+  await logAudit({
+    adminId: req.userId!,
+    adminEmail: req.dbUser?.email ?? undefined,
+    action: "sellerCourierConfig.verified",
+    targetType: "sellerCourierConfig",
+    targetId: String(id),
+    before: { isVerified: false, sellerId: existing.sellerId },
+    after: { isVerified: true },
+  });
+
+  res.json(formatCourierConfig(config));
+}));
 
 /**
  * Admin: revoke verification on a courier config. Same rationale as
  * unverify-payment-config above.
  */
-router.put("/admin/seller-courier-configs/:id/unverify", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid courier config id" });
-      return;
-    }
-
-    const [existing] = await db
-      .select()
-      .from(sellerCourierConfigsTable)
-      .where(eq(sellerCourierConfigsTable.id, id))
-      .limit(1);
-    if (!existing) {
-      res.status(404).json({ error: "Courier config not found" });
-      return;
-    }
-    if (!existing.isVerified) {
-      res.status(400).json({ error: "Courier config is not currently verified" });
-      return;
-    }
-
-    const [config] = await db
-      .update(sellerCourierConfigsTable)
-      .set({ isVerified: false })
-      .where(eq(sellerCourierConfigsTable.id, id))
-      .returning();
-
-    await logAudit({
-      adminId: req.userId!,
-      adminEmail: req.dbUser?.email ?? undefined,
-      action: "sellerCourierConfig.unverified",
-      targetType: "sellerCourierConfig",
-      targetId: String(id),
-      before: { isVerified: true, sellerId: existing.sellerId },
-      after: { isVerified: false },
-    });
-
-    res.json(formatCourierConfig(config));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to unverify courier config" });
+router.put("/admin/seller-courier-configs/:id/unverify", requireAdmin, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid courier config id" });
+    return;
   }
-});
+
+  const [existing] = await db
+    .select()
+    .from(sellerCourierConfigsTable)
+    .where(eq(sellerCourierConfigsTable.id, id))
+    .limit(1);
+  if (!existing) {
+    res.status(404).json({ error: "Courier config not found" });
+    return;
+  }
+  if (!existing.isVerified) {
+    res.status(400).json({ error: "Courier config is not currently verified" });
+    return;
+  }
+
+  const [config] = await db
+    .update(sellerCourierConfigsTable)
+    .set({ isVerified: false })
+    .where(eq(sellerCourierConfigsTable.id, id))
+    .returning();
+
+  await logAudit({
+    adminId: req.userId!,
+    adminEmail: req.dbUser?.email ?? undefined,
+    action: "sellerCourierConfig.unverified",
+    targetType: "sellerCourierConfig",
+    targetId: String(id),
+    before: { isVerified: true, sellerId: existing.sellerId },
+    after: { isVerified: false },
+  });
+
+  res.json(formatCourierConfig(config));
+}));
 
 /* -------------------------------------------------------------------- */
 /* Verified-seller badge (public trust checkmark, separate from account */
@@ -587,23 +528,19 @@ router.put("/admin/seller-courier-configs/:id/unverify", requireAdmin, async (re
  * verificationRequestStatus values so the admin panel can also show
  * approved/rejected history.
  */
-router.get("/admin/seller-verification-requests", requireAdmin, async (req, res) => {
-  try {
-    const { status } = req.query as { status?: string };
-    const VALID = ["none", "requested", "approved", "rejected"];
-    const filterStatus = status && VALID.includes(status) ? status : "requested";
+router.get("/admin/seller-verification-requests", requireAdmin, asyncHandler(async (req, res) => {
+  const { status } = req.query as { status?: string };
+  const VALID = ["none", "requested", "approved", "rejected"];
+  const filterStatus = status && VALID.includes(status) ? status : "requested";
 
-    const sellers = await db
-      .select()
-      .from(sellersTable)
-      .where(eq(sellersTable.verificationRequestStatus, filterStatus))
-      .orderBy(desc(sellersTable.verificationRequestedAt));
+  const sellers = await db
+    .select()
+    .from(sellersTable)
+    .where(eq(sellersTable.verificationRequestStatus, filterStatus))
+    .orderBy(desc(sellersTable.verificationRequestedAt));
 
-    res.json(sellers.map(formatSeller));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch verification requests" });
-  }
-});
+  res.json(sellers.map(formatSeller));
+}));
 
 /**
  * Admin: approve a seller's pending verification request -> isVerified =

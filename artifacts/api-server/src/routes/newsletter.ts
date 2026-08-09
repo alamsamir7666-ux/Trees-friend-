@@ -1,21 +1,25 @@
 import { Router } from "express";
-import { logger } from "../lib/logger";
+import type { z } from "zod";
 import { db } from "@workspace/db";
 import { newsletterTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { newsletterLimiter } from "../middlewares/rateLimiter";
+import { validateBody } from "../lib/validateRequest";
+import { asyncHandler } from "../lib/errors";
+import {
+  NewsletterSubscribeBody,
+  NewsletterUnsubscribeBody,
+} from "../lib/schemas";
 
 const router = Router();
 
-router.post("/newsletter/subscribe", newsletterLimiter, async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email || typeof email !== "string" || !email.includes("@")) {
-      res.status(400).json({ error: "Valid email is required" });
-      return;
-    }
-
+router.post(
+  "/newsletter/subscribe",
+  newsletterLimiter,
+  validateBody(NewsletterSubscribeBody, "NewsletterSubscribeBody"),
+  asyncHandler(async (req, res) => {
+    const { email } = req.body as z.infer<typeof NewsletterSubscribeBody>;
     const clean = email.toLowerCase().trim();
 
     await db
@@ -27,32 +31,26 @@ router.post("/newsletter/subscribe", newsletterLimiter, async (req, res) => {
       });
 
     res.status(201).json({ message: "Successfully subscribed to newsletter" });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to subscribe" });
-  }
-});
+  }),
+);
 
-router.post("/newsletter/unsubscribe", async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email || !email.includes("@")) {
-      res.status(400).json({ error: "Valid email is required" });
-      return;
-    }
+router.post(
+  "/newsletter/unsubscribe",
+  validateBody(NewsletterUnsubscribeBody, "NewsletterUnsubscribeBody"),
+  asyncHandler(async (req, res) => {
+    const { email } = req.body as z.infer<typeof NewsletterUnsubscribeBody>;
     await db
       .update(newsletterTable)
       .set({ isActive: false })
       .where(eq(newsletterTable.email, email.toLowerCase().trim()));
     res.json({ message: "Unsubscribed successfully" });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to unsubscribe" });
-  }
-});
+  }),
+);
 
-router.get("/admin/newsletter/subscribers", requireAdmin, async (_req, res) => {
-  try {
+router.get(
+  "/admin/newsletter/subscribers",
+  requireAdmin,
+  asyncHandler(async (_req, res) => {
     const subscribers = await db
       .select()
       .from(newsletterTable)
@@ -67,10 +65,7 @@ router.get("/admin/newsletter/subscribers", requireAdmin, async (_req, res) => {
         subscribedAt: s.createdAt.toISOString(),
       })),
     });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to fetch subscribers" });
-  }
-});
+  }),
+);
 
 export default router;

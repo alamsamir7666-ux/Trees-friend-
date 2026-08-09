@@ -1,9 +1,13 @@
+import { asyncHandler } from "../lib/errors";
 import { logAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { Router } from "express";
 import multerPkg from "multer";
-import { v2 as cloudinaryV2 } from "cloudinary";
-import { deleteCloudinaryAssets, cleanupRemovedImages } from "../lib/cloudinary";
+import {
+  cloudinary,
+  deleteCloudinaryAssets,
+  cleanupRemovedImages,
+} from "../lib/cloudinary";
 import { db } from "@workspace/db";
 import {
   productsTable,
@@ -30,14 +34,24 @@ import {
 } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
 
-cloudinaryV2.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+// Use the shared Cloudinary singleton from lib/cloudinary.ts (configured once
+// at module load). The previous `cloudinaryV2.config(...)` call here was
+// redundant — the same SDK instance is shared across all imports.
 
 const uploadStorage = multerPkg.memoryStorage();
-const uploadMiddleware = multerPkg({ storage: uploadStorage, limits: { fileSize: 10 * 1024 * 1024 } });
+const uploadMiddleware = multerPkg({
+  storage: uploadStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  // MIME filter: only allow image uploads (defense-in-depth before Cloudinary
+  // sees the file).
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed"));
+    }
+  },
+});
 
 const router = Router();
 
@@ -385,97 +399,84 @@ async function fetchSellerListingCardsFor(productId: number) {
     .map(({ hasQualifyingVariant, ...card }) => card);
 }
 
-router.get("/products/featured", async (_req, res) => {
-  try {
-    // PERF-6a: Cache-Control 5 min — featured products change only when an
-    // admin edits product homepageTag. The browser/proxy cache eliminates
-    // repeat DB queries on every page load. Stale-while-revalidate lets
-    // the browser serve a stale response while fetching a fresh one in the
-    // background (better UX than blocking on a cache-miss).
-    res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
-    const products = await db
+router.get("/products/featured", asyncHandler(async (_req, res) => {
+  // PERF-6a: Cache-Control 5 min — featured products change only when an
+  // admin edits product homepageTag. The browser/proxy cache eliminates
+  // repeat DB queries on every page load. Stale-while-revalidate lets
+  // the browser serve a stale response while fetching a fresh one in the
+  // background (better UX than blocking on a cache-miss).
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
+  const products = await db
+    .select()
+    .from(productsTable)
+    .where(and(eq(productsTable.homepageTag, "trending"), isNull(productsTable.deletedAt)))
+    .limit(8);
+
+  const ids = products.map((p) => p.id);
+  const [statsMap, variantsMap, marketplaceMap] = await Promise.all([
+    fetchReviewStats(ids),
+    fetchVariantsFor(ids),
+    fetchMarketplaceStatsFor(ids),
+  ]);
+  const result = products.map((p) => {
+    const stats = statsMap.get(p.id) ?? { avg: 0, count: 0 };
+    return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count, marketplaceMap.get(p.id));
+  });
+  res.json(result);
+}));
+
+router.get("/products/tag-counts", asyncHandler(async (_req, res) => {
+  // PERF-6a: Cache-Control 5 min — tag counts change only when an admin
+  // edits product homepageTag. Same rationale as /products/featured.
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
+  const { isNotNull } = await import("drizzle-orm");
+  const rows = await db
+    .select({ tag: productsTable.homepageTag, count: sql<number>`cast(count(*) as int)` })
+    .from(productsTable)
+    .where(isNotNull(productsTable.homepageTag))
+    .groupBy(productsTable.homepageTag);
+  const counts: Record<string, number> = {};
+  rows.forEach(r => { if (r.tag) counts[r.tag] = r.count; });
+  res.json(counts);
+}));
+
+router.get("/products/homepage", asyncHandler(async (_req, res) => {
+  // PERF-6a: Cache-Control 5 min — homepage products change only when an
+  // admin edits product homepageTag. Same rationale as /products/featured.
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
+  const [topProducts, bottomProducts] = await Promise.all([
+    db
       .select()
       .from(productsTable)
       .where(and(eq(productsTable.homepageTag, "trending"), isNull(productsTable.deletedAt)))
-      .limit(8);
+      .orderBy(desc(productsTable.createdAt)),
+    db
+      .select()
+      .from(productsTable)
+      .where(and(eq(productsTable.homepageTag, "new_arrivals"), isNull(productsTable.deletedAt)))
+      .orderBy(desc(productsTable.createdAt)),
+  ]);
 
-    const ids = products.map((p) => p.id);
-    const [statsMap, variantsMap, marketplaceMap] = await Promise.all([
-      fetchReviewStats(ids),
-      fetchVariantsFor(ids),
-      fetchMarketplaceStatsFor(ids),
-    ]);
-    const result = products.map((p) => {
+  const allProducts = [...topProducts, ...bottomProducts];
+  const ids = allProducts.map((p) => p.id);
+  const [statsMap, variantsMap, marketplaceMap] = await Promise.all([
+    fetchReviewStats(ids),
+    fetchVariantsFor(ids),
+    fetchMarketplaceStatsFor(ids),
+  ]);
+
+  function withStats(products: typeof topProducts) {
+    return products.map((p) => {
       const stats = statsMap.get(p.id) ?? { avg: 0, count: 0 };
       return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count, marketplaceMap.get(p.id));
     });
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch featured products" });
   }
-});
 
-router.get("/products/tag-counts", async (_req, res) => {
-  try {
-    // PERF-6a: Cache-Control 5 min — tag counts change only when an admin
-    // edits product homepageTag. Same rationale as /products/featured.
-    res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
-    const { isNotNull } = await import("drizzle-orm");
-    const rows = await db
-      .select({ tag: productsTable.homepageTag, count: sql<number>`cast(count(*) as int)` })
-      .from(productsTable)
-      .where(isNotNull(productsTable.homepageTag))
-      .groupBy(productsTable.homepageTag);
-    const counts: Record<string, number> = {};
-    rows.forEach(r => { if (r.tag) counts[r.tag] = r.count; });
-    res.json(counts);
-  } catch (e) {
-    logger.error({ err: e }, "tag-counts error");
-    res.status(500).json({ error: "Failed to fetch tag counts" });
-  }
-});
-
-router.get("/products/homepage", async (_req, res) => {
-  try {
-    // PERF-6a: Cache-Control 5 min — homepage products change only when an
-    // admin edits product homepageTag. Same rationale as /products/featured.
-    res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
-    const [topProducts, bottomProducts] = await Promise.all([
-      db
-        .select()
-        .from(productsTable)
-        .where(and(eq(productsTable.homepageTag, "trending"), isNull(productsTable.deletedAt)))
-        .orderBy(desc(productsTable.createdAt)),
-      db
-        .select()
-        .from(productsTable)
-        .where(and(eq(productsTable.homepageTag, "new_arrivals"), isNull(productsTable.deletedAt)))
-        .orderBy(desc(productsTable.createdAt)),
-    ]);
-
-    const allProducts = [...topProducts, ...bottomProducts];
-    const ids = allProducts.map((p) => p.id);
-    const [statsMap, variantsMap, marketplaceMap] = await Promise.all([
-      fetchReviewStats(ids),
-      fetchVariantsFor(ids),
-      fetchMarketplaceStatsFor(ids),
-    ]);
-
-    function withStats(products: typeof topProducts) {
-      return products.map((p) => {
-        const stats = statsMap.get(p.id) ?? { avg: 0, count: 0 };
-        return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count, marketplaceMap.get(p.id));
-      });
-    }
-
-    res.json({
-      top: withStats(topProducts),
-      bottom: withStats(bottomProducts),
-    });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch homepage products" });
-  }
-});
+  res.json({
+    top: withStats(topProducts),
+    bottom: withStats(bottomProducts),
+  });
+}));
 
 router.post("/products/upload-image", requireAuth, requireAdmin, uploadMiddleware.array("images", 4), async (req: ApiRequest, res) => {
   try {
@@ -495,7 +496,7 @@ router.post("/products/upload-image", requireAuth, requireAdmin, uploadMiddlewar
       const absoluteIdx = startIndex + idx;
       const publicId = slug ? `${slug}-${absoluteIdx + 1}-${Date.now()}` : undefined;
       const isPrimary = absoluteIdx === 0;
-      const stream = cloudinaryV2.uploader.upload_stream(
+      const stream = cloudinary.uploader.upload_stream(
         { folder: "envyenhance/products", ...(isPrimary ? {} : { quality: 75, format: "webp" }), ...(publicId ? { public_id: publicId } : {}) },
         (err, result) => {
           if (err || !result) { logger.error({ err: err }, "Cloudinary error"); return reject(err ?? new Error("Upload failed")); }
@@ -574,46 +575,66 @@ router.get("/products/:id", validateParams(GetProductParams, "GetProductParams")
   }
 });
 
-router.get("/products", async (req, res) => {
-  try {
-    const {
-      category,
-      search,
-      minPrice,
-      maxPrice,
-      page = "1",
-      limit = "20",
-    } = req.query as Record<string, string>;
+router.get("/products", asyncHandler(async (req, res) => {
+  const {
+    category,
+    search,
+    minPrice,
+    maxPrice,
+    page = "1",
+    limit = "20",
+  } = req.query as Record<string, string>;
 
-    const minRating = req.query.minRating ? Number(req.query.minRating) : null;
-    const pageNum = Math.max(1, parseInt(page));
-    const limitNum = Math.min(200, Math.max(1, parseInt(limit)));
-    const offset = (pageNum - 1) * limitNum;
+  const minRating = req.query.minRating ? Number(req.query.minRating) : null;
+  const pageNum = Math.max(1, parseInt(page));
+  const limitNum = Math.min(200, Math.max(1, parseInt(limit)));
+  const offset = (pageNum - 1) * limitNum;
 
-    const conditions: SQL[] = [isNull(productsTable.deletedAt)]; // Always exclude soft-deleted
-    if (category) {
-      const slugs = category.split(",").map(s => s.trim()).filter(Boolean);
-      const matchingCats = await db
-        .select({ id: categoriesTable.id })
-        .from(categoriesTable)
-        .where(inArray(categoriesTable.slug, slugs));
-      const categoryIds = matchingCats.map((c) => c.id);
-      conditions.push(
-        categoryIds.length > 0
-          ? inArray(productsTable.categoryId, categoryIds)
-          : sql`false`
-      );
-    }
-    if (search) {
-      const searchCond = or(ilike(productsTable.name, `%${search}%`), ilike(productsTable.description, `%${search}%`));
-      if (searchCond) conditions.push(searchCond);
-    }
+  const conditions: SQL[] = [isNull(productsTable.deletedAt)]; // Always exclude soft-deleted
+  if (category) {
+    const slugs = category.split(",").map(s => s.trim()).filter(Boolean);
+    const matchingCats = await db
+      .select({ id: categoriesTable.id })
+      .from(categoriesTable)
+      .where(inArray(categoriesTable.slug, slugs));
+    const categoryIds = matchingCats.map((c) => c.id);
+    conditions.push(
+      categoryIds.length > 0
+        ? inArray(productsTable.categoryId, categoryIds)
+        : sql`false`
+    );
+  }
+  if (search) {
+    const searchCond = or(ilike(productsTable.name, `%${search}%`), ilike(productsTable.description, `%${search}%`));
+    if (searchCond) conditions.push(searchCond);
+  }
 
-    const homepageTagFilter = req.query.homepageTag as string | undefined;
-    if (homepageTagFilter) conditions.push(eq(productsTable.homepageTag, homepageTagFilter));
+  const homepageTagFilter = req.query.homepageTag as string | undefined;
+  if (homepageTagFilter) conditions.push(eq(productsTable.homepageTag, homepageTagFilter));
 
-    const where = and(...conditions);
+  const where = and(...conditions);
 
+  // ─── PERF: price/rating filters must be applied BEFORE pagination ────────
+  //
+  // startingPrice and averageRating are computed fields (not columns on
+  // productsTable) — they come from productVariantsTable and reviewsTable
+  // respectively. The previous code applied LIMIT/OFFSET in SQL first, then
+  // filtered in JS — a page of 20 could filter down to 3, and the total
+  // count was wrong (`result.length + offset`).
+  //
+  // When price/rating filters are active, we now fetch ALL matching products
+  // (no SQL LIMIT), apply the JS filters, THEN paginate the filtered result.
+  // This is correct but fetches more rows when filters are active —
+  // acceptable for a catalog of thousands of products. For very large
+  // catalogs, a proper SQL fix would compute startingPrice/averageRating as
+  // subqueries and filter in SQL — but that's a larger refactor.
+  //
+  // When NO price/rating filters are active, we keep the efficient SQL
+  // LIMIT/OFFSET path with a correct COUNT(*) total.
+  const hasPostFilters = (minRating !== null && minRating > 0) || !!minPrice || !!maxPrice;
+
+  if (!hasPostFilters) {
+    // ─── Efficient path: no post-fetch filtering needed ────────────────────
     const [{ total }] = await db
       .select({ total: sql<string>`COUNT(*)` })
       .from(productsTable)
@@ -634,32 +655,56 @@ router.get("/products", async (req, res) => {
       fetchMarketplaceStatsFor(ids),
     ]);
 
-    let result = products.map((p) => {
+    const result = products.map((p) => {
       const stats = statsMap.get(p.id) ?? { avg: 0, count: 0 };
       return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count, marketplaceMap.get(p.id));
     });
 
-    if (minPrice) result = result.filter((p) => p.startingPrice != null && p.startingPrice >= Number(minPrice));
-    if (maxPrice) result = result.filter((p) => p.startingPrice != null && p.startingPrice <= Number(maxPrice));
-
-    if (minRating !== null && minRating > 0) {
-      result = result.filter((p) => p.averageRating >= minRating);
-    }
-
-    const reportedTotal = (minRating !== null && minRating > 0) || minPrice || maxPrice
-      ? result.length + offset
-      : Number(total);
-
+    const totalNum = Number(total);
     res.json({
       products: result,
-      total: reportedTotal,
+      total: totalNum,
       page: pageNum,
-      totalPages: Math.ceil(reportedTotal / limitNum),
+      totalPages: Math.ceil(totalNum / limitNum),
     });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch products" });
+    return;
   }
-});
+
+  // ─── Filter path: fetch all matching, filter in JS, paginate result ──────
+  const allProducts = await db
+    .select()
+    .from(productsTable)
+    .where(where)
+    .orderBy(desc(productsTable.createdAt));
+
+  const allIds = allProducts.map((p) => p.id);
+  const [allStatsMap, allVariantsMap, allMarketplaceMap] = await Promise.all([
+    fetchReviewStats(allIds),
+    fetchVariantsFor(allIds),
+    fetchMarketplaceStatsFor(allIds),
+  ]);
+
+  let filtered = allProducts.map((p) => {
+    const stats = allStatsMap.get(p.id) ?? { avg: 0, count: 0 };
+    return toProduct(p, allVariantsMap.get(p.id) ?? [], stats.avg, stats.count, allMarketplaceMap.get(p.id));
+  });
+
+  if (minPrice) filtered = filtered.filter((p) => p.startingPrice != null && p.startingPrice >= Number(minPrice));
+  if (maxPrice) filtered = filtered.filter((p) => p.startingPrice != null && p.startingPrice <= Number(maxPrice));
+  if (minRating !== null && minRating > 0) {
+    filtered = filtered.filter((p) => p.averageRating >= minRating);
+  }
+
+  const filteredTotal = filtered.length;
+  const paged = filtered.slice(offset, offset + limitNum);
+
+  res.json({
+    products: paged,
+    total: filteredTotal,
+    page: pageNum,
+    totalPages: Math.ceil(filteredTotal / limitNum),
+  });
+}));
 
 /**
  * Phase 2: admin creates the product/variety ONLY -- no price/stock/variant

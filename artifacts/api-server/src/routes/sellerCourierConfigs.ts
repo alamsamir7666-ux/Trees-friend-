@@ -1,3 +1,5 @@
+import { asyncHandler } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { sellerCourierConfigsTable } from "@workspace/db";
@@ -46,23 +48,18 @@ function toMasked(c: CourierConfigRow) {
  * doesn't get refetched on every Clerk token refresh (which was flooding
  * the seller dashboard's Network tab with ~12 identical 404s per session).
  */
-router.get("/seller-courier-configs/mine", requireSeller, async (req, res) => {
-  try {
-    const [config] = await db
-      .select()
-      .from(sellerCourierConfigsTable)
-      .where(eq(sellerCourierConfigsTable.sellerId, req.dbSeller!.id))
-      .limit(1);
-    if (!config) {
-      res.status(200).json(null);
-      return;
-    }
-    res.json(toMasked(config));
-  } catch (err) {
-    logger.error({ err: err }, "Get seller courier config error");
-    res.status(500).json({ error: "Failed to fetch courier config" });
+router.get("/seller-courier-configs/mine", requireSeller, asyncHandler(async (req, res) => {
+  const [config] = await db
+    .select()
+    .from(sellerCourierConfigsTable)
+    .where(eq(sellerCourierConfigsTable.sellerId, req.dbSeller!.id))
+    .limit(1);
+  if (!config) {
+    res.status(200).json(null);
+    return;
   }
-});
+  res.json(toMasked(config));
+}));
 
 /**
  * Seller: create or replace their courier config (one per seller -- upsert
@@ -86,76 +83,65 @@ router.get("/seller-courier-configs/mine", requireSeller, async (req, res) => {
  * Starts false; verifying is a manual/future step, same open-ended state
  * as seller_payment_configs.isVerified.
  */
-router.post("/seller-courier-configs", requireSeller, async (req, res) => {
-  try {
-    const { provider, apiKey, apiSecret, storeId } = req.body as {
-      provider?: string;
-      apiKey?: string;
-      apiSecret?: string;
-      storeId?: string;
-    };
+router.post("/seller-courier-configs", requireSeller, asyncHandler(async (req, res) => {
+  const { provider, apiKey, apiSecret, storeId } = req.body as {
+    provider?: string;
+    apiKey?: string;
+    apiSecret?: string;
+    storeId?: string;
+  };
 
-    if (provider !== "pathao" && provider !== "steadfast") {
-      res.status(400).json({ error: 'provider must be "pathao" or "steadfast"' });
-      return;
-    }
-    if (!apiKey || !apiSecret) {
-      res.status(400).json({ error: "apiKey and apiSecret are required" });
-      return;
-    }
-    if (provider === "pathao") {
-      const parts = apiSecret.split("|");
-      if (parts.length !== 3 || parts.some((p) => !p)) {
-        res.status(400).json({
-          error: 'For Pathao, apiSecret must be packed as "clientSecret|username|password" (3 non-empty parts)',
-        });
-        return;
-      }
-      if (!storeId) {
-        res.status(400).json({ error: "storeId is required for Pathao" });
-        return;
-      }
-    }
-
-    // Delete any existing config for this seller (one active courier
-    // provider at a time -- see doc comment above).
-    await db.delete(sellerCourierConfigsTable).where(eq(sellerCourierConfigsTable.sellerId, req.dbSeller!.id));
-
-    const [config] = await db
-      .insert(sellerCourierConfigsTable)
-      .values({
-        sellerId: req.dbSeller!.id,
-        provider,
-        apiKey: encryptCredential(apiKey),
-        apiSecret: encryptCredential(apiSecret),
-        storeId: storeId ?? null,
-        isVerified: false,
-      })
-      .returning();
-
-    res.status(201).json(toMasked(config));
-  } catch (err) {
-    logger.error({ err: err }, "Create seller courier config error");
-    res.status(500).json({ error: "Failed to save courier config" });
+  if (provider !== "pathao" && provider !== "steadfast") {
+    res.status(400).json({ error: 'provider must be "pathao" or "steadfast"' });
+    return;
   }
-});
-
-router.delete("/seller-courier-configs/mine", requireSeller, async (req, res) => {
-  try {
-    const deleted = await db
-      .delete(sellerCourierConfigsTable)
-      .where(eq(sellerCourierConfigsTable.sellerId, req.dbSeller!.id))
-      .returning();
-    if (deleted.length === 0) {
-      res.status(404).json({ error: "No courier config to delete" });
+  if (!apiKey || !apiSecret) {
+    res.status(400).json({ error: "apiKey and apiSecret are required" });
+    return;
+  }
+  if (provider === "pathao") {
+    const parts = apiSecret.split("|");
+    if (parts.length !== 3 || parts.some((p) => !p)) {
+      res.status(400).json({
+        error: 'For Pathao, apiSecret must be packed as "clientSecret|username|password" (3 non-empty parts)',
+      });
       return;
     }
-    res.json({ message: "Courier config removed. Orders will fall back to manual status updates." });
-  } catch (err) {
-    logger.error({ err: err }, "Delete seller courier config error");
-    res.status(500).json({ error: "Failed to delete courier config" });
+    if (!storeId) {
+      res.status(400).json({ error: "storeId is required for Pathao" });
+      return;
+    }
   }
-});
-import { logger } from "../lib/logger";
+
+  // Delete any existing config for this seller (one active courier
+  // provider at a time -- see doc comment above).
+  await db.delete(sellerCourierConfigsTable).where(eq(sellerCourierConfigsTable.sellerId, req.dbSeller!.id));
+
+  const [config] = await db
+    .insert(sellerCourierConfigsTable)
+    .values({
+      sellerId: req.dbSeller!.id,
+      provider,
+      apiKey: encryptCredential(apiKey),
+      apiSecret: encryptCredential(apiSecret),
+      storeId: storeId ?? null,
+      isVerified: false,
+    })
+    .returning();
+
+  res.status(201).json(toMasked(config));
+}));
+
+router.delete("/seller-courier-configs/mine", requireSeller, asyncHandler(async (req, res) => {
+  const deleted = await db
+    .delete(sellerCourierConfigsTable)
+    .where(eq(sellerCourierConfigsTable.sellerId, req.dbSeller!.id))
+    .returning();
+  if (deleted.length === 0) {
+    res.status(404).json({ error: "No courier config to delete" });
+    return;
+  }
+  res.json({ message: "Courier config removed. Orders will fall back to manual status updates." });
+}));
 
 export default router;

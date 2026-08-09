@@ -1,6 +1,12 @@
+import { asyncHandler } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { Router } from "express";
 import multerPkg from "multer";
-import { v2 as cloudinaryV2 } from "cloudinary";
+import {
+  cloudinary,
+  deleteCloudinaryAssets,
+  cleanupRemovedImages,
+} from "../lib/cloudinary";
 import { db } from "@workspace/db";
 import {
   sellerListingsTable,
@@ -15,18 +21,26 @@ import { eq, and, inArray, sql, desc, asc } from "drizzle-orm";
 import { requireAuth, requireSeller, requireAdmin } from "../middlewares/auth";
 import { hasVerifiedPaymentConfig } from "@workspace/db/logic";
 import { notifyPreOrderCustomers } from "./preOrders";
-import { deleteCloudinaryAssets, cleanupRemovedImages } from "../lib/cloudinary";
 
 export { hasVerifiedPaymentConfig };
 
-cloudinaryV2.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+// Use the shared Cloudinary singleton from lib/cloudinary.ts (configured once
+// at module load).
 
 const uploadStorage = multerPkg.memoryStorage();
-const uploadMiddleware = multerPkg({ storage: uploadStorage, limits: { fileSize: 10 * 1024 * 1024 } });
+const uploadMiddleware = multerPkg({
+  storage: uploadStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  // MIME filter: only allow image uploads (defense-in-depth before Cloudinary
+  // sees the file).
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed"));
+    }
+  },
+});
 
 const router = Router();
 
@@ -638,34 +652,29 @@ router.get("/seller-listings/by-category", async (req, res) => {
   }
 });
 
-router.get("/seller-listings/mine", requireSeller, async (req, res) => {
-  try {
-    const listings = await db
-      .select()
-      .from(sellerListingsTable)
-      .where(eq(sellerListingsTable.sellerId, req.dbSeller!.id))
-      .orderBy(desc(sellerListingsTable.createdAt));
+router.get("/seller-listings/mine", requireSeller, asyncHandler(async (req, res) => {
+  const listings = await db
+    .select()
+    .from(sellerListingsTable)
+    .where(eq(sellerListingsTable.sellerId, req.dbSeller!.id))
+    .orderBy(desc(sellerListingsTable.createdAt));
 
-    const listingIds = listings.map((l) => l.id);
-    const variants = listingIds.length > 0
-      ? await db
-          .select()
-          .from(sellerListingVariantsTable)
-          .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
-      : [];
-    const variantsByListing = new Map<number, SellerListingVariantRow[]>();
-    for (const v of variants) {
-      const list = variantsByListing.get(v.sellerListingId) ?? [];
-      list.push(v);
-      variantsByListing.set(v.sellerListingId, list);
-    }
-
-    res.json(listings.map((l) => toListingWithVariants(l, variantsByListing.get(l.id) ?? [])));
-  } catch (err) {
-    logger.error({ err: err }, "List my seller listings error");
-    res.status(500).json({ error: "Failed to fetch your listings" });
+  const listingIds = listings.map((l) => l.id);
+  const variants = listingIds.length > 0
+    ? await db
+        .select()
+        .from(sellerListingVariantsTable)
+        .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
+    : [];
+  const variantsByListing = new Map<number, SellerListingVariantRow[]>();
+  for (const v of variants) {
+    const list = variantsByListing.get(v.sellerListingId) ?? [];
+    list.push(v);
+    variantsByListing.set(v.sellerListingId, list);
   }
-});
+
+  res.json(listings.map((l) => toListingWithVariants(l, variantsByListing.get(l.id) ?? [])));
+}));
 
 /**
  * Seller: create a listing against an existing admin-owned product
@@ -691,131 +700,126 @@ router.get("/seller-listings/mine", requireSeller, async (req, res) => {
  * paymentMethod to "advance"/"both" with no config at all; that gap is
  * closed now.
  */
-router.post("/seller-listings", requireSeller, async (req, res) => {
-  try {
-    const {
-      productId,
-      variants,
-      deliveryTimeDays,
-      warrantyDays,
-      returnPolicyText,
-      paymentMethod,
-      images,
-      videoUrl,
-      description,
-      offerText,
-      certification,
-      tags,
-    } = req.body as any;
+router.post("/seller-listings", requireSeller, asyncHandler(async (req, res) => {
+  const {
+    productId,
+    variants,
+    deliveryTimeDays,
+    warrantyDays,
+    returnPolicyText,
+    paymentMethod,
+    images,
+    videoUrl,
+    description,
+    offerText,
+    certification,
+    tags,
+  } = req.body as any;
 
-    if (!productId || isNaN(Number(productId))) {
-      res.status(400).json({ error: "productId is required" });
-      return;
-    }
-    if (!Array.isArray(variants) || variants.length === 0) {
-      res.status(400).json({ error: "At least one variant (e.g. Seed, Sapling, Grafted, Potted) is required" });
-      return;
-    }
-    for (let i = 0; i < variants.length; i++) {
-      const err = validateVariantShape(variants[i], variants[i]?.form || `#${i + 1}`);
-      if (err) {
-        res.status(400).json({ error: err });
-        return;
-      }
-    }
-    if (paymentMethod !== undefined && !["cod", "advance", "both"].includes(paymentMethod)) {
-      res.status(400).json({ error: 'paymentMethod must be "cod", "advance", or "both"' });
-      return;
-    }
-    if (paymentMethod === "advance" || paymentMethod === "both") {
-      const verified = await hasVerifiedPaymentConfig(req.dbSeller!.id);
-      if (!verified) {
-        res.status(400).json({ error: PAYMENT_METHOD_ERROR });
-        return;
-      }
-    }
-    if (images !== undefined && !Array.isArray(images)) {
-      res.status(400).json({ error: "images must be an array of URLs" });
-      return;
-    }
-    if (tags !== undefined && !Array.isArray(tags)) {
-      res.status(400).json({ error: "tags must be an array of strings" });
-      return;
-    }
-
-    const [product] = await db
-      .select()
-      .from(productsTable)
-      .where(eq(productsTable.id, Number(productId)))
-      .limit(1);
-    if (!product) {
-      res.status(404).json({ error: "Product (variety) not found" });
-      return;
-    }
-
-    for (const v of variants) {
-      const validationError = await validateControlledAttributes(product.categoryId, {
-        height: v.height,
-        potSize: v.potSize,
-        age: v.age,
-        rootType: v.rootType,
-      });
-      if (validationError) {
-        res.status(400).json({ error: validationError });
-        return;
-      }
-    }
-
-    const [listing] = await db
-      .insert(sellerListingsTable)
-      .values({
-        productId: Number(productId),
-        sellerId: req.dbSeller!.id,
-        deliveryTimeDays: deliveryTimeDays != null ? Number(deliveryTimeDays) : null,
-        warrantyDays: warrantyDays != null ? Number(warrantyDays) : null,
-        returnPolicyText: returnPolicyText || null,
-        paymentMethod: paymentMethod || "cod",
-        images: Array.isArray(images) ? images : [],
-        videoUrl: videoUrl || null,
-        description: description || null,
-        offerText: offerText || null,
-        certification: certification || null,
-        tags: Array.isArray(tags) ? tags : [],
-        visibility: "public",
-        approvalStatus: "pending",
-      })
-      .returning();
-
-    const insertedVariants = await db
-      .insert(sellerListingVariantsTable)
-      .values(
-        variants.map((v: any) => {
-          const stockNum = v.stock !== undefined ? Number(v.stock) : 0;
-          return {
-            sellerListingId: listing.id,
-            form: v.form || null,
-            rootType: v.rootType || null,
-            potSize: v.potSize || null,
-            age: v.age || null,
-            height: v.height || null,
-            condition: v.condition || null,
-            price: String(v.price),
-            discountPrice: v.discountPrice != null ? String(v.discountPrice) : null,
-            stock: stockNum,
-            availableQuantity: stockNum,
-            deliveryCharge: String(v.deliveryCharge ?? 0),
-            isPreOrder: v.isPreOrder === true,
-          };
-        }),
-      )
-      .returning();
-
-    res.status(201).json(toListingWithVariants(listing, insertedVariants));
-  } catch (err) {
-    logger.error({ err: err }, "Create seller listing error");
-    res.status(500).json({ error: "Failed to create listing" });
+  if (!productId || isNaN(Number(productId))) {
+    res.status(400).json({ error: "productId is required" });
+    return;
   }
-});
+  if (!Array.isArray(variants) || variants.length === 0) {
+    res.status(400).json({ error: "At least one variant (e.g. Seed, Sapling, Grafted, Potted) is required" });
+    return;
+  }
+  for (let i = 0; i < variants.length; i++) {
+    const err = validateVariantShape(variants[i], variants[i]?.form || `#${i + 1}`);
+    if (err) {
+      res.status(400).json({ error: err });
+      return;
+    }
+  }
+  if (paymentMethod !== undefined && !["cod", "advance", "both"].includes(paymentMethod)) {
+    res.status(400).json({ error: 'paymentMethod must be "cod", "advance", or "both"' });
+    return;
+  }
+  if (paymentMethod === "advance" || paymentMethod === "both") {
+    const verified = await hasVerifiedPaymentConfig(req.dbSeller!.id);
+    if (!verified) {
+      res.status(400).json({ error: PAYMENT_METHOD_ERROR });
+      return;
+    }
+  }
+  if (images !== undefined && !Array.isArray(images)) {
+    res.status(400).json({ error: "images must be an array of URLs" });
+    return;
+  }
+  if (tags !== undefined && !Array.isArray(tags)) {
+    res.status(400).json({ error: "tags must be an array of strings" });
+    return;
+  }
+
+  const [product] = await db
+    .select()
+    .from(productsTable)
+    .where(eq(productsTable.id, Number(productId)))
+    .limit(1);
+  if (!product) {
+    res.status(404).json({ error: "Product (variety) not found" });
+    return;
+  }
+
+  for (const v of variants) {
+    const validationError = await validateControlledAttributes(product.categoryId, {
+      height: v.height,
+      potSize: v.potSize,
+      age: v.age,
+      rootType: v.rootType,
+    });
+    if (validationError) {
+      res.status(400).json({ error: validationError });
+      return;
+    }
+  }
+
+  const [listing] = await db
+    .insert(sellerListingsTable)
+    .values({
+      productId: Number(productId),
+      sellerId: req.dbSeller!.id,
+      deliveryTimeDays: deliveryTimeDays != null ? Number(deliveryTimeDays) : null,
+      warrantyDays: warrantyDays != null ? Number(warrantyDays) : null,
+      returnPolicyText: returnPolicyText || null,
+      paymentMethod: paymentMethod || "cod",
+      images: Array.isArray(images) ? images : [],
+      videoUrl: videoUrl || null,
+      description: description || null,
+      offerText: offerText || null,
+      certification: certification || null,
+      tags: Array.isArray(tags) ? tags : [],
+      visibility: "public",
+      approvalStatus: "pending",
+    })
+    .returning();
+
+  const insertedVariants = await db
+    .insert(sellerListingVariantsTable)
+    .values(
+      variants.map((v: any) => {
+        const stockNum = v.stock !== undefined ? Number(v.stock) : 0;
+        return {
+          sellerListingId: listing.id,
+          form: v.form || null,
+          rootType: v.rootType || null,
+          potSize: v.potSize || null,
+          age: v.age || null,
+          height: v.height || null,
+          condition: v.condition || null,
+          price: String(v.price),
+          discountPrice: v.discountPrice != null ? String(v.discountPrice) : null,
+          stock: stockNum,
+          availableQuantity: stockNum,
+          deliveryCharge: String(v.deliveryCharge ?? 0),
+          isPreOrder: v.isPreOrder === true,
+        };
+      }),
+    )
+    .returning();
+
+  res.status(201).json(toListingWithVariants(listing, insertedVariants));
+}));
 
 /**
  * Seller: update their own listing, and manage its variants. Ownership is
@@ -846,274 +850,269 @@ router.post("/seller-listings", requireSeller, async (req, res) => {
  * (same "a listing needs >=1 variant to be purchasable" rule as POST) --
  * rejected if deletions would leave zero.
  */
-router.put("/seller-listings/:id", requireSeller, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid listing id" });
-      return;
-    }
+router.put("/seller-listings/:id", requireSeller, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid listing id" });
+    return;
+  }
 
-    const [existing] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, id)).limit(1);
-    if (!existing) {
-      res.status(404).json({ error: "Listing not found" });
-      return;
-    }
-    if (existing.sellerId !== req.dbSeller!.id) {
-      res.status(403).json({ error: "You don't own this listing" });
-      return;
-    }
+  const [existing] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, id)).limit(1);
+  if (!existing) {
+    res.status(404).json({ error: "Listing not found" });
+    return;
+  }
+  if (existing.sellerId !== req.dbSeller!.id) {
+    res.status(403).json({ error: "You don't own this listing" });
+    return;
+  }
 
-    const {
-      deliveryTimeDays, warrantyDays, returnPolicyText,
-      paymentMethod, images, videoUrl, description, offerText, certification, tags, visibility,
-      variants, deletedVariantIds,
-    } = req.body as any;
+  const {
+    deliveryTimeDays, warrantyDays, returnPolicyText,
+    paymentMethod, images, videoUrl, description, offerText, certification, tags, visibility,
+    variants, deletedVariantIds,
+  } = req.body as any;
 
-    if (paymentMethod !== undefined && !["cod", "advance", "both"].includes(paymentMethod)) {
-      res.status(400).json({ error: 'paymentMethod must be "cod", "advance", or "both"' });
+  if (paymentMethod !== undefined && !["cod", "advance", "both"].includes(paymentMethod)) {
+    res.status(400).json({ error: 'paymentMethod must be "cod", "advance", or "both"' });
+    return;
+  }
+  if (paymentMethod === "advance" || paymentMethod === "both") {
+    const verified = await hasVerifiedPaymentConfig(req.dbSeller!.id);
+    if (!verified) {
+      res.status(400).json({ error: PAYMENT_METHOD_ERROR });
       return;
     }
-    if (paymentMethod === "advance" || paymentMethod === "both") {
-      const verified = await hasVerifiedPaymentConfig(req.dbSeller!.id);
-      if (!verified) {
-        res.status(400).json({ error: PAYMENT_METHOD_ERROR });
+  }
+  if (visibility !== undefined && !["public", "hidden"].includes(visibility)) {
+    res.status(400).json({ error: 'visibility must be "public" or "hidden"' });
+    return;
+  }
+  if (images !== undefined && !Array.isArray(images)) {
+    res.status(400).json({ error: "images must be an array of URLs" });
+    return;
+  }
+  if (tags !== undefined && !Array.isArray(tags)) {
+    res.status(400).json({ error: "tags must be an array of strings" });
+    return;
+  }
+  if (variants !== undefined && !Array.isArray(variants)) {
+    res.status(400).json({ error: "variants must be an array" });
+    return;
+  }
+  if (deletedVariantIds !== undefined && !Array.isArray(deletedVariantIds)) {
+    res.status(400).json({ error: "deletedVariantIds must be an array" });
+    return;
+  }
+
+  const existingVariants = await db
+    .select()
+    .from(sellerListingVariantsTable)
+    .where(eq(sellerListingVariantsTable.sellerListingId, id));
+  const existingVariantIds = new Set(existingVariants.map((v) => v.id));
+
+  const toDelete: number[] = Array.isArray(deletedVariantIds)
+    ? deletedVariantIds.map((n: any) => Number(n)).filter((n: number) => existingVariantIds.has(n))
+    : [];
+
+  const toUpdate: any[] = [];
+  const toCreate: any[] = [];
+  if (Array.isArray(variants)) {
+    for (const v of variants) {
+      if (v && v.id != null) {
+        const vid = Number(v.id);
+        if (!existingVariantIds.has(vid)) {
+          res.status(404).json({ error: `Variant ${vid} not found on this listing` });
+          return;
+        }
+        if (toDelete.includes(vid)) {
+          res.status(400).json({ error: `Variant ${vid} is both being updated and deleted -- pick one` });
+          return;
+        }
+        toUpdate.push({ ...v, id: vid });
+      } else {
+        const shapeError = validateVariantShape(v, v?.form || "(new)");
+        if (shapeError) {
+          res.status(400).json({ error: shapeError });
+          return;
+        }
+        toCreate.push(v);
+      }
+    }
+  }
+
+  const resultingVariantCount = existingVariantIds.size - toDelete.length + toCreate.length;
+  if (resultingVariantCount <= 0) {
+    res.status(400).json({ error: "A listing must have at least one variant -- can't remove the last one" });
+    return;
+  }
+
+  const [product] = await db
+    .select()
+    .from(productsTable)
+    .where(eq(productsTable.id, existing.productId))
+    .limit(1);
+  // product should always exist (FK constraint), but guard anyway rather
+  // than crash on categoryId lookup if data is ever in a bad state.
+  if (product) {
+    for (const v of [...toUpdate, ...toCreate]) {
+      const validationError = await validateControlledAttributes(product.categoryId, {
+        height: v.height, potSize: v.potSize, age: v.age, rootType: v.rootType,
+      });
+      if (validationError) {
+        res.status(400).json({ error: validationError });
         return;
       }
     }
-    if (visibility !== undefined && !["public", "hidden"].includes(visibility)) {
-      res.status(400).json({ error: 'visibility must be "public" or "hidden"' });
-      return;
-    }
-    if (images !== undefined && !Array.isArray(images)) {
-      res.status(400).json({ error: "images must be an array of URLs" });
-      return;
-    }
-    if (tags !== undefined && !Array.isArray(tags)) {
-      res.status(400).json({ error: "tags must be an array of strings" });
-      return;
-    }
-    if (variants !== undefined && !Array.isArray(variants)) {
-      res.status(400).json({ error: "variants must be an array" });
-      return;
-    }
-    if (deletedVariantIds !== undefined && !Array.isArray(deletedVariantIds)) {
-      res.status(400).json({ error: "deletedVariantIds must be an array" });
-      return;
-    }
-
-    const existingVariants = await db
-      .select()
-      .from(sellerListingVariantsTable)
-      .where(eq(sellerListingVariantsTable.sellerListingId, id));
-    const existingVariantIds = new Set(existingVariants.map((v) => v.id));
-
-    const toDelete: number[] = Array.isArray(deletedVariantIds)
-      ? deletedVariantIds.map((n: any) => Number(n)).filter((n: number) => existingVariantIds.has(n))
-      : [];
-
-    const toUpdate: any[] = [];
-    const toCreate: any[] = [];
-    if (Array.isArray(variants)) {
-      for (const v of variants) {
-        if (v && v.id != null) {
-          const vid = Number(v.id);
-          if (!existingVariantIds.has(vid)) {
-            res.status(404).json({ error: `Variant ${vid} not found on this listing` });
-            return;
-          }
-          if (toDelete.includes(vid)) {
-            res.status(400).json({ error: `Variant ${vid} is both being updated and deleted -- pick one` });
-            return;
-          }
-          toUpdate.push({ ...v, id: vid });
-        } else {
-          const shapeError = validateVariantShape(v, v?.form || "(new)");
-          if (shapeError) {
-            res.status(400).json({ error: shapeError });
-            return;
-          }
-          toCreate.push(v);
-        }
-      }
-    }
-
-    const resultingVariantCount = existingVariantIds.size - toDelete.length + toCreate.length;
-    if (resultingVariantCount <= 0) {
-      res.status(400).json({ error: "A listing must have at least one variant -- can't remove the last one" });
-      return;
-    }
-
-    const [product] = await db
-      .select()
-      .from(productsTable)
-      .where(eq(productsTable.id, existing.productId))
-      .limit(1);
-    // product should always exist (FK constraint), but guard anyway rather
-    // than crash on categoryId lookup if data is ever in a bad state.
-    if (product) {
-      for (const v of [...toUpdate, ...toCreate]) {
-        const validationError = await validateControlledAttributes(product.categoryId, {
-          height: v.height, potSize: v.potSize, age: v.age, rootType: v.rootType,
-        });
-        if (validationError) {
-          res.status(400).json({ error: validationError });
-          return;
-        }
-      }
-    }
-
-    const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (deliveryTimeDays !== undefined) updates.deliveryTimeDays = deliveryTimeDays != null ? Number(deliveryTimeDays) : null;
-    if (warrantyDays !== undefined) updates.warrantyDays = warrantyDays != null ? Number(warrantyDays) : null;
-    if (returnPolicyText !== undefined) updates.returnPolicyText = returnPolicyText || null;
-    if (paymentMethod !== undefined) updates.paymentMethod = paymentMethod;
-    if (images !== undefined) updates.images = images;
-    if (videoUrl !== undefined) updates.videoUrl = videoUrl || null;
-    if (description !== undefined) updates.description = description || null;
-    if (offerText !== undefined) updates.offerText = offerText || null;
-    if (certification !== undefined) updates.certification = certification || null;
-    if (tags !== undefined) updates.tags = tags;
-    if (visibility !== undefined) {
-      updates.visibility = visibility;
-      // A seller manually toggling visibility is a deliberate choice, not
-      // the subscription job's automated hide -- clear hiddenReason so a
-      // later admin mark-as-paid pass doesn't misread this as still being
-      // subscription-caused (see sellerListingsTable.hiddenReason comment).
-      updates.hiddenReason = null;
-    }
-
-    const [updated] = await db
-      .update(sellerListingsTable)
-      .set(updates)
-      .where(eq(sellerListingsTable.id, id))
-      .returning();
-
-    // Clean up any images that were part of the previous version of this
-    // listing but aren't in the new `images` array -- e.g. the seller
-    // removed a photo in the editor. `existing` was fetched above, before
-    // this update overwrote the row, so it still has the old array. Only
-    // runs when this request actually touched images; fires after the DB
-    // write succeeds and never blocks/fails the response.
-    if (images !== undefined) {
-      cleanupRemovedImages(existing.images ?? [], images).catch(() => {});
-    }
-
-    if (toDelete.length > 0) {
-      await db.delete(sellerListingVariantsTable).where(inArray(sellerListingVariantsTable.id, toDelete));
-    }
-
-    // Phase 5: replaces the removed admin-productStatus-driven
-    // notifyPreOrderCustomers trigger in products.ts (pre_order -> in_stock
-    // on the frozen product-level field, which had no real relationship to
-    // any actual pre-order). The real signal is here: a seller editing a
-    // variant that was previously "pending pre-order" -- isPreOrder=true
-    // AND availableQuantity===0 -- into either isPreOrder=false or
-    // availableQuantity>0.
-    //
-    // RESOLVED (Phase 6): previously this collapsed every transitioned
-    // variant in the request into a single boolean and fired one
-    // product-wide notifyPreOrderCustomers call, which is exactly the
-    // over-notification gap logged as an Open Item in PHASE5_HANDOFF.md.
-    // Now each transitioned variant id is collected individually and gets
-    // its own notify call, scoped to that specific
-    // sellerListingVariantId -- see notifyPreOrderCustomers's doc comment
-    // in preOrders.ts for how the query uses it (falls back to
-    // product-wide only for legacy null-variant pre-order rows).
-    const existingVariantsById = new Map(existingVariants.map((v) => [v.id, v]));
-    const transitionedVariantIds: number[] = [];
-
-    // PERF-3: Batch variant UPDATEs via Promise.all instead of sequential
-    // awaits in a for-loop. Each UPDATE targets a different variant ID so
-    // there's no conflict between them — N serial round-trips become 1
-    // parallel batch. The transitionedVariantIds collection (which reads
-    // pre-update state) runs first, BEFORE any UPDATEs execute.
-    const variantUpdatePromises: Promise<unknown>[] = [];
-    for (const v of toUpdate) {
-      const variantUpdates: Record<string, unknown> = { updatedAt: new Date() };
-      if (v.form !== undefined) variantUpdates.form = v.form || null;
-      if (v.rootType !== undefined) variantUpdates.rootType = v.rootType || null;
-      if (v.potSize !== undefined) variantUpdates.potSize = v.potSize || null;
-      if (v.age !== undefined) variantUpdates.age = v.age || null;
-      if (v.height !== undefined) variantUpdates.height = v.height || null;
-      if (v.condition !== undefined) variantUpdates.condition = v.condition || null;
-      if (v.price !== undefined) variantUpdates.price = String(v.price);
-      if (v.discountPrice !== undefined) variantUpdates.discountPrice = v.discountPrice != null ? String(v.discountPrice) : null;
-      if (v.stock !== undefined) {
-        // availableQuantity mirrors stock on every stock edit -- same
-        // lockstep convention this route used pre-Phase-2 (no separate
-        // "reserve stock for a pending order" concept exists yet).
-        variantUpdates.stock = Number(v.stock);
-        variantUpdates.availableQuantity = Number(v.stock);
-      }
-      if (v.deliveryCharge !== undefined) variantUpdates.deliveryCharge = String(v.deliveryCharge);
-      if (v.isPreOrder !== undefined) variantUpdates.isPreOrder = v.isPreOrder === true;
-
-      const before = existingVariantsById.get(v.id);
-      if (before && before.isPreOrder && before.availableQuantity === 0) {
-        const nextIsPreOrder = variantUpdates.isPreOrder !== undefined ? variantUpdates.isPreOrder as boolean : before.isPreOrder;
-        const nextAvailableQuantity = variantUpdates.availableQuantity !== undefined ? variantUpdates.availableQuantity as number : before.availableQuantity;
-        if (!nextIsPreOrder || nextAvailableQuantity > 0) {
-          transitionedVariantIds.push(v.id);
-        }
-      }
-
-      // Queue the UPDATE (don't await yet — batch them all).
-      variantUpdatePromises.push(
-        db.update(sellerListingVariantsTable).set(variantUpdates).where(eq(sellerListingVariantsTable.id, v.id)),
-      );
-    }
-
-    // Execute all variant UPDATEs in parallel.
-    await Promise.all(variantUpdatePromises);
-
-    if (transitionedVariantIds.length > 0) {
-      const [product] = await db.select().from(productsTable).where(eq(productsTable.id, existing.productId)).limit(1);
-      if (product) {
-        for (const variantId of transitionedVariantIds) {
-          notifyPreOrderCustomers(product.id, product.name, variantId).catch(() => {});
-        }
-      }
-    }
-
-    let createdVariants: SellerListingVariantRow[] = [];
-    if (toCreate.length > 0) {
-      createdVariants = await db
-        .insert(sellerListingVariantsTable)
-        .values(
-          toCreate.map((v: any) => {
-            const stockNum = v.stock !== undefined ? Number(v.stock) : 0;
-            return {
-              sellerListingId: id,
-              form: v.form || null,
-              rootType: v.rootType || null,
-              potSize: v.potSize || null,
-              age: v.age || null,
-              height: v.height || null,
-              condition: v.condition || null,
-              price: String(v.price),
-              discountPrice: v.discountPrice != null ? String(v.discountPrice) : null,
-              stock: stockNum,
-              availableQuantity: stockNum,
-              deliveryCharge: String(v.deliveryCharge ?? 0),
-              isPreOrder: v.isPreOrder === true,
-            };
-          }),
-        )
-        .returning();
-    }
-
-    const finalVariants = await db
-      .select()
-      .from(sellerListingVariantsTable)
-      .where(eq(sellerListingVariantsTable.sellerListingId, id));
-
-    res.json(toListingWithVariants(updated, finalVariants));
-  } catch (err) {
-    logger.error({ err: err }, "Update seller listing error");
-    res.status(500).json({ error: "Failed to update listing" });
   }
-});
+
+  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  if (deliveryTimeDays !== undefined) updates.deliveryTimeDays = deliveryTimeDays != null ? Number(deliveryTimeDays) : null;
+  if (warrantyDays !== undefined) updates.warrantyDays = warrantyDays != null ? Number(warrantyDays) : null;
+  if (returnPolicyText !== undefined) updates.returnPolicyText = returnPolicyText || null;
+  if (paymentMethod !== undefined) updates.paymentMethod = paymentMethod;
+  if (images !== undefined) updates.images = images;
+  if (videoUrl !== undefined) updates.videoUrl = videoUrl || null;
+  if (description !== undefined) updates.description = description || null;
+  if (offerText !== undefined) updates.offerText = offerText || null;
+  if (certification !== undefined) updates.certification = certification || null;
+  if (tags !== undefined) updates.tags = tags;
+  if (visibility !== undefined) {
+    updates.visibility = visibility;
+    // A seller manually toggling visibility is a deliberate choice, not
+    // the subscription job's automated hide -- clear hiddenReason so a
+    // later admin mark-as-paid pass doesn't misread this as still being
+    // subscription-caused (see sellerListingsTable.hiddenReason comment).
+    updates.hiddenReason = null;
+  }
+
+  const [updated] = await db
+    .update(sellerListingsTable)
+    .set(updates)
+    .where(eq(sellerListingsTable.id, id))
+    .returning();
+
+  // Clean up any images that were part of the previous version of this
+  // listing but aren't in the new `images` array -- e.g. the seller
+  // removed a photo in the editor. `existing` was fetched above, before
+  // this update overwrote the row, so it still has the old array. Only
+  // runs when this request actually touched images; fires after the DB
+  // write succeeds and never blocks/fails the response.
+  if (images !== undefined) {
+    cleanupRemovedImages(existing.images ?? [], images).catch(() => {});
+  }
+
+  if (toDelete.length > 0) {
+    await db.delete(sellerListingVariantsTable).where(inArray(sellerListingVariantsTable.id, toDelete));
+  }
+
+  // Phase 5: replaces the removed admin-productStatus-driven
+  // notifyPreOrderCustomers trigger in products.ts (pre_order -> in_stock
+  // on the frozen product-level field, which had no real relationship to
+  // any actual pre-order). The real signal is here: a seller editing a
+  // variant that was previously "pending pre-order" -- isPreOrder=true
+  // AND availableQuantity===0 -- into either isPreOrder=false or
+  // availableQuantity>0.
+  //
+  // RESOLVED (Phase 6): previously this collapsed every transitioned
+  // variant in the request into a single boolean and fired one
+  // product-wide notifyPreOrderCustomers call, which is exactly the
+  // over-notification gap logged as an Open Item in PHASE5_HANDOFF.md.
+  // Now each transitioned variant id is collected individually and gets
+  // its own notify call, scoped to that specific
+  // sellerListingVariantId -- see notifyPreOrderCustomers's doc comment
+  // in preOrders.ts for how the query uses it (falls back to
+  // product-wide only for legacy null-variant pre-order rows).
+  const existingVariantsById = new Map(existingVariants.map((v) => [v.id, v]));
+  const transitionedVariantIds: number[] = [];
+
+  // PERF-3: Batch variant UPDATEs via Promise.all instead of sequential
+  // awaits in a for-loop. Each UPDATE targets a different variant ID so
+  // there's no conflict between them — N serial round-trips become 1
+  // parallel batch. The transitionedVariantIds collection (which reads
+  // pre-update state) runs first, BEFORE any UPDATEs execute.
+  const variantUpdatePromises: Promise<unknown>[] = [];
+  for (const v of toUpdate) {
+    const variantUpdates: Record<string, unknown> = { updatedAt: new Date() };
+    if (v.form !== undefined) variantUpdates.form = v.form || null;
+    if (v.rootType !== undefined) variantUpdates.rootType = v.rootType || null;
+    if (v.potSize !== undefined) variantUpdates.potSize = v.potSize || null;
+    if (v.age !== undefined) variantUpdates.age = v.age || null;
+    if (v.height !== undefined) variantUpdates.height = v.height || null;
+    if (v.condition !== undefined) variantUpdates.condition = v.condition || null;
+    if (v.price !== undefined) variantUpdates.price = String(v.price);
+    if (v.discountPrice !== undefined) variantUpdates.discountPrice = v.discountPrice != null ? String(v.discountPrice) : null;
+    if (v.stock !== undefined) {
+      // availableQuantity mirrors stock on every stock edit -- same
+      // lockstep convention this route used pre-Phase-2 (no separate
+      // "reserve stock for a pending order" concept exists yet).
+      variantUpdates.stock = Number(v.stock);
+      variantUpdates.availableQuantity = Number(v.stock);
+    }
+    if (v.deliveryCharge !== undefined) variantUpdates.deliveryCharge = String(v.deliveryCharge);
+    if (v.isPreOrder !== undefined) variantUpdates.isPreOrder = v.isPreOrder === true;
+
+    const before = existingVariantsById.get(v.id);
+    if (before && before.isPreOrder && before.availableQuantity === 0) {
+      const nextIsPreOrder = variantUpdates.isPreOrder !== undefined ? variantUpdates.isPreOrder as boolean : before.isPreOrder;
+      const nextAvailableQuantity = variantUpdates.availableQuantity !== undefined ? variantUpdates.availableQuantity as number : before.availableQuantity;
+      if (!nextIsPreOrder || nextAvailableQuantity > 0) {
+        transitionedVariantIds.push(v.id);
+      }
+    }
+
+    // Queue the UPDATE (don't await yet — batch them all).
+    variantUpdatePromises.push(
+      db.update(sellerListingVariantsTable).set(variantUpdates).where(eq(sellerListingVariantsTable.id, v.id)),
+    );
+  }
+
+  // Execute all variant UPDATEs in parallel.
+  await Promise.all(variantUpdatePromises);
+
+  if (transitionedVariantIds.length > 0) {
+    const [product] = await db.select().from(productsTable).where(eq(productsTable.id, existing.productId)).limit(1);
+    if (product) {
+      for (const variantId of transitionedVariantIds) {
+        notifyPreOrderCustomers(product.id, product.name, variantId).catch(() => {});
+      }
+    }
+  }
+
+  let createdVariants: SellerListingVariantRow[] = [];
+  if (toCreate.length > 0) {
+    createdVariants = await db
+      .insert(sellerListingVariantsTable)
+      .values(
+        toCreate.map((v: any) => {
+          const stockNum = v.stock !== undefined ? Number(v.stock) : 0;
+          return {
+            sellerListingId: id,
+            form: v.form || null,
+            rootType: v.rootType || null,
+            potSize: v.potSize || null,
+            age: v.age || null,
+            height: v.height || null,
+            condition: v.condition || null,
+            price: String(v.price),
+            discountPrice: v.discountPrice != null ? String(v.discountPrice) : null,
+            stock: stockNum,
+            availableQuantity: stockNum,
+            deliveryCharge: String(v.deliveryCharge ?? 0),
+            isPreOrder: v.isPreOrder === true,
+          };
+        }),
+      )
+      .returning();
+  }
+
+  const finalVariants = await db
+    .select()
+    .from(sellerListingVariantsTable)
+    .where(eq(sellerListingVariantsTable.sellerListingId, id));
+
+  res.json(toListingWithVariants(updated, finalVariants));
+}));
 
 /**
  * Seller: delete their own listing. Variants cascade-delete with it --
@@ -1128,37 +1127,33 @@ router.put("/seller-listings/:id", requireSeller, async (req: ApiRequest, res) =
  * in this codebase (no soft-delete convention exists here to follow
  * instead).
  */
-router.delete("/seller-listings/:id", requireSeller, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid listing id" });
-      return;
-    }
-    const [existing] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, id)).limit(1);
-    if (!existing) {
-      res.status(404).json({ error: "Listing not found" });
-      return;
-    }
-    if (existing.sellerId !== req.dbSeller!.id) {
-      res.status(403).json({ error: "You don't own this listing" });
-      return;
-    }
-    await db.delete(sellerListingsTable).where(eq(sellerListingsTable.id, id));
-
-    // Best-effort Cloudinary cleanup after the DB delete succeeds. `existing`
-    // (fetched above, before the delete) still has the images[] array.
-    // Never blocks/fails the response -- the listing is already gone either
-    // way; failures here are logged for a manual/retry pass instead.
-    if (existing.images?.length) {
-      deleteCloudinaryAssets(existing.images).catch(() => {});
-    }
-
-    res.json({ message: "Listing deleted" });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to delete listing" });
+router.delete("/seller-listings/:id", requireSeller, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid listing id" });
+    return;
   }
-});
+  const [existing] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, id)).limit(1);
+  if (!existing) {
+    res.status(404).json({ error: "Listing not found" });
+    return;
+  }
+  if (existing.sellerId !== req.dbSeller!.id) {
+    res.status(403).json({ error: "You don't own this listing" });
+    return;
+  }
+  await db.delete(sellerListingsTable).where(eq(sellerListingsTable.id, id));
+
+  // Best-effort Cloudinary cleanup after the DB delete succeeds. `existing`
+  // (fetched above, before the delete) still has the images[] array.
+  // Never blocks/fails the response -- the listing is already gone either
+  // way; failures here are logged for a manual/retry pass instead.
+  if (existing.images?.length) {
+    deleteCloudinaryAssets(existing.images).catch(() => {});
+  }
+
+  res.json({ message: "Listing deleted" });
+}));
 
 /**
  * Seller: upload images/video for a listing. Same hand-called
@@ -1177,7 +1172,7 @@ router.post("/seller-listings/upload-image", requireSeller, uploadMiddleware.arr
       files.map(
         (file) =>
           new Promise<string>((resolve, reject) => {
-            const stream = cloudinaryV2.uploader.upload_stream(
+            const stream = cloudinary.uploader.upload_stream(
               { folder: "treefriend/seller-listings", quality: 80, format: "webp" },
               (err, result) => {
                 if (err || !result) {
@@ -1229,114 +1224,109 @@ router.post("/seller-listings/upload-image", requireSeller, uploadMiddleware.arr
  * built here since the plan doesn't define its filter set -- flagging
  * rather than guessing which fields it should filter on.
  */
-router.get("/products/:productId/seller-listings", async (req: ApiRequest, res) => {
-  try {
-    const productId = parseInt(req.params.productId);
-    if (isNaN(productId) || productId <= 0) {
-      res.status(400).json({ error: "Invalid product id" });
-      return;
-    }
-    const { sort } = req.query as { sort?: string };
-
-    const rows = await db
-      .select({ listing: sellerListingsTable, seller: sellersTable })
-      .from(sellerListingsTable)
-      .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
-      .where(
-        and(
-          eq(sellerListingsTable.productId, productId),
-          eq(sellerListingsTable.visibility, "public"),
-          eq(sellerListingsTable.approvalStatus, "approved"),
-          eq(sellersTable.status, "active"),
-        ),
-      );
-
-    const listingIds = rows.map((r) => r.listing.id);
-
-    const [variantRows, statsRows] = await Promise.all([
-      listingIds.length > 0
-        ? db
-            .select()
-            .from(sellerListingVariantsTable)
-            .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
-        : Promise.resolve([] as SellerListingVariantRow[]),
-      listingIds.length > 0
-        ? db
-            .select({
-              sellerListingId: reviewsTable.sellerListingId,
-              avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
-              count: sql<string>`COUNT(*)`,
-            })
-            .from(reviewsTable)
-            .where(inArray(reviewsTable.sellerListingId, listingIds))
-            .groupBy(reviewsTable.sellerListingId)
-        : Promise.resolve([]),
-    ]);
-
-    const variantsByListing = new Map<number, SellerListingVariantRow[]>();
-    for (const v of variantRows) {
-      const list = variantsByListing.get(v.sellerListingId) ?? [];
-      list.push(v);
-      variantsByListing.set(v.sellerListingId, list);
-    }
-
-    const statsMap = new Map<number, { avg: number; count: number }>();
-    for (const s of statsRows) {
-      if (s.sellerListingId != null) {
-        statsMap.set(s.sellerListingId, { avg: Number(Number(s.avg).toFixed(1)), count: Number(s.count) });
-      }
-    }
-
-    let cards = rows
-      .map(({ listing, seller }) => {
-        const variants = variantsByListing.get(listing.id) ?? [];
-        const qualifyingVariants = variants.filter((v) => v.availableQuantity > 0);
-        const stats = statsMap.get(listing.id) ?? { avg: 0, count: 0 };
-        return {
-          listing: toListingWithVariants(listing, variants),
-          qualifyingVariants,
-          seller: {
-            id: seller.id,
-            businessName: seller.businessName,
-            nurseryName: seller.nurseryName,
-            location: seller.location,
-            isVerified: seller.isVerified,
-            logoUrl: seller.logoUrl,
-          },
-          rating: stats.avg,
-          reviewCount: stats.count,
-        };
-      })
-      // Drop listings with zero purchasable variants entirely -- see doc
-      // comment above for why sold-out/pre-order-only variants inside an
-      // otherwise-qualifying listing are kept nested instead.
-      .filter((card) => card.qualifyingVariants.length > 0);
-
-    function cheapestQualifyingPrice(card: (typeof cards)[number]): number {
-      const prices = card.qualifyingVariants.map((v) =>
-        v.discountPrice != null ? Number(v.discountPrice) : Number(v.price),
-      );
-      return Math.min(...prices);
-    }
-
-    if (sort === "price_asc") {
-      cards = cards.sort((a, b) => cheapestQualifyingPrice(a) - cheapestQualifyingPrice(b));
-    } else if (sort === "price_desc") {
-      cards = cards.sort((a, b) => cheapestQualifyingPrice(b) - cheapestQualifyingPrice(a));
-    } else if (sort === "delivery_time") {
-      cards = cards.sort(
-        (a, b) => (a.listing.deliveryTimeDays ?? Infinity) - (b.listing.deliveryTimeDays ?? Infinity),
-      );
-    } else if (sort === "rating") {
-      cards = cards.sort((a, b) => b.rating - a.rating);
-    }
-
-    res.json(cards.map(({ qualifyingVariants, ...card }) => card));
-  } catch (err) {
-    logger.error({ err: err }, "List product seller listings error");
-    res.status(500).json({ error: "Failed to fetch seller listings" });
+router.get("/products/:productId/seller-listings", asyncHandler(async (req: ApiRequest, res) => {
+  const productId = parseInt(req.params.productId);
+  if (isNaN(productId) || productId <= 0) {
+    res.status(400).json({ error: "Invalid product id" });
+    return;
   }
-});
+  const { sort } = req.query as { sort?: string };
+
+  const rows = await db
+    .select({ listing: sellerListingsTable, seller: sellersTable })
+    .from(sellerListingsTable)
+    .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+    .where(
+      and(
+        eq(sellerListingsTable.productId, productId),
+        eq(sellerListingsTable.visibility, "public"),
+        eq(sellerListingsTable.approvalStatus, "approved"),
+        eq(sellersTable.status, "active"),
+      ),
+    );
+
+  const listingIds = rows.map((r) => r.listing.id);
+
+  const [variantRows, statsRows] = await Promise.all([
+    listingIds.length > 0
+      ? db
+          .select()
+          .from(sellerListingVariantsTable)
+          .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
+      : Promise.resolve([] as SellerListingVariantRow[]),
+    listingIds.length > 0
+      ? db
+          .select({
+            sellerListingId: reviewsTable.sellerListingId,
+            avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
+            count: sql<string>`COUNT(*)`,
+          })
+          .from(reviewsTable)
+          .where(inArray(reviewsTable.sellerListingId, listingIds))
+          .groupBy(reviewsTable.sellerListingId)
+      : Promise.resolve([]),
+  ]);
+
+  const variantsByListing = new Map<number, SellerListingVariantRow[]>();
+  for (const v of variantRows) {
+    const list = variantsByListing.get(v.sellerListingId) ?? [];
+    list.push(v);
+    variantsByListing.set(v.sellerListingId, list);
+  }
+
+  const statsMap = new Map<number, { avg: number; count: number }>();
+  for (const s of statsRows) {
+    if (s.sellerListingId != null) {
+      statsMap.set(s.sellerListingId, { avg: Number(Number(s.avg).toFixed(1)), count: Number(s.count) });
+    }
+  }
+
+  let cards = rows
+    .map(({ listing, seller }) => {
+      const variants = variantsByListing.get(listing.id) ?? [];
+      const qualifyingVariants = variants.filter((v) => v.availableQuantity > 0);
+      const stats = statsMap.get(listing.id) ?? { avg: 0, count: 0 };
+      return {
+        listing: toListingWithVariants(listing, variants),
+        qualifyingVariants,
+        seller: {
+          id: seller.id,
+          businessName: seller.businessName,
+          nurseryName: seller.nurseryName,
+          location: seller.location,
+          isVerified: seller.isVerified,
+          logoUrl: seller.logoUrl,
+        },
+        rating: stats.avg,
+        reviewCount: stats.count,
+      };
+    })
+    // Drop listings with zero purchasable variants entirely -- see doc
+    // comment above for why sold-out/pre-order-only variants inside an
+    // otherwise-qualifying listing are kept nested instead.
+    .filter((card) => card.qualifyingVariants.length > 0);
+
+  function cheapestQualifyingPrice(card: (typeof cards)[number]): number {
+    const prices = card.qualifyingVariants.map((v) =>
+      v.discountPrice != null ? Number(v.discountPrice) : Number(v.price),
+    );
+    return Math.min(...prices);
+  }
+
+  if (sort === "price_asc") {
+    cards = cards.sort((a, b) => cheapestQualifyingPrice(a) - cheapestQualifyingPrice(b));
+  } else if (sort === "price_desc") {
+    cards = cards.sort((a, b) => cheapestQualifyingPrice(b) - cheapestQualifyingPrice(a));
+  } else if (sort === "delivery_time") {
+    cards = cards.sort(
+      (a, b) => (a.listing.deliveryTimeDays ?? Infinity) - (b.listing.deliveryTimeDays ?? Infinity),
+    );
+  } else if (sort === "rating") {
+    cards = cards.sort((a, b) => b.rating - a.rating);
+  }
+
+  res.json(cards.map(({ qualifyingVariants, ...card }) => card));
+}));
 
 /**
  * Buyer-facing: ONE listing's full detail by id, publicly, nested variants +
@@ -1355,67 +1345,62 @@ router.get("/products/:productId/seller-listings", async (req: ApiRequest, res) 
  * unavailable), not 404 it outright, since "sold out" is a real, showable
  * state here rather than a reason to hide the whole listing from a list.
  */
-router.get("/seller-listings/:id", async (req, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid listing id" });
-      return;
-    }
-
-    const [row] = await db
-      .select({ listing: sellerListingsTable, seller: sellersTable })
-      .from(sellerListingsTable)
-      .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
-      .where(
-        and(
-          eq(sellerListingsTable.id, id),
-          eq(sellerListingsTable.visibility, "public"),
-          eq(sellerListingsTable.approvalStatus, "approved"),
-          eq(sellersTable.status, "active"),
-        ),
-      )
-      .limit(1);
-
-    if (!row) {
-      res.status(404).json({ error: "Listing not found" });
-      return;
-    }
-
-    const [variants, reviewStats] = await Promise.all([
-      db
-        .select()
-        .from(sellerListingVariantsTable)
-        .where(eq(sellerListingVariantsTable.sellerListingId, id)),
-      db
-        .select({
-          avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
-          count: sql<string>`COUNT(*)`,
-        })
-        .from(reviewsTable)
-        .where(eq(reviewsTable.sellerListingId, id)),
-    ]);
-
-    const stats = reviewStats[0] ?? { avg: "0", count: "0" };
-
-    res.json({
-      listing: toListingWithVariants(row.listing, variants),
-      seller: {
-        id: row.seller.id,
-        businessName: row.seller.businessName,
-        nurseryName: row.seller.nurseryName,
-        location: row.seller.location,
-        isVerified: row.seller.isVerified,
-        logoUrl: row.seller.logoUrl,
-      },
-      rating: Number(Number(stats.avg).toFixed(1)),
-      reviewCount: Number(stats.count),
-    });
-  } catch (err) {
-    logger.error({ err: err }, "Get seller listing by id error");
-    res.status(500).json({ error: "Failed to fetch listing" });
+router.get("/seller-listings/:id", asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid listing id" });
+    return;
   }
-});
+
+  const [row] = await db
+    .select({ listing: sellerListingsTable, seller: sellersTable })
+    .from(sellerListingsTable)
+    .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+    .where(
+      and(
+        eq(sellerListingsTable.id, id),
+        eq(sellerListingsTable.visibility, "public"),
+        eq(sellerListingsTable.approvalStatus, "approved"),
+        eq(sellersTable.status, "active"),
+      ),
+    )
+    .limit(1);
+
+  if (!row) {
+    res.status(404).json({ error: "Listing not found" });
+    return;
+  }
+
+  const [variants, reviewStats] = await Promise.all([
+    db
+      .select()
+      .from(sellerListingVariantsTable)
+      .where(eq(sellerListingVariantsTable.sellerListingId, id)),
+    db
+      .select({
+        avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
+        count: sql<string>`COUNT(*)`,
+      })
+      .from(reviewsTable)
+      .where(eq(reviewsTable.sellerListingId, id)),
+  ]);
+
+  const stats = reviewStats[0] ?? { avg: "0", count: "0" };
+
+  res.json({
+    listing: toListingWithVariants(row.listing, variants),
+    seller: {
+      id: row.seller.id,
+      businessName: row.seller.businessName,
+      nurseryName: row.seller.nurseryName,
+      location: row.seller.location,
+      isVerified: row.seller.isVerified,
+      logoUrl: row.seller.logoUrl,
+    },
+    rating: Number(Number(stats.avg).toFixed(1)),
+    reviewCount: Number(stats.count),
+  });
+}));
 
 /**
  * Buyer-facing: cheapest-variant product cards for ONE seller, across all
@@ -1432,105 +1417,100 @@ router.get("/seller-listings/:id", async (req, res) => {
  * clutter a seller's product grid, though its detail page is still
  * independently reachable.
  */
-router.get("/sellers/:id/listings", async (req: ApiRequest, res) => {
-  try {
-    const sellerId = parseInt(req.params.id);
-    if (isNaN(sellerId) || sellerId <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
-    const { sort } = req.query as { sort?: string };
-
-    const rows = await db
-      .select({ listing: sellerListingsTable, product: productsTable })
-      .from(sellerListingsTable)
-      .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
-      .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
-      .where(
-        and(
-          eq(sellerListingsTable.sellerId, sellerId),
-          eq(sellerListingsTable.visibility, "public"),
-          eq(sellerListingsTable.approvalStatus, "approved"),
-          eq(sellersTable.status, "active"),
-        ),
-      );
-
-    const listingIds = rows.map((r) => r.listing.id);
-
-    const [variantRows, statsRows] = await Promise.all([
-      listingIds.length > 0
-        ? db
-            .select()
-            .from(sellerListingVariantsTable)
-            .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
-        : Promise.resolve([] as SellerListingVariantRow[]),
-      listingIds.length > 0
-        ? db
-            .select({
-              sellerListingId: reviewsTable.sellerListingId,
-              avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
-              count: sql<string>`COUNT(*)`,
-            })
-            .from(reviewsTable)
-            .where(inArray(reviewsTable.sellerListingId, listingIds))
-            .groupBy(reviewsTable.sellerListingId)
-        : Promise.resolve([]),
-    ]);
-
-    const variantsByListing = new Map<number, SellerListingVariantRow[]>();
-    for (const v of variantRows) {
-      const list = variantsByListing.get(v.sellerListingId) ?? [];
-      list.push(v);
-      variantsByListing.set(v.sellerListingId, list);
-    }
-
-    const statsMap = new Map<number, { avg: number; count: number }>();
-    for (const s of statsRows) {
-      if (s.sellerListingId != null) {
-        statsMap.set(s.sellerListingId, { avg: Number(Number(s.avg).toFixed(1)), count: Number(s.count) });
-      }
-    }
-
-    let cards = rows
-      .map(({ listing, product }) => {
-        const variants = variantsByListing.get(listing.id) ?? [];
-        const qualifyingVariants = variants.filter((v) => v.availableQuantity > 0);
-        const stats = statsMap.get(listing.id) ?? { avg: 0, count: 0 };
-        return {
-          listing: toListingWithVariants(listing, variants),
-          qualifyingVariants,
-          product: { id: product.id, name: product.name, slug: product.slug },
-          rating: stats.avg,
-          reviewCount: stats.count,
-        };
-      })
-      .filter((card) => card.qualifyingVariants.length > 0);
-
-    function cheapestQualifyingPrice(card: (typeof cards)[number]): number {
-      const prices = card.qualifyingVariants.map((v) =>
-        v.discountPrice != null ? Number(v.discountPrice) : Number(v.price),
-      );
-      return Math.min(...prices);
-    }
-
-    if (sort === "price_asc") {
-      cards = cards.sort((a, b) => cheapestQualifyingPrice(a) - cheapestQualifyingPrice(b));
-    } else if (sort === "price_desc") {
-      cards = cards.sort((a, b) => cheapestQualifyingPrice(b) - cheapestQualifyingPrice(a));
-    } else if (sort === "rating") {
-      cards = cards.sort((a, b) => b.rating - a.rating);
-    } else {
-      // Default: newest listing first -- matches "All Products" reasonably
-      // without requiring the caller to pick a sort.
-      cards = cards.sort((a, b) => b.listing.id - a.listing.id);
-    }
-
-    res.json(cards.map(({ qualifyingVariants, ...card }) => card));
-  } catch (err) {
-    logger.error({ err: err }, "List seller listings error");
-    res.status(500).json({ error: "Failed to fetch seller's listings" });
+router.get("/sellers/:id/listings", asyncHandler(async (req: ApiRequest, res) => {
+  const sellerId = parseInt(req.params.id);
+  if (isNaN(sellerId) || sellerId <= 0) {
+    res.status(400).json({ error: "Invalid seller id" });
+    return;
   }
-});
+  const { sort } = req.query as { sort?: string };
+
+  const rows = await db
+    .select({ listing: sellerListingsTable, product: productsTable })
+    .from(sellerListingsTable)
+    .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
+    .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+    .where(
+      and(
+        eq(sellerListingsTable.sellerId, sellerId),
+        eq(sellerListingsTable.visibility, "public"),
+        eq(sellerListingsTable.approvalStatus, "approved"),
+        eq(sellersTable.status, "active"),
+      ),
+    );
+
+  const listingIds = rows.map((r) => r.listing.id);
+
+  const [variantRows, statsRows] = await Promise.all([
+    listingIds.length > 0
+      ? db
+          .select()
+          .from(sellerListingVariantsTable)
+          .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
+      : Promise.resolve([] as SellerListingVariantRow[]),
+    listingIds.length > 0
+      ? db
+          .select({
+            sellerListingId: reviewsTable.sellerListingId,
+            avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)`,
+            count: sql<string>`COUNT(*)`,
+          })
+          .from(reviewsTable)
+          .where(inArray(reviewsTable.sellerListingId, listingIds))
+          .groupBy(reviewsTable.sellerListingId)
+      : Promise.resolve([]),
+  ]);
+
+  const variantsByListing = new Map<number, SellerListingVariantRow[]>();
+  for (const v of variantRows) {
+    const list = variantsByListing.get(v.sellerListingId) ?? [];
+    list.push(v);
+    variantsByListing.set(v.sellerListingId, list);
+  }
+
+  const statsMap = new Map<number, { avg: number; count: number }>();
+  for (const s of statsRows) {
+    if (s.sellerListingId != null) {
+      statsMap.set(s.sellerListingId, { avg: Number(Number(s.avg).toFixed(1)), count: Number(s.count) });
+    }
+  }
+
+  let cards = rows
+    .map(({ listing, product }) => {
+      const variants = variantsByListing.get(listing.id) ?? [];
+      const qualifyingVariants = variants.filter((v) => v.availableQuantity > 0);
+      const stats = statsMap.get(listing.id) ?? { avg: 0, count: 0 };
+      return {
+        listing: toListingWithVariants(listing, variants),
+        qualifyingVariants,
+        product: { id: product.id, name: product.name, slug: product.slug },
+        rating: stats.avg,
+        reviewCount: stats.count,
+      };
+    })
+    .filter((card) => card.qualifyingVariants.length > 0);
+
+  function cheapestQualifyingPrice(card: (typeof cards)[number]): number {
+    const prices = card.qualifyingVariants.map((v) =>
+      v.discountPrice != null ? Number(v.discountPrice) : Number(v.price),
+    );
+    return Math.min(...prices);
+  }
+
+  if (sort === "price_asc") {
+    cards = cards.sort((a, b) => cheapestQualifyingPrice(a) - cheapestQualifyingPrice(b));
+  } else if (sort === "price_desc") {
+    cards = cards.sort((a, b) => cheapestQualifyingPrice(b) - cheapestQualifyingPrice(a));
+  } else if (sort === "rating") {
+    cards = cards.sort((a, b) => b.rating - a.rating);
+  } else {
+    // Default: newest listing first -- matches "All Products" reasonably
+    // without requiring the caller to pick a sort.
+    cards = cards.sort((a, b) => b.listing.id - a.listing.id);
+  }
+
+  res.json(cards.map(({ qualifyingVariants, ...card }) => card));
+}));
 
 /**
  * Buyer-facing: paginated reviews across ALL of a seller's listings, plus
@@ -1549,63 +1529,58 @@ router.get("/sellers/:id/listings", async (req: ApiRequest, res) => {
  * today's catalog. (If the seller itself is suspended/deleted, the page
  * calling this is unreachable in the first place -- see GET /sellers/:id.)
  */
-router.get("/sellers/:id/reviews", async (req: ApiRequest, res) => {
-  try {
-    const sellerId = parseInt(req.params.id);
-    if (isNaN(sellerId) || sellerId <= 0) {
-      res.status(400).json({ error: "Invalid seller id" });
-      return;
-    }
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 10));
-    const offset = (page - 1) * limit;
-
-    const [reviews, totalRow, breakdownRows] = await Promise.all([
-      db
-        .select()
-        .from(reviewsTable)
-        .where(eq(reviewsTable.sellerId, sellerId))
-        .orderBy(desc(reviewsTable.createdAt))
-        .limit(limit)
-        .offset(offset),
-      db
-        .select({ count: sql<string>`COUNT(*)`, avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)` })
-        .from(reviewsTable)
-        .where(eq(reviewsTable.sellerId, sellerId)),
-      db
-        .select({ rating: reviewsTable.rating, count: sql<string>`COUNT(*)` })
-        .from(reviewsTable)
-        .where(eq(reviewsTable.sellerId, sellerId))
-        .groupBy(reviewsTable.rating),
-    ]);
-
-    const ratingBreakdown: Record<1 | 2 | 3 | 4 | 5, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-    for (const row of breakdownRows) {
-      const r = row.rating as 1 | 2 | 3 | 4 | 5;
-      if (r >= 1 && r <= 5) ratingBreakdown[r] = Number(row.count);
-    }
-
-    res.json({
-      reviews: reviews.map((r) => ({
-        id: r.id,
-        userId: r.userId,
-        userName: r.userName,
-        rating: r.rating,
-        comment: r.comment,
-        sellerListingId: r.sellerListingId,
-        createdAt: r.createdAt.toISOString(),
-      })),
-      total: Number(totalRow[0]?.count ?? 0),
-      page,
-      limit,
-      averageRating: Number(Number(totalRow[0]?.avg ?? 0).toFixed(1)),
-      ratingBreakdown,
-    });
-  } catch (err) {
-    logger.error({ err: err }, "List seller reviews error");
-    res.status(500).json({ error: "Failed to fetch seller's reviews" });
+router.get("/sellers/:id/reviews", asyncHandler(async (req: ApiRequest, res) => {
+  const sellerId = parseInt(req.params.id);
+  if (isNaN(sellerId) || sellerId <= 0) {
+    res.status(400).json({ error: "Invalid seller id" });
+    return;
   }
-});
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 10));
+  const offset = (page - 1) * limit;
+
+  const [reviews, totalRow, breakdownRows] = await Promise.all([
+    db
+      .select()
+      .from(reviewsTable)
+      .where(eq(reviewsTable.sellerId, sellerId))
+      .orderBy(desc(reviewsTable.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ count: sql<string>`COUNT(*)`, avg: sql<string>`COALESCE(AVG(${reviewsTable.rating}), 0)` })
+      .from(reviewsTable)
+      .where(eq(reviewsTable.sellerId, sellerId)),
+    db
+      .select({ rating: reviewsTable.rating, count: sql<string>`COUNT(*)` })
+      .from(reviewsTable)
+      .where(eq(reviewsTable.sellerId, sellerId))
+      .groupBy(reviewsTable.rating),
+  ]);
+
+  const ratingBreakdown: Record<1 | 2 | 3 | 4 | 5, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  for (const row of breakdownRows) {
+    const r = row.rating as 1 | 2 | 3 | 4 | 5;
+    if (r >= 1 && r <= 5) ratingBreakdown[r] = Number(row.count);
+  }
+
+  res.json({
+    reviews: reviews.map((r) => ({
+      id: r.id,
+      userId: r.userId,
+      userName: r.userName,
+      rating: r.rating,
+      comment: r.comment,
+      sellerListingId: r.sellerListingId,
+      createdAt: r.createdAt.toISOString(),
+    })),
+    total: Number(totalRow[0]?.count ?? 0),
+    page,
+    limit,
+    averageRating: Number(Number(totalRow[0]?.avg ?? 0).toFixed(1)),
+    ratingBreakdown,
+  });
+}));
 
 /**
  * Admin: list listings pending approval, and approve/reject them. Whether
@@ -1621,97 +1596,84 @@ router.get("/sellers/:id/reviews", async (req: ApiRequest, res) => {
  * see what a seller is actually offering (variants, prices, stock) to make
  * an approve/reject decision, not just the listing's shared fields.
  */
-router.get("/admin/seller-listings", requireAdmin, async (req, res) => {
-  try {
-    const { approvalStatus } = req.query as { approvalStatus?: string };
-    const valid = ["pending", "approved", "rejected"];
-    const rows = await db
-      .select({ listing: sellerListingsTable, seller: sellersTable, product: productsTable })
-      .from(sellerListingsTable)
-      .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
-      .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
-      .where(approvalStatus && valid.includes(approvalStatus) ? eq(sellerListingsTable.approvalStatus, approvalStatus) : undefined)
-      .orderBy(asc(sellerListingsTable.createdAt));
+router.get("/admin/seller-listings", requireAdmin, asyncHandler(async (req, res) => {
+  const { approvalStatus } = req.query as { approvalStatus?: string };
+  const valid = ["pending", "approved", "rejected"];
+  const rows = await db
+    .select({ listing: sellerListingsTable, seller: sellersTable, product: productsTable })
+    .from(sellerListingsTable)
+    .innerJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+    .innerJoin(productsTable, eq(sellerListingsTable.productId, productsTable.id))
+    .where(approvalStatus && valid.includes(approvalStatus) ? eq(sellerListingsTable.approvalStatus, approvalStatus) : undefined)
+    .orderBy(asc(sellerListingsTable.createdAt));
 
-    const listingIds = rows.map((r) => r.listing.id);
-    const variants = listingIds.length > 0
-      ? await db
-          .select()
-          .from(sellerListingVariantsTable)
-          .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
-      : [];
-    const variantsByListing = new Map<number, SellerListingVariantRow[]>();
-    for (const v of variants) {
-      const list = variantsByListing.get(v.sellerListingId) ?? [];
-      list.push(v);
-      variantsByListing.set(v.sellerListingId, list);
-    }
-
-    res.json(
-      rows.map(({ listing, seller, product }) => ({
-        ...toListingWithVariants(listing, variantsByListing.get(listing.id) ?? []),
-        sellerBusinessName: seller.businessName,
-        productName: product.name,
-      })),
-    );
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch listings" });
+  const listingIds = rows.map((r) => r.listing.id);
+  const variants = listingIds.length > 0
+    ? await db
+        .select()
+        .from(sellerListingVariantsTable)
+        .where(inArray(sellerListingVariantsTable.sellerListingId, listingIds))
+    : [];
+  const variantsByListing = new Map<number, SellerListingVariantRow[]>();
+  for (const v of variants) {
+    const list = variantsByListing.get(v.sellerListingId) ?? [];
+    list.push(v);
+    variantsByListing.set(v.sellerListingId, list);
   }
-});
 
-router.put("/admin/seller-listings/:id/approve", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid listing id" });
-      return;
-    }
-    const [listing] = await db
-      .update(sellerListingsTable)
-      .set({ approvalStatus: "approved", rejectionReason: null, updatedAt: new Date() })
-      .where(eq(sellerListingsTable.id, id))
-      .returning();
-    if (!listing) {
-      res.status(404).json({ error: "Listing not found" });
-      return;
-    }
-    const variants = await db
-      .select()
-      .from(sellerListingVariantsTable)
-      .where(eq(sellerListingVariantsTable.sellerListingId, listing.id));
-    res.json(toListingWithVariants(listing, variants));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to approve listing" });
-  }
-});
+  res.json(
+    rows.map(({ listing, seller, product }) => ({
+      ...toListingWithVariants(listing, variantsByListing.get(listing.id) ?? []),
+      sellerBusinessName: seller.businessName,
+      productName: product.name,
+    })),
+  );
+}));
 
-router.put("/admin/seller-listings/:id/reject", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid listing id" });
-      return;
-    }
-    const { reason } = req.body as { reason?: string };
-    const [listing] = await db
-      .update(sellerListingsTable)
-      .set({ approvalStatus: "rejected", rejectionReason: reason ?? null, updatedAt: new Date() })
-      .where(eq(sellerListingsTable.id, id))
-      .returning();
-    if (!listing) {
-      res.status(404).json({ error: "Listing not found" });
-      return;
-    }
-    const variants = await db
-      .select()
-      .from(sellerListingVariantsTable)
-      .where(eq(sellerListingVariantsTable.sellerListingId, listing.id));
-    res.json(toListingWithVariants(listing, variants));
-  } catch (err) {
-    res.status(500).json({ error: "Failed to reject listing" });
+router.put("/admin/seller-listings/:id/approve", requireAdmin, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid listing id" });
+    return;
   }
-});
-import { logger } from "../lib/logger";
+  const [listing] = await db
+    .update(sellerListingsTable)
+    .set({ approvalStatus: "approved", rejectionReason: null, updatedAt: new Date() })
+    .where(eq(sellerListingsTable.id, id))
+    .returning();
+  if (!listing) {
+    res.status(404).json({ error: "Listing not found" });
+    return;
+  }
+  const variants = await db
+    .select()
+    .from(sellerListingVariantsTable)
+    .where(eq(sellerListingVariantsTable.sellerListingId, listing.id));
+  res.json(toListingWithVariants(listing, variants));
+}));
+
+router.put("/admin/seller-listings/:id/reject", requireAdmin, asyncHandler(async (req: ApiRequest, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid listing id" });
+    return;
+  }
+  const { reason } = req.body as { reason?: string };
+  const [listing] = await db
+    .update(sellerListingsTable)
+    .set({ approvalStatus: "rejected", rejectionReason: reason ?? null, updatedAt: new Date() })
+    .where(eq(sellerListingsTable.id, id))
+    .returning();
+  if (!listing) {
+    res.status(404).json({ error: "Listing not found" });
+    return;
+  }
+  const variants = await db
+    .select()
+    .from(sellerListingVariantsTable)
+    .where(eq(sellerListingVariantsTable.sellerListingId, listing.id));
+  res.json(toListingWithVariants(listing, variants));
+}));
 import type { ApiRequest } from "../types/apiRequest";
 
 export default router;

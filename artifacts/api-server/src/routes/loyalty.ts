@@ -3,68 +3,25 @@ import { db } from "@workspace/db";
 import { loyaltyPointsTable, loyaltyTransactionsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
+import { asyncHandler } from "../lib/errors";
+import {
+  POINTS_PER_100_TAKA,
+  TAKA_PER_POINT,
+  awardPoints,
+  redeemPoints,
+} from "../lib/loyalty";
+import type { ApiRequest } from "../types/apiRequest";
+
+// Re-export for backward compat — orders.ts imports these from "./loyalty".
+// New code should import directly from "../lib/loyalty".
+export { POINTS_PER_100_TAKA, TAKA_PER_POINT, awardPoints, redeemPoints };
 
 const router = Router();
 
-export const POINTS_PER_100_TAKA = 1;   // Earn 1 point per ৳100 spent
-export const TAKA_PER_POINT = 1;         // 1 point = ৳1 discount
-
-export async function awardPoints(userId: string, orderId: number, orderTotal: number) {
-  const points = Math.floor(orderTotal / 100) * POINTS_PER_100_TAKA;
-  if (points <= 0) return;
-  try {
-    const [existing] = await db
-      .select()
-      .from(loyaltyPointsTable)
-      .where(eq(loyaltyPointsTable.userId, userId))
-      .limit(1);
-
-    if (existing) {
-      await db
-        .update(loyaltyPointsTable)
-        .set({ points: existing.points + points, updatedAt: new Date() })
-        .where(eq(loyaltyPointsTable.userId, userId));
-    } else {
-      await db.insert(loyaltyPointsTable).values({ userId, points });
-    }
-
-    await db.insert(loyaltyTransactionsTable).values({
-      userId,
-      points,
-      reason: `order_#${orderId}`,
-      orderId,
-    });
-  } catch (err) {
-    logger.error({ err: err }, "[loyalty] awardPoints failed");
-  }
-}
-
-export async function redeemPoints(userId: string, pointsToRedeem: number, orderId: number) {
-  const [existing] = await db
-    .select()
-    .from(loyaltyPointsTable)
-    .where(eq(loyaltyPointsTable.userId, userId))
-    .limit(1);
-
-  if (!existing || existing.points < pointsToRedeem) {
-    throw new Error("Insufficient points");
-  }
-
-  await db
-    .update(loyaltyPointsTable)
-    .set({ points: existing.points - pointsToRedeem, updatedAt: new Date() })
-    .where(eq(loyaltyPointsTable.userId, userId));
-
-  await db.insert(loyaltyTransactionsTable).values({
-    userId,
-    points: -pointsToRedeem,
-    reason: `redeemed_order_#${orderId}`,
-    orderId,
-  });
-}
-
-router.get("/loyalty/me", requireAuth, async (req: ApiRequest, res) => {
-  try {
+router.get(
+  "/loyalty/me",
+  requireAuth,
+  asyncHandler(async (req: ApiRequest, res) => {
     const [balance] = await db
       .select()
       .from(loyaltyPointsTable)
@@ -89,12 +46,7 @@ router.get("/loyalty/me", requireAuth, async (req: ApiRequest, res) => {
         createdAt: t.createdAt.toISOString(),
       })),
     });
-  } catch (err) {
-    logger.error({ err }, "Route handler error");
-    res.status(500).json({ error: "Failed to fetch loyalty points" });
-  }
-});
-import { logger } from "../lib/logger";
-import type { ApiRequest } from "../types/apiRequest";
+  }),
+);
 
 export default router;

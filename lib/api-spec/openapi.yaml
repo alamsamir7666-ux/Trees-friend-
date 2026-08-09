@@ -1,11 +1,26 @@
 openapi: 3.1.0
 info:
   title: Api
-  version: 0.1.0
-  description: Tree Friend E-Commerce API
+  version: 1.0.0
+  description: |
+    Tree Friend E-Commerce API.
+
+    ## Versioning
+
+    The API is mounted under two prefixes:
+      - `/api/v1` — the canonical, versioned path. New clients should use this.
+      - `/api`     — backward-compat alias for existing callers. Same handlers,
+                     transparently aliased.
+
+    When a v2 is needed, a new router will be mounted under `/api/v2` and
+    `/api/v1` will be left untouched. The unversioned `/api` alias will be
+    deprecated (Deprecation header + warning log) once all callers have
+    migrated to `/api/v1`.
 servers:
+  - url: /api/v1
+    description: Versioned API path (canonical)
   - url: /api
-    description: Base API path
+    description: Unversioned API path (backward-compat alias)
 tags:
   - name: health
     description: Health operations

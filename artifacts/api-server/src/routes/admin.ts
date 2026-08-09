@@ -1,3 +1,4 @@
+import { asyncHandler } from "../lib/errors";
 import { Router } from "express";
 import { db } from "@workspace/db";
 import {
@@ -16,6 +17,8 @@ import { sendOrderStatusUpdate } from "../lib/email";
 import { logAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { attemptSellerPayout } from "../lib/payouts";
+import { formatOrder } from "../lib/formatters";
+import { describeError } from "../lib/describeError";
 import type { ApiRequest } from "../types/apiRequest";
 import { z } from "zod";
 import {
@@ -48,31 +51,6 @@ const router = Router();
 // plain text column with room to extend, same reasoning as
 // VALID_ORDER_STATUSES/VALID_PAYMENT_STATUSES below.
 const VALID_PAYOUT_STATUSES = ["pending", "success", "failed"];
-
-function formatOrder(o: typeof ordersTable.$inferSelect) {
-  return {
-    id: o.id,
-    trackingId: o.trackingId,
-    userId: o.userId,
-    sellerId: o.sellerId,
-    items: o.items as any[],
-    totalAmount: Number(o.totalAmount),
-    paymentMethod: o.paymentMethod,
-    paymentStatus: o.paymentStatus,
-    orderStatus: o.orderStatus,
-    transactionId: o.transactionId,
-    shippingAddress: o.shippingAddress as any,
-    couponCode: o.couponCode,
-    discountAmount: Number(o.discountAmount),
-    cancellationReason: o.cancellationReason ?? null,
-    giftWrap: o.giftWrap ?? "false",
-    giftMessage: o.giftMessage ?? null,
-    senderNumber: o.senderNumber ?? null,
-    paidAt: o.paidAt ? o.paidAt.toISOString() : null,
-    createdAt: o.createdAt.toISOString(),
-    updatedAt: o.updatedAt.toISOString(),
-  };
-}
 
 // Extends formatOrder's output with the user (customer) fields and the
 // seller fields. Both joins are LEFT -- `userId` may not match a row in
@@ -133,276 +111,264 @@ const VALID_PAYMENT_STATUSES = [
   "refunded",
 ];
 
-router.get("/admin/dashboard", requireAdmin, async (_req, res) => {
-  try {
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+router.get("/admin/dashboard", requireAdmin, asyncHandler(async (_req, res) => {
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const [
-      [{ totalOrders }],
-      [{ totalUsers }],
-      [{ totalSales }],
-      [{ pendingOrders }],
-    ] = await Promise.all([
-      db
-        .select({ totalOrders: sql<string>`COUNT(*)` })
-        .from(ordersTable)
-        .where(sql`created_at >= ${startOfMonth.toISOString()}`),
-      db.select({ totalUsers: sql<string>`COUNT(*)` }).from(usersTable),
-      db
-        .select({
-          totalSales: sql<string>`COALESCE(SUM(total_amount), 0)`,
-        })
-        .from(ordersTable)
-        .where(
-          sql`order_status = \'delivered\' AND created_at >= ${startOfMonth.toISOString()}`,
-        ),
-      db
-        .select({ pendingOrders: sql<string>`COUNT(*)` })
-        .from(ordersTable)
-        .where(eq(ordersTable.orderStatus, "pending")),
-    ]);
-
-    const recentOrders = await db
-      .select()
+  const [
+    [{ totalOrders }],
+    [{ totalUsers }],
+    [{ totalSales }],
+    [{ pendingOrders }],
+  ] = await Promise.all([
+    db
+      .select({ totalOrders: sql<string>`COUNT(*)` })
       .from(ordersTable)
-      .orderBy(desc(ordersTable.createdAt))
-      .limit(5);
+      .where(sql`created_at >= ${startOfMonth.toISOString()}`),
+    db.select({ totalUsers: sql<string>`COUNT(*)` }).from(usersTable),
+    db
+      .select({
+        totalSales: sql<string>`COALESCE(SUM(total_amount), 0)`,
+      })
+      .from(ordersTable)
+      .where(
+        sql`order_status = \'delivered\' AND created_at >= ${startOfMonth.toISOString()}`,
+      ),
+    db
+      .select({ pendingOrders: sql<string>`COUNT(*)` })
+      .from(ordersTable)
+      .where(eq(ordersTable.orderStatus, "pending")),
+  ]);
 
-    const monthlySalesRaw = await db.execute(sql`
-      SELECT
-        TO_CHAR(created_at, \'Mon \'\'YY\') AS month,
-        COALESCE(SUM(CASE WHEN order_status = \'delivered\' THEN total_amount ELSE 0 END), 0) AS total,
-        COUNT(*) AS orders
-      FROM orders
-      WHERE created_at >= NOW() - INTERVAL \'6 months\'
-      GROUP BY TO_CHAR(created_at, \'Mon \'\'YY\'), DATE_TRUNC(\'month\', created_at)
-      ORDER BY DATE_TRUNC(\'month\', created_at) ASC
-    `);
+  const recentOrders = await db
+    .select()
+    .from(ordersTable)
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(5);
 
-    const monthlySales = (monthlySalesRaw.rows as any[]).map((r) => ({
-      month: r.month as string,
-      total: Number(r.total),
-      orders: Number(r.orders),
-    }));
+  const monthlySalesRaw = await db.execute(sql`
+    SELECT
+      TO_CHAR(created_at, \'Mon \'\'YY\') AS month,
+      COALESCE(SUM(CASE WHEN order_status = \'delivered\' THEN total_amount ELSE 0 END), 0) AS total,
+      COUNT(*) AS orders
+    FROM orders
+    WHERE created_at >= NOW() - INTERVAL \'6 months\'
+    GROUP BY TO_CHAR(created_at, \'Mon \'\'YY\'), DATE_TRUNC(\'month\', created_at)
+    ORDER BY DATE_TRUNC(\'month\', created_at) ASC
+  `);
 
-    // Sales by TOP-LEVEL category (e.g. "Fruit Trees"), resolved by
-    // walking product -> subcategory -> parent category. Order items are
-    // a JSONB snapshot, so we match on productId and join through the
-    // current categories table (category name is not frozen on the order,
-    // only price/name at time of purchase are).
-    const salesByCategoryRaw = await db.execute(sql`
-      SELECT
-        COALESCE(parent.name, sub.name, \'Uncategorized\') AS category,
-        COUNT(DISTINCT o.id) AS count,
-        COALESCE(SUM(o.total_amount), 0) AS total
-      FROM products p
-      LEFT JOIN categories sub ON sub.id = p.category_id
-      LEFT JOIN categories parent ON parent.id = sub.parent_id
-      LEFT JOIN orders o ON o.order_status = \'delivered\'
-        AND EXISTS (
-          SELECT 1 FROM jsonb_array_elements(o.items) AS item
-          WHERE (item->>\'productId\')::int = p.id
-        )
-      GROUP BY COALESCE(parent.name, sub.name, \'Uncategorized\')
-      ORDER BY total DESC
-      LIMIT 10
-    `);
+  const monthlySales = (monthlySalesRaw.rows as any[]).map((r) => ({
+    month: r.month as string,
+    total: Number(r.total),
+    orders: Number(r.orders),
+  }));
 
-    const salesByCategory = (salesByCategoryRaw.rows as any[]).map((r) => ({
-      category: r.category as string,
-      total: Number(r.total),
-      count: Number(r.count),
-    }));
+  // Sales by TOP-LEVEL category (e.g. "Fruit Trees"), resolved by
+  // walking product -> subcategory -> parent category. Order items are
+  // a JSONB snapshot, so we match on productId and join through the
+  // current categories table (category name is not frozen on the order,
+  // only price/name at time of purchase are).
+  const salesByCategoryRaw = await db.execute(sql`
+    SELECT
+      COALESCE(parent.name, sub.name, \'Uncategorized\') AS category,
+      COUNT(DISTINCT o.id) AS count,
+      COALESCE(SUM(o.total_amount), 0) AS total
+    FROM products p
+    LEFT JOIN categories sub ON sub.id = p.category_id
+    LEFT JOIN categories parent ON parent.id = sub.parent_id
+    LEFT JOIN orders o ON o.order_status = \'delivered\'
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements(o.items) AS item
+        WHERE (item->>\'productId\')::int = p.id
+      )
+    GROUP BY COALESCE(parent.name, sub.name, \'Uncategorized\')
+    ORDER BY total DESC
+    LIMIT 10
+  `);
 
-    res.json({
-      totalSales: Number(totalSales),
-      totalOrders: Number(totalOrders),
-      totalUsers: Number(totalUsers),
-      pendingOrders: Number(pendingOrders),
-      recentOrders: recentOrders.map(formatOrder),
-      salesByCategory,
-      monthlySales,
-    });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to load dashboard" });
-  }
-});
+  const salesByCategory = (salesByCategoryRaw.rows as any[]).map((r) => ({
+    category: r.category as string,
+    total: Number(r.total),
+    count: Number(r.count),
+  }));
 
-router.get("/admin/orders/stats", requireAdmin, async (_req, res) => {
-  try {
-    const TWO_DAYS_AGO = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-    const [activeResult, archivedResult, archivedPreOrderResult] = await Promise.all([
-      db.select({ count: sql<string>`COUNT(*)` })
-        .from(ordersTable)
-        .where(
-          sql`NOT (
-            (order_status = \'delivered\' OR order_status = \'cancelled\')
-            AND updated_at < ${TWO_DAYS_AGO.toISOString()}
-          )`
+  res.json({
+    totalSales: Number(totalSales),
+    totalOrders: Number(totalOrders),
+    totalUsers: Number(totalUsers),
+    pendingOrders: Number(pendingOrders),
+    recentOrders: recentOrders.map(formatOrder),
+    salesByCategory,
+    monthlySales,
+  });
+}));
+
+router.get("/admin/orders/stats", requireAdmin, asyncHandler(async (_req, res) => {
+  const TWO_DAYS_AGO = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const [activeResult, archivedResult, archivedPreOrderResult] = await Promise.all([
+    db.select({ count: sql<string>`COUNT(*)` })
+      .from(ordersTable)
+      .where(
+        sql`NOT (
+          (order_status = \'delivered\' OR order_status = \'cancelled\')
+          AND updated_at < ${TWO_DAYS_AGO.toISOString()}
+        )`
+      ),
+    db.select({ count: sql<string>`COUNT(*)` })
+      .from(ordersTable)
+      .where(and(
+        or(
+          eq(ordersTable.orderStatus, "delivered"),
+          eq(ordersTable.orderStatus, "cancelled")
         ),
-      db.select({ count: sql<string>`COUNT(*)` })
-        .from(ordersTable)
-        .where(and(
-          or(
-            eq(ordersTable.orderStatus, "delivered"),
-            eq(ordersTable.orderStatus, "cancelled")
-          ),
-          lt(ordersTable.updatedAt, TWO_DAYS_AGO)
-        )),
-      db.select({ count: sql<string>`COUNT(*)` })
-        .from(preOrdersTable)
-        .where(and(
-          or(
-            eq(preOrdersTable.status, "delivered"),
-            eq(preOrdersTable.status, "cancelled")
-          ),
-          lt(preOrdersTable.updatedAt, TWO_DAYS_AGO)
-        )),
-    ]);
-    res.json({
-      activeOrders: Number(activeResult[0].count),
-      archivedOrders: Number(archivedResult[0].count) + Number(archivedPreOrderResult[0].count),
-    });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch order stats" });
-  }
-});
+        lt(ordersTable.updatedAt, TWO_DAYS_AGO)
+      )),
+    db.select({ count: sql<string>`COUNT(*)` })
+      .from(preOrdersTable)
+      .where(and(
+        or(
+          eq(preOrdersTable.status, "delivered"),
+          eq(preOrdersTable.status, "cancelled")
+        ),
+        lt(preOrdersTable.updatedAt, TWO_DAYS_AGO)
+      )),
+  ]);
+  res.json({
+    activeOrders: Number(activeResult[0].count),
+    archivedOrders: Number(archivedResult[0].count) + Number(archivedPreOrderResult[0].count),
+  });
+}));
 
-router.get("/admin/orders/archived", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const { page = "1" } = req.query as Record<string, string>;
-    const pageNum = Math.max(1, parseInt(page));
-    const limit = 15;
-    const offset = (pageNum - 1) * limit;
-    const TWO_DAYS_AGO = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+router.get("/admin/orders/archived", requireAdmin, asyncHandler(async (req: ApiRequest, res) => {
+  const { page = "1" } = req.query as Record<string, string>;
+  const pageNum = Math.max(1, parseInt(page));
+  const limit = 15;
+  const offset = (pageNum - 1) * limit;
+  const TWO_DAYS_AGO = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
 
-    const baseSelect = {
-      id: ordersTable.id,
-      trackingId: ordersTable.trackingId,
-      userId: ordersTable.userId,
-      sellerId: ordersTable.sellerId,
-      items: ordersTable.items,
-      totalAmount: ordersTable.totalAmount,
-      paymentMethod: ordersTable.paymentMethod,
-      paymentStatus: ordersTable.paymentStatus,
-      orderStatus: ordersTable.orderStatus,
-      transactionId: ordersTable.transactionId,
-      shippingAddress: ordersTable.shippingAddress,
-      couponCode: ordersTable.couponCode,
-      discountAmount: ordersTable.discountAmount,
-      cancellationReason: ordersTable.cancellationReason,
-      createdAt: ordersTable.createdAt,
-      updatedAt: ordersTable.updatedAt,
-      userEmail: usersTable.email,
-      userFirstName: usersTable.firstName,
-      userLastName: usersTable.lastName,
-      userPhone: usersTable.phone,
-      // Seller join — same as /admin/orders above. Archived orders also
-      // need seller context so the admin can audit who fulfilled what.
+  const baseSelect = {
+    id: ordersTable.id,
+    trackingId: ordersTable.trackingId,
+    userId: ordersTable.userId,
+    sellerId: ordersTable.sellerId,
+    items: ordersTable.items,
+    totalAmount: ordersTable.totalAmount,
+    paymentMethod: ordersTable.paymentMethod,
+    paymentStatus: ordersTable.paymentStatus,
+    orderStatus: ordersTable.orderStatus,
+    transactionId: ordersTable.transactionId,
+    shippingAddress: ordersTable.shippingAddress,
+    couponCode: ordersTable.couponCode,
+    discountAmount: ordersTable.discountAmount,
+    cancellationReason: ordersTable.cancellationReason,
+    createdAt: ordersTable.createdAt,
+    updatedAt: ordersTable.updatedAt,
+    userEmail: usersTable.email,
+    userFirstName: usersTable.firstName,
+    userLastName: usersTable.lastName,
+    userPhone: usersTable.phone,
+    // Seller join — same as /admin/orders above. Archived orders also
+    // need seller context so the admin can audit who fulfilled what.
+    sellerBusinessName: sellersTable.businessName,
+    sellerOwnerName: sellersTable.ownerName,
+    sellerContactEmail: sellersTable.contactEmail,
+    sellerContactPhone: sellersTable.contactPhone,
+    sellerStatus: sellersTable.status,
+    sellerLogoUrl: sellersTable.logoUrl,
+    giftWrap: ordersTable.giftWrap,
+    giftMessage: ordersTable.giftMessage,
+    senderNumber: ordersTable.senderNumber,
+    paidAt: ordersTable.paidAt,
+  };
+
+  const [orders, [{ total }]] = await Promise.all([
+    db.select(baseSelect)
+      .from(ordersTable)
+      .leftJoin(usersTable, eq(ordersTable.userId, usersTable.clerkId))
+      .leftJoin(sellersTable, eq(ordersTable.sellerId, sellersTable.id))
+      .where(and(
+        or(
+          eq(ordersTable.orderStatus, "delivered"),
+          eq(ordersTable.orderStatus, "cancelled")
+        ),
+        lt(ordersTable.updatedAt, TWO_DAYS_AGO)
+      ))
+      .orderBy(desc(ordersTable.updatedAt))
+      .limit(limit)
+      .offset(offset) as unknown as Promise<OrderWithUser[]>,
+    db.select({ total: sql<string>`COUNT(*)` })
+      .from(ordersTable)
+      .where(and(
+        or(
+          eq(ordersTable.orderStatus, "delivered"),
+          eq(ordersTable.orderStatus, "cancelled")
+        ),
+        lt(ordersTable.updatedAt, TWO_DAYS_AGO)
+      )),
+  ]);
+
+  const TWO_DAYS_AGO2 = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  // Archived pre-orders: join through sellerListingVariantId -> variant ->
+  // listing -> seller so the admin can see which seller fulfilled each
+  // archived pre-order, same as the new /admin/pre-orders endpoint below.
+  // All joins are LEFT because (a) sellerListingVariantId is NULL on
+  // legacy rows created before the Phase 6 migration, (b) the variant
+  // or listing row may have been deleted (pre_orders is a denormalized
+  // historical record, no FK), and (c) the seller row may have been
+  // deleted (sellersTable.user_id cascades, but a seller could be gone
+  // for other reasons). The frontend handles null seller fields.
+  const archivedPreOrders = await db
+    .select({
+      id: preOrdersTable.id,
+      trackingId: preOrdersTable.trackingId,
+      userId: preOrdersTable.userId,
+      productId: preOrdersTable.productId,
+      productName: preOrdersTable.productName,
+      productImage: preOrdersTable.productImage,
+      sellerListingVariantId: preOrdersTable.sellerListingVariantId,
+      quantity: preOrdersTable.quantity,
+      productPrice: preOrdersTable.productPrice,
+      discountedPrice: preOrdersTable.discountedPrice,
+      deliveryCharge: preOrdersTable.deliveryCharge,
+      whatsappPhone: preOrdersTable.whatsappPhone,
+      shippingAddress: preOrdersTable.shippingAddress,
+      paymentMethod: preOrdersTable.paymentMethod,
+      senderNumber: preOrdersTable.senderNumber,
+      transactionId: preOrdersTable.transactionId,
+      paymentStatus: preOrdersTable.paymentStatus,
+      status: preOrdersTable.status,
+      notifiedAt: preOrdersTable.notifiedAt,
+      cancellationReason: preOrdersTable.cancellationReason,
+      createdAt: preOrdersTable.createdAt,
+      updatedAt: preOrdersTable.updatedAt,
       sellerBusinessName: sellersTable.businessName,
       sellerOwnerName: sellersTable.ownerName,
       sellerContactEmail: sellersTable.contactEmail,
       sellerContactPhone: sellersTable.contactPhone,
       sellerStatus: sellersTable.status,
       sellerLogoUrl: sellersTable.logoUrl,
-      giftWrap: ordersTable.giftWrap,
-      giftMessage: ordersTable.giftMessage,
-      senderNumber: ordersTable.senderNumber,
-      paidAt: ordersTable.paidAt,
-    };
+    })
+    .from(preOrdersTable)
+    .leftJoin(sellerListingVariantsTable, eq(preOrdersTable.sellerListingVariantId, sellerListingVariantsTable.id))
+    .leftJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
+    .leftJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
+    .where(and(
+      or(
+        eq(preOrdersTable.status, "delivered"),
+        eq(preOrdersTable.status, "cancelled")
+      ),
+      lt(preOrdersTable.updatedAt, TWO_DAYS_AGO2)
+    ))
+    .orderBy(desc(preOrdersTable.updatedAt));
 
-    const [orders, [{ total }]] = await Promise.all([
-      db.select(baseSelect)
-        .from(ordersTable)
-        .leftJoin(usersTable, eq(ordersTable.userId, usersTable.clerkId))
-        .leftJoin(sellersTable, eq(ordersTable.sellerId, sellersTable.id))
-        .where(and(
-          or(
-            eq(ordersTable.orderStatus, "delivered"),
-            eq(ordersTable.orderStatus, "cancelled")
-          ),
-          lt(ordersTable.updatedAt, TWO_DAYS_AGO)
-        ))
-        .orderBy(desc(ordersTable.updatedAt))
-        .limit(limit)
-        .offset(offset) as unknown as Promise<OrderWithUser[]>,
-      db.select({ total: sql<string>`COUNT(*)` })
-        .from(ordersTable)
-        .where(and(
-          or(
-            eq(ordersTable.orderStatus, "delivered"),
-            eq(ordersTable.orderStatus, "cancelled")
-          ),
-          lt(ordersTable.updatedAt, TWO_DAYS_AGO)
-        )),
-    ]);
-
-    const TWO_DAYS_AGO2 = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-    // Archived pre-orders: join through sellerListingVariantId -> variant ->
-    // listing -> seller so the admin can see which seller fulfilled each
-    // archived pre-order, same as the new /admin/pre-orders endpoint below.
-    // All joins are LEFT because (a) sellerListingVariantId is NULL on
-    // legacy rows created before the Phase 6 migration, (b) the variant
-    // or listing row may have been deleted (pre_orders is a denormalized
-    // historical record, no FK), and (c) the seller row may have been
-    // deleted (sellersTable.user_id cascades, but a seller could be gone
-    // for other reasons). The frontend handles null seller fields.
-    const archivedPreOrders = await db
-      .select({
-        id: preOrdersTable.id,
-        trackingId: preOrdersTable.trackingId,
-        userId: preOrdersTable.userId,
-        productId: preOrdersTable.productId,
-        productName: preOrdersTable.productName,
-        productImage: preOrdersTable.productImage,
-        sellerListingVariantId: preOrdersTable.sellerListingVariantId,
-        quantity: preOrdersTable.quantity,
-        productPrice: preOrdersTable.productPrice,
-        discountedPrice: preOrdersTable.discountedPrice,
-        deliveryCharge: preOrdersTable.deliveryCharge,
-        whatsappPhone: preOrdersTable.whatsappPhone,
-        shippingAddress: preOrdersTable.shippingAddress,
-        paymentMethod: preOrdersTable.paymentMethod,
-        senderNumber: preOrdersTable.senderNumber,
-        transactionId: preOrdersTable.transactionId,
-        paymentStatus: preOrdersTable.paymentStatus,
-        status: preOrdersTable.status,
-        notifiedAt: preOrdersTable.notifiedAt,
-        cancellationReason: preOrdersTable.cancellationReason,
-        createdAt: preOrdersTable.createdAt,
-        updatedAt: preOrdersTable.updatedAt,
-        sellerBusinessName: sellersTable.businessName,
-        sellerOwnerName: sellersTable.ownerName,
-        sellerContactEmail: sellersTable.contactEmail,
-        sellerContactPhone: sellersTable.contactPhone,
-        sellerStatus: sellersTable.status,
-        sellerLogoUrl: sellersTable.logoUrl,
-      })
-      .from(preOrdersTable)
-      .leftJoin(sellerListingVariantsTable, eq(preOrdersTable.sellerListingVariantId, sellerListingVariantsTable.id))
-      .leftJoin(sellerListingsTable, eq(sellerListingVariantsTable.sellerListingId, sellerListingsTable.id))
-      .leftJoin(sellersTable, eq(sellerListingsTable.sellerId, sellersTable.id))
-      .where(and(
-        or(
-          eq(preOrdersTable.status, "delivered"),
-          eq(preOrdersTable.status, "cancelled")
-        ),
-        lt(preOrdersTable.updatedAt, TWO_DAYS_AGO2)
-      ))
-      .orderBy(desc(preOrdersTable.updatedAt));
-
-    res.json({
-      orders: orders.map(formatOrderWithUser),
-      preOrders: archivedPreOrders,
-      total: Number(total),
-      page: pageNum,
-      hasMore: offset + limit < Number(total),
-    });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch archived orders" });
-  }
-});
+  res.json({
+    orders: orders.map(formatOrderWithUser),
+    preOrders: archivedPreOrders,
+    total: Number(total),
+    page: pageNum,
+    hasMore: offset + limit < Number(total),
+  });
+}));
 
 router.get("/admin/orders", requireAdmin, async (req: ApiRequest, res) => {
   try {
@@ -482,9 +448,9 @@ router.get("/admin/orders", requireAdmin, async (req: ApiRequest, res) => {
       total: totalNum,
       hasMore: offset + limitNum < totalNum,
     });
-  } catch (err: any) {
+  } catch (err) {
     logger.error({ err }, "Admin: orders endpoint failed");
-    res.status(500).json({ error: err?.message ?? "Failed to fetch orders" });
+    res.status(500).json({ error: describeError(err) ?? "Failed to fetch orders" });
   }
 });
 
@@ -668,47 +634,43 @@ router.get("/admin/pre-orders", requireAdmin, async (_req, res) => {
       .orderBy(desc(preOrdersTable.createdAt));
 
     res.json(preOrders);
-  } catch (err: any) {
-    logger.error({ err }, "Admin: pre-orders endpoint failed");
-    res.status(500).json({ error: err?.message ?? "Failed to fetch admin pre-orders" });
-  }
-});
-
-router.get("/admin/users", requireAdmin, async (_req, res) => {
-  try {
-    const usersRaw = await db
-      .select()
-      .from(usersTable)
-      .orderBy(desc(usersTable.createdAt));
-
-    const orderCountsRaw = await db.execute(sql`
-      SELECT user_id, COUNT(*) AS order_count
-      FROM orders
-      GROUP BY user_id
-    `);
-    const orderCountMap: Record<string, number> = {};
-    for (const row of orderCountsRaw.rows as any[]) {
-      orderCountMap[row.user_id] = Number(row.order_count);
-    }
-
-    res.json(
-      usersRaw.map((u) => ({
-        id: u.id,
-        clerkId: u.clerkId,
-        email: u.email,
-        firstName: u.firstName,
-        lastName: u.lastName,
-        phone: u.phone,
-        role: u.role,
-        isBlocked: u.isBlocked,
-        orderCount: orderCountMap[u.clerkId] ?? 0,
-        createdAt: u.createdAt.toISOString(),
-      })),
-    );
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch users" });
+    logger.error({ err }, "Admin: pre-orders endpoint failed");
+    res.status(500).json({ error: describeError(err) ?? "Failed to fetch admin pre-orders" });
   }
 });
+
+router.get("/admin/users", requireAdmin, asyncHandler(async (_req, res) => {
+  const usersRaw = await db
+    .select()
+    .from(usersTable)
+    .orderBy(desc(usersTable.createdAt));
+
+  const orderCountsRaw = await db.execute(sql`
+    SELECT user_id, COUNT(*) AS order_count
+    FROM orders
+    GROUP BY user_id
+  `);
+  const orderCountMap: Record<string, number> = {};
+  for (const row of orderCountsRaw.rows as any[]) {
+    orderCountMap[row.user_id] = Number(row.order_count);
+  }
+
+  res.json(
+    usersRaw.map((u) => ({
+      id: u.id,
+      clerkId: u.clerkId,
+      email: u.email,
+      firstName: u.firstName,
+      lastName: u.lastName,
+      phone: u.phone,
+      role: u.role,
+      isBlocked: u.isBlocked,
+      orderCount: orderCountMap[u.clerkId] ?? 0,
+      createdAt: u.createdAt.toISOString(),
+    })),
+  );
+}));
 
 router.put("/admin/users/:id/block", requireAdmin, validateParams(ToggleUserBlockParams, "ToggleUserBlockParams"), validateBody(ToggleUserBlockBody, "ToggleUserBlockBody"), async (req: ApiRequest<z.infer<typeof ToggleUserBlockBody>>, res) => {
   try {
@@ -860,9 +822,9 @@ router.get("/admin/payouts", requireAdmin, async (req: ApiRequest, res) => {
       total: totalNum,
       hasMore: offset + limitNum < totalNum,
     });
-  } catch (err: any) {
+  } catch (err) {
     logger.error({ err }, "Admin: payouts endpoint failed");
-    res.status(500).json({ error: err?.message ?? "Failed to fetch payouts" });
+    res.status(500).json({ error: describeError(err) ?? "Failed to fetch payouts" });
   }
 });
 
@@ -964,9 +926,9 @@ router.post("/admin/payouts/:id/retry", requireAdmin, validateParams(UpdatePayou
       .limit(1);
 
     res.json(formatPayout(newPayout as PayoutWithContext));
-  } catch (err: any) {
+  } catch (err) {
     logger.error({ err }, "Admin: payout retry failed");
-    res.status(500).json({ error: err?.message ?? "Failed to retry payout" });
+    res.status(500).json({ error: describeError(err) ?? "Failed to retry payout" });
   }
 });
 
@@ -1046,9 +1008,9 @@ router.patch("/admin/payouts/:id/note", requireAdmin, validateParams(UpdatePayou
       adminNote: updated.adminNote ?? null,
       clawbackNotedAmount: updated.clawbackNotedAmount != null ? Number(updated.clawbackNotedAmount) : null,
     });
-  } catch (err: any) {
+  } catch (err) {
     logger.error({ err }, "Admin: payout note failed");
-    res.status(500).json({ error: err?.message ?? "Failed to update payout note" });
+    res.status(500).json({ error: describeError(err) ?? "Failed to update payout note" });
   }
 });
 

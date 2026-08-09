@@ -1,10 +1,13 @@
 import { Router } from "express";
+import type { z } from "zod";
 import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
-import { productsTable, productVariantsTable, categoriesTable } from "@workspace/db";
+import { productsTable, categoriesTable } from "@workspace/db";
 import { requireAdmin } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
-import { eq, or } from "drizzle-orm";
+import { describeError } from "../lib/describeError";
+import { validateBody } from "../lib/validateRequest";
+import { BulkImportBody } from "../lib/schemas";
 import crypto from "crypto";
 import type { ApiRequest } from "../types/apiRequest";
 
@@ -63,13 +66,13 @@ function parseList(val: string): string[] {
  * first row of each group and are NOT used to overwrite an existing product
  * — only new variants are appended to it.
  */
-router.post("/admin/products/bulk-import", requireAdmin, async (req: ApiRequest, res) => {
-  try {
-    const { csv } = req.body as any;
-    if (!csv || typeof csv !== "string") {
-      res.status(400).json({ error: "CSV content is required" });
-      return;
-    }
+router.post(
+  "/admin/products/bulk-import",
+  requireAdmin,
+  validateBody(BulkImportBody, "BulkImportBody"),
+  async (req: ApiRequest<z.infer<typeof BulkImportBody>>, res) => {
+    try {
+    const { csv } = req.body;
 
     const lines = csv.split("\n").map((l: string) => l.trim()).filter(Boolean);
     if (lines.length < 2) {
@@ -295,9 +298,10 @@ router.post("/admin/products/bulk-import", requireAdmin, async (req: ApiRequest,
          * the response message reflects that honestly rather than
          * claiming variants were created when none were.
          */
-      } catch (err: any) {
+      } catch (err) {
+        const msg = describeError(err) || "Failed to insert";
         for (const row of rows) {
-          errors.push(`Row ${row.rowNum}: ${err.message ?? "Failed to insert"}`);
+          errors.push(`Row ${row.rowNum}: ${msg}`);
         }
       }
     }
