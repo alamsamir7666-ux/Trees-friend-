@@ -99,7 +99,9 @@ function SubcategoryCard({ cat }: { cat: CategoryWithMeta }) {
         loading="lazy"
         className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
       />
-      <div className="absolute inset-0 bg-gradient-to-t from-foreground/70 via-foreground/10 to-transparent" />
+      {/* Gradient only on the bottom half for text readability —
+          keeps the image at full brightness instead of fading it. */}
+      <div className="absolute bottom-0 left-0 right-0 h-1/2 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
       {(cat.icon || cat.iconImage) && (
         <div className="absolute bottom-16 right-4 h-10 w-10 rounded-full flex items-center justify-center text-lg bg-card/90 backdrop-blur-sm shadow-md overflow-hidden">
           {cat.iconImage ? (
