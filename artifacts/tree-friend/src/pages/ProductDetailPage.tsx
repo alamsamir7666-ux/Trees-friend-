@@ -22,6 +22,7 @@ import { saveRecentlyViewed, useRecentlyViewed } from "@/hooks/useRecentlyViewed
 import { ProductQA } from "@/components/ui/ProductQA";
 import { SellerListingsSection } from "@/components/ui/SellerListingsSection";
 import { PhotoReviewForm } from "@/components/ui/PhotoReviewForm";
+import { ConfirmDialog } from "@/components/admin/modals/ConfirmDialog";
 import { updateSEO } from "@/lib/seo";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 
@@ -83,6 +84,7 @@ export function ProductDetailPage() {
   const [editingReviewId, setEditingReviewId] = useState<number | null>(null);
   const [editRating, setEditRating] = useState(5);
   const [editComment, setEditComment] = useState("");
+  const [reviewToDelete, setReviewToDelete] = useState<number | null>(null);
 
   const isWishlisted = wishlist?.products.some((w) => w.productId === id) ?? false;
 
@@ -188,13 +190,19 @@ export function ProductDetailPage() {
   }
 
   function handleDeleteReview(reviewId: number) {
-    if (!confirm("Delete your review?")) return;
+    setReviewToDelete(reviewId);
+  }
+
+  function confirmDeleteReview() {
+    if (reviewToDelete == null) return;
+    const reviewId = reviewToDelete;
     deleteReview.mutate({ productId: id, reviewId }, {
       onSuccess: () => {
         qc.invalidateQueries({ queryKey: getListReviewsQueryKey(id) });
         qc.invalidateQueries({ queryKey: getGetReviewEligibilityQueryKey(id) });
       },
     });
+    setReviewToDelete(null);
   }
 
   // Determine review UI state
@@ -557,6 +565,16 @@ export function ProductDetailPage() {
           </section>
         )}
       </div>
+
+      {/* Delete review confirmation — replaces native confirm() dialog */}
+      <ConfirmDialog
+        open={reviewToDelete != null}
+        title="Delete your review?"
+        message="This action cannot be undone. Your review and its photos will be permanently removed."
+        onConfirm={confirmDeleteReview}
+        onCancel={() => setReviewToDelete(null)}
+        danger
+      />
     </div>
   );
 }

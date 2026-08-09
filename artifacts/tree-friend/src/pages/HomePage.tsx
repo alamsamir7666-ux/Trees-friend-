@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
 import { ArrowRight, ShieldCheck, Leaf, Truck, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,12 +7,12 @@ import { ProductCard } from "@/components/ui/ProductCard";
 import { HomepageProductCard } from "@/components/ui/HomepageProductCard";
 import { ProductCardSkeleton, ProductGridSkeleton } from "@/components/ui/ProductCardSkeleton";
 import { useListProducts, useListCategories, getListCategoriesQueryKey } from "@workspace/api-client-react";
-import type { Category } from "@workspace/api-client-react";
+import type { Category, Product } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/apiClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePageContext } from "@/contexts/PageContext";
-import { updateSEO } from "@/lib/seo";
+import { useSEO } from "@/lib/seo";
 import { InstagramFeed } from "@/components/ui/InstagramFeed";
 
 // Fallback image/background used only when a category has no custom image
@@ -173,6 +173,7 @@ type HomeSection = { id: number; key: string; label: string };
 
 export function HomePage() {
   // ── All hooks first — no early returns before this block ─────────────────
+  useSEO(); // Reset to default SEO on the homepage
   const [activeTab, setActiveTab] = useState<"trending" | "new_arrivals">("trending");
   const [bestTab, setBestTab] = useState("");
   const [heroSearch, setHeroSearch] = useState("");
@@ -188,8 +189,13 @@ export function HomePage() {
   const { data: cardCategories = [] } = useListCategories({
     query: { staleTime: 60_000, queryKey: getListCategoriesQueryKey() },
   });
-  const categoryNameById = new Map<number, string>(
-    cardCategories.map((c: { id: number; name: string }) => [c.id, c.name])
+  // PERF: useMemo so the Map isn't rebuilt on every render — only when
+  // cardCategories actually changes.
+  const categoryNameById = useMemo(
+    () => new Map<number, string>(
+      cardCategories.map((c: { id: number; name: string }) => [c.id, c.name])
+    ),
+    [cardCategories],
   );
 
   const { data: homepageSections = [] as HomeSection[], isLoading: sectionsLoading } = useQuery({
@@ -203,8 +209,8 @@ export function HomePage() {
 
   const { data: activeBestData, isLoading: activeBestLoading } = useQuery({
     queryKey: ["products", "homepage", bestTab],
-    queryFn: async (): Promise<{ products: any[] }> => {
-      const { data } = await apiClient.get<{ products: any[] }>("/api/products", { params: { homepageTag: bestTab, limit: 15 } });
+    queryFn: async (): Promise<{ products: Product[]; total: number; page: number; totalPages: number }> => {
+      const { data } = await apiClient.get<{ products: Product[]; total: number; page: number; totalPages: number }>("/api/products", { params: { homepageTag: bestTab, limit: 15 } });
       return data;
     },
     enabled: !!bestTab,
@@ -212,10 +218,6 @@ export function HomePage() {
   });
 
   const featuredLoading = trendingLoading || newArrivalsLoading;
-
-  useEffect(() => {
-    updateSEO();
-  }, []);
 
   useEffect(() => {
     setPageReady(!featuredLoading);

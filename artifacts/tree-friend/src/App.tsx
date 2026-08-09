@@ -194,10 +194,6 @@ if (typeof window !== "undefined") {
 
 const SCROLL_KEY = (path: string) => `__scroll__${path}`;
 
-// Module-level flag - survives React render batching unlike a ref
-const _isPop = false;
-const _lastScrollY = 0;
-
 function saveScrollPosition(path: string) {
   try {
     sessionStorage.setItem(SCROLL_KEY(path), String(Math.round(window.scrollY)));
@@ -274,37 +270,51 @@ function ScrollManager() {
     if (targetY > 0) {
       pendingScrollRef.current = targetY;
 
-      if (targetY === 0) {
-        window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+      // PERF FIX: replaced 100ms polling (5s of layout-thrashing) with a
+      // ResizeObserver that fires once when the page is tall enough, then
+      // disconnects. Falls back to a final scroll after a 5s timeout
+      // (matching the old MAX_ATTEMPTS * INTERVAL_MS) in case the page
+      // never grows (e.g. an error page).
+      let scrollDone = false;
+      const doScroll = () => {
+        if (scrollDone || pendingScrollRef.current === null) return;
+        scrollDone = true;
+        window.scrollTo({ top: targetY, behavior: "instant" as ScrollBehavior });
         pendingScrollRef.current = null;
-        return;
-      }
+        if (resizeObserver) resizeObserver.disconnect();
+        clearTimeout(fallbackTimer);
+      };
 
-      // Poll until page is tall enough, then scroll.
-      // MAX_ATTEMPTS ? INTERVAL_MS = max wait time before giving up.
-      // Increased to handle slow API responses on all pages.
-      let attempts = 0;
-      const MAX_ATTEMPTS = 50;
-      const INTERVAL_MS = 100;
-
-      function tryScroll() {
-        if (pendingScrollRef.current === null) return; // cancelled
+      const tryScroll = () => {
+        if (pendingScrollRef.current === null) return;
         const pageHeight = document.body.scrollHeight;
         const viewportHeight = window.innerHeight;
-
-        if (pageHeight - viewportHeight >= targetY || attempts >= MAX_ATTEMPTS) {
-          window.scrollTo({ top: targetY, behavior: "instant" as ScrollBehavior });
-          pendingScrollRef.current = null;
-        } else {
-          attempts++;
-          setTimeout(tryScroll, INTERVAL_MS);
+        if (pageHeight - viewportHeight >= targetY) {
+          doScroll();
         }
-      }
+      };
 
+      // Observe body size changes — fires when async content renders
+      const resizeObserver = new ResizeObserver(() => {
+        tryScroll();
+      });
+      resizeObserver.observe(document.body);
+
+      // Also try on the next two animation frames (catches synchronous renders)
       requestAnimationFrame(() => requestAnimationFrame(tryScroll));
+
+      // Fallback: after 5s, scroll regardless of page height
+      const fallbackTimer = setTimeout(doScroll, 5000);
+
+      return () => {
+        scrollDone = true;
+        resizeObserver.disconnect();
+        clearTimeout(fallbackTimer);
+      };
     } else {
       pendingScrollRef.current = null;
       window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+      return undefined;
     }
   }, [fullHref]);
 

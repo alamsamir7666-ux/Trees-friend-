@@ -1,5 +1,8 @@
-const CACHE_NAME = "envyenhance-v1";
-const STATIC_ASSETS = ["/", "/manifest.json"];
+// FIX: was "envyenhance-v1" (leftover from a previous project). Now
+// "treefriend-v1" — matches the app name. Bump the version suffix when
+// you want to invalidate all cached assets (e.g. after a major deploy).
+const CACHE_NAME = "treefriend-v1";
+const STATIC_ASSETS = ["/", "/manifest.json", "/logo.webp", "/favicon.svg"];
 
 // Install: cache static shell
 self.addEventListener("install", (event) => {
