@@ -13,6 +13,7 @@ import {
   useListSellerReviews,
   getListSellerListingsQueryKey,
   getListSellerReviewsQueryKey,
+  useGetMySeller,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -24,7 +25,7 @@ import { apiClient } from "@/lib/apiClient";
 import {
   Star, MapPin, Package, Headset,
   ShieldCheck as ShieldIcon,
-  MessageCircle,
+  MessageCircle, Settings,
 } from "lucide-react";
 
 const ICON_VERIFIED =
@@ -68,6 +69,11 @@ export function SellerStorePage() {
   const { toast } = useToast();
 
   const [reviewPage, setReviewPage] = useState(1);
+
+  // Check if the current user is the owner of this store — if so, hide the
+  // Message and Follow buttons (you can't message or follow yourself).
+  const { data: mySeller } = useGetMySeller({ query: { enabled: !!user, queryKey: ["getMySeller"] } });
+  const isOwnStore = !!mySeller && mySeller.id === id;
 
   const { data: seller, isLoading: sellerLoading, isError: sellerError } = useGetPublicSeller(id, {
     query: { enabled: !!id, queryKey: getGetPublicSellerQueryKey(id) },
@@ -130,11 +136,22 @@ export function SellerStorePage() {
       });
       setLocation(`/messages/${(res.data as { id: number }).id}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("Failed to create conversation:", message);
+      // Try to extract the backend's error message — the apiClient throws
+      // `HTTP 400: {"error":"Cannot message yourself"}` style messages.
+      const raw = err instanceof Error ? err.message : String(err);
+      // Extract the JSON body from the error string if present
+      let description = "Something went wrong. Please try again.";
+      try {
+        const jsonMatch = raw.match(/\{.*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.error) description = parsed.error;
+        }
+      } catch {}
+      console.error("Failed to create conversation:", raw);
       toast({
         title: "Could not start chat",
-        description: "Something went wrong. Please try again.",
+        description,
       });
     }
   }
@@ -216,23 +233,38 @@ export function SellerStorePage() {
                 </p>
               </div>
               <div className="flex flex-col gap-2 shrink-0">
-                <Button
-                  size="sm"
-                  variant={isFollowing ? "secondary" : "default"}
-                  disabled={followPending}
-                  onClick={handleFollowToggle}
-                >
-                  {isFollowing ? "Following" : "Follow"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleMessageSeller}
-                  className="gap-1.5"
-                >
-                  <MessageCircle className="w-3.5 h-3.5" />
-                  Message
-                </Button>
+                {!isOwnStore && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant={isFollowing ? "secondary" : "default"}
+                      disabled={followPending}
+                      onClick={handleFollowToggle}
+                    >
+                      {isFollowing ? "Following" : "Follow"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleMessageSeller}
+                      className="gap-1.5"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5" />
+                      Message
+                    </Button>
+                  </>
+                )}
+                {isOwnStore && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setLocation("/seller-dashboard")}
+                    className="gap-1.5"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    Dashboard
+                  </Button>
+                )}
               </div>
             </div>
 
