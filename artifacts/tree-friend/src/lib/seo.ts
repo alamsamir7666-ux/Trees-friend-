@@ -4,6 +4,8 @@
  * For proper server-side SEO, consider migrating to Next.js.
  */
 
+import { useEffect } from "react";
+
 const DEFAULT_TITLE = "Tree Friend - Trees & Plants for Every Home | Bangladesh";
 const DEFAULT_DESCRIPTION =
   "Shop fruit trees, indoor plants, and saplings in Bangladesh. Quality plants from trusted nurseries, fair pricing, delivered responsibly.";
@@ -78,3 +80,28 @@ export function updateSEO(opts: SEOOptions = {}) {
   }
   canonical.href = window.location.href.split("?")[0]; // Strip query params from canonical
 }
+
+/**
+ * React hook for updating SEO meta tags. Wraps `updateSEO` in `useEffect`
+ * so the side effect runs after render (in the commit phase), not during
+ * render. Calling `updateSEO` directly during render is an anti-pattern
+ * that can cause issues with React's concurrent rendering and hydration.
+ *
+ * Usage:
+ *   function MyPage() {
+ *     useSEO({ title: "My Page", description: "..." });
+ *     return <div>...</div>;
+ *   }
+ *
+ * The effect re-runs only when the options actually change (shallow compare
+ * via JSON.stringify — fine for SEO options which are small plain objects).
+ */
+export function useSEO(opts: SEOOptions = {}) {
+  // Stringify opts so the effect only re-runs when they actually change.
+  // JSON.stringify is fine here — opts is a small plain object.
+  const serialized = JSON.stringify(opts);
+  useEffect(() => {
+    updateSEO(JSON.parse(serialized));
+  }, [serialized]);
+}
+

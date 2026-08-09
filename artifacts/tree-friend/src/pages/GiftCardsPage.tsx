@@ -9,13 +9,8 @@ import { useUser } from "@clerk/react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
-import { updateSEO } from "@/lib/seo";
+import { useSEO } from "@/lib/seo";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
-
-updateSEO({
-  title: "Gift Cards",
-  description: "Send the gift of a greener home. Purchase a gift card for a friend or loved one.",
-});
 
 interface GiftCard {
   id: number;
@@ -38,6 +33,10 @@ async function fetchMyCards(): Promise<GiftCard[]> {
 }
 
 export function GiftCardsPage() {
+  useSEO({
+    title: "Gift Cards",
+    description: "Send the gift of a greener home. Purchase a gift card for a friend or loved one.",
+  });
   const { user } = useUser();
   const { toast } = useToast();
   const qc = useQueryClient();

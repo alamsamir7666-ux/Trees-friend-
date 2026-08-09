@@ -7,14 +7,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useListAddresses, useAddAddress, useUpdateAddress, useDeleteAddress, getListAddressesQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
-import { updateSEO } from "@/lib/seo";
+import { useSEO } from "@/lib/seo";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
-
-updateSEO({ title: "My Addresses", noIndex: true });
 
 const EMPTY = { fullName: "", phone: "", street: "", city: "", district: "", postalCode: "", isDefault: false };
 
 export function AddressesPage() {
+  useSEO({ title: "My Addresses", noIndex: true });
   const qc = useQueryClient();
   const { data: addresses = [], isLoading } = useListAddresses({ query: { queryKey: getListAddressesQueryKey() } });
   const createAddress = useAddAddress();

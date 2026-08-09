@@ -7,12 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
-import { updateSEO } from "@/lib/seo";
+import { useSEO } from "@/lib/seo";
 import { useGetMySeller, useBecomeSeller, getGetMySellerQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-
-updateSEO({ title: "Become a Seller", noIndex: true });
 
 const EMPTY = {
   businessName: "",
@@ -188,6 +186,7 @@ export function BecomeSellerContent() {
 }
 
 export function BecomeSellerPage() {
+  useSEO({ title: "Become a Seller", noIndex: true });
   return (
     <div className="container mx-auto px-4 py-10 max-w-lg">
       <PageBreadcrumb crumbs={[{ label: "Become a Seller", icon: <Sprout className="h-3 w-3" /> }]} className="mb-4" />

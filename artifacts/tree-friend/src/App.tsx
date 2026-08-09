@@ -28,27 +28,31 @@ const SellerStorePage = lazy(() => import("@/pages/SellerStorePage").then(m => (
 const BrowseAllTreesPage = lazy(() => import("@/pages/BrowseAllTreesPage").then(m => ({ default: m.BrowseAllTreesPage })));
 const CategoryProductsPage = lazy(() => import("@/pages/CategoryProductsPage").then(m => ({ default: m.CategoryProductsPage })));
 const CategoryListingsPage = lazy(() => import("@/pages/CategoryListingsPage").then(m => ({ default: m.CategoryListingsPage })));
-import { I18nProvider } from "@/lib/i18n";
 import { ThemeProvider } from "next-themes";
 import { CurrencyProvider } from "@/lib/currency";
 import { FloatingCartIcon } from "./components/ui/FloatingCartIcon";
 import { PageTransition } from "@/components/ui/PageTransition";
 import { ProfileSync } from "./components/auth/ProfileSync";
-import { HomePage } from "./pages/HomePage";
-import { ProductsPage } from "./pages/ProductsPage";
-import { ProductDetailPage } from "./pages/ProductDetailPage";
-import { ProductSellerListingsPage } from "./pages/ProductSellerListingsPage";
-import { SellerListingDetailPage } from "./pages/SellerListingDetailPage";
-import { CartPage } from "./pages/CartPage";
-import { CheckoutPage } from "./pages/CheckoutPage";
-import { PreOrderCheckoutPage } from "./pages/PreOrderCheckoutPage";
-import { OrdersPage } from "./pages/OrdersPage";
-import { OrderDetailPage } from "./pages/OrderDetailPage";
-import { PreOrderDetailPage } from "./pages/PreOrderDetailPage";
-import { WishlistPage } from "./pages/WishlistPage";
-import { ProfilePage } from "./pages/ProfilePage";
-import { TrackOrderPage } from "./pages/TrackOrderPage";
-import { MessagesPage } from "./pages/MessagesPage";
+// PERF: All page components are lazy-loaded to keep the entry bundle small.
+// The previous eager imports for HomePage, ProductsPage, CartPage, CheckoutPage,
+// OrdersPage, etc. forced every visitor to download the entire app's code
+// even if they only landed on one page. Lazy-loading splits each page into
+// its own chunk, loaded on demand.
+const HomePage = lazy(() => import("@/pages/HomePage").then(m => ({ default: m.HomePage })));
+const ProductsPage = lazy(() => import("@/pages/ProductsPage").then(m => ({ default: m.ProductsPage })));
+const ProductDetailPage = lazy(() => import("@/pages/ProductDetailPage").then(m => ({ default: m.ProductDetailPage })));
+const ProductSellerListingsPage = lazy(() => import("@/pages/ProductSellerListingsPage").then(m => ({ default: m.ProductSellerListingsPage })));
+const SellerListingDetailPage = lazy(() => import("@/pages/SellerListingDetailPage").then(m => ({ default: m.SellerListingDetailPage })));
+const CartPage = lazy(() => import("@/pages/CartPage").then(m => ({ default: m.CartPage })));
+const CheckoutPage = lazy(() => import("@/pages/CheckoutPage").then(m => ({ default: m.CheckoutPage })));
+const PreOrderCheckoutPage = lazy(() => import("@/pages/PreOrderCheckoutPage").then(m => ({ default: m.PreOrderCheckoutPage })));
+const OrdersPage = lazy(() => import("@/pages/OrdersPage").then(m => ({ default: m.OrdersPage })));
+const OrderDetailPage = lazy(() => import("@/pages/OrderDetailPage").then(m => ({ default: m.OrderDetailPage })));
+const PreOrderDetailPage = lazy(() => import("@/pages/PreOrderDetailPage").then(m => ({ default: m.PreOrderDetailPage })));
+const WishlistPage = lazy(() => import("@/pages/WishlistPage").then(m => ({ default: m.WishlistPage })));
+const ProfilePage = lazy(() => import("@/pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
+const TrackOrderPage = lazy(() => import("@/pages/TrackOrderPage").then(m => ({ default: m.TrackOrderPage })));
+const MessagesPage = lazy(() => import("@/pages/MessagesPage").then(m => ({ default: m.MessagesPage })));
 const ChatPage = lazy(() => import("@/pages/ChatPage").then(m => ({ default: m.ChatPage })));
 const AdminPage = lazy(() => import("./pages/AdminPage").then(m => ({ default: m.AdminPage })));
 const SubscriptionsPage = lazy(() => import("@/pages/SubscriptionsPage").then(m => ({ default: m.SubscriptionsPage })));
@@ -488,13 +492,11 @@ function ClerkProviderWithRoutes() {
 function App() {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem={true} disableTransitionOnChange>
-    <I18nProvider>
       <CurrencyProvider>
         <WouterRouter base={basePath}>
           <ClerkProviderWithRoutes />
         </WouterRouter>
       </CurrencyProvider>
-    </I18nProvider>
     </ThemeProvider>
   );
 }

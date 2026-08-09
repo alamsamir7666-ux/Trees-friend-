@@ -1,14 +1,9 @@
 import { useState, useEffect } from "react";
 import { apiClient } from "@/lib/apiClient";
-import { updateSEO } from "@/lib/seo";
+import { useSEO } from "@/lib/seo";
 import { Link } from "wouter";
 import { ArrowRight, Clock, Tag, BookOpen, Loader2 } from "lucide-react";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
-
-updateSEO({
-  title: "Plant Care Tips & Guides",
-  description: "Expert plant care tips, tree-growing guides, and gardening advice for Bangladesh.",
-});
 
 interface BlogPost {
   slug: string;
@@ -22,6 +17,10 @@ interface BlogPost {
 }
 
 export function BlogPage() {
+  useSEO({
+    title: "Plant Care Tips & Guides",
+    description: "Expert plant care tips, tree-growing guides, and gardening advice for Bangladesh.",
+  });
   const [posts, setPosts] = useState<BlogPost[]>([]);
   const [loading, setLoading] = useState(true);
 

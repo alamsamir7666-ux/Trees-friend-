@@ -14,14 +14,12 @@ import { useUser } from "@clerk/react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
-import { updateSEO } from "@/lib/seo";
+import { useSEO } from "@/lib/seo";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import {
   RefreshCw, Pause, Play, X, Package, ChevronRight, Plus, CalendarDays,
 } from "lucide-react";
-
-updateSEO({ title: "My Subscriptions", description: "Manage your recurring plant and tree orders." });
 
 interface SubscriptionItem {
   productId: number;
@@ -68,6 +66,7 @@ async function patchSubscription(id: number, body: object): Promise<Subscription
 }
 
 export function SubscriptionsPage() {
+  useSEO({ title: "My Subscriptions", description: "Manage your recurring plant and tree orders." });
   const { user } = useUser();
   const { toast } = useToast();
   const qc = useQueryClient();

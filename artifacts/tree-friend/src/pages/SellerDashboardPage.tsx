@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { updateSEO } from "@/lib/seo";
+import { useSEO } from "@/lib/seo";
 import { useGetMySeller, useListSellerOrders, useGetMe } from "@workspace/api-client-react";
 import { SellerOverviewTab } from "@/components/seller/SellerOverviewTab";
 import { SellerListingsTab } from "@/components/seller/SellerListingsTab";
@@ -19,8 +19,6 @@ import { PaymentSettingsForm } from "@/components/seller/PaymentSettingsForm";
 import { BusinessProfileForm } from "@/components/seller/BusinessProfileForm";
 import { SellerCouponsTab } from "@/components/seller/SellerCouponsTab";
 import { useAuth } from "@clerk/react";
-
-updateSEO({ title: "Seller Dashboard", noIndex: true });
 
 type SectionId =
   | "dashboard" | "listings" | "orders" | "returns"
@@ -54,6 +52,7 @@ const NAV_GROUPS: {
 const ALL_NAV_ITEMS = NAV_GROUPS.flatMap((g) => g.items);
 
 export function SellerDashboardPage() {
+  useSEO({ title: "Seller Dashboard", noIndex: true });
   const { data: seller, isLoading: sellerLoading } = useGetMySeller();
   const { data: me } = useGetMe();
   const { signOut } = useAuth();

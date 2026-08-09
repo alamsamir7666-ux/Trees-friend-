@@ -10,9 +10,7 @@ import { useUser } from "@clerk/react";
 import { Link } from "wouter";
 import { apiClient } from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
-import { updateSEO } from "@/lib/seo";
-
-updateSEO({ title: "Email Preferences", description: "Manage which emails you receive from Tree Friend." });
+import { useSEO } from "@/lib/seo";
 
 interface EmailPrefs {
   orderUpdates: boolean;
@@ -70,6 +68,7 @@ const PREF_META = [
 ];
 
 export function EmailPreferencesPage() {
+  useSEO({ title: "Email Preferences", description: "Manage which emails you receive from Tree Friend." });
   const { user } = useUser();
   const { toast } = useToast();
   const [prefs, setPrefs] = useState<EmailPrefs | null>(null);

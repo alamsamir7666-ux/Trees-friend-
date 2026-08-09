@@ -5,7 +5,14 @@
  * 1. Generate VAPID keys: npx web-push generate-vapid-keys
  * 2. Add VITE_VAPID_PUBLIC_KEY=... to tree-friend/.env
  * 3. Add VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_MAILTO to api-server/.env
+ *
+ * FIX: Previously used raw `fetch("/api/push/subscribe")` without an
+ * Authorization header — the exact "Pattern #4 known-broken call" that
+ * `useApiFetch.ts` explicitly warns about. Push subscriptions would 401
+ * in production. Now uses `apiClient` which handles auth + the /api prefix.
  */
+
+import { apiClient } from "@/lib/apiClient";
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
 
@@ -29,7 +36,7 @@ export async function requestPushPermission(): Promise<boolean> {
   return permission === "granted";
 }
 
-export async function subscribeToPush(userId: string): Promise<boolean> {
+export async function subscribeToPush(_userId: string): Promise<boolean> {
   if (!VAPID_PUBLIC_KEY) return false;
   try {
     const reg = await navigator.serviceWorker.ready;
@@ -41,12 +48,13 @@ export async function subscribeToPush(userId: string): Promise<boolean> {
       applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
     });
 
-    // Send subscription to backend
-    await fetch("/api/push/subscribe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ subscription, userId }),
+    // Send subscription to backend via apiClient (handles auth + /api prefix).
+    // The backend's PushSubscribeBody schema expects { endpoint, keys } —
+    // the standard PushSubscription JSON shape. userId is no longer sent
+    // (the backend gets it from the auth token via requireAuth).
+    await apiClient.post("/push/subscribe", {
+      endpoint: subscription.endpoint,
+      keys: subscription.toJSON().keys,
     });
 
     return true;
@@ -62,11 +70,8 @@ export async function unsubscribeFromPush(): Promise<void> {
     const subscription = await reg.pushManager.getSubscription();
     if (subscription) {
       await subscription.unsubscribe();
-      await fetch("/api/push/unsubscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ endpoint: subscription.endpoint }),
+      await apiClient.post("/push/unsubscribe", {
+        endpoint: subscription.endpoint,
       });
     }
   } catch (err) {
