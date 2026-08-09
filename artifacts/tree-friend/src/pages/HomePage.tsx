@@ -121,7 +121,10 @@ function CollectionSlider() {
           style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
         >
           {categories.map((cat, idx) => {
-            const img = (cat as Category & { iconImage?: string | null }).iconImage || DEFAULT_CATEGORY_IMAGE;
+            // FIX: was using `iconImage` (the small icon) as the card background
+            // image — should use `image` (the category photo). The `iconImage`
+            // is only for the small circular badge in the corner (below).
+            const img = (cat as Category & { image?: string | null }).image || DEFAULT_CATEGORY_IMAGE;
             const bg = DEFAULT_CATEGORY_BG;
             return (
               <Link key={cat.slug} href={`/category/${cat.slug}`}>
