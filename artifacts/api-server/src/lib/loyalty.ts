@@ -8,32 +8,48 @@
  *  • The race condition in the previous `awardPoints` implementation is fixed
  *    (see below).
  *
- * ─── Race condition fix ─────────────────────────────────────────────────────
+ * ─── Concurrency safety ──────────────────────────────────────────────────────
  *
- * The previous implementation did:
+ * awardPoints: uses Postgres's atomic `UPDATE ... SET points = points + N`
+ * (the `+ N` is evaluated server-side, not client-side), wrapped in a
+ * transaction that also inserts the audit row. If the user doesn't have a
+ * `loyalty_points` row yet, we INSERT it (with the points already applied)
+ * inside the same transaction. This is safe under concurrency — concurrent
+ * calls each atomically add their delta; no delta is lost.
  *
- *   const [existing] = SELECT points FROM loyalty_points WHERE userId = ?
- *   if (existing) UPDATE loyalty_points SET points = existing.points + N
+ * redeemPoints: uses a single guarded UPDATE with `WHERE points >= N`:
  *
- * This is a classic read-modify-write race: two concurrent `awardPoints` calls
- * for the same user both read `points = 100`, both compute `100 + N`, both
- * write `100 + N` — one delta is lost.
+ *   UPDATE loyalty_points
+ *   SET points = points - $1, updated_at = now()
+ *   WHERE user_id = $2 AND points >= $1
+ *   RETURNING id, points
  *
- * The fix uses Postgres's atomic `UPDATE ... SET points = points + N` (the
- * `+ N` is evaluated server-side, not client-side), wrapped in a transaction
- * that also inserts the audit row. If the user doesn't have a `loyalty_points`
- * row yet, we INSERT it (with the points already applied) inside the same
- * transaction.
+ * If this returns zero rows, either the user has no loyalty_points row OR
+ * their balance is insufficient — in both cases we throw "Insufficient
+ * points" WITHOUT having decremented anything. The `WHERE points >= N`
+ * guard is enforced by Postgres's row-level locking: the UPDATE acquires
+ * an exclusive lock on the row, evaluates the WHERE clause, and only
+ * applies the SET if the condition holds. Two concurrent calls cannot
+ * both succeed if the combined decrement would go negative — the second
+ * call sees the already-decremented balance and its `points >= N` check
+ * fails.
  *
- * `redeemPoints` uses the same atomic pattern, with an additional guard:
- * the `WHERE points >= N` clause ensures we never go negative even under
- * concurrent redemption attempts.
+ * ─── Correction notice ───────────────────────────────────────────────────────
+ *
+ * A prior version of this file's doc comments claimed redeemPoints used a
+ * `WHERE points >= N` guard. That claim was false — the guard did not
+ * exist in the code. The prior code did an unconditional decrement, then
+ * checked the result, then issued a compensating "add back" UPDATE if the
+ * balance went negative. That two-step approach was NOT safe under
+ * concurrency (the compensating write could race with a third operation).
+ * This file now implements the guarded UPDATE that the prior doc comments
+ * incorrectly described.
  */
 
 import { logger } from "./logger";
 import { db } from "@workspace/db";
 import { loyaltyPointsTable, loyaltyTransactionsTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and, gte } from "drizzle-orm";
 
 export const POINTS_PER_100_TAKA = 1;   // Earn 1 point per ৳100 spent
 export const TAKA_PER_POINT = 1;         // 1 point = ৳1 discount
@@ -83,44 +99,47 @@ export async function awardPoints(userId: string, orderId: number, orderTotal: n
 }
 
 /**
- * Redeem loyalty points for an order discount. Throws if the user has
- * insufficient points. The check-and-decrement is atomic: the
- * `WHERE points >= N` clause ensures we never go negative even under
- * concurrent redemption attempts.
+ * Redeem loyalty points for an order discount. Throws "Insufficient points"
+ * if the user has no loyalty_points row OR their balance is less than
+ * `pointsToRedeem`.
+ *
+ * Uses a single guarded UPDATE:
+ *
+ *   UPDATE loyalty_points
+ *   SET points = points - N, updated_at = now()
+ *   WHERE user_id = ? AND points >= N
+ *   RETURNING id, points
+ *
+ * If zero rows are returned, the user either has no row or insufficient
+ * balance — in both cases nothing was decremented and we throw. This is
+ * safe under concurrency: Postgres's row-level locking ensures the WHERE
+ * clause is evaluated atomically with the SET, so two concurrent calls
+ * cannot both succeed if the combined decrement would go negative.
  */
 export async function redeemPoints(userId: string, pointsToRedeem: number, orderId: number): Promise<void> {
+  // Guarded UPDATE: the WHERE clause includes `points >= pointsToRedeem`,
+  // so the decrement only happens if the user has enough points. If zero
+  // rows are returned, either the user has no loyalty_points row or their
+  // balance is insufficient — in both cases, nothing was decremented.
   const result = await db
     .update(loyaltyPointsTable)
     .set({ points: sql`${loyaltyPointsTable.points} - ${pointsToRedeem}`, updatedAt: new Date() })
-    .where(eq(loyaltyPointsTable.userId, userId))
+    .where(
+      and(
+        eq(loyaltyPointsTable.userId, userId),
+        gte(loyaltyPointsTable.points, pointsToRedeem),
+      ),
+    )
     .returning({ id: loyaltyPointsTable.id, points: loyaltyPointsTable.points });
 
   if (result.length === 0) {
-    // No row → user has never earned any points.
-    throw new Error("Insufficient points");
-  }
-  // Drizzle's UPDATE with WHERE only affects rows that match — but we didn't
-  // include `points >= N` in the WHERE. We need to check the resulting balance
-  // to ensure we didn't go negative. If we did, throw — the caller will roll
-  // back the transaction (the order checkout) and the points will be restored.
-  //
-  // Note: this is NOT as good as a `WHERE points >= N` clause (which would
-  // prevent the decrement entirely), but Drizzle's .returning() gives us the
-  // new balance and we can check it. For true atomicity under high concurrency,
-  // a `WHERE points >= N` would be better — but that requires raw SQL since
-  // Drizzle doesn't expose it cleanly. The current approach is correct for
-  // the typical case (single redemption per user at a time) and the
-  // transaction wrapper in orders.ts ensures the order isn't created if
-  // redemption fails.
-  if (result[0].points < 0) {
-    // Restore the points we just decremented.
-    await db
-      .update(loyaltyPointsTable)
-      .set({ points: sql`${loyaltyPointsTable.points} + ${pointsToRedeem}`, updatedAt: new Date() })
-      .where(eq(loyaltyPointsTable.userId, userId));
+    // No row matched — either user doesn't exist or points < pointsToRedeem.
+    // Nothing was decremented; no compensating write needed.
     throw new Error("Insufficient points");
   }
 
+  // Success — the guarded UPDATE already decremented atomically. Insert
+  // the audit row.
   await db.insert(loyaltyTransactionsTable).values({
     userId,
     points: -pointsToRedeem,
