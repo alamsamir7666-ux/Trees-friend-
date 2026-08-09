@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, memo } from "react";
 import { Link } from "wouter";
 import {
   LayoutDashboard, Package, ShoppingBag, Wallet, Truck, Building2,
@@ -50,6 +50,213 @@ const NAV_GROUPS: {
 ];
 
 const ALL_NAV_ITEMS = NAV_GROUPS.flatMap((g) => g.items);
+
+// ─── Sidebar (extracted to module scope) ────────────────────────────────────
+//
+// Previously this was declared INSIDE SellerDashboardPage's render function,
+// which created a new component identity on every render — causing React to
+// remount the entire sidebar tree on every state change (activeSection,
+// sidebarOpen, etc.). This destroyed internal DOM state (scroll position,
+// focus, CSS transitions) and caused unnecessary re-renders.
+//
+// Now it's a module-level component with explicit props. React.memo ensures
+// it only re-renders when the props actually change.
+interface SidebarProps {
+  mobile?: boolean;
+  activeSection: SectionId;
+  onNavigate: (id: string) => void;
+  onCloseMobile?: () => void;
+  onVacation: boolean;
+  isNavDisabled: (id: SectionId) => boolean;
+  pendingOrdersCount: number;
+  // Use `any` here because useGetMySeller's return type resolves to `{}` at
+  // typecheck time (the generated client's types don't fully resolve without
+  // a build step). The runtime shape is the seller row from the DB.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  activeSeller: any;
+  ownerInitial: string;
+  storeInitial: string;
+  ownerName: string;
+  ownerEmail: string;
+  onSignOut?: () => void;
+}
+
+const SellerSidebar = memo(function SellerSidebar({
+  mobile = false,
+  activeSection,
+  onNavigate,
+  onCloseMobile,
+  onVacation,
+  isNavDisabled,
+  pendingOrdersCount,
+  activeSeller,
+  ownerInitial,
+  storeInitial,
+  ownerName,
+  ownerEmail,
+  onSignOut,
+}: SidebarProps) {
+  return (
+    <aside
+      className={[
+        "w-72 bg-sidebar text-sidebar-foreground flex flex-col h-full border-r border-sidebar-border",
+        mobile ? "shadow-2xl" : "",
+      ].join(" ")}
+    >
+      {/* Brand header */}
+      <div className="px-5 py-5 border-b border-sidebar-border">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-primary to-[hsl(150_30%_22%)] flex items-center justify-center shrink-0 shadow-sm">
+            <Sprout className="h-5 w-5 text-primary-foreground" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-sm text-sidebar-foreground truncate">Tree Friend</p>
+            <p className="text-[11px] text-sidebar-foreground/60">Seller Center</p>
+          </div>
+          {mobile && (
+            <button
+              onClick={onCloseMobile}
+              className="p-1.5 rounded-lg text-sidebar-foreground/60 hover:bg-sidebar-accent/40"
+              aria-label="Close menu"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Vacation notice */}
+      {onVacation && (
+        <div className="mx-4 mt-3 bg-warning border border-warning-border rounded-xl px-3 py-2.5 text-[11px] text-warning-foreground leading-relaxed">
+          <p className="font-semibold mb-0.5">Vacation mode active</p>
+          <p className="text-warning-foreground">Listings, Orders, Payment, and Courier are paused. Turn it off in Business Profile.</p>
+        </div>
+      )}
+
+      {/* Nav */}
+      <nav className="flex-1 px-3 py-4 overflow-y-auto">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.label} className="mb-5">
+            <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
+              {group.label}
+            </p>
+            <div className="space-y-0.5">
+              {group.items.map(({ id, label, icon: Icon }) => {
+                const disabled = isNavDisabled(id);
+                const isActive = activeSection === id;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => onNavigate(id)}
+                    disabled={disabled}
+                    aria-current={isActive ? "page" : undefined}
+                    className={[
+                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 group",
+                      disabled
+                        ? "text-sidebar-foreground/30 cursor-not-allowed"
+                        : isActive
+                          ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                          : "text-sidebar-foreground/70 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground",
+                    ].join(" ")}
+                  >
+                    <Icon
+                      className={[
+                        "h-[18px] w-[18px] shrink-0 transition-colors",
+                        isActive ? "text-sidebar-primary-foreground" : "",
+                      ].join(" ")}
+                    />
+                    <span className="flex-1 text-left truncate">{label}</span>
+                    {id === "orders" && !disabled && pendingOrdersCount > 0 && (
+                      <span
+                        className={[
+                          "text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center tabular-nums",
+                          isActive
+                            ? "bg-sidebar-primary-foreground/20 text-sidebar-primary-foreground"
+                            : "bg-sidebar-accent text-sidebar-accent-foreground",
+                        ].join(" ")}
+                      >
+                        {pendingOrdersCount}
+                      </span>
+                    )}
+                    {isActive && !disabled && (
+                      <ChevronRight className="h-3.5 w-3.5 text-sidebar-primary-foreground/70" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </nav>
+
+      {/* Store card */}
+      <div className="px-3 pb-3">
+        <div className="rounded-xl bg-sidebar-accent/30 border border-sidebar-border p-3">
+          <div className="flex items-center gap-2.5">
+            <Avatar className="h-9 w-9 border border-sidebar-border shrink-0">
+              {activeSeller.logoUrl ? (
+                <img src={activeSeller.logoUrl} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <AvatarFallback className="bg-gradient-to-br from-primary to-[hsl(150_30%_22%)] text-primary-foreground text-xs font-bold">
+                  {storeInitial}
+                </AvatarFallback>
+              )}
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-sidebar-foreground truncate">
+                {activeSeller.businessName}
+              </p>
+              <p className="text-[11px] text-sidebar-foreground/60 truncate flex items-center gap-1">
+                {activeSeller.isVerified && <BadgeCheck className="h-3 w-3 text-success-foreground" />}
+                {activeSeller.location || "No location"}
+              </p>
+            </div>
+          </div>
+          <div className="mt-2.5 flex items-center gap-1.5">
+            <Link href={`/seller/${activeSeller.id}`} className="flex-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="w-full h-7 text-[11px] text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+              >
+                <ExternalLink className="h-3 w-3 mr-1" />
+                View store
+              </Button>
+            </Link>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-[11px] text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+              onClick={onSignOut}
+              title="Sign out"
+            >
+              <LogOut className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* User row */}
+      <div className="px-4 py-3 border-t border-sidebar-border">
+        <div className="flex items-center gap-2.5">
+          <Avatar className="h-8 w-8 shrink-0">
+            <AvatarFallback className="bg-secondary text-secondary-foreground text-[11px] font-bold">
+              {ownerInitial}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-sidebar-foreground truncate">
+              {ownerName}
+            </p>
+            <p className="text-[11px] text-sidebar-foreground/60 truncate">
+              {ownerEmail}
+            </p>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+});
 
 export function SellerDashboardPage() {
   useSEO({ title: "Seller Dashboard", noIndex: true });
@@ -149,174 +356,27 @@ export function SellerDashboardPage() {
   const ownerInitial = seller.ownerName?.[0] ?? (me as any)?.firstName?.[0] ?? "S";
   const storeInitial = (seller.businessName ?? seller.nurseryName ?? "S")[0];
 
-  function Sidebar({ mobile = false }: { mobile?: boolean }) {
-    return (
-      <aside
-        className={[
-          "w-72 bg-sidebar text-sidebar-foreground flex flex-col h-full border-r border-sidebar-border",
-          mobile ? "shadow-2xl" : "",
-        ].join(" ")}
-      >
-        {/* Brand header */}
-        <div className="px-5 py-5 border-b border-sidebar-border">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-primary to-[hsl(150_30%_22%)] flex items-center justify-center shrink-0 shadow-sm">
-              <Sprout className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="font-semibold text-sm text-sidebar-foreground truncate">Tree Friend</p>
-              <p className="text-[11px] text-sidebar-foreground/60">Seller Center</p>
-            </div>
-            {mobile && (
-              <button
-                onClick={() => setSidebarOpen(false)}
-                className="p-1.5 rounded-lg text-sidebar-foreground/60 hover:bg-sidebar-accent/40"
-                aria-label="Close menu"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Vacation notice */}
-        {onVacation && (
-          <div className="mx-4 mt-3 bg-warning border border-warning-border rounded-xl px-3 py-2.5 text-[11px] text-warning-foreground leading-relaxed">
-            <p className="font-semibold mb-0.5">Vacation mode active</p>
-            <p className="text-warning-foreground">Listings, Orders, Payment, and Courier are paused. Turn it off in Business Profile.</p>
-          </div>
-        )}
-
-        {/* Nav */}
-        <nav className="flex-1 px-3 py-4 overflow-y-auto">
-          {NAV_GROUPS.map((group) => (
-            <div key={group.label} className="mb-5">
-              <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
-                {group.label}
-              </p>
-              <div className="space-y-0.5">
-                {group.items.map(({ id, label, icon: Icon }) => {
-                  const disabled = isNavDisabled(id);
-                  const isActive = activeSection === id;
-                  return (
-                    <button
-                      key={id}
-                      onClick={() => handleNavigate(id)}
-                      disabled={disabled}
-                      aria-current={isActive ? "page" : undefined}
-                      className={[
-                        "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 group",
-                        disabled
-                          ? "text-sidebar-foreground/30 cursor-not-allowed"
-                          : isActive
-                            ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                            : "text-sidebar-foreground/70 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground",
-                      ].join(" ")}
-                    >
-                      <Icon
-                        className={[
-                          "h-[18px] w-[18px] shrink-0 transition-colors",
-                          isActive ? "text-sidebar-primary-foreground" : "",
-                        ].join(" ")}
-                      />
-                      <span className="flex-1 text-left truncate">{label}</span>
-                      {id === "orders" && !disabled && pendingOrdersCount > 0 && (
-                        <span
-                          className={[
-                            "text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center tabular-nums",
-                            isActive
-                              ? "bg-sidebar-primary-foreground/20 text-sidebar-primary-foreground"
-                              : "bg-sidebar-accent text-sidebar-accent-foreground",
-                          ].join(" ")}
-                        >
-                          {pendingOrdersCount}
-                        </span>
-                      )}
-                      {isActive && !disabled && (
-                        <ChevronRight className="h-3.5 w-3.5 text-sidebar-primary-foreground/70" />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </nav>
-
-        {/* Store card */}
-        <div className="px-3 pb-3">
-          <div className="rounded-xl bg-sidebar-accent/30 border border-sidebar-border p-3">
-            <div className="flex items-center gap-2.5">
-              <Avatar className="h-9 w-9 border border-sidebar-border shrink-0">
-                {activeSeller.logoUrl ? (
-                  <img src={activeSeller.logoUrl} alt="" className="h-full w-full object-cover" />
-                ) : (
-                  <AvatarFallback className="bg-gradient-to-br from-primary to-[hsl(150_30%_22%)] text-primary-foreground text-xs font-bold">
-                    {storeInitial}
-                  </AvatarFallback>
-                )}
-              </Avatar>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold text-sidebar-foreground truncate">
-                  {activeSeller.businessName}
-                </p>
-                <p className="text-[11px] text-sidebar-foreground/60 truncate flex items-center gap-1">
-                  {activeSeller.isVerified && <BadgeCheck className="h-3 w-3 text-success-foreground" />}
-                  {activeSeller.location || "No location"}
-                </p>
-              </div>
-            </div>
-            <div className="mt-2.5 flex items-center gap-1.5">
-              <Link href={`/seller/${activeSeller.id}`} className="flex-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="w-full h-7 text-[11px] text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-                >
-                  <ExternalLink className="h-3 w-3 mr-1" />
-                  View store
-                </Button>
-              </Link>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 px-2 text-[11px] text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-                onClick={() => signOut?.()}
-                title="Sign out"
-              >
-                <LogOut className="h-3 w-3" />
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {/* User row */}
-        <div className="px-4 py-3 border-t border-sidebar-border">
-          <div className="flex items-center gap-2.5">
-            <Avatar className="h-8 w-8 shrink-0">
-              <AvatarFallback className="bg-secondary text-secondary-foreground text-[11px] font-bold">
-                {ownerInitial}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-sidebar-foreground truncate">
-                {activeSeller.ownerName || (me as any)?.firstName || "Seller"}
-              </p>
-              <p className="text-[11px] text-sidebar-foreground/60 truncate">
-                {(me as any)?.email || "Signed in"}
-              </p>
-            </div>
-          </div>
-        </div>
-      </aside>
-    );
-  }
+  // Compute owner info once (was inline `(me as any)?.firstName` in the old Sidebar)
+  const ownerName = activeSeller.ownerName || (me as any)?.firstName || "Seller";
+  const ownerEmail = (me as any)?.email || "Signed in";
 
   return (
     <div className="flex h-screen bg-background overflow-hidden font-sans">
       {/* Desktop sidebar */}
       <div className="hidden md:flex shrink-0">
-        <Sidebar />
+        <SellerSidebar
+          activeSection={activeSection}
+          onNavigate={handleNavigate}
+          onVacation={onVacation}
+          isNavDisabled={isNavDisabled}
+          pendingOrdersCount={pendingOrdersCount}
+          activeSeller={activeSeller}
+          ownerInitial={ownerInitial}
+          storeInitial={storeInitial}
+          ownerName={ownerName}
+          ownerEmail={ownerEmail}
+          onSignOut={signOut ? () => signOut() : undefined}
+        />
       </div>
 
       {/* Mobile sidebar */}
@@ -327,7 +387,21 @@ export function SellerDashboardPage() {
             onClick={() => setSidebarOpen(false)}
           />
           <div className="fixed inset-y-0 left-0 z-50 md:hidden">
-            <Sidebar mobile />
+            <SellerSidebar
+              mobile
+              activeSection={activeSection}
+              onNavigate={handleNavigate}
+              onCloseMobile={() => setSidebarOpen(false)}
+              onVacation={onVacation}
+              isNavDisabled={isNavDisabled}
+              pendingOrdersCount={pendingOrdersCount}
+              activeSeller={activeSeller}
+              ownerInitial={ownerInitial}
+              storeInitial={storeInitial}
+              ownerName={ownerName}
+              ownerEmail={ownerEmail}
+              onSignOut={signOut ? () => signOut() : undefined}
+            />
           </div>
         </>
       )}
