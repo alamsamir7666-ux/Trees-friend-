@@ -57,6 +57,9 @@ export const preOrdersTable = pgTable(
     // Without this index, the restock notification path seq-scans pre_orders
     // on every restock event.
     index("pre_orders_product_id_idx").on(table.productId),
+    // P0-2: index on userId — supports GET /pre-orders/my (the buyer's own
+    // pre-orders). Without this index, the query seq-scans.
+    index("pre_orders_user_id_idx").on(table.userId),
   ],
 );
 

@@ -120,7 +120,15 @@ DROP TRIGGER IF EXISTS update_gift_cards_updated_at ON gift_cards;
 CREATE TRIGGER update_gift_cards_updated_at BEFORE UPDATE ON gift_cards
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- blog_posts (no updated_at column in current schema — skip)
+-- blog_posts
+-- FIX: previously skipped with a stale comment claiming "no updated_at column
+-- in current schema" — but blogPosts.ts:16 clearly has
+-- `updatedAt: timestamp("updated_at").notNull().defaultNow()`. The trigger
+-- was never created, so blog_posts.updated_at never auto-updated on UPDATE.
+-- Added in migration 0003.
+DROP TRIGGER IF EXISTS update_blog_posts_updated_at ON blog_posts;
+CREATE TRIGGER update_blog_posts_updated_at BEFORE UPDATE ON blog_posts
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- pre_orders
 DROP TRIGGER IF EXISTS update_pre_orders_updated_at ON pre_orders;

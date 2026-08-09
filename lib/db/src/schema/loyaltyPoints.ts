@@ -34,5 +34,8 @@ export const loyaltyTransactionsTable = pgTable(
       table.userId,
       table.createdAt,
     ),
+    // P0-2: index on orderId — supports "earned from order X" lookup
+    // (used by admin analytics and loyalty debugging).
+    index("loyalty_transactions_order_id_idx").on(table.orderId),
   ],
 );

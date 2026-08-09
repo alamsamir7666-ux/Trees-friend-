@@ -5,7 +5,9 @@ import {
   boolean,
   timestamp,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { type z } from "zod/v4";
 
@@ -29,6 +31,13 @@ export const addressesTable = pgTable(
     // Without this index, the address-book page seq-scans the addresses
     // table for every signed-in user.
     index("addresses_user_id_idx").on(table.userId),
+    // Partial unique index: prevents multiple default addresses per user.
+    // Without this, a race or bug can leave two rows with is_default=true
+    // for the same user. The partial index only covers rows where
+    // is_default = true, so non-default addresses are unrestricted.
+    uniqueIndex("addresses_one_default_per_user")
+      .on(table.userId)
+      .where(sql`is_default = true`),
   ],
 );
 

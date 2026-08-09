@@ -4,6 +4,7 @@ import {
   text,
   integer,
   timestamp,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { type z } from "zod/v4";
@@ -33,25 +34,34 @@ import { type z } from "zod/v4";
  * (see uncategorized handling in the categories admin route) so nothing
  * is ever silently lost.
  */
-export const categoriesTable = pgTable("categories", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),        // "Fruit Trees" (L1) or "Mango" (L2)
-  slug: text("slug").notNull().unique(),
-  description: text("description"),
-  icon: text("icon"),
-  iconImage: text("icon_image"), // uploaded icon, alternative to emoji
-  image: text("image"),
-  displayOrder: integer("display_order").notNull().default(0),
-  // NULL = top-level category. Set = subcategory nested under that category.
-  // Self-referencing FK: deleting a parent category cascades to its
-  // subcategories (which then cascade their products to "Uncategorized",
-  // per the table doc comment's deletion rule).
-  parentId: integer("parent_id").references((): any => categoriesTable.id, {
-    onDelete: "cascade",
-  }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+export const categoriesTable = pgTable(
+  "categories",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),        // "Fruit Trees" (L1) or "Mango" (L2)
+    slug: text("slug").notNull().unique(),
+    description: text("description"),
+    icon: text("icon"),
+    iconImage: text("icon_image"), // uploaded icon, alternative to emoji
+    image: text("image"),
+    displayOrder: integer("display_order").notNull().default(0),
+    // NULL = top-level category. Set = subcategory nested under that category.
+    // Self-referencing FK: deleting a parent category cascades to its
+    // subcategories (which then cascade their products to "Uncategorized",
+    // per the table doc comment's deletion rule).
+    parentId: integer("parent_id").references((): any => categoriesTable.id, {
+      onDelete: "cascade",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // Index on parentId — supports the category tree build in
+    // routes/sellerListings.ts (allCats.filter + childrenOf) and admin
+    // category management. Without this index, tree building seq-scans.
+    index("categories_parent_id_idx").on(table.parentId),
+  ],
+);
 
 export const insertCategorySchema = createInsertSchema(categoriesTable).omit({
   id: true,
