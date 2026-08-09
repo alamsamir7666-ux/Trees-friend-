@@ -203,7 +203,7 @@ export function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // ─── Scroll-position tracking ─────────────────────────────────────────
   // We use a ref + IntersectionObserver instead of reading scroll math
   // inside the polling callback. The old approach computed `isNearBottom`
@@ -358,11 +358,21 @@ export function ChatPage() {
   //      conversation polling was effectively disabled.
   //   2. Each re-creation was wasted work.
   // We now read the latest message id from a ref instead.
+  //
+  // PERF FIX: Added visibility-aware polling — when the tab is hidden
+  // (document.hidden), polling pauses entirely to save battery + bandwidth.
+  // When the tab becomes visible again, polling immediately resumes with a
+  // fresh fetch (so the user sees new messages right away, not after waiting
+  // for the next 5s tick). This is the industry-standard pattern for
+  // polling-based chat (WhatsApp Web, Telegram Web both do this).
   useEffect(() => {
     if (!conversationId) return;
 
-    pollingRef.current = setInterval(async () => {
-      if (!conversationId) return;
+    let paused = document.hidden;
+    let errorBackoff = 5000; // starts at 5s, doubles on error, caps at 60s
+
+    const poll = async () => {
+      if (paused || !conversationId) return;
       const id = parseInt(conversationId);
       if (isNaN(id)) return;
 
@@ -378,6 +388,9 @@ export function ChatPage() {
         const res = await apiClient.get(`/api/conversations/${id}/messages?${params}`);
         const data = res.data as { messages: ChatMessage[]; hasMore: boolean };
         const { messages: newMessages } = data;
+
+        // Reset error backoff on success
+        errorBackoff = 5000;
 
         if (newMessages.length > 0) {
           // Update the ref BEFORE setMessages so the next poll uses the
@@ -439,12 +452,38 @@ export function ChatPage() {
         }
       } catch {
         // Silently fail on polling errors — a transient network blip
-        // shouldn't spam the user with toasts.
+        // shouldn't spam the user with toasts. But DO increase the backoff
+        // so we don't hammer a failing server at 5s intervals.
+        errorBackoff = Math.min(errorBackoff * 2, 60000); // cap at 60s
       }
-    }, 5000);
+    };
+
+    // Schedule the next poll using the current backoff interval
+    const scheduleNext = () => {
+      pollingRef.current = setTimeout(async () => {
+        await poll();
+        scheduleNext();
+      }, errorBackoff);
+    };
+
+    // Visibility change handler — pause/resume polling
+    const handleVisibilityChange = () => {
+      const wasPaused = paused;
+      paused = document.hidden;
+      // If the tab just became visible, poll immediately so the user sees
+      // new messages right away (not after waiting for the next tick).
+      if (wasPaused && !paused) {
+        poll();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // Start polling
+    scheduleNext();
 
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
+      if (pollingRef.current) clearTimeout(pollingRef.current);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [conversationId]);
 
