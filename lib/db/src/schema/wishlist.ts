@@ -10,12 +10,15 @@ import {
 import { sql } from "drizzle-orm";
 import { productsTable } from "./products";
 import { sellerListingVariantsTable } from "./sellerListingVariants";
+import { usersTable } from "./users";
 
 export const wishlistTable = pgTable(
   "wishlist",
   {
     id: serial("id").primaryKey(),
-    userId: text("user_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "cascade" }),
     productId: integer("product_id")
       .notNull()
       .references(() => productsTable.id, { onDelete: "cascade" }),

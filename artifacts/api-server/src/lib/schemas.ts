@@ -190,10 +190,10 @@ export const CreateBlogPostBody = z.object({
   excerpt: z.string().max(1000).optional(),
   content: z.string(),
   category: z.string().max(100).optional(),
-  readTime: z.string().max(50).optional(),
+  readTime: z.union([z.coerce.number().int().positive().max(600), z.string()]).optional(),
   image: z.string().url().nullish(),
   featured: z.boolean().optional(),
-  publishedAt: z.string().max(100).optional(),
+  publishedAt: z.string().datetime().nullish(),
   linkedProductIds: z.array(z.coerce.number().int().positive()).max(3).optional(),
 });
 export const UpdateBlogPostBody = z.object({
@@ -202,10 +202,10 @@ export const UpdateBlogPostBody = z.object({
   excerpt: z.string().max(1000).nullish(),
   content: z.string().optional(),
   category: z.string().max(100).nullish(),
-  readTime: z.string().max(50).nullish(),
+  readTime: z.union([z.coerce.number().int().positive().max(600), z.string()]).nullish(),
   image: z.string().url().nullish(),
   featured: z.boolean().optional(),
-  publishedAt: z.string().max(100).nullish(),
+  publishedAt: z.string().datetime().nullish(),
   linkedProductIds: z.array(z.coerce.number().int().positive()).max(3).nullish(),
 });
 

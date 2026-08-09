@@ -2,6 +2,7 @@ import { pgTable, serial, integer, text, boolean, timestamp } from "drizzle-orm/
 import { productsTable } from "./products";
 import { sellerListingsTable } from "./sellerListings";
 import { sellersTable } from "./sellers";
+import { usersTable } from "./users";
 
 /**
  * Product-level Q&A (sellerListingId/sellerId both null) is answered by
@@ -35,7 +36,9 @@ export const productQATable = pgTable("product_qa", {
   sellerId: integer("seller_id").references(() => sellersTable.id, {
     onDelete: "cascade",
   }),
-  userId: text("user_id").notNull(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => usersTable.clerkId, { onDelete: "restrict" }),
   userName: text("user_name").notNull(),
   question: text("question").notNull(),
   answer: text("answer"),

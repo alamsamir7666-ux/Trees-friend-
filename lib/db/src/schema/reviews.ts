@@ -13,9 +13,10 @@ import { createInsertSchema } from "drizzle-zod";
 import { type z } from "zod/v4";
 import { sql } from "drizzle-orm";
 import { productsTable } from "./products";
-import { sellersTable } from "./sellers";
 import { sellerListingsTable } from "./sellerListings";
 import { sellerListingVariantsTable } from "./sellerListingVariants";
+import { sellersTable } from "./sellers";
+import { usersTable } from "./users";
 
 /**
  * Reviews rate the specific seller-listing VARIANT a buyer actually
@@ -69,7 +70,9 @@ export const reviewsTable = pgTable(
       () => sellerListingVariantsTable.id,
       { onDelete: "cascade" },
     ),
-    userId: text("user_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "restrict" }),
     userName: text("user_name").notNull(),
     // FIX: CHECK constraint added — rating must be between 1 and 5.
     // Previously accepted any integer (0, -1, 999 all valid).

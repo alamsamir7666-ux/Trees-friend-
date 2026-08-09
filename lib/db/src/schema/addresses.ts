@@ -10,12 +10,15 @@ import {
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { type z } from "zod/v4";
+import { usersTable } from "./users";
 
 export const addressesTable = pgTable(
   "addresses",
   {
     id: serial("id").primaryKey(),
-    userId: text("user_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "cascade" }),
     fullName: text("full_name").notNull(),
     phone: text("phone").notNull(),
     street: text("street").notNull(),

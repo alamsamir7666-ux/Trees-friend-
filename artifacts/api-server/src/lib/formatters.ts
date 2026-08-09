@@ -87,7 +87,7 @@ export function formatOrder(o: typeof ordersTable.$inferSelect) {
     couponCode: o.couponCode,
     discountAmount: Number(o.discountAmount),
     cancellationReason: o.cancellationReason ?? null,
-    giftWrap: o.giftWrap ?? "false",
+    giftWrap: o.giftWrap,
     giftMessage: o.giftMessage ?? null,
     senderNumber: o.senderNumber ?? null,
     paidAt: o.paidAt ? o.paidAt.toISOString() : null,

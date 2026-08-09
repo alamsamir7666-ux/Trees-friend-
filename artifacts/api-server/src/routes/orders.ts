@@ -209,7 +209,7 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
       shippingAddress,
       couponCode: couponCode ?? null,
       discountAmount: String(discountAmount),
-      giftWrap: giftWrap ? "true" : "false",
+      giftWrap: !!giftWrap,
       giftMessage: giftMessage ?? null,
     }).returning();
 
@@ -586,7 +586,7 @@ router.post("/orders", requireAuth, checkoutLimiter, validateBody(CreateOrderBod
             shippingAddress,
             couponCode: g.discountAmount > 0 && couponCode ? couponCode : null,
             discountAmount: String(g.discountAmount),
-            giftWrap: giftWrap ? "true" : "false",
+            giftWrap: !!giftWrap,
             giftMessage: giftWrap ? giftMessage : null,
           })
           .returning();

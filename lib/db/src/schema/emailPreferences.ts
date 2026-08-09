@@ -2,10 +2,14 @@
 import { pgTable, serial, text, boolean, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { type z } from "zod/v4";
+import { usersTable } from "./users";
 
 export const emailPreferencesTable = pgTable("email_preferences", {
   id: serial("id").primaryKey(),
-  userId: text("user_id").notNull().unique(),
+  userId: text("user_id")
+    .notNull()
+    .unique()
+    .references(() => usersTable.clerkId, { onDelete: "cascade" }),
   orderUpdates: boolean("order_updates").notNull().default(true),
   promotions: boolean("promotions").notNull().default(true),
   restockAlerts: boolean("restock_alerts").notNull().default(true),

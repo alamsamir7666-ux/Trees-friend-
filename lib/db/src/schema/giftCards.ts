@@ -4,6 +4,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { type z } from "zod/v4";
+import { usersTable } from "./users";
 
 export const giftCardsTable = pgTable(
   "gift_cards",
@@ -13,7 +14,8 @@ export const giftCardsTable = pgTable(
     initialBalance: numeric("initial_balance", { precision: 10, scale: 2 }).notNull(),
     balance: numeric("balance", { precision: 10, scale: 2 }).notNull(),
     isActive: boolean("is_active").notNull().default(true),
-    purchasedByUserId: text("purchased_by_user_id"),  // null = admin-issued
+    purchasedByUserId: text("purchased_by_user_id")  // null = admin-issued
+      .references(() => usersTable.clerkId, { onDelete: "set null" }),
     recipientEmail: text("recipient_email"),
     recipientName: text("recipient_name"),
     message: text("message"),
@@ -39,7 +41,8 @@ export const giftCardTransactionsTable = pgTable(
     // card by coincidence). Now `integer`, the correct type for a FK.
     giftCardId: integer("gift_card_id").notNull().references(() => giftCardsTable.id),
     orderId: text("order_id"),
-    userId: text("user_id"),
+    userId: text("user_id")
+      .references(() => usersTable.clerkId, { onDelete: "set null" }),
     amount: numeric("amount", { precision: 10, scale: 2 }).notNull(), // negative = debit
     balanceAfter: numeric("balance_after", { precision: 10, scale: 2 }).notNull(),
     note: text("note"),

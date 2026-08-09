@@ -6,6 +6,7 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { type z } from "zod/v4";
 import { productsTable } from "./products";
+import { usersTable } from "./users";
 
 export type SubscriptionItem = {
   productId: number;
@@ -28,7 +29,9 @@ export const subscriptionsTable = pgTable(
   "subscriptions",
   {
     id: serial("id").primaryKey(),
-    userId: text("user_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "cascade" }),
     status: text("status").notNull().default("active"), // "active" | "paused" | "cancelled"
     frequency: text("frequency").notNull(),             // "weekly" | "biweekly" | "monthly"
     items: jsonb("items").$type<SubscriptionItem[]>().notNull(),

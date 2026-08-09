@@ -29,8 +29,8 @@ function fmtPost(p: typeof blogPostsTable.$inferSelect, linkedProducts: any[] = 
     readTime: p.readTime,
     image: p.image,
     featured: p.featured,
-    publishedAt: p.publishedAt,
-    linkedProductIds: (() => { try { return JSON.parse(p.linkedProductIds); } catch { return []; } })(),
+    publishedAt: p.publishedAt ? p.publishedAt.toISOString() : null,
+    linkedProductIds: p.linkedProductIds,
     linkedProducts,
     createdAt: p.createdAt.toISOString(),
     updatedAt: p.updatedAt.toISOString(),
@@ -38,8 +38,7 @@ function fmtPost(p: typeof blogPostsTable.$inferSelect, linkedProducts: any[] = 
 }
 
 async function resolveLinkedProducts(post: typeof blogPostsTable.$inferSelect) {
-  let ids: number[] = [];
-  try { ids = JSON.parse(post.linkedProductIds); } catch { ids = []; }
+  const ids = post.linkedProductIds;
   if (!Array.isArray(ids) || ids.length === 0) return [];
 
   const rows = await db
@@ -147,11 +146,11 @@ router.post(
         excerpt: excerpt?.trim() ?? "",
         content: JSON.stringify(content ?? []),
         category: category?.trim() ?? "",
-        readTime: readTime?.trim() || "5 min read",
+        readTime: readTime ? parseInt(String(readTime).replace(/\D/g, "") || "5", 10) : 5,
         image: image?.trim() || "",
         featured: featured ?? false,
-        publishedAt: publishedAt?.trim() || new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-        linkedProductIds: JSON.stringify(linkedProductIds ?? []),
+        publishedAt: publishedAt ? new Date(publishedAt) : null,
+        linkedProductIds: linkedProductIds ?? [],
       }).returning();
       const linkedProducts = await resolveLinkedProducts(post);
       res.status(201).json(fmtPost(post, linkedProducts));
@@ -179,11 +178,15 @@ router.patch(
     if (body.excerpt !== undefined) updates.excerpt = body.excerpt?.trim() ?? "";
     if (body.content !== undefined) updates.content = JSON.stringify(body.content);
     if (body.category !== undefined) updates.category = body.category?.trim() ?? "";
-    if (body.readTime !== undefined) updates.readTime = body.readTime?.trim() || "5 min read";
+    if (body.readTime !== undefined) {
+      updates.readTime = parseInt(String(body.readTime).replace(/\D/g, "") || "5", 10);
+    }
     if (body.image !== undefined) updates.image = body.image?.trim() || "";
     if (body.featured !== undefined) updates.featured = body.featured;
-    if (body.publishedAt !== undefined) updates.publishedAt = body.publishedAt?.trim() ?? "";
-    if (body.linkedProductIds !== undefined) updates.linkedProductIds = JSON.stringify(body.linkedProductIds ?? []);
+    if (body.publishedAt !== undefined) {
+      updates.publishedAt = body.publishedAt ? new Date(body.publishedAt) : null;
+    }
+    if (body.linkedProductIds !== undefined) updates.linkedProductIds = body.linkedProductIds ?? [];
     const [updated] = await db.update(blogPostsTable).set(updates).where(eq(blogPostsTable.id, id)).returning();
     if (!updated) throw new HttpError(404, "Post not found");
     const linkedProducts = await resolveLinkedProducts(updated);

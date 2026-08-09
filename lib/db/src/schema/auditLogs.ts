@@ -1,4 +1,5 @@
 import { pgTable, serial, text, jsonb, timestamp, index } from "drizzle-orm/pg-core";
+import { usersTable } from "./users";
 
 /**
  * Audit log — append-only record of admin actions.
@@ -27,7 +28,9 @@ export const auditLogsTable = pgTable(
   "audit_logs",
   {
     id: serial("id").primaryKey(),
-    adminId: text("admin_id").notNull(),
+    adminId: text("admin_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "restrict" }),
     adminEmail: text("admin_email"),
     action: text("action").notNull(),   // "order.status_changed", "product.deleted", etc.
     targetType: text("target_type"),    // "order", "product", "user", "coupon"

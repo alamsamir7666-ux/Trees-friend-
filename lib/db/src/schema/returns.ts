@@ -1,5 +1,6 @@
 import { pgTable, serial, integer, text, timestamp, numeric, pgEnum, index } from "drizzle-orm/pg-core";
 import { ordersTable } from "./orders";
+import { usersTable } from "./users";
 
 export const returnStatusEnum = pgEnum("return_status", [
   "requested", "approved", "rejected", "completed"
@@ -12,7 +13,9 @@ export const returnsTable = pgTable(
     orderId: integer("order_id")
       .notNull()
       .references(() => ordersTable.id, { onDelete: "cascade" }),
-    userId: text("user_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "restrict" }),
     reason: text("reason").notNull(),
     status: returnStatusEnum("status").notNull().default("requested"),
     adminNote: text("admin_note"),

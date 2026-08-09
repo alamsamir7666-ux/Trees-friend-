@@ -4,6 +4,7 @@ import {
   text,
   numeric,
   integer,
+  boolean,
   timestamp,
   jsonb,
   check,
@@ -13,6 +14,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { type z } from "zod/v4";
 import { sql } from "drizzle-orm";
 import { sellersTable } from "./sellers";
+import { usersTable } from "./users";
 
 /**
  * A line item snapshot at checkout time. Mirrors the cart_items XOR shape
@@ -84,7 +86,9 @@ export const ordersTable = pgTable(
   {
     id: serial("id").primaryKey(),
     trackingId: text("tracking_id").notNull().unique(),
-    userId: text("user_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "restrict" }),
     // Null for admin-direct orders (pre-marketplace buying path, still live
     // -- see schema/cart.ts and OrderItem doc above). Set to the seller's id
     // for every marketplace order; every item in that order's items[] then
@@ -112,7 +116,9 @@ export const ordersTable = pgTable(
     })
       .notNull()
       .default("0"),
-    giftWrap: text("gift_wrap").default("false"),
+    // FIX (migration 0005): was text default "false" — stored booleans as
+    // strings. Now proper boolean type.
+    giftWrap: boolean("gift_wrap").notNull().default(false),
     giftMessage: text("gift_message"),
     cancellationReason: text("cancellation_reason"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

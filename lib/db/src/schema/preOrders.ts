@@ -8,6 +8,7 @@ import {
   jsonb,
   index,
 } from "drizzle-orm/pg-core";
+import { usersTable } from "./users";
 
 export type PreOrderShipping = {
   fullName: string; phone: string; street: string; city: string; district: string; postalCode?: string | null;
@@ -18,7 +19,11 @@ export const preOrdersTable = pgTable(
   {
     id: serial("id").primaryKey(),
     trackingId: text("tracking_id").notNull().unique(),
-    userId: text("user_id").notNull().default("guest"),
+    // FIX (migration 0005): was text NOT NULL default 'guest' — the magic
+    // string 'guest' broke the FK to users.clerk_id added in migration 0004.
+    // Now nullable; guest pre-orders have NULL user_id.
+    userId: text("user_id")
+      .references(() => usersTable.clerkId, { onDelete: "restrict" }),
     productId: integer("product_id").notNull(),
     productName: text("product_name").notNull(),
     productImage: text("product_image").notNull().default(""),

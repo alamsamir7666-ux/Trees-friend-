@@ -11,6 +11,7 @@ import { productsTable } from "./products";
 import { productVariantsTable } from "./productVariants";
 import { sellerListingsTable } from "./sellerListings";
 import { sellerListingVariantsTable } from "./sellerListingVariants";
+import { usersTable } from "./users";
 
 /**
  * A cart line is EITHER an admin-direct variant purchase (variantId set,
@@ -48,7 +49,9 @@ export const cartItemsTable = pgTable(
   "cart_items",
   {
     id: serial("id").primaryKey(),
-    userId: text("user_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "cascade" }),
     productId: integer("product_id")
       .notNull()
       .references(() => productsTable.id, { onDelete: "cascade" }),

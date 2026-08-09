@@ -13,6 +13,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { type z } from "zod/v4";
 import { sellersTable } from "./sellers";
 import { sellerListingsTable } from "./sellerListings";
+import { usersTable } from "./users";
 
 /**
  * A conversation between a buyer and a seller. Each buyer-seller pair has
@@ -34,7 +35,9 @@ export const conversationsTable = pgTable(
   "conversations",
   {
     id: serial("id").primaryKey(),
-    buyerId: text("buyer_id").notNull(), // Clerk user ID (text), same convention as follows/wishlist/cart
+    buyerId: text("buyer_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "restrict" }),
     sellerId: integer("seller_id")
       .notNull()
       .references(() => sellersTable.id, { onDelete: "cascade" }),
@@ -100,7 +103,9 @@ export const messagesTable = pgTable(
     conversationId: integer("conversation_id")
       .notNull()
       .references(() => conversationsTable.id, { onDelete: "cascade" }),
-    senderId: text("sender_id").notNull(), // Clerk user ID — identifies who sent the message
+    senderId: text("sender_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "restrict" }),
     content: text("content").notNull(),
     // "text" | "image" | "file" | "product_card" — extensible for future media types
     messageType: text("message_type").notNull().default("text"),

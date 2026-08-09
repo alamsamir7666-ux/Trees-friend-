@@ -6,10 +6,14 @@ import {
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
+import { usersTable } from "./users";
 
 export const loyaltyPointsTable = pgTable("loyalty_points", {
   id: serial("id").primaryKey(),
-  userId: text("user_id").notNull().unique(),
+  userId: text("user_id")
+    .notNull()
+    .unique()
+    .references(() => usersTable.clerkId, { onDelete: "cascade" }),
   points: integer("points").notNull().default(0),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -18,7 +22,9 @@ export const loyaltyTransactionsTable = pgTable(
   "loyalty_transactions",
   {
     id: serial("id").primaryKey(),
-    userId: text("user_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => usersTable.clerkId, { onDelete: "restrict" }),
     points: integer("points").notNull(), // positive = earned, negative = spent
     reason: text("reason").notNull(),    // "order_#123", "redeemed", "referral_bonus"
     orderId: integer("order_id"),
