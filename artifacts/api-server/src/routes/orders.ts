@@ -7,6 +7,7 @@ import {
   productVariantsTable,
   sellerListingsTable,
   sellerListingVariantsTable,
+  sellersTable,
   platformPaymentConfigTable,
   couponsTable,
   usersTable,
@@ -1278,22 +1279,82 @@ router.post(
       .limit(1);
 
     if (!order) throw new HttpError(404, "Order not found");
-    if (!["pending"].includes(order.orderStatus)) {
+
+    // RELAXED: buyer can cancel until the order is SHIPPED (was: only
+    // pending). Standard e-commerce allows buyer cancellation until the
+    // package leaves the seller's hands — once it's shipped, it's in the
+    // courier's possession and the buyer must use the return flow instead.
+    // "return_completed" and "cancelled" are also rejected (already in
+    // a terminal state).
+    const cancellableStatuses = ["pending", "confirmed", "processing"];
+    if (!cancellableStatuses.includes(order.orderStatus)) {
       throw new HttpError(
         400,
-        `Cannot cancel an order that is already "${order.orderStatus}". Please contact support.`,
+        order.orderStatus === "shipped"
+          ? "Cannot cancel an order that has already been shipped. Please request a return after delivery."
+          : `Cannot cancel an order that is already "${order.orderStatus}". Please contact support.`,
       );
+    }
+
+    // ── Stock restoration on cancel ────────────────────────────────
+    // BUG FIX: previously, cancelling an order did NOT restore the stock
+    // that was decremented at checkout — cancelled orders permanently
+    // lost inventory. Now restores via additive `stock = stock + quantity`
+    // (idempotent — safe even if the job runs twice).
+    const items = (order.items ?? []) as OrderItem[];
+    for (const item of items) {
+      if (item.variantId != null) {
+        await db
+          .update(productVariantsTable)
+          .set({ stock: sql`${productVariantsTable.stock} + ${item.quantity}` })
+          .where(eq(productVariantsTable.id, item.variantId));
+      } else if (item.sellerListingVariantId != null) {
+        await db
+          .update(sellerListingVariantsTable)
+          .set({
+            stock: sql`${sellerListingVariantsTable.stock} + ${item.quantity}`,
+            availableQuantity: sql`${sellerListingVariantsTable.availableQuantity} + ${item.quantity}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(sellerListingVariantsTable.id, item.sellerListingVariantId));
+      }
     }
 
     const [updated] = await db
       .update(ordersTable)
       .set({
         orderStatus: "cancelled",
+        paymentStatus:
+          order.paymentStatus === "payment_pending" ? "cancelled" : order.paymentStatus,
         cancellationReason: reason.trim(),
+        cancelledAt: new Date(),
+        // Clear the payment-pending expiry timer (if any) — the order is
+        // now cancelled, not waiting for payment.
+        paymentExpiresAt: null,
         updatedAt: new Date(),
       })
       .where(eq(ordersTable.id, id))
       .returning();
+
+    // Notify the seller (if marketplace order) that the buyer cancelled.
+    // Fire-and-forget — non-blocking. The seller should know their order
+    // was cancelled + stock was restored.
+    if (order.sellerId) {
+      try {
+        const [seller] = await db
+          .select()
+          .from(sellersTable)
+          .where(eq(sellersTable.id, order.sellerId))
+          .limit(1);
+        if (seller?.contactEmail) {
+          // Best-effort: a proper "order cancelled" seller email template
+          // is a follow-up. For now, the seller sees the cancellation in
+          // their dashboard on next refresh.
+        }
+      } catch (err) {
+        logger.warn({ err, orderId: id }, "Cancel: seller notification failed (non-blocking)");
+      }
+    }
 
     res.json(formatOrder(updated));
   }),

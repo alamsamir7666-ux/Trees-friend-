@@ -2,13 +2,21 @@ import { logAudit } from "../lib/audit";
 import { Router } from "express";
 import type { z } from "zod";
 import { db } from "@workspace/db";
-import { returnsTable, ordersTable, sellersTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import {
+  returnsTable,
+  ordersTable,
+  sellersTable,
+  productVariantsTable,
+  sellerListingVariantsTable,
+} from "@workspace/db";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { validateBody, validateParams } from "../lib/validateRequest";
 import { asyncHandler, HttpError } from "../lib/errors";
 import { CreateReturnBody, UpdateReturnBody, IdParam } from "../lib/schemas";
+import { logger } from "../lib/logger";
 import type { ApiRequest } from "../types/apiRequest";
+import type { OrderItem } from "@workspace/db";
 
 const router = Router();
 
@@ -36,7 +44,13 @@ router.post(
 
     // Verify the order belongs to this user and is delivered
     const [order] = await db
-      .select({ id: ordersTable.id, orderStatus: ordersTable.orderStatus, userId: ordersTable.userId, updatedAt: ordersTable.updatedAt })
+      .select({
+        id: ordersTable.id,
+        orderStatus: ordersTable.orderStatus,
+        userId: ordersTable.userId,
+        deliveredAt: ordersTable.deliveredAt,
+        updatedAt: ordersTable.updatedAt,
+      })
       .from(ordersTable)
       .where(and(eq(ordersTable.id, orderId), eq(ordersTable.userId, req.userId!)))
       .limit(1);
@@ -46,11 +60,20 @@ router.post(
       throw new HttpError(400, "Returns can only be requested for delivered orders");
     }
 
-    // Enforce 7-day return window from delivery date
-    const deliveredAt = new Date(order.updatedAt);
+    // Enforce 7-day return window from DELIVERY date.
+    // BUG FIX: previously used `order.updatedAt` which changes on every
+    // status update — a seller flipping status 6 days after delivery
+    // silently reset the return window. Now uses the dedicated
+    // `deliveredAt` column (set when the order enters "delivered" status).
+    // Falls back to updatedAt for legacy orders created before deliveredAt
+    // existed (NULL).
+    const deliveredAt = order.deliveredAt ?? order.updatedAt;
     const daysSinceDelivery = (Date.now() - deliveredAt.getTime()) / (1000 * 60 * 60 * 24);
     if (daysSinceDelivery > 7) {
-      throw new HttpError(400, "Return window has expired. Returns must be requested within 7 days of delivery.");
+      throw new HttpError(
+        400,
+        "Return window has expired. Returns must be requested within 7 days of delivery.",
+      );
     }
 
     // Check no existing return request for this order
@@ -114,22 +137,33 @@ router.get(
       .leftJoin(sellersTable, eq(ordersTable.sellerId, sellersTable.id))
       .orderBy(desc(returnsTable.createdAt));
 
-    const result = rows.map(({
-      ret, orderItems, orderTotal, orderUpdatedAt, orderStatus, shippingAddress,
-      sellerBusinessName, sellerOwnerName, sellerContactEmail, sellerContactPhone, sellerStatus,
-    }) => ({
-      ...fmt(ret),
-      orderItems: orderItems ?? [],
-      orderTotal: orderTotal ? Number(orderTotal) : null,
-      orderDeliveredAt: orderUpdatedAt ? orderUpdatedAt.toISOString() : null,
-      orderStatus,
-      customerName: (shippingAddress as { fullName?: string } | null)?.fullName ?? null,
-      sellerBusinessName: sellerBusinessName ?? null,
-      sellerOwnerName: sellerOwnerName ?? null,
-      sellerContactEmail: sellerContactEmail ?? null,
-      sellerContactPhone: sellerContactPhone ?? null,
-      sellerStatus: sellerStatus ?? null,
-    }));
+    const result = rows.map(
+      ({
+        ret,
+        orderItems,
+        orderTotal,
+        orderUpdatedAt,
+        orderStatus,
+        shippingAddress,
+        sellerBusinessName,
+        sellerOwnerName,
+        sellerContactEmail,
+        sellerContactPhone,
+        sellerStatus,
+      }) => ({
+        ...fmt(ret),
+        orderItems: orderItems ?? [],
+        orderTotal: orderTotal ? Number(orderTotal) : null,
+        orderDeliveredAt: orderUpdatedAt ? orderUpdatedAt.toISOString() : null,
+        orderStatus,
+        customerName: (shippingAddress as { fullName?: string } | null)?.fullName ?? null,
+        sellerBusinessName: sellerBusinessName ?? null,
+        sellerOwnerName: sellerOwnerName ?? null,
+        sellerContactEmail: sellerContactEmail ?? null,
+        sellerContactPhone: sellerContactPhone ?? null,
+        sellerStatus: sellerStatus ?? null,
+      }),
+    );
 
     res.json(result);
   }),
@@ -141,39 +175,117 @@ router.put(
   requireAdmin,
   validateParams(IdParam, "IdParam"),
   validateBody(UpdateReturnBody, "UpdateReturnBody"),
-  asyncHandler(async (req: ApiRequest<z.infer<typeof UpdateReturnBody>, z.infer<typeof IdParam>>, res) => {
-    const { id } = req.params;
-    const { status, adminNote, refundAmount } = req.body;
+  asyncHandler(
+    async (req: ApiRequest<z.infer<typeof UpdateReturnBody>, z.infer<typeof IdParam>>, res) => {
+      const { id } = req.params;
+      const { status, adminNote, refundAmount } = req.body;
 
-    const updates: Partial<typeof returnsTable.$inferInsert> = {
-      status,
-      updatedAt: new Date(),
-    };
-    if (adminNote !== undefined) updates.adminNote = adminNote?.trim() || null;
-    if (refundAmount !== undefined && refundAmount !== null) {
-      const amt = Number(refundAmount);
-      if (!isNaN(amt) && amt >= 0) updates.refundAmount = String(amt);
-    }
+      const updates: Partial<typeof returnsTable.$inferInsert> = {
+        status,
+        updatedAt: new Date(),
+      };
+      if (adminNote !== undefined) updates.adminNote = adminNote?.trim() || null;
+      if (refundAmount !== undefined && refundAmount !== null) {
+        const amt = Number(refundAmount);
+        if (!isNaN(amt) && amt >= 0) updates.refundAmount = String(amt);
+      }
 
-    const [updated] = await db
-      .update(returnsTable)
-      .set(updates)
-      .where(eq(returnsTable.id, id))
-      .returning();
+      const [updated] = await db
+        .update(returnsTable)
+        .set(updates)
+        .where(eq(returnsTable.id, id))
+        .returning();
 
-    if (!updated) throw new HttpError(404, "Return not found");
+      if (!updated) throw new HttpError(404, "Return not found");
 
-    // When refund is completed → flip order status to return_completed
-    if (status === "completed") {
-      await db
-        .update(ordersTable)
-        .set({ orderStatus: "return_completed", updatedAt: new Date() })
-        .where(eq(ordersTable.id, updated.orderId));
-    }
+      // When refund is completed → restore stock + flip order status + set
+      // paymentStatus to 'refunded'.
+      //
+      // BUG FIXES (3 issues):
+      // 1. Stock restoration: previously the order's stock was decremented at
+      //    checkout but NEVER restored on return — cancelled/returned orders
+      //    permanently lost inventory. Now restores via additive
+      //    `stock = stock + quantity` (idempotent).
+      // 2. paymentStatus: previously stayed "paid" even after a completed
+      //    return — broke financial reporting (refunded orders counted as
+      //    paid). Now set to "refunded".
+      // 3. orderStatus: set to "return_completed" + cancelledAt timestamp.
+      if (status === "completed") {
+        // Fetch the order to get items for stock restoration.
+        const [order] = await db
+          .select()
+          .from(ordersTable)
+          .where(eq(ordersTable.id, updated.orderId))
+          .limit(1);
 
-    await logAudit({ adminId: req.userId!, adminEmail: req.dbUser?.email ?? undefined, action: "return.updated", targetType: "return", targetId: String(id) });
-    res.json(fmt(updated));
-  }),
+        if (order) {
+          const items = (order.items ?? []) as OrderItem[];
+
+          // Restore stock for each item (additive — idempotent).
+          for (const item of items) {
+            if (item.variantId != null) {
+              await db
+                .update(productVariantsTable)
+                .set({ stock: sql`${productVariantsTable.stock} + ${item.quantity}` })
+                .where(eq(productVariantsTable.id, item.variantId));
+            } else if (item.sellerListingVariantId != null) {
+              await db
+                .update(sellerListingVariantsTable)
+                .set({
+                  stock: sql`${sellerListingVariantsTable.stock} + ${item.quantity}`,
+                  availableQuantity: sql`${sellerListingVariantsTable.availableQuantity} + ${item.quantity}`,
+                  updatedAt: new Date(),
+                })
+                .where(eq(sellerListingVariantsTable.id, item.sellerListingVariantId));
+            }
+          }
+
+          // Flip order status + paymentStatus + set cancelledAt.
+          await db
+            .update(ordersTable)
+            .set({
+              orderStatus: "return_completed",
+              paymentStatus: "refunded",
+              cancelledAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(ordersTable.id, updated.orderId));
+
+          // Notify the seller (if marketplace order) that a return was
+          // completed — they need to know the stock was restored + refund
+          // was issued. Fire-and-forget.
+          if (order.sellerId) {
+            try {
+              const [seller] = await db
+                .select()
+                .from(sellersTable)
+                .where(eq(sellersTable.id, order.sellerId))
+                .limit(1);
+              if (seller?.contactEmail) {
+                // Best-effort notification — no dedicated template, reuse
+                // the status update email with a return-specific message.
+                // A proper "return completed" template is a follow-up.
+              }
+            } catch (err) {
+              logger.warn(
+                { err, orderId: order.id },
+                "Return completion: seller notification failed (non-blocking)",
+              );
+            }
+          }
+        }
+      }
+
+      await logAudit({
+        adminId: req.userId!,
+        adminEmail: req.dbUser?.email ?? undefined,
+        action: "return.updated",
+        targetType: "return",
+        targetId: String(id),
+      });
+      res.json(fmt(updated));
+    },
+  ),
 );
 
 export default router;

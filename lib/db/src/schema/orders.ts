@@ -142,6 +142,21 @@ export const ordersTable = pgTable(
     // created before the payment_sessions table existed. See
     // schema/paymentSessions.ts for the full rationale.
     paymentSessionId: integer("payment_session_id"),
+    // ── Per-status timestamps (industry-standard) ──────────────────
+    // Each timestamp records WHEN the order entered that status. Used by:
+    //   1. The 7-day return window (now reads deliveredAt, not updatedAt —
+    //      updatedAt changes on every status flip, which was silently
+    //      resetting the return window).
+    //   2. SLA reporting ("average time to ship", "average time to deliver").
+    //   3. The OrderTimeline component (shows real per-step timestamps
+    //      instead of the fake "all steps share updatedAt" display).
+    //   4. Audit trail (when was this cancelled? when was it confirmed?).
+    // NULL = the order hasn't reached that status yet (or was created
+    // before these columns existed).
+    confirmedAt: timestamp("confirmed_at"),
+    shippedAt: timestamp("shipped_at"),
+    deliveredAt: timestamp("delivered_at"),
+    cancelledAt: timestamp("cancelled_at"),
     shippingAddress: jsonb("shipping_address").$type<ShippingAddress>().notNull(),
     couponCode: text("coupon_code"),
     discountAmount: numeric("discount_amount", {

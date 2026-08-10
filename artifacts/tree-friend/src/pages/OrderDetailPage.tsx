@@ -6,6 +6,7 @@ import {
   createBkashPaymentGuest,
 } from "@workspace/api-client-react";
 import type { Order } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -18,15 +19,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   CheckCircle2,
-  Circle,
   Package,
-  Truck,
-  Home,
   ChevronLeft,
   XCircle,
   RotateCcw,
   Loader2,
   AlertTriangle,
+  ExternalLink,
 } from "lucide-react";
 import { Link } from "wouter";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
@@ -35,6 +34,7 @@ import { BKASH_ICON } from "@/lib/preorderIcons";
 import { useApiFetch } from "@/lib/useApiFetch";
 import { getOrderStatusConfig } from "@/lib/orderStatus";
 import { getReturnStatusConfig } from "@/lib/returnStatus";
+import { OrderTimeline } from "@/components/ui/OrderTimeline";
 
 interface GuestOrder {
   id: number;
@@ -70,11 +70,11 @@ interface ReturnRow {
   [key: string]: unknown;
 }
 
-const STEPS = ["pending", "confirmed", "processing", "shipped", "delivered"];
-
 // Note: statusColors + returnStatusConfig moved to @/lib/orderStatus.ts and
 // @/lib/returnStatus.ts (shared with OrdersPage.tsx). The local copies were
 // removed to prevent drift between the two surfaces.
+// The STEPS array + inline progress bar were replaced by the OrderTimeline
+// component (imported above) which uses real per-status timestamps.
 
 export function OrderDetailPage() {
   const params = useParams<{ id: string }>();
@@ -82,6 +82,7 @@ export function OrderDetailPage() {
   const isGuest = !/^\d+$/.test(rawId);
   const id = isGuest ? 0 : parseInt(rawId);
   const apiFetch = useApiFetch();
+  const qc = useQueryClient();
   // Note: previously this component called useListOrders just to compute a
   // display "rank" ("Order #3") from the array position. That rank was
   // fragile — it broke with pagination (array position != global position)
@@ -164,6 +165,35 @@ export function OrderDetailPage() {
     };
   }, [id, apiFetch]);
 
+  // ── Shipment tracking (courier tracking ID + link) ──────────────
+  // Fetches the order's shipment record (booked by the seller via
+  // Pathao/Steadfast) so the buyer can see the courier's tracking ID
+  // and click through to the courier's tracking page. Previously the
+  // shipment endpoint existed (GET /orders/:id/shipment) but the UI
+  // never called it — the buyer had no way to track their package on
+  // the courier's website.
+  const [shipment, setShipment] = useState<{
+    trackingNumber: string | null;
+    courierName: string | null;
+    trackingUrl: string | null;
+    status: string | null;
+  } | null>(null);
+  useEffect(() => {
+    if (!id || isGuest) return;
+    let cancelled = false;
+    apiFetch(`/api/orders/${id}/shipment`)
+      .then(async (r) => (r.ok ? await r.json() : null))
+      .then((data) => {
+        if (!cancelled && data) setShipment(data);
+      })
+      .catch(() => {
+        // Non-critical — shipment info just won't show.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, isGuest, apiFetch]);
+
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-10">
@@ -175,7 +205,6 @@ export function OrderDetailPage() {
     return <div className="py-20 text-center text-muted-foreground">Order not found.</div>;
   }
 
-  const currentStep = STEPS.indexOf(order.orderStatus);
   const addr = order.shippingAddress as {
     fullName?: string;
     street?: string;
@@ -239,7 +268,13 @@ export function OrderDetailPage() {
         return;
       }
       setCancelOpen(false);
-      window.location.reload();
+      // React Query invalidation — replaces the old window.location.reload()
+      // which was an anti-pattern (lost scroll position, bKash callback
+      // query state, etc.). Invalidating the "order" query causes
+      // useGetOrder to refetch with the updated status.
+      qc.invalidateQueries({ queryKey: ["order", order.id] });
+      // Also invalidate the orders list so it reflects the new status.
+      qc.invalidateQueries({ queryKey: ["/api/orders"] });
     } catch {
       setCancelError("Something went wrong. Please try again.");
     } finally {
@@ -390,40 +425,62 @@ export function OrderDetailPage() {
           </div>
         )}
 
-        {/* Tracking steps */}
-        {order.orderStatus !== "cancelled" && (
-          <div className="bg-card border rounded-xl p-6">
-            <h2 className="font-medium mb-6">Order Progress</h2>
-            <div className="flex items-center gap-0">
-              {STEPS.map((step, i) => {
-                const done = i < currentStep;
-                const active = i === currentStep;
-                const icons = [Circle, CheckCircle2, Package, Truck, Home];
-                const Icon = icons[Math.min(i, icons.length - 1)];
-                return (
-                  <div key={step} className="flex-1 flex flex-col items-center relative">
-                    {i < STEPS.length - 1 && (
-                      <div
-                        className={`absolute top-5 left-1/2 w-full h-0.5 ${done ? "bg-accent" : "bg-border"}`}
-                      />
-                    )}
-                    <div
-                      className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors ${done ? "bg-accent border-accent text-accent-foreground" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}
-                    >
-                      {done ? (
-                        <CheckCircle2 className="h-5 w-5 text-accent-foreground" />
-                      ) : (
-                        <Icon className="h-5 w-5" />
-                      )}
-                    </div>
-                    <p
-                      className={`text-xs mt-2 capitalize text-center ${active ? "font-medium" : "text-muted-foreground"}`}
-                    >
-                      {step}
-                    </p>
-                  </div>
-                );
-              })}
+        {/* Tracking steps — uses the OrderTimeline component with REAL
+            per-status timestamps (confirmedAt, shippedAt, deliveredAt,
+            cancelledAt) instead of the old fake "all steps share
+            updatedAt" display. */}
+        {order.orderStatus !== "return_completed" && (
+          <OrderTimeline
+            currentStatus={order.orderStatus}
+            timeline={[
+              { status: "pending", timestamp: order.createdAt, note: "Order placed" },
+              { status: "confirmed", timestamp: (ord as any).confirmedAt ?? "", note: null },
+              { status: "processing", timestamp: (ord as any).confirmedAt ?? "", note: null },
+              { status: "shipped", timestamp: (ord as any).shippedAt ?? "", note: null },
+              { status: "delivered", timestamp: (ord as any).deliveredAt ?? "", note: null },
+              {
+                status: "cancelled",
+                timestamp: (ord as any).cancelledAt ?? "",
+                note: (order as any).cancellationReason ?? null,
+              },
+            ].filter((e) => e.timestamp)}
+          />
+        )}
+
+        {/* ── Courier tracking (shipment info) ────────────────────── */}
+        {/* Shows the courier's tracking ID + a link to the courier's
+            tracking page when the seller has booked a shipment via
+            Pathao/Steadfast. Previously this endpoint existed but the UI
+            never called it — the buyer had no way to track their package. */}
+        {shipment && shipment.trackingNumber && (
+          <div className="bg-card border rounded-xl p-5">
+            <h3 className="font-medium text-sm mb-3 uppercase tracking-wider">Courier Tracking</h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Courier</span>
+                <span className="font-medium capitalize">{shipment.courierName ?? "N/A"}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Tracking Number</span>
+                <span className="font-mono font-medium">{shipment.trackingNumber}</span>
+              </div>
+              {shipment.status && (
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Status</span>
+                  <span className="capitalize">{shipment.status.replace(/_/g, " ")}</span>
+                </div>
+              )}
+              {shipment.trackingUrl && (
+                <a
+                  href={shipment.trackingUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-accent hover:underline mt-2"
+                >
+                  Track on courier's website
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              )}
             </div>
           </div>
         )}
@@ -618,7 +675,11 @@ export function OrderDetailPage() {
           </div>
         )}
         <div className="flex flex-wrap gap-3">
-          {order.orderStatus === "pending" && (
+          {/* RELAXED: buyer can cancel until the order is SHIPPED (was:
+              only pending). Standard e-commerce allows cancellation until
+              the package leaves the seller's hands — after that, the buyer
+              must use the return flow. The backend enforces the same rule. */}
+          {["pending", "confirmed", "processing"].includes(order.orderStatus) && (
             <Button
               variant="outline"
               className="rounded-full gap-2 text-destructive border-destructive hover:bg-destructive/10"
@@ -664,7 +725,14 @@ export function OrderDetailPage() {
               </div>
             ) : order.orderStatus === "delivered" ? (
               (() => {
-                const deliveredAt = new Date((order as any).updatedAt ?? order.createdAt);
+                // BUG FIX: return window now uses `deliveredAt` (the dedicated
+                // timestamp set when the order entered "delivered" status)
+                // instead of `updatedAt` (which changes on every status flip
+                // and was silently resetting the return window).
+                // Falls back to updatedAt for legacy orders (NULL deliveredAt).
+                const deliveredAt = new Date(
+                  (ord as any).deliveredAt ?? (order as any).updatedAt ?? order.createdAt,
+                );
                 const expired = (Date.now() - deliveredAt.getTime()) / (1000 * 60 * 60 * 24) > 7;
                 return expired ? (
                   <div className="w-full border border-muted-foreground/20 rounded-xl px-4 py-3 bg-muted/30">

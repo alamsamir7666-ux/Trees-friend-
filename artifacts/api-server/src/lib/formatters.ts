@@ -90,6 +90,10 @@ export function formatOrder(o: typeof ordersTable.$inferSelect) {
     senderNumber: o.senderNumber ?? null,
     paidAt: o.paidAt ? o.paidAt.toISOString() : null,
     paymentSessionId: o.paymentSessionId ?? null,
+    confirmedAt: o.confirmedAt ? o.confirmedAt.toISOString() : null,
+    shippedAt: o.shippedAt ? o.shippedAt.toISOString() : null,
+    deliveredAt: o.deliveredAt ? o.deliveredAt.toISOString() : null,
+    cancelledAt: o.cancelledAt ? o.cancelledAt.toISOString() : null,
     createdAt: o.createdAt.toISOString(),
     updatedAt: o.updatedAt.toISOString(),
   };
