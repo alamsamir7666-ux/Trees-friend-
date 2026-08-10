@@ -1,4 +1,5 @@
 import { Link, useLocation } from "wouter";
+import { useEffect, useRef } from "react";
 import {
   useGetCart,
   useUpdateCartItem,
@@ -8,11 +9,21 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Minus, Plus, Trash2, ShoppingBag, ArrowRight, LogIn, Sprout } from "lucide-react";
+import {
+  Minus,
+  Plus,
+  Trash2,
+  ShoppingBag,
+  ArrowRight,
+  LogIn,
+  Sprout,
+  AlertCircle,
+} from "lucide-react";
 import { useUser } from "@clerk/react";
 import { useGuestCart } from "@/hooks/useGuestCart";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
+import { apiClient } from "@/lib/apiClient";
 
 function EmptyCart() {
   return (
@@ -262,6 +273,44 @@ function AuthenticatedCartPage() {
   const updateItem = useUpdateCartItem();
   const removeItem = useRemoveFromCart();
 
+  // ── Abandoned cart recovery sync ───────────────────────────────────
+  //
+  // Industry-standard abandoned cart recovery (Shopify, WooCommerce,
+  // Magento all do this): whenever the authenticated cart changes, sync
+  // a snapshot to the `abandoned_carts` table so the 24-hour cron job
+  // (routes/abandonedCart.ts:runAbandonedCartJob) can send a recovery
+  // email if the buyer leaves without checking out. The sync endpoint
+  // reads the cart from the DB (not from the request body), so it's
+  // idempotent — calling it multiple times with the same cart state
+  // produces the same result. When the cart is emptied (checkout
+  // complete or buyer cleared it), the sync endpoint deletes the
+  // abandoned_carts row — no recovery email for an empty cart.
+  //
+  // Debounced 2s so a rapid add→remove→add sequence fires only one
+  // sync, not three. The sync is fire-and-forget (no await, no error
+  // handling) — if it fails, the cron job simply won't send a recovery
+  // email for this session, which is acceptable (the buyer can still
+  // come back and find their cart via the persistent cart_items table).
+  const syncAbandonedCartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (syncAbandonedCartTimeoutRef.current) {
+      clearTimeout(syncAbandonedCartTimeoutRef.current);
+    }
+    syncAbandonedCartTimeoutRef.current = setTimeout(() => {
+      // Fire-and-forget — errors are logged server-side, not surfaced
+      // to the buyer. The buyer's cart experience must not depend on
+      // the abandoned cart sync succeeding.
+      apiClient.post("/abandoned-cart/sync").catch(() => {
+        // Silently ignore — see comment above.
+      });
+    }, 2000);
+    return () => {
+      if (syncAbandonedCartTimeoutRef.current) {
+        clearTimeout(syncAbandonedCartTimeoutRef.current);
+      }
+    };
+  }, [cart?.items, cart?.subtotal]);
+
   const items = cart?.items ?? [];
   const subtotal = cart?.subtotal ?? 0;
   // Use the REAL per-variant delivery total computed by the API
@@ -319,6 +368,21 @@ function AuthenticatedCartPage() {
 
   if (items.length === 0) return <EmptyCart />;
 
+  // Price-change warning: if any line's price has drifted since the buyer
+  // added it to the cart, show a warning banner so the buyer knows the
+  // total at checkout may differ from what they saw in the bag. The
+  // actual charge always uses the current variant price (after
+  // re-validation at checkout) — this is a heads-up, not a price lock.
+  //
+  // Cast through `any` because the generated API client (lib/api-client-react)
+  // doesn't yet know about the `priceChangedCount` field added to the cart
+  // response in routes/cart.ts:buildCart. The field IS sent by the backend
+  // (verified in the route handler), but the OpenAPI spec + generated
+  // client haven't been regenerated to include it. This is the standard
+  // pattern for backend-first evolution — regenerate the client later.
+  const priceChangedCount =
+    (cart as unknown as { priceChangedCount?: number })?.priceChangedCount ?? 0;
+
   return (
     <div className="min-h-screen bg-background">
       <div className="bg-muted/30 border-b py-10">
@@ -333,6 +397,19 @@ function AuthenticatedCartPage() {
           </p>
         </div>
       </div>
+
+      {priceChangedCount > 0 && (
+        <div className="bg-orange-50 dark:bg-orange-950/30 border-b border-orange-200 dark:border-orange-900">
+          <div className="container mx-auto px-4 py-3 flex items-start gap-2 text-sm text-orange-800 dark:text-orange-200">
+            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+            <span>
+              Prices for {priceChangedCount} item{priceChangedCount !== 1 ? "s" : ""} in your bag
+              have changed since you added them. The total at checkout will reflect the current
+              prices.
+            </span>
+          </div>
+        </div>
+      )}
 
       <div className="container mx-auto px-4 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">

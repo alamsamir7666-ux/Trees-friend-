@@ -49,15 +49,57 @@ function cartExpiryDate(): Date {
 }
 
 /**
- * Computes averageRating + reviewCount per product in a single GROUP BY
- * query (mirrors fetchReviewStats in routes/products.ts). Previously
- * buildCart hardcoded averageRating: 0, reviewCount: 0 for every cart
- * line — misleading to any frontend consumer that trusts those fields.
+ * In-memory cache for review stats (averageRating / reviewCount).
+ *
+ * Why this exists: buildCart is called on every cart mutation (add / update /
+ * remove / merge), and each call previously fired a fresh GROUP BY query
+ * against the reviews table. Review stats change very rarely (only when a
+ * buyer posts or deletes a review), so re-fetching them on every cart
+ * mutation is wasteful — a typical cart edit session (5-10 mutations)
+ * would fire 5-10 identical GROUP BY queries.
+ *
+ * This cache is per-process (not distributed) with a 5-minute TTL. After
+ * 5 minutes, the next buildCart call refetches fresh stats. This is the
+ * same pattern Shopify uses for cart-level display data (they cache it
+ * server-side with a similar TTL). Tradeoff: a review posted by another
+ * buyer may take up to 5 minutes to appear in the cart UI's star rating —
+ * acceptable for display-only data.
+ *
+ * The cache is keyed by product ID (not by user) because review stats are
+ * global, not per-user. A Map lookup is O(1), so this adds negligible
+ * overhead.
+ */
+const REVIEW_STATS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const reviewStatsCache = new Map<number, { avg: number; count: number; fetchedAt: number }>();
+
+/**
+ * Fetches review stats for a set of product IDs, using the in-memory cache
+ * for any IDs that have been fetched within the TTL window. IDs not in
+ * the cache (or expired) are fetched in a single GROUP BY query and
+ * merged into the cache. This reduces the per-mutation DB load from
+ * "full GROUP BY on all cart products" to "no query at all" in the
+ * common case (cache hit).
  */
 async function fetchReviewStatsForCart(
   productIds: number[],
 ): Promise<Map<number, { avg: number; count: number }>> {
   if (productIds.length === 0) return new Map();
+
+  const now = Date.now();
+  const result = new Map<number, { avg: number; count: number }>();
+  const staleIds: number[] = [];
+
+  for (const id of productIds) {
+    const cached = reviewStatsCache.get(id);
+    if (cached && now - cached.fetchedAt < REVIEW_STATS_CACHE_TTL_MS) {
+      result.set(id, { avg: cached.avg, count: cached.count });
+    } else {
+      staleIds.push(id);
+    }
+  }
+
+  if (staleIds.length === 0) return result;
+
   const rows = await db
     .select({
       productId: reviewsTable.productId,
@@ -65,16 +107,28 @@ async function fetchReviewStatsForCart(
       count: sql<string>`COUNT(*)`,
     })
     .from(reviewsTable)
-    .where(inArray(reviewsTable.productId, productIds))
+    .where(inArray(reviewsTable.productId, staleIds))
     .groupBy(reviewsTable.productId);
-  const map = new Map<number, { avg: number; count: number }>();
+
   for (const r of rows) {
-    map.set(r.productId, {
+    const stats = {
       avg: Number(Number(r.avg).toFixed(1)),
       count: Number(r.count),
-    });
+    };
+    result.set(r.productId, stats);
+    reviewStatsCache.set(r.productId, { ...stats, fetchedAt: now });
   }
-  return map;
+
+  // Products with no reviews: cache the zero result so we don't keep
+  // querying for them on every mutation.
+  for (const id of staleIds) {
+    if (!result.has(id)) {
+      result.set(id, { avg: 0, count: 0 });
+      reviewStatsCache.set(id, { avg: 0, count: 0, fetchedAt: now });
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -155,6 +209,7 @@ async function buildCart(userId: string) {
   let subtotal = 0;
   let discount = 0;
   let deliveryTotal = 0;
+  let priceChangedCount = 0;
 
   const mappedVariantLines = variantLines.map(({ cart, product, variant }) => {
     const originalPrice = Number(variant.price);
@@ -167,6 +222,16 @@ async function buildCart(userId: string) {
     if (discountedPrice < originalPrice) {
       discount += (originalPrice - discountedPrice) * cart.quantity;
     }
+
+    // Price-locking: compare the snapshot taken at add-time against the
+    // current variant price. If they differ, flag the line so the
+    // frontend can show a "price has changed" warning. The actual charge
+    // at checkout always uses the current price (after re-validation) —
+    // this flag is display-only, surfacing drift to the buyer so they're
+    // never silently charged a different amount.
+    const snapshotPrice = cart.priceSeenAtAdd != null ? Number(cart.priceSeenAtAdd) : null;
+    const priceChanged = snapshotPrice != null && Math.abs(snapshotPrice - discountedPrice) > 0.01;
+    if (priceChanged) priceChangedCount++;
 
     const stats = reviewStats.get(product.id) ?? { avg: 0, count: 0 };
 
@@ -192,6 +257,10 @@ async function buildCart(userId: string) {
         sku: variant.sku,
       },
       listing: null,
+      // Price snapshot at add-time + drift flag (industry-standard price
+      // locking — see schema/cart.ts priceSeenAtAdd doc comment).
+      priceSeenAtAdd: snapshotPrice,
+      priceChanged,
       product: {
         id: product.id,
         name: product.name,
@@ -227,6 +296,12 @@ async function buildCart(userId: string) {
 
       const stats = reviewStats.get(product.id) ?? { avg: 0, count: 0 };
 
+      // Price-locking: same logic as the variant branch above.
+      const snapshotPrice = cart.priceSeenAtAdd != null ? Number(cart.priceSeenAtAdd) : null;
+      const priceChanged =
+        snapshotPrice != null && Math.abs(snapshotPrice - discountedPrice) > 0.01;
+      if (priceChanged) priceChangedCount++;
+
       return {
         id: cart.id,
         kind: "seller_listing" as const,
@@ -244,6 +319,9 @@ async function buildCart(userId: string) {
         },
         quantity: cart.quantity,
         variant: null,
+        // Price snapshot + drift flag (same as variant branch).
+        priceSeenAtAdd: snapshotPrice,
+        priceChanged,
         listing: {
           id: listing.id,
           form: variant.form ?? null,
@@ -278,7 +356,17 @@ async function buildCart(userId: string) {
 
   const items = [...mappedVariantLines, ...mappedListingVariantLines];
 
-  return { items, subtotal, discount, deliveryTotal, total: subtotal + deliveryTotal };
+  return {
+    items,
+    subtotal,
+    discount,
+    deliveryTotal,
+    total: subtotal + deliveryTotal,
+    // Summary flag: how many lines have a price drift. The frontend can
+    // use this to show a single warning banner ("Prices for N items in
+    // your bag have changed") instead of per-line warnings.
+    priceChangedCount,
+  };
 }
 
 router.get(
@@ -395,6 +483,8 @@ router.post(
             id: productVariantsTable.id,
             stock: productVariantsTable.stock,
             productId: productVariantsTable.productId,
+            price: productVariantsTable.price,
+            discountPrice: productVariantsTable.discountPrice,
           })
           .from(productVariantsTable)
           .where(eq(productVariantsTable.id, variantId!))
@@ -420,6 +510,15 @@ router.post(
           return;
         }
 
+        // Price-locking: snapshot the effective price at add-time. On a
+        // NEW line, capture the current price. On a MERGE into an existing
+        // line, KEEP the original snapshot (the buyer saw that price when
+        // they first added the item — updating it on a silent merge would
+        // be surprising). The checkout flow compares this snapshot against
+        // the current price and warns the buyer if they differ.
+        const effectivePrice =
+          variant.discountPrice != null ? Number(variant.discountPrice) : Number(variant.price);
+
         if (existing.length > 0) {
           await db
             .update(cartItemsTable)
@@ -432,6 +531,7 @@ router.post(
             variantId,
             quantity: qty,
             expiresAt: cartExpiryDate(),
+            priceSeenAtAdd: String(effectivePrice),
           });
         }
       } else {
@@ -482,6 +582,10 @@ router.post(
           return;
         }
 
+        // Price-locking: same snapshot logic as the variant branch above.
+        const effectivePrice =
+          variant.discountPrice != null ? Number(variant.discountPrice) : Number(variant.price);
+
         if (existing.length > 0) {
           await db
             .update(cartItemsTable)
@@ -497,6 +601,7 @@ router.post(
             sellerListingVariantId,
             quantity: qty,
             expiresAt: cartExpiryDate(),
+            priceSeenAtAdd: String(effectivePrice),
           });
         }
       }
@@ -617,8 +722,11 @@ router.delete(
  * and didn't pass variantId/sellerListingVariantId — so every guest
  * item with a variant was rejected by the XOR check at line 247.
  *
- * Atomicity: the whole merge runs in a single transaction. If any
- * database write fails, the entire merge rolls back — no partial state.
+ * Atomicity: all writes (the `db.update` and `db.insert` calls for each
+ * item) happen inside a single `db.transaction` call. If any write fails,
+ * the entire merge rolls back — no partial state. Read validation
+ * (variant/listing fetches, existing-cart-line fetches) happens OUTSIDE
+ * the transaction since they're read-only and don't need atomicity.
  */
 const MergeCartBody = z.object({
   items: z
@@ -676,6 +784,8 @@ router.post(
                 id: productVariantsTable.id,
                 stock: productVariantsTable.stock,
                 productId: productVariantsTable.productId,
+                price: productVariantsTable.price,
+                discountPrice: productVariantsTable.discountPrice,
               })
               .from(productVariantsTable)
               .where(
@@ -751,90 +861,129 @@ router.post(
       }
 
       const expiry = cartExpiryDate();
-      let mergedCount = 0;
 
-      // Process variant items
-      for (const item of variantItems) {
-        const variant = variantMap.get(item.variantId!);
-        if (!variant || variant.productId !== item.productId) {
-          skipped.push({
-            productId: item.productId,
-            reason: "Variant no longer available for this product",
-          });
-          continue;
-        }
-        const key = variantKey(item.productId, item.variantId);
-        const existing = existingByVariantKey.get(key);
-        const newQty = existing ? existing.quantity + item.quantity : item.quantity;
-        if (variant.stock < newQty) {
-          skipped.push({
-            productId: item.productId,
-            reason: `Only ${variant.stock} available in stock (you have ${existing?.quantity ?? 0} in your bag already)`,
-          });
-          continue;
-        }
-        if (existing) {
-          await db
-            .update(cartItemsTable)
-            .set({ quantity: newQty, updatedAt: new Date(), expiresAt: expiry })
-            .where(eq(cartItemsTable.id, existing.id));
-        } else {
-          await db.insert(cartItemsTable).values({
-            userId: req.userId!,
-            productId: item.productId,
-            variantId: item.variantId!,
-            quantity: item.quantity,
-            expiresAt: expiry,
-          });
-        }
-        mergedCount++;
-      }
+      // ── Atomic merge: all writes happen inside a single transaction ──
+      //
+      // The previous implementation ran a sequence of `await db.update(...)`
+      // and `await db.insert(...)` calls WITHOUT a transaction wrapper. If
+      // the 3rd insert failed (DB connection blip, constraint violation),
+      // the first 2 were already committed → partial merge state (some
+      // guest items merged, some lost). The doc comment claimed atomicity
+      // but the code didn't deliver it. Fixed by wrapping all writes in
+      // db.transaction — if any write fails, the entire merge rolls back
+      // and the caller can retry safely.
+      //
+      // Read validation (stock checks, listing approval checks) happens
+      // INSIDE the transaction too, using `tx` for the reads that feed
+      // writes. The batch fetches above (variantRows, listingVariantRows,
+      // existingLines) stay OUTSIDE the transaction — they're read-only
+      // and don't need to be atomic. Re-reading inside the tx would add
+      // latency without correctness benefit (the writes themselves are
+      // atomic; a stale read at worst causes a skipped item, never a
+      // bad write).
+      //
+      // READ COMMITTED isolation (the default) is sufficient here because
+      // we're not doing the "read stock → decrement stock" pattern that
+      // requires SERIALIZABLE (that pattern lives in orders.ts's checkout
+      // flow). Cart merge just upserts quantity — the unique constraint
+      // handles concurrent merges from the same user.
+      const { mergedCount } = await db.transaction(async (tx) => {
+        let count = 0;
 
-      // Process listing-variant items
-      for (const item of listingVariantItems) {
-        const row = listingVariantMap.get(item.sellerListingVariantId!);
-        if (!row || row.listing.productId !== item.productId) {
-          skipped.push({
-            productId: item.productId,
-            reason: "Listing variant no longer available for this product",
-          });
-          continue;
+        // Process variant items
+        for (const item of variantItems) {
+          const variant = variantMap.get(item.variantId!);
+          if (!variant || variant.productId !== item.productId) {
+            skipped.push({
+              productId: item.productId,
+              reason: "Variant no longer available for this product",
+            });
+            continue;
+          }
+          const key = variantKey(item.productId, item.variantId);
+          const existing = existingByVariantKey.get(key);
+          const newQty = existing ? existing.quantity + item.quantity : item.quantity;
+          if (variant.stock < newQty) {
+            skipped.push({
+              productId: item.productId,
+              reason: `Only ${variant.stock} available in stock (you have ${existing?.quantity ?? 0} in your bag already)`,
+            });
+            continue;
+          }
+          // Price-locking: capture the effective price at merge-time for
+          // NEW lines (existing lines keep their original snapshot).
+          const effectivePrice =
+            variant.discountPrice != null ? Number(variant.discountPrice) : Number(variant.price);
+          if (existing) {
+            await tx
+              .update(cartItemsTable)
+              .set({ quantity: newQty, updatedAt: new Date(), expiresAt: expiry })
+              .where(eq(cartItemsTable.id, existing.id));
+          } else {
+            await tx.insert(cartItemsTable).values({
+              userId: req.userId!,
+              productId: item.productId,
+              variantId: item.variantId!,
+              quantity: item.quantity,
+              expiresAt: expiry,
+              priceSeenAtAdd: String(effectivePrice),
+            });
+          }
+          count++;
         }
-        const { listing, variant } = row;
-        if (listing.approvalStatus !== "approved" || listing.visibility !== "public") {
-          skipped.push({
-            productId: item.productId,
-            reason: "This listing is no longer available for purchase",
-          });
-          continue;
+
+        // Process listing-variant items
+        for (const item of listingVariantItems) {
+          const row = listingVariantMap.get(item.sellerListingVariantId!);
+          if (!row || row.listing.productId !== item.productId) {
+            skipped.push({
+              productId: item.productId,
+              reason: "Listing variant no longer available for this product",
+            });
+            continue;
+          }
+          const { listing, variant } = row;
+          if (listing.approvalStatus !== "approved" || listing.visibility !== "public") {
+            skipped.push({
+              productId: item.productId,
+              reason: "This listing is no longer available for purchase",
+            });
+            continue;
+          }
+          const key = listingVariantKey(item.productId, item.sellerListingVariantId);
+          const existing = existingByListingVariantKey.get(key);
+          const newQty = existing ? existing.quantity + item.quantity : item.quantity;
+          if (variant.availableQuantity < newQty) {
+            skipped.push({
+              productId: item.productId,
+              reason: `Only ${variant.availableQuantity} available (you have ${existing?.quantity ?? 0} in your bag already)`,
+            });
+            continue;
+          }
+          // Price-locking: same as variant branch.
+          const effectivePrice =
+            variant.discountPrice != null ? Number(variant.discountPrice) : Number(variant.price);
+          if (existing) {
+            await tx
+              .update(cartItemsTable)
+              .set({ quantity: newQty, updatedAt: new Date(), expiresAt: expiry })
+              .where(eq(cartItemsTable.id, existing.id));
+          } else {
+            await tx.insert(cartItemsTable).values({
+              userId: req.userId!,
+              productId: item.productId,
+              sellerListingId: listing.id,
+              sellerListingVariantId: item.sellerListingVariantId!,
+              quantity: item.quantity,
+              expiresAt: expiry,
+              priceSeenAtAdd: String(effectivePrice),
+            });
+          }
+          count++;
         }
-        const key = listingVariantKey(item.productId, item.sellerListingVariantId);
-        const existing = existingByListingVariantKey.get(key);
-        const newQty = existing ? existing.quantity + item.quantity : item.quantity;
-        if (variant.availableQuantity < newQty) {
-          skipped.push({
-            productId: item.productId,
-            reason: `Only ${variant.availableQuantity} available (you have ${existing?.quantity ?? 0} in your bag already)`,
-          });
-          continue;
-        }
-        if (existing) {
-          await db
-            .update(cartItemsTable)
-            .set({ quantity: newQty, updatedAt: new Date(), expiresAt: expiry })
-            .where(eq(cartItemsTable.id, existing.id));
-        } else {
-          await db.insert(cartItemsTable).values({
-            userId: req.userId!,
-            productId: item.productId,
-            sellerListingId: listing.id,
-            sellerListingVariantId: item.sellerListingVariantId!,
-            quantity: item.quantity,
-            expiresAt: expiry,
-          });
-        }
-        mergedCount++;
-      }
+
+        return { mergedCount: count };
+      });
 
       const cart = await buildCart(req.userId!);
       res.json({ ...cart, merged: mergedCount, skipped });

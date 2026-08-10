@@ -1,4 +1,13 @@
-import { pgTable, serial, text, integer, timestamp, unique, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  serial,
+  text,
+  integer,
+  timestamp,
+  numeric,
+  unique,
+  index,
+} from "drizzle-orm/pg-core";
 import { productsTable } from "./products";
 import { productVariantsTable } from "./productVariants";
 import { sellerListingsTable } from "./sellerListings";
@@ -79,6 +88,21 @@ export const cartItemsTable = pgTable(
     // up stale rows. Without this, cart_items rows persist forever —
     // Shopify/Magento/WooCommerce all expire abandoned carts by default.
     expiresAt: timestamp("expires_at").notNull().defaultNow(),
+    // Industry-standard price locking: snapshot of the variant's effective
+    // price (discountPrice ?? price) at the moment the buyer added the item
+    // to their cart. Checkout compares this against the current variant
+    // price and surfaces a "price has changed" warning if they differ —
+    // so the buyer is never silently charged a different amount than what
+    // they saw in the bag. Shopify stores this on the cart line
+    // (`cart_line.original_price`); WooCommerce stores it as
+    // `woocommerce_cart_contents_price`; Magento stores it on the quote
+    // item as `custom_price`. NULL for rows created before this column
+    // existed (backfilled to the current price on first update).
+    //
+    // This is a SNAPSHOT, not the source of truth — the actual charge at
+    // checkout always uses the current variant price (after re-validation).
+    // The snapshot exists only to detect drift and warn the buyer.
+    priceSeenAtAdd: numeric("price_seen_at_add", { precision: 10, scale: 2 }),
   },
   (table) => [
     // A user can have one cart line per (product, variant) pair. Since

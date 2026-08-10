@@ -2,17 +2,35 @@ import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useLoyalty } from "@/hooks/useLoyalty";
-import { useGetCart, useCreateOrder, useValidateCoupon, useListAddresses, getGetCartQueryKey, getListAddressesQueryKey, createBkashPayment, createBkashPaymentGuest } from "@workspace/api-client-react";
+import {
+  useGetCart,
+  useCreateOrder,
+  useValidateCoupon,
+  useListAddresses,
+  getGetCartQueryKey,
+  getListAddressesQueryKey,
+  createBkashPayment,
+  createBkashPaymentGuest,
+} from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { BKASH_ICON } from "@/lib/preorderIcons";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, Tag, MapPin, ChevronDown, ShoppingBag, CreditCard, Sprout } from "lucide-react";
+import {
+  CheckCircle2,
+  Tag,
+  MapPin,
+  ChevronDown,
+  ShoppingBag,
+  CreditCard,
+  Sprout,
+} from "lucide-react";
 import { Link } from "wouter";
 import { useUser } from "@clerk/react";
 import { useGuestCart } from "@/hooks/useGuestCart";
+import { apiClient } from "@/lib/apiClient";
 
 type PaymentMethod = "bkash" | "cod";
 
@@ -30,7 +48,10 @@ type PaymentMethod = "bkash" | "cod";
  * excludes "bkash" whenever it's false, regardless of what the listing
  * itself claims to support.
  */
-function allowedMethodsForListingPaymentMethod(pm: string, hasVerifiedPaymentConfig: boolean): PaymentMethod[] {
+function allowedMethodsForListingPaymentMethod(
+  pm: string,
+  hasVerifiedPaymentConfig: boolean,
+): PaymentMethod[] {
   if (pm === "cod") return ["cod"];
   if (pm === "advance") return hasVerifiedPaymentConfig ? ["bkash"] : [];
   return hasVerifiedPaymentConfig ? ["bkash", "cod"] : ["cod"];
@@ -42,14 +63,23 @@ export function CheckoutPage() {
   const { user, isLoaded: userLoaded } = useUser();
   const isGuest = userLoaded && !user;
   const guestCart = useGuestCart();
-  const { data: cart, isLoading: cartLoading } = useGetCart({ query: { enabled: !isGuest, queryKey: getGetCartQueryKey() } });
+  const { data: cart, isLoading: cartLoading } = useGetCart({
+    query: { enabled: !isGuest, queryKey: getGetCartQueryKey() },
+  });
   const isLoading = !userLoaded || (!isGuest && cartLoading);
-  const { data: savedAddresses = [] } = useListAddresses({ query: { retry: false, queryKey: getListAddressesQueryKey() } });
+  const { data: savedAddresses = [] } = useListAddresses({
+    query: { retry: false, queryKey: getListAddressesQueryKey() },
+  });
   const createOrder = useCreateOrder();
   const validateCoupon = useValidateCoupon();
 
   const [address, setAddress] = useState({
-    fullName: "", phone: "", street: "", city: "", district: "", postalCode: "",
+    fullName: "",
+    phone: "",
+    street: "",
+    city: "",
+    district: "",
+    postalCode: "",
   });
   const [selectedAddressId, setSelectedAddressId] = useState<number | null>(null);
   const [showAddressPicker, setShowAddressPicker] = useState(false);
@@ -91,7 +121,7 @@ export function CheckoutPage() {
   // the product. sellerId/sellerName are null for admin-direct lines and
   // guest items (guest checkout is admin-direct-only -- see routes/orders.ts).
   const items = isGuest
-    ? guestCart.items.map(i => ({
+    ? guestCart.items.map((i) => ({
         productId: i.productId,
         quantity: i.quantity,
         name: i.name,
@@ -102,7 +132,7 @@ export function CheckoutPage() {
         sellerName: null as string | null,
         codDeliveryCharge: 0,
       }))
-    : (cart?.items ?? []).map(i => {
+    : (cart?.items ?? []).map((i) => {
         const isListing = i.kind === "seller_listing";
         return {
           productId: i.productId,
@@ -110,7 +140,9 @@ export function CheckoutPage() {
           name: i.product.name,
           image: i.product.images[0] ?? "",
           price: isListing ? i.listing!.price : i.variant!.price,
-          discountPrice: isListing ? (i.listing!.discountPrice ?? null) : (i.variant!.discountPrice ?? null),
+          discountPrice: isListing
+            ? (i.listing!.discountPrice ?? null)
+            : (i.variant!.discountPrice ?? null),
           sellerId: isListing ? i.sellerId : null,
           sellerName: isListing ? (i.seller?.nurseryName ?? null) : null,
           // Only present (and non-zero delivery-relevant) on seller_listing
@@ -124,10 +156,19 @@ export function CheckoutPage() {
   // "null" (string) represents the admin-direct group, matching how the
   // backend reads sellerPaymentMethods (routes/orders.ts).
   const sellerGroups = useMemo(() => {
-    const map = new Map<string, { sellerId: number | null; sellerName: string | null; items: typeof items; subtotal: number }>();
+    const map = new Map<
+      string,
+      { sellerId: number | null; sellerName: string | null; items: typeof items; subtotal: number }
+    >();
     for (const item of items) {
       const key = item.sellerId == null ? "null" : String(item.sellerId);
-      if (!map.has(key)) map.set(key, { sellerId: item.sellerId, sellerName: item.sellerName, items: [], subtotal: 0 });
+      if (!map.has(key))
+        map.set(key, {
+          sellerId: item.sellerId,
+          sellerName: item.sellerName,
+          items: [],
+          subtotal: 0,
+        });
       const g = map.get(key)!;
       g.items.push(item);
       g.subtotal += (item.discountPrice ?? item.price) * item.quantity;
@@ -195,28 +236,35 @@ export function CheckoutPage() {
     // sellerIds lets the backend reject a seller-scoped coupon up front
     // (routes/coupons.ts /coupons/validate) instead of only failing later
     // at Place Order -- see that route's doc comment.
-    const cartSellerIds = sellerGroups.map((g) => g.sellerId).filter((id): id is number => id !== null);
-    validateCoupon.mutate({ data: { code: couponCode, orderAmount: subtotal, sellerIds: cartSellerIds } }, {
-      onSuccess: (coupon) => {
-        // A seller-scoped coupon only discounts that seller's own group
-        // subtotal, not the whole cart -- matches routes/orders.ts
-        // groupBySellerAndAllocateDiscount(..., couponSellerId) exactly.
-        // A platform-wide coupon (coupon.sellerId === null) still applies
-        // against the largest group's subtotal, same as before.
-        const base = coupon.sellerId !== null
-          ? (sellerGroups.find((g) => g.sellerId === coupon.sellerId)?.subtotal ?? 0)
-          : subtotal;
-        const computed = coupon.discountType === "percentage"
-          ? Math.floor(base * (coupon.discountValue / 100))
-          : Math.min(coupon.discountValue, base);
-        setDiscount(computed);
-        setCouponApplied(true);
-        setCouponSellerId(coupon.sellerId);
+    const cartSellerIds = sellerGroups
+      .map((g) => g.sellerId)
+      .filter((id): id is number => id !== null);
+    validateCoupon.mutate(
+      { data: { code: couponCode, orderAmount: subtotal, sellerIds: cartSellerIds } },
+      {
+        onSuccess: (coupon) => {
+          // A seller-scoped coupon only discounts that seller's own group
+          // subtotal, not the whole cart -- matches routes/orders.ts
+          // groupBySellerAndAllocateDiscount(..., couponSellerId) exactly.
+          // A platform-wide coupon (coupon.sellerId === null) still applies
+          // against the largest group's subtotal, same as before.
+          const base =
+            coupon.sellerId !== null
+              ? (sellerGroups.find((g) => g.sellerId === coupon.sellerId)?.subtotal ?? 0)
+              : subtotal;
+          const computed =
+            coupon.discountType === "percentage"
+              ? Math.floor(base * (coupon.discountValue / 100))
+              : Math.min(coupon.discountValue, base);
+          setDiscount(computed);
+          setCouponApplied(true);
+          setCouponSellerId(coupon.sellerId);
+        },
+        onError: () => {
+          setCouponError("Invalid or expired coupon code.");
+        },
       },
-      onError: () => {
-        setCouponError("Invalid or expired coupon code.");
-      },
-    });
+    );
   }
 
   const [submitError, setSubmitError] = useState("");
@@ -322,12 +370,19 @@ export function CheckoutPage() {
           couponCode: couponApplied ? couponCode : null,
           giftWrap,
           giftMessage: giftWrap ? giftMessage : null,
-          items: guestCart.items.map(i => ({ productId: i.productId, variantId: i.variantId, quantity: i.quantity })),
+          items: guestCart.items.map((i) => ({
+            productId: i.productId,
+            variantId: i.variantId,
+            quantity: i.quantity,
+          })),
         }),
       })
         .then(async (res) => {
           const data = await res.json();
-          if (!res.ok) { setSubmitError(data.error ?? "Failed to place order."); return; }
+          if (!res.ok) {
+            setSubmitError(data.error ?? "Failed to place order.");
+            return;
+          }
           guestCart.clearCart();
           try {
             const key = "treefriend_guest_orders";
@@ -340,63 +395,98 @@ export function CheckoutPage() {
               discount,
               shipping,
               couponCode: couponApplied ? couponCode : null,
-              items: guestCart.items.map(i => ({
+              items: guestCart.items.map((i) => ({
                 productName: i.name,
                 productImage: i.image,
                 quantity: i.quantity,
                 price: i.discountPrice ?? i.price,
               })),
             };
-            localStorage.setItem(key, JSON.stringify([summary, ...existing.filter((o: any) => (o.trackingId ?? o) !== data.trackingId)]));
-          } catch {}
+            localStorage.setItem(
+              key,
+              JSON.stringify([
+                summary,
+                ...existing.filter((o: any) => (o.trackingId ?? o) !== data.trackingId),
+              ]),
+            );
+          } catch {
+            // localStorage may be unavailable (private mode) — non-critical,
+            // the guest order summary is a best-effort convenience.
+          }
           await payGuestBkashOrderOrGoToOrder(data.trackingId, paymentMethod);
         })
         .catch(() => setSubmitError("Failed to place order. Please try again."));
       return;
     }
 
-    createOrder.mutate({
-      data: {
-        shippingAddress,
-        paymentMethod,
-        sellerPaymentMethods: isMultiSeller
-          ? Object.fromEntries(sellerGroups.map((g) => {
-              const key = g.sellerId == null ? "null" : String(g.sellerId);
-              return [key, methodFor(key)];
-            }))
-          : undefined,
-        couponCode: couponApplied ? couponCode : null,
-        loyaltyPointsToRedeem: usePoints && maxPointsDiscount > 0 ? Math.ceil(maxPointsDiscount / 1) : 0,
-        giftWrap,
-        giftMessage: giftWrap ? giftMessage : null,
+    createOrder.mutate(
+      {
+        data: {
+          shippingAddress,
+          paymentMethod,
+          sellerPaymentMethods: isMultiSeller
+            ? Object.fromEntries(
+                sellerGroups.map((g) => {
+                  const key = g.sellerId == null ? "null" : String(g.sellerId);
+                  return [key, methodFor(key)];
+                }),
+              )
+            : undefined,
+          couponCode: couponApplied ? couponCode : null,
+          loyaltyPointsToRedeem:
+            usePoints && maxPointsDiscount > 0 ? Math.ceil(maxPointsDiscount / 1) : 0,
+          giftWrap,
+          giftMessage: giftWrap ? giftMessage : null,
+        },
       },
-    }, {
-      // Always an array now (routes/orders.ts): a multi-seller cart splits
-      // into multiple orders. Redirect to the first one (or, Part 2, kick
-      // off bKash payment for the first bkash-paying one); the order
-      // confirmation/detail page links between sibling orders from the
-      // same checkout if there's more than one (see OrderDetailPage).
-      onSuccess: (orders) => {
-        qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
-        if (orders.length > 1) {
-          try {
-            sessionStorage.setItem("last_checkout_order_ids", JSON.stringify(orders.map((o) => o.id)));
-          } catch {}
-        }
-        payFirstBkashOrderOrGoToOrder(orders);
+      {
+        // Always an array now (routes/orders.ts): a multi-seller cart splits
+        // into multiple orders. Redirect to the first one (or, Part 2, kick
+        // off bKash payment for the first bkash-paying one); the order
+        // confirmation/detail page links between sibling orders from the
+        // same checkout if there's more than one (see OrderDetailPage).
+        onSuccess: (orders) => {
+          qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
+          // Mark the buyer's abandoned cart as recovered so the 24-hour
+          // cron job doesn't send a "you left items in your cart" email
+          // for a cart that was just successfully checked out. Fire-and-
+          // forget — if this fails, the cron job will just skip the email
+          // (it checks `recovered = false` AND `updatedAt < 24h ago`; the
+          // order just placed means the cart was recently active).
+          apiClient.post("/abandoned-cart/recover").catch(() => {
+            // Silently ignore — recovery marking is best-effort.
+          });
+          if (orders.length > 1) {
+            try {
+              sessionStorage.setItem(
+                "last_checkout_order_ids",
+                JSON.stringify(orders.map((o) => o.id)),
+              );
+            } catch {
+              // sessionStorage may be unavailable (private mode) — non-critical.
+            }
+          }
+          payFirstBkashOrderOrGoToOrder(orders);
+        },
       },
-    });
+    );
   }
 
   if (isLoading) {
-    return <div className="container mx-auto px-4 py-10"><Skeleton className="h-96 rounded-xl" /></div>;
+    return (
+      <div className="container mx-auto px-4 py-10">
+        <Skeleton className="h-96 rounded-xl" />
+      </div>
+    );
   }
 
   if (items.length === 0) {
     return (
       <div className="py-24 text-center">
         <p className="text-muted-foreground mb-4">No items in cart.</p>
-        <Link href="/products"><Button>Shop Now</Button></Link>
+        <Link href="/products">
+          <Button>Shop Now</Button>
+        </Link>
       </div>
     );
   }
@@ -415,7 +505,8 @@ export function CheckoutPage() {
           <h1 className="font-serif text-4xl font-medium">Checkout</h1>
           {isMultiSeller && (
             <p className="text-sm text-muted-foreground mt-1">
-              Your bag has items from {sellerGroups.length} sellers — this will create {sellerGroups.length} separate orders.
+              Your bag has items from {sellerGroups.length} sellers — this will create{" "}
+              {sellerGroups.length} separate orders.
             </p>
           )}
         </div>
@@ -437,7 +528,9 @@ export function CheckoutPage() {
                     >
                       <MapPin className="h-4 w-4" />
                       Saved addresses
-                      <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAddressPicker ? "rotate-180" : ""}`} />
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 transition-transform ${showAddressPicker ? "rotate-180" : ""}`}
+                      />
                     </button>
                   )}
                 </div>
@@ -457,42 +550,83 @@ export function CheckoutPage() {
                       >
                         <p className="font-medium">{addr.fullName}</p>
                         <p className="text-muted-foreground text-xs mt-0.5">
-                          {addr.street}, {addr.city}{addr.district ? `, ${addr.district}` : ""}
+                          {addr.street}, {addr.city}
+                          {addr.district ? `, ${addr.district}` : ""}
                           {addr.phone ? ` 📞 ${addr.phone}` : ""}
                         </p>
                         {addr.isDefault && (
-                          <span className="inline-block mt-1 text-xs bg-accent/10 text-accent px-2 py-0.5 rounded-full font-medium">Default</span>
+                          <span className="inline-block mt-1 text-xs bg-accent/10 text-accent px-2 py-0.5 rounded-full font-medium">
+                            Default
+                          </span>
                         )}
                       </button>
                     ))}
-                    <p className="text-xs text-muted-foreground pl-1">Or enter a new address below</p>
+                    <p className="text-xs text-muted-foreground pl-1">
+                      Or enter a new address below
+                    </p>
                   </div>
                 )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="sm:col-span-2">
                     <Label htmlFor="fullName">Full Name *</Label>
-                    <Input id="fullName" value={address.fullName} onChange={e => setAddress(a => ({ ...a, fullName: e.target.value }))} required className="mt-1.5" />
+                    <Input
+                      id="fullName"
+                      value={address.fullName}
+                      onChange={(e) => setAddress((a) => ({ ...a, fullName: e.target.value }))}
+                      required
+                      className="mt-1.5"
+                    />
                   </div>
                   <div>
                     <Label htmlFor="phone">Phone *</Label>
-                    <Input id="phone" value={address.phone} onChange={e => setAddress(a => ({ ...a, phone: e.target.value }))} required className="mt-1.5" placeholder="01XXXXXXXXX" />
+                    <Input
+                      id="phone"
+                      value={address.phone}
+                      onChange={(e) => setAddress((a) => ({ ...a, phone: e.target.value }))}
+                      required
+                      className="mt-1.5"
+                      placeholder="01XXXXXXXXX"
+                    />
                   </div>
                   <div>
                     <Label htmlFor="postalCode">Postal Code</Label>
-                    <Input id="postalCode" value={address.postalCode} onChange={e => setAddress(a => ({ ...a, postalCode: e.target.value }))} className="mt-1.5" />
+                    <Input
+                      id="postalCode"
+                      value={address.postalCode}
+                      onChange={(e) => setAddress((a) => ({ ...a, postalCode: e.target.value }))}
+                      className="mt-1.5"
+                    />
                   </div>
                   <div className="sm:col-span-2">
                     <Label htmlFor="street">Street Address *</Label>
-                    <Input id="street" value={address.street} onChange={e => setAddress(a => ({ ...a, street: e.target.value }))} required className="mt-1.5" placeholder="House, Road, Area" />
+                    <Input
+                      id="street"
+                      value={address.street}
+                      onChange={(e) => setAddress((a) => ({ ...a, street: e.target.value }))}
+                      required
+                      className="mt-1.5"
+                      placeholder="House, Road, Area"
+                    />
                   </div>
                   <div>
                     <Label htmlFor="city">City *</Label>
-                    <Input id="city" value={address.city} onChange={e => setAddress(a => ({ ...a, city: e.target.value }))} required className="mt-1.5" />
+                    <Input
+                      id="city"
+                      value={address.city}
+                      onChange={(e) => setAddress((a) => ({ ...a, city: e.target.value }))}
+                      required
+                      className="mt-1.5"
+                    />
                   </div>
                   <div>
                     <Label htmlFor="district">District</Label>
-                    <Input id="district" value={address.district} onChange={e => setAddress(a => ({ ...a, district: e.target.value }))} className="mt-1.5" />
+                    <Input
+                      id="district"
+                      value={address.district}
+                      onChange={(e) => setAddress((a) => ({ ...a, district: e.target.value }))}
+                      className="mt-1.5"
+                    />
                   </div>
                 </div>
               </div>
@@ -509,12 +643,18 @@ export function CheckoutPage() {
                       className="mt-1 accent-pink-500"
                     />
                     <div>
-                      <label htmlFor="usePoints" className="font-medium cursor-pointer flex items-center gap-2 text-sm">
+                      <label
+                        htmlFor="usePoints"
+                        className="font-medium cursor-pointer flex items-center gap-2 text-sm"
+                      >
                         ? Use {loyaltyData.points} Loyalty Points
-                        <span className="text-muted-foreground font-normal">= Tk{maxPointsDiscount} off</span>
+                        <span className="text-muted-foreground font-normal">
+                          = Tk{maxPointsDiscount} off
+                        </span>
                       </label>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Up to 20% of your order value{isMultiSeller ? " — applied to your largest order" : ""}
+                        Up to 20% of your order value
+                        {isMultiSeller ? " — applied to your largest order" : ""}
                       </p>
                     </div>
                   </div>
@@ -532,11 +672,16 @@ export function CheckoutPage() {
                     className="mt-1 accent-pink-500"
                   />
                   <div className="flex-1">
-                    <label htmlFor="giftWrap" className="font-medium cursor-pointer flex items-center gap-2">
-                       🎁 Gift Wrapping
+                    <label
+                      htmlFor="giftWrap"
+                      className="font-medium cursor-pointer flex items-center gap-2"
+                    >
+                      🎁 Gift Wrapping
                       <span className="text-sm text-muted-foreground font-normal">+Tk50</span>
                     </label>
-                    <p className="text-sm text-muted-foreground mt-0.5">Beautiful gift packaging with a handwritten card</p>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      Beautiful gift packaging with a handwritten card
+                    </p>
                     {giftWrap && (
                       <textarea
                         value={giftMessage}
@@ -561,26 +706,50 @@ export function CheckoutPage() {
                     // intersect them so the buyer can't pick something that
                     // doesn't work for every item in that seller's order.
                     const allowedSets = g.items
-                      .map((it) => !isGuest ? (cart?.items ?? []).find(ci => ci.productId === it.productId && ci.sellerId === it.sellerId) : null)
-                      .filter((ci): ci is NonNullable<typeof ci> => !!ci && ci.kind === "seller_listing" && !!ci.listing)
-                      .map((ci) => allowedMethodsForListingPaymentMethod(ci.listing!.paymentMethod, ci.seller?.hasVerifiedPaymentConfig ?? false));
-                    const allowed: PaymentMethod[] = allowedSets.length > 0
-                      ? (["bkash", "cod"] as PaymentMethod[]).filter((m) => allowedSets.every((set) => set.includes(m)))
-                      : ["bkash", "cod"];
+                      .map((it) =>
+                        !isGuest
+                          ? (cart?.items ?? []).find(
+                              (ci) => ci.productId === it.productId && ci.sellerId === it.sellerId,
+                            )
+                          : null,
+                      )
+                      .filter(
+                        (ci): ci is NonNullable<typeof ci> =>
+                          !!ci && ci.kind === "seller_listing" && !!ci.listing,
+                      )
+                      .map((ci) =>
+                        allowedMethodsForListingPaymentMethod(
+                          ci.listing!.paymentMethod,
+                          ci.seller?.hasVerifiedPaymentConfig ?? false,
+                        ),
+                      );
+                    const allowed: PaymentMethod[] =
+                      allowedSets.length > 0
+                        ? (["bkash", "cod"] as PaymentMethod[]).filter((m) =>
+                            allowedSets.every((set) => set.includes(m)),
+                          )
+                        : ["bkash", "cod"];
                     const current = methodFor(key);
 
                     return (
                       <div key={key} className="bg-card border rounded-xl p-6">
                         <h3 className="font-medium text-sm mb-4 flex items-center gap-1.5">
                           {g.sellerName ? (
-                            <><Sprout className="h-3.5 w-3.5 text-accent" /> {g.sellerName}</>
+                            <>
+                              <Sprout className="h-3.5 w-3.5 text-accent" /> {g.sellerName}
+                            </>
                           ) : (
                             "Tree Friend"
                           )}
-                          <span className="text-muted-foreground font-normal">— Tk{g.subtotal.toLocaleString()}</span>
-                          {largestGroupKey === g.sellerId && (discount > 0 || loyaltyDiscount > 0) && (
-                            <span className="text-xs bg-success text-success-foreground px-2 py-0.5 rounded-full ml-1">Discount applied here</span>
-                          )}
+                          <span className="text-muted-foreground font-normal">
+                            — Tk{g.subtotal.toLocaleString()}
+                          </span>
+                          {largestGroupKey === g.sellerId &&
+                            (discount > 0 || loyaltyDiscount > 0) && (
+                              <span className="text-xs bg-success text-success-foreground px-2 py-0.5 rounded-full ml-1">
+                                Discount applied here
+                              </span>
+                            )}
                         </h3>
                         <div className="grid grid-cols-2 gap-3">
                           {(["bkash", "cod"] as PaymentMethod[]).map((method) => {
@@ -592,12 +761,19 @@ export function CheckoutPage() {
                                 disabled={disabled}
                                 onClick={() => setMethodFor(key, method)}
                                 className={`border rounded-xl py-3 px-4 text-sm font-medium transition-all ${
-                                  disabled ? "opacity-30 cursor-not-allowed border-border" :
-                                  current === method ? "border-primary bg-primary/5 text-foreground" : "border-border text-muted-foreground hover:border-foreground/50"
+                                  disabled
+                                    ? "opacity-30 cursor-not-allowed border-border"
+                                    : current === method
+                                      ? "border-primary bg-primary/5 text-foreground"
+                                      : "border-border text-muted-foreground hover:border-foreground/50"
                                 }`}
                               >
                                 <div className="text-lg font-bold mb-1">
-                                  {method === "bkash" ? <img src={BKASH_ICON} className="h-7 w-7 mx-auto" /> : <span className="text-2xl">💵</span>}
+                                  {method === "bkash" ? (
+                                    <img src={BKASH_ICON} className="h-7 w-7 mx-auto" />
+                                  ) : (
+                                    <span className="text-2xl">💵</span>
+                                  )}
                                 </div>
                                 <div className="text-xs font-semibold">
                                   {method === "bkash" ? "bKash" : "Cash on Delivery"}
@@ -608,7 +784,8 @@ export function CheckoutPage() {
                         </div>
                         {current === "bkash" && (
                           <p className="mt-3 text-xs text-muted-foreground">
-                            You'll be redirected to bKash to complete this payment securely after placing your order.
+                            You'll be redirected to bKash to complete this payment securely after
+                            placing your order.
                           </p>
                         )}
                       </div>
@@ -627,7 +804,11 @@ export function CheckoutPage() {
                         className={`border rounded-xl py-3 px-4 text-sm font-medium transition-all ${paymentMethod === method ? "border-primary bg-primary/5 text-foreground" : "border-border text-muted-foreground hover:border-foreground/50"}`}
                       >
                         <div className="text-lg font-bold mb-1">
-                          {method === "bkash" ? <img src={BKASH_ICON} className="h-7 w-7 mx-auto" /> : <span className="text-2xl">💵</span>}
+                          {method === "bkash" ? (
+                            <img src={BKASH_ICON} className="h-7 w-7 mx-auto" />
+                          ) : (
+                            <span className="text-2xl">💵</span>
+                          )}
                         </div>
                         <div className="text-xs font-semibold">
                           {method === "bkash" ? "bKash" : "Cash on Delivery"}
@@ -640,8 +821,8 @@ export function CheckoutPage() {
                     <div className="bg-muted/30 rounded-lg p-4 space-y-1.5 text-sm">
                       <p className="font-medium">Pay with bKash</p>
                       <p className="text-muted-foreground">
-                        After you place your order, you'll be redirected to bKash's secure payment page to
-                        complete your Tk{total.toLocaleString()} payment.
+                        After you place your order, you'll be redirected to bKash's secure payment
+                        page to complete your Tk{total.toLocaleString()} payment.
                       </p>
                     </div>
                   )}
@@ -660,25 +841,32 @@ export function CheckoutPage() {
                     <div className="flex gap-2">
                       <Input
                         value={couponCode}
-                        onChange={e => setCouponCode(e.target.value)}
+                        onChange={(e) => setCouponCode(e.target.value)}
                         placeholder="Coupon code"
                         className="flex-1 text-sm"
                       />
-                      <Button type="button" variant="outline" size="sm" onClick={handleApplyCoupon} disabled={!couponCode || validateCoupon.isPending}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleApplyCoupon}
+                        disabled={!couponCode || validateCoupon.isPending}
+                      >
                         <Tag className="h-4 w-4 mr-1" /> Apply
                       </Button>
                     </div>
-                    {couponError && <p className="text-xs text-destructive mt-1.5">{couponError}</p>}
+                    {couponError && (
+                      <p className="text-xs text-destructive mt-1.5">{couponError}</p>
+                    )}
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 text-sm text-success-foreground">
                     <CheckCircle2 className="h-4 w-4" />
                     Coupon applied: -Tk{discount.toLocaleString()}
-                    {isMultiSeller && (
-                      couponSellerId !== null
+                    {isMultiSeller &&
+                      (couponSellerId !== null
                         ? ` (${sellerGroups.find((g) => g.sellerId === couponSellerId)?.sellerName ?? "seller"}'s order)`
-                        : " (largest order)"
-                    )}
+                        : " (largest order)")}
                   </div>
                 )}
 
@@ -688,19 +876,36 @@ export function CheckoutPage() {
                     <div key={g.sellerId ?? "admin-direct"}>
                       {isMultiSeller && (
                         <p className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
-                          {g.sellerName ? <><Sprout className="h-3 w-3 text-accent" /> {g.sellerName}</> : "Tree Friend"}
+                          {g.sellerName ? (
+                            <>
+                              <Sprout className="h-3 w-3 text-accent" /> {g.sellerName}
+                            </>
+                          ) : (
+                            "Tree Friend"
+                          )}
                         </p>
                       )}
                       <div className="space-y-1.5">
                         {g.items.map((item, i) => (
-                          <div key={`${item.productId}-${i}`} className="flex justify-between text-sm">
+                          <div
+                            key={`${item.productId}-${i}`}
+                            className="flex justify-between text-sm"
+                          >
                             <span className="text-muted-foreground line-clamp-1 flex-1 pr-2">
                               {item.name} × {item.quantity}
                               {item.codDeliveryCharge > 0 && (
-                                <span className="block text-xs">Pay on delivery: Tk{(item.codDeliveryCharge * item.quantity).toLocaleString()}</span>
+                                <span className="block text-xs">
+                                  Pay on delivery: Tk
+                                  {(item.codDeliveryCharge * item.quantity).toLocaleString()}
+                                </span>
                               )}
                             </span>
-                            <span>Tk{((item.discountPrice ?? item.price) * item.quantity).toLocaleString()}</span>
+                            <span>
+                              Tk
+                              {(
+                                (item.discountPrice ?? item.price) * item.quantity
+                              ).toLocaleString()}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -715,7 +920,13 @@ export function CheckoutPage() {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Delivery</span>
-                    <span>{shipping === 0 ? <span className="text-success-foreground">Free</span> : `Tk${shipping.toLocaleString()}`}</span>
+                    <span>
+                      {shipping === 0 ? (
+                        <span className="text-success-foreground">Free</span>
+                      ) : (
+                        `Tk${shipping.toLocaleString()}`
+                      )}
+                    </span>
                   </div>
                   {giftWrap && (
                     <div className="flex justify-between">
@@ -741,7 +952,8 @@ export function CheckoutPage() {
                   </div>
                   {codDeliveryTotal > 0 && (
                     <p className="text-xs text-muted-foreground pt-1">
-                      Plus Tk{codDeliveryTotal.toLocaleString()} pay on delivery for marketplace items
+                      Plus Tk{codDeliveryTotal.toLocaleString()} pay on delivery for marketplace
+                      items
                     </p>
                   )}
                 </div>
@@ -750,7 +962,9 @@ export function CheckoutPage() {
                   <p className="text-sm text-destructive text-center">{submitError}</p>
                 )}
                 {createOrder.isError && (
-                  <p className="text-sm text-destructive text-center">Failed to place order. Please try again.</p>
+                  <p className="text-sm text-destructive text-center">
+                    Failed to place order. Please try again.
+                  </p>
                 )}
                 <Button
                   type="submit"
