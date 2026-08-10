@@ -17,7 +17,21 @@ export function FloatingCartIcon() {
   const { user } = useUser();
   const [location, navigate] = useLocation();
   const { data: cart } = useGetCart({
-    query: { enabled: !!user, queryKey: getGetCartQueryKey() },
+    query: {
+      enabled: !!user,
+      queryKey: getGetCartQueryKey(),
+      // staleTime: avoid refetching the cart on every component mount.
+      // The floating icon renders on every page (except /cart, /checkout,
+      // /orders, /messages/:id), so without a staleTime every navigation
+      // fires a GET /cart. 60s is a reasonable trade-off: the count badge
+      // may be up to 60s stale, but the actual cart page (which the user
+      // navigates to before checkout) always refetches with staleTime: 0.
+      // React Query still invalidates immediately on add-to-cart / remove
+      // mutations (see CartPage.tsx handleUpdate/handleRemove), so the
+      // badge updates instantly after user actions — only passive
+      // navigation is throttled.
+      staleTime: 60_000,
+    },
   });
   const guestCart = useGuestCart();
 
@@ -40,7 +54,9 @@ export function FloatingCartIcon() {
           return;
         }
       }
-    } catch {}
+    } catch {
+      // Corrupted position JSON — fall through to default position.
+    }
     setPos({
       x: window.innerWidth - ICON_SIZE - EDGE,
       y: window.innerHeight * 0.75,
@@ -49,7 +65,7 @@ export function FloatingCartIcon() {
 
   useEffect(() => {
     const onResize = () => {
-      setPos(prev => {
+      setPos((prev) => {
         const x = clamp(prev.x, EDGE, window.innerWidth - ICON_SIZE - EDGE);
         const y = clamp(prev.y, EDGE + 64, window.innerHeight - ICON_SIZE - EDGE);
         return { x, y };
@@ -63,7 +79,13 @@ export function FloatingCartIcon() {
   // Only hide inside an ACTIVE conversation (/messages/:id) where the
   // floating icon would overlap the chat composer. On the /messages LIST
   // page (no trailing slash, no conversationId) the icon is fine to show.
-  if (location.startsWith('/cart') || location.startsWith('/checkout') || location.startsWith('/orders') || location.startsWith('/messages/')) return null;
+  if (
+    location.startsWith("/cart") ||
+    location.startsWith("/checkout") ||
+    location.startsWith("/orders") ||
+    location.startsWith("/messages/")
+  )
+    return null;
 
   function onPointerDown(e: React.PointerEvent) {
     isDragging.current = true;

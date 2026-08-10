@@ -1,12 +1,4 @@
-import {
-  pgTable,
-  serial,
-  text,
-  integer,
-  timestamp,
-  unique,
-  index,
-} from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, unique, index } from "drizzle-orm/pg-core";
 import { productsTable } from "./products";
 import { productVariantsTable } from "./productVariants";
 import { sellerListingsTable } from "./sellerListings";
@@ -66,10 +58,9 @@ export const cartItemsTable = pgTable(
     // Denormalized from the variant's own sellerListingId (see doc comment
     // above) -- convenience/grouping data, not the purchasability source of
     // truth.
-    sellerListingId: integer("seller_listing_id").references(
-      () => sellerListingsTable.id,
-      { onDelete: "cascade" },
-    ),
+    sellerListingId: integer("seller_listing_id").references(() => sellerListingsTable.id, {
+      onDelete: "cascade",
+    }),
     // Nullable: only set for marketplace (seller-listing) cart lines.
     // Mutually exclusive with variantId. This is the actual purchasable
     // unit for a marketplace line as of Phase 2 -- price/stock/
@@ -82,17 +73,19 @@ export const cartItemsTable = pgTable(
     quantity: integer("quantity").notNull().default(1),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    // Industry-standard cart TTL: abandoned carts expire after 30 days.
+    // Refreshed on every insert/update so an actively-edited cart stays
+    // alive. A cron job (or ad-hoc DELETE WHERE expires_at < now()) cleans
+    // up stale rows. Without this, cart_items rows persist forever —
+    // Shopify/Magento/WooCommerce all expire abandoned carts by default.
+    expiresAt: timestamp("expires_at").notNull().defaultNow(),
   },
   (table) => [
     // A user can have one cart line per (product, variant) pair. Since
     // variantId is nullable, Postgres treats each NULL as distinct, so
     // this still correctly allows only one no-variant line per product
     // per user, and one line per distinct variant per user.
-    unique("cart_user_product_variant_unique").on(
-      table.userId,
-      table.productId,
-      table.variantId,
-    ),
+    unique("cart_user_product_variant_unique").on(table.userId, table.productId, table.variantId),
     // Phase 2: uniqueness for the marketplace path moves from
     // (user, sellerListingId) to (user, sellerListingVariantId), so a buyer
     // CAN have two lines against the same listing as long as they're

@@ -1,9 +1,9 @@
 import { useEffect, useRef } from "react";
 import { useUser } from "@clerk/react";
-import { useUpdateMe, useAddToCart, getGetCartQueryKey } from "@workspace/api-client-react";
+import { useUpdateMe, getGetCartQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getGuestCartItems } from "@/hooks/useGuestCart";
-import { useGuestCartContext } from "@/contexts/GuestCartContext";
+import { getGuestCartItems, clearGuestCart } from "@/hooks/useGuestCart";
+import { apiClient } from "@/lib/apiClient";
 
 /**
  * Pushes the Clerk-side user profile (firstName / lastName / email) to
@@ -24,15 +24,26 @@ import { useGuestCartContext } from "@/contexts/GuestCartContext";
  * debounce timer, and only fire the PUT if the snapshot has actually
  * changed after the timer elapses. The one-shot guest-cart migration
  * is unaffected (still keyed on `user?.id`) and runs once on sign-in.
+ *
+ * Cart merge
+ * ──────────
+ * On first sign-in, the guest cart (localStorage) is merged into the
+ * user's server-side cart via a single `POST /api/cart/merge` call.
+ * The previous implementation called `POST /api/cart/items` N times
+ * sequentially (N network round-trips) and didn't pass variantId or
+ * sellerListingVariantId — so every guest item with a variant was
+ * rejected by the XOR check in routes/cart.ts. The new merge endpoint
+ * accepts all items in one request, validates stock per item, and
+ * returns a `skipped[]` array of items that couldn't be merged (out of
+ * stock, listing no longer approved, etc.) so the frontend can surface
+ * a warning to the buyer.
  */
 const PROFILE_SYNC_DEBOUNCE_MS = 1500;
 
 export function ProfileSync() {
   const { user, isLoaded } = useUser();
   const updateMe = useUpdateMe();
-  const addToCart = useAddToCart();
   const qc = useQueryClient();
-  const guestCart = useGuestCartContext();
   const cartSynced = useRef(false);
 
   // Snapshot of the last profile we successfully pushed to the backend.
@@ -95,11 +106,19 @@ export function ProfileSync() {
     }, PROFILE_SYNC_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, user?.id, user?.firstName, user?.lastName, user?.primaryEmailAddress?.emailAddress]);
+  }, [
+    isLoaded,
+    user?.id,
+    user?.firstName,
+    user?.lastName,
+    user?.primaryEmailAddress?.emailAddress,
+  ]);
 
   // One-shot guest-cart migration on first sign-in. Independent of the
-  // debounced profile-sync above.
+  // debounced profile-sync above. Uses the batch /cart/merge endpoint
+  // (single network call) instead of N sequential POST /cart/items
+  // calls, and passes variantId/sellerListingVariantId so variant-keyed
+  // items aren't rejected by the XOR check.
   useEffect(() => {
     if (!isLoaded || !user) {
       cartSynced.current = false;
@@ -107,23 +126,53 @@ export function ProfileSync() {
     }
     if (cartSynced.current) return;
     cartSynced.current = true;
+
     const guestItems = getGuestCartItems();
     if (guestItems.length === 0) return;
 
-    const syncNext = (index: number) => {
-      if (index >= guestItems.length) {
-        guestCart.clearCart();
+    // Snapshot BEFORE clearing — clearGuestCart() mutates localStorage
+    // synchronously, so reading from getGuestCartItems() after would
+    // return []. We capture the items here and pass them to /cart/merge.
+    const snapshot = guestItems.map((i) => ({
+      productId: i.productId,
+      variantId: i.variantId ?? null,
+      sellerListingVariantId: i.sellerListingVariantId ?? null,
+      quantity: i.quantity,
+    }));
+
+    (async () => {
+      try {
+        const { data: result } = await apiClient.post<{
+          merged: number;
+          skipped: { productId: number; reason: string }[];
+        }>("/cart/merge", { items: snapshot });
+
+        // Clear the guest cart only after a successful merge response.
+        // If the request fails (network error, 500, etc.), leave the
+        // guest cart intact so a retry on next sign-in can pick it up.
+        clearGuestCart();
+
+        // Invalidate the cart query so the authenticated cart UI
+        // refetches with the merged items.
         qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
-        return;
+
+        // Surface skipped items to the buyer — these are items that
+        // couldn't be merged (out of stock, listing no longer approved,
+        // etc.). The buyer should know their guest cart wasn't fully
+        // transferred. (Toast handled by the caller / global error
+        // boundary; here we just log for now. A follow-up could surface
+        // a non-blocking toast per skipped item.)
+        if (result.skipped.length > 0) {
+          console.warn(
+            `[ProfileSync] ${result.skipped.length} guest cart item(s) could not be merged:`,
+            result.skipped,
+          );
+        }
+      } catch (err) {
+        // Don't clear the guest cart on failure — leave it for a retry.
+        console.error("[ProfileSync] guest cart merge failed:", err);
       }
-      const item = guestItems[index];
-      addToCart.mutate(
-        { data: { productId: item.productId, quantity: item.quantity } },
-        { onSettled: () => syncNext(index + 1) }
-      );
-    };
-    syncNext(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    })();
   }, [isLoaded, user?.id]);
 
   return null;
