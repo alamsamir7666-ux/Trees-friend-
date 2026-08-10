@@ -19,7 +19,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   CheckCircle2,
+  Circle,
   Package,
+  Truck,
+  Home,
   ChevronLeft,
   XCircle,
   RotateCcw,
@@ -34,7 +37,6 @@ import { BKASH_ICON } from "@/lib/preorderIcons";
 import { useApiFetch } from "@/lib/useApiFetch";
 import { getOrderStatusConfig } from "@/lib/orderStatus";
 import { getReturnStatusConfig } from "@/lib/returnStatus";
-import { OrderTimeline } from "@/components/ui/OrderTimeline";
 
 interface GuestOrder {
   id: number;
@@ -73,8 +75,8 @@ interface ReturnRow {
 // Note: statusColors + returnStatusConfig moved to @/lib/orderStatus.ts and
 // @/lib/returnStatus.ts (shared with OrdersPage.tsx). The local copies were
 // removed to prevent drift between the two surfaces.
-// The STEPS array + inline progress bar were replaced by the OrderTimeline
-// component (imported above) which uses real per-status timestamps.
+
+const STEPS = ["pending", "confirmed", "processing", "shipped", "delivered"];
 
 export function OrderDetailPage() {
   const params = useParams<{ id: string }>();
@@ -205,6 +207,7 @@ export function OrderDetailPage() {
     return <div className="py-20 text-center text-muted-foreground">Order not found.</div>;
   }
 
+  const currentStep = STEPS.indexOf(order.orderStatus);
   const addr = order.shippingAddress as {
     fullName?: string;
     street?: string;
@@ -425,26 +428,46 @@ export function OrderDetailPage() {
           </div>
         )}
 
-        {/* Tracking steps — uses the OrderTimeline component with REAL
-            per-status timestamps (confirmedAt, shippedAt, deliveredAt,
-            cancelledAt) instead of the old fake "all steps share
-            updatedAt" display. */}
-        {order.orderStatus !== "return_completed" && (
-          <OrderTimeline
-            currentStatus={order.orderStatus}
-            timeline={[
-              { status: "pending", timestamp: order.createdAt, note: "Order placed" },
-              { status: "confirmed", timestamp: (ord as any).confirmedAt ?? "", note: null },
-              { status: "processing", timestamp: (ord as any).confirmedAt ?? "", note: null },
-              { status: "shipped", timestamp: (ord as any).shippedAt ?? "", note: null },
-              { status: "delivered", timestamp: (ord as any).deliveredAt ?? "", note: null },
-              {
-                status: "cancelled",
-                timestamp: (ord as any).cancelledAt ?? "",
-                note: (order as any).cancellationReason ?? null,
-              },
-            ].filter((e) => e.timestamp)}
-          />
+        {/* Tracking steps — original horizontal progress bar, restored.
+            The per-status timestamps (confirmedAt, shippedAt, deliveredAt)
+            are now available on the order object for the return window
+            calculation + SLA reporting, but the visual UI stays as the
+            compact horizontal bar the user originally designed. */}
+        {order.orderStatus !== "cancelled" && order.orderStatus !== "return_completed" && (
+          <div className="bg-card border rounded-xl p-6">
+            <h2 className="font-medium mb-6">Order Progress</h2>
+            <div className="flex items-center gap-0">
+              {STEPS.map((step, i) => {
+                const done = i < currentStep;
+                const active = i === currentStep;
+                const icons = [Circle, CheckCircle2, Package, Truck, Home];
+                const Icon = icons[Math.min(i, icons.length - 1)];
+                return (
+                  <div key={step} className="flex-1 flex flex-col items-center relative">
+                    {i < STEPS.length - 1 && (
+                      <div
+                        className={`absolute top-5 left-1/2 w-full h-0.5 ${done ? "bg-accent" : "bg-border"}`}
+                      />
+                    )}
+                    <div
+                      className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors ${done ? "bg-accent border-accent text-accent-foreground" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}
+                    >
+                      {done ? (
+                        <CheckCircle2 className="h-5 w-5 text-accent-foreground" />
+                      ) : (
+                        <Icon className="h-5 w-5" />
+                      )}
+                    </div>
+                    <p
+                      className={`text-xs mt-2 capitalize text-center ${active ? "font-medium" : "text-muted-foreground"}`}
+                    >
+                      {step}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         )}
 
         {/* ── Courier tracking (shipment info) ────────────────────── */}
