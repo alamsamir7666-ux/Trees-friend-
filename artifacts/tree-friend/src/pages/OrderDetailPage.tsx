@@ -1,17 +1,40 @@
 import { useState, useEffect } from "react";
 import { useParams, useSearch } from "wouter";
-import { useGetOrder, useListOrders, getListOrdersQueryKey, createBkashPayment, createBkashPaymentGuest } from "@workspace/api-client-react";
+import {
+  useGetOrder,
+  createBkashPayment,
+  createBkashPaymentGuest,
+} from "@workspace/api-client-react";
 import type { Order } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, Circle, Package, Truck, Home, ChevronLeft, XCircle, RotateCcw, Loader2, AlertTriangle } from "lucide-react";
+import {
+  CheckCircle2,
+  Circle,
+  Package,
+  Truck,
+  Home,
+  ChevronLeft,
+  XCircle,
+  RotateCcw,
+  Loader2,
+  AlertTriangle,
+} from "lucide-react";
 import { Link } from "wouter";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { BKASH_ICON } from "@/lib/preorderIcons";
 import { useApiFetch } from "@/lib/useApiFetch";
+import { getOrderStatusConfig } from "@/lib/orderStatus";
+import { getReturnStatusConfig } from "@/lib/returnStatus";
 
 interface GuestOrder {
   id: number;
@@ -20,8 +43,21 @@ interface GuestOrder {
   paymentStatus: string;
   paymentMethod: string;
   totalAmount: number | string;
-  items?: { productName: string; productImage?: string; quantity: number; price: number; [k: string]: unknown }[];
-  shippingAddress?: { fullName?: string; street?: string; line1?: string; city?: string; district?: string; phone?: string } | null;
+  items?: {
+    productName: string;
+    productImage?: string;
+    quantity: number;
+    price: number;
+    [k: string]: unknown;
+  }[];
+  shippingAddress?: {
+    fullName?: string;
+    street?: string;
+    line1?: string;
+    city?: string;
+    district?: string;
+    phone?: string;
+  } | null;
   createdAt: string;
   [key: string]: unknown;
 }
@@ -36,22 +72,9 @@ interface ReturnRow {
 
 const STEPS = ["pending", "confirmed", "processing", "shipped", "delivered"];
 
-const statusColors: Record<string, string> = {
-  pending:          "bg-warning text-warning-foreground",
-  confirmed:        "bg-info text-info-foreground",
-  processing:       "bg-info text-info-foreground",
-  shipped:          "bg-info text-info-foreground",
-  delivered:        "bg-success text-success-foreground",
-  cancelled:        "bg-destructive/10 text-destructive",
-  return_completed: "bg-success text-success-foreground",
-};
-
-const returnStatusConfig: Record<string, { label: string; color: string; bg: string }> = {
-  requested: { label: "Return Requested - Under Review",     color: "text-warning-foreground", bg: "bg-warning border-warning-border" },
-  approved:  { label: "Return Approved - Refund Processing", color: "text-info-foreground",  bg: "bg-info border-info-border"  },
-  rejected:  { label: "Return Rejected",                     color: "text-destructive",   bg: "bg-destructive/10 border-destructive/20"    },
-  completed: { label: "Refund Completed",                    color: "text-success-foreground",  bg: "bg-success border-success-border"  },
-};
+// Note: statusColors + returnStatusConfig moved to @/lib/orderStatus.ts and
+// @/lib/returnStatus.ts (shared with OrdersPage.tsx). The local copies were
+// removed to prevent drift between the two surfaces.
 
 export function OrderDetailPage() {
   const params = useParams<{ id: string }>();
@@ -59,9 +82,15 @@ export function OrderDetailPage() {
   const isGuest = !/^\d+$/.test(rawId);
   const id = isGuest ? 0 : parseInt(rawId);
   const apiFetch = useApiFetch();
-  const { data: orders } = useListOrders({ query: { enabled: !isGuest, queryKey: getListOrdersQueryKey() } });
-  const orderRank = orders ? orders.length - orders.findIndex(o => o.id === id) : null;
-  const { data: authOrder, isLoading: authLoading } = useGetOrder(id, { query: { enabled: !!id && !isGuest, queryKey: ["order", id] } });
+  // Note: previously this component called useListOrders just to compute a
+  // display "rank" ("Order #3") from the array position. That rank was
+  // fragile — it broke with pagination (array position != global position)
+  // and required an extra network request on every order detail page load.
+  // Removed: the order ID is now used directly as the display identifier,
+  // which is stable and meaningful.
+  const { data: authOrder, isLoading: authLoading } = useGetOrder(id, {
+    query: { enabled: !!id && !isGuest, queryKey: ["order", id] },
+  });
 
   const [guestOrder, setGuestOrder] = useState<GuestOrder | null>(null);
   const [guestLoading, setGuestLoading] = useState(isGuest);
@@ -76,10 +105,18 @@ export function OrderDetailPage() {
     // to attach a token (harmless if there's no signed-in user).
     apiFetch(`/api/orders/track/${rawId}`)
       .then(async (r) => (r.ok ? await r.json() : null))
-      .then((data) => { if (!cancelled) setGuestOrder(data); })
-      .catch(() => { if (!cancelled) setGuestOrder(null); })
-      .finally(() => { if (!cancelled) setGuestLoading(false); });
-    return () => { cancelled = true; };
+      .then((data) => {
+        if (!cancelled) setGuestOrder(data);
+      })
+      .catch(() => {
+        if (!cancelled) setGuestOrder(null);
+      })
+      .finally(() => {
+        if (!cancelled) setGuestLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isGuest, rawId, apiFetch]);
 
   const order = isGuest ? guestOrder : authOrder;
@@ -122,18 +159,31 @@ export function OrderDetailPage() {
         }
       })
       .catch(() => {});
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [id, apiFetch]);
 
   if (isLoading) {
-    return <div className="container mx-auto px-4 py-10"><Skeleton className="h-96 rounded-xl" /></div>;
+    return (
+      <div className="container mx-auto px-4 py-10">
+        <Skeleton className="h-96 rounded-xl" />
+      </div>
+    );
   }
   if (!order) {
     return <div className="py-20 text-center text-muted-foreground">Order not found.</div>;
   }
 
   const currentStep = STEPS.indexOf(order.orderStatus);
-  const addr = order.shippingAddress as { fullName?: string; street?: string; line1?: string; city?: string; district?: string; phone?: string } | null;
+  const addr = order.shippingAddress as {
+    fullName?: string;
+    street?: string;
+    line1?: string;
+    city?: string;
+    district?: string;
+    phone?: string;
+  } | null;
 
   // Normalize for field accesses that would otherwise widen to `unknown`
   // (because `order` is a union of `GuestOrder` and `Order`). This alias
@@ -184,7 +234,10 @@ export function OrderDetailPage() {
         headers: { "Content-Type": "application/json" },
       });
       const data = await r.json();
-      if (!r.ok) { setCancelError(data.error ?? "Failed to cancel order."); return; }
+      if (!r.ok) {
+        setCancelError(data.error ?? "Failed to cancel order.");
+        return;
+      }
       setCancelOpen(false);
       window.location.reload();
     } catch {
@@ -209,7 +262,10 @@ export function OrderDetailPage() {
         headers: { "Content-Type": "application/json" },
       });
       const data = await r.json();
-      if (!r.ok) { setReturnError(data.error ?? "Failed to submit return request."); return; }
+      if (!r.ok) {
+        setReturnError(data.error ?? "Failed to submit return request.");
+        return;
+      }
       setReturnSuccess(true);
       setExistingReturn(data as ReturnRow);
       setTimeout(() => setReturnOpen(false), 2500);
@@ -227,7 +283,7 @@ export function OrderDetailPage() {
           <PageBreadcrumb
             crumbs={[
               { label: "My Orders", href: "/orders", icon: <Package className="h-3 w-3" /> },
-              { label: isGuest ? `Order ${order.trackingId}` : `Order #${orderRank ?? order.id}` },
+              { label: isGuest ? `Order ${order.trackingId}` : `Order #${order.id}` },
             ]}
             className="mb-4"
           />
@@ -238,11 +294,23 @@ export function OrderDetailPage() {
           </Link>
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="font-serif text-3xl font-medium">{isGuest ? `Order ${order.trackingId}` : `Order #${orderRank ?? order.id}`}</h1>
-              <p className="text-muted-foreground mt-1 text-sm">{new Date(order.createdAt).toLocaleDateString("en-BD", { year: "numeric", month: "long", day: "numeric" })}</p>
+              <h1 className="font-serif text-3xl font-medium">
+                {isGuest ? `Order ${order.trackingId}` : `Order #${order.id}`}
+              </h1>
+              <p className="text-muted-foreground mt-1 text-sm">
+                {new Date(order.createdAt).toLocaleDateString("en-BD", {
+                  year: "numeric",
+                  month: "long",
+                  day: "numeric",
+                })}
+              </p>
             </div>
-            <span className={`px-3 py-1.5 rounded-full text-sm font-medium ${statusColors[order.orderStatus] ?? "bg-muted"}`}>
-              {order.orderStatus === "return_completed" ? "Refund Completed" : order.orderStatus.charAt(0).toUpperCase() + order.orderStatus.slice(1)}
+            <span
+              className={`px-3 py-1.5 rounded-full text-sm font-medium ${getOrderStatusConfig(order.orderStatus).badge}`}
+            >
+              {order.orderStatus === "return_completed"
+                ? "Refund Completed"
+                : order.orderStatus.charAt(0).toUpperCase() + order.orderStatus.slice(1)}
             </span>
           </div>
         </div>
@@ -272,7 +340,9 @@ export function OrderDetailPage() {
               <CheckCircle2 className="h-5 w-5 text-success-foreground shrink-0 mt-0.5" />
               <div>
                 <p className="font-medium text-success-foreground text-sm">Payment received</p>
-                <p className="text-sm text-success-foreground mt-1">Your bKash payment was successful. Thank you!</p>
+                <p className="text-sm text-success-foreground mt-1">
+                  Your bKash payment was successful. Thank you!
+                </p>
               </div>
             </div>
           </div>
@@ -305,9 +375,13 @@ export function OrderDetailPage() {
                 <span className="text-destructive text-lg">⚠️</span>
               </div>
               <div>
-                <p className="font-medium text-destructive text-sm">This order has been cancelled</p>
+                <p className="font-medium text-destructive text-sm">
+                  This order has been cancelled
+                </p>
                 {(order as any).cancellationReason ? (
-                  <p className="text-sm text-destructive mt-1">Reason: {(order as any).cancellationReason}</p>
+                  <p className="text-sm text-destructive mt-1">
+                    Reason: {(order as any).cancellationReason}
+                  </p>
                 ) : (
                   <p className="text-sm text-destructive mt-1">No reason provided.</p>
                 )}
@@ -329,12 +403,24 @@ export function OrderDetailPage() {
                 return (
                   <div key={step} className="flex-1 flex flex-col items-center relative">
                     {i < STEPS.length - 1 && (
-                      <div className={`absolute top-5 left-1/2 w-full h-0.5 ${done ? "bg-accent" : "bg-border"}`} />
+                      <div
+                        className={`absolute top-5 left-1/2 w-full h-0.5 ${done ? "bg-accent" : "bg-border"}`}
+                      />
                     )}
-                    <div className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors ${done ? "bg-accent border-accent text-accent-foreground" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}>
-                      {done ? <CheckCircle2 className="h-5 w-5 text-accent-foreground" /> : <Icon className="h-5 w-5" />}
+                    <div
+                      className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors ${done ? "bg-accent border-accent text-accent-foreground" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}
+                    >
+                      {done ? (
+                        <CheckCircle2 className="h-5 w-5 text-accent-foreground" />
+                      ) : (
+                        <Icon className="h-5 w-5" />
+                      )}
                     </div>
-                    <p className={`text-xs mt-2 capitalize text-center ${active ? "font-medium" : "text-muted-foreground"}`}>{step}</p>
+                    <p
+                      className={`text-xs mt-2 capitalize text-center ${active ? "font-medium" : "text-muted-foreground"}`}
+                    >
+                      {step}
+                    </p>
                   </div>
                 );
               })}
@@ -351,7 +437,11 @@ export function OrderDetailPage() {
               return (
                 <div key={item.productId} className="flex gap-4 py-4 first:pt-0 last:pb-0">
                   {img ? (
-                    <img src={img} alt={item.productName} className="w-16 h-16 object-cover rounded-lg shrink-0" />
+                    <img
+                      src={img}
+                      alt={item.productName}
+                      className="w-16 h-16 object-cover rounded-lg shrink-0"
+                    />
                   ) : (
                     <NoImagePlaceholder className="w-16 h-16 rounded-lg shrink-0" compact />
                   )}
@@ -361,11 +451,14 @@ export function OrderDetailPage() {
                       <p className="text-xs text-muted-foreground mt-0.5">Qty: {item.quantity}</p>
                       {item.sellerId != null && Number(item.deliveryCharge) > 0 && (
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          Pay on delivery: Tk{(Number(item.deliveryCharge) * item.quantity).toLocaleString()}
+                          Pay on delivery: Tk
+                          {(Number(item.deliveryCharge) * item.quantity).toLocaleString()}
                         </p>
                       )}
                     </div>
-                    <p className="font-medium text-sm">Tk{(item.price * item.quantity).toLocaleString()}</p>
+                    <p className="font-medium text-sm">
+                      Tk{(item.price * item.quantity).toLocaleString()}
+                    </p>
                   </div>
                 </div>
               );
@@ -413,9 +506,13 @@ export function OrderDetailPage() {
                     disabled={bkashRetryLoading}
                   >
                     {bkashRetryLoading ? (
-                      <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Redirecting...</>
+                      <>
+                        <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Redirecting...
+                      </>
                     ) : (
-                      <><img src={BKASH_ICON} className="h-4 w-4 mr-1.5" /> Pay with bKash</>
+                      <>
+                        <img src={BKASH_ICON} className="h-4 w-4 mr-1.5" /> Pay with bKash
+                      </>
                     )}
                   </Button>
                   {bkashRetryError && (
@@ -426,21 +523,38 @@ export function OrderDetailPage() {
               <div className="border-t pt-2 mt-1 space-y-1.5">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Subtotal</span>
-                  <span>Tk{(order.items ?? []).reduce((s: number, i: any) => s + Number(i.price) * i.quantity, 0).toLocaleString()}</span>
+                  <span>
+                    Tk
+                    {(order.items ?? [])
+                      .reduce((s: number, i: any) => s + Number(i.price) * i.quantity, 0)
+                      .toLocaleString()}
+                  </span>
                 </div>
                 {Number(ord.discountAmount ?? 0) > 0 && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Discount{ord.couponCode ? ` (${ord.couponCode})` : ""}</span>
-                    <span className="text-success-foreground">-Tk{Number(ord.discountAmount).toLocaleString()}</span>
+                    <span className="text-muted-foreground">
+                      Discount{ord.couponCode ? ` (${ord.couponCode})` : ""}
+                    </span>
+                    <span className="text-success-foreground">
+                      -Tk{Number(ord.discountAmount).toLocaleString()}
+                    </span>
                   </div>
                 )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Delivery</span>
                   <span>
                     {(() => {
-                      const subtotal = (order.items ?? []).reduce((s: number, i: any) => s + Number(i.price) * i.quantity, 0);
-                      const delivery = Number(order.totalAmount) - subtotal + Number(order.discountAmount ?? 0);
-                      return delivery <= 0 ? <span className="text-success-foreground">Free</span> : `Tk${delivery.toLocaleString()}`;
+                      const subtotal = (order.items ?? []).reduce(
+                        (s: number, i: any) => s + Number(i.price) * i.quantity,
+                        0,
+                      );
+                      const delivery =
+                        Number(order.totalAmount) - subtotal + Number(order.discountAmount ?? 0);
+                      return delivery <= 0 ? (
+                        <span className="text-success-foreground">Free</span>
+                      ) : (
+                        `Tk${delivery.toLocaleString()}`
+                      );
                     })()}
                   </span>
                 </div>
@@ -456,7 +570,8 @@ export function OrderDetailPage() {
                 // the seller's courier directly. Surface the order-wide
                 // sum here so it isn't lost once the order is placed.
                 const codDeliveryTotal = (order.items ?? []).reduce(
-                  (s: number, i: any) => s + (i.sellerId != null ? Number(i.deliveryCharge ?? 0) * i.quantity : 0),
+                  (s: number, i: any) =>
+                    s + (i.sellerId != null ? Number(i.deliveryCharge ?? 0) * i.quantity : 0),
                   0,
                 );
                 return codDeliveryTotal > 0 ? (
@@ -470,11 +585,16 @@ export function OrderDetailPage() {
 
           {addr && (
             <div className="bg-card border rounded-xl p-5">
-              <h3 className="font-medium text-sm mb-3 uppercase tracking-wider">Delivery Address</h3>
+              <h3 className="font-medium text-sm mb-3 uppercase tracking-wider">
+                Delivery Address
+              </h3>
               <div className="text-sm text-muted-foreground space-y-1">
                 <p className="font-medium text-foreground">{addr.fullName}</p>
                 <p>{addr.street ?? addr.line1}</p>
-                <p>{addr.city}{addr.district ? `, ${addr.district}` : ""}</p>
+                <p>
+                  {addr.city}
+                  {addr.district ? `, ${addr.district}` : ""}
+                </p>
                 {addr.phone && <p>📞 {addr.phone}</p>}
               </div>
             </div>
@@ -486,8 +606,15 @@ export function OrderDetailPage() {
       <div className="container mx-auto px-4 pb-10 max-w-3xl">
         {showLoginPrompt && (
           <div className="mb-3 bg-warning border border-warning-border text-warning-foreground text-sm rounded-xl px-4 py-3">
-            Please <Link href="/sign-in" className="font-semibold underline">sign in</Link> or{" "}
-            <Link href="/sign-up" className="font-semibold underline">sign up</Link> to cancel orders or request a return/refund.
+            Please{" "}
+            <Link href="/sign-in" className="font-semibold underline">
+              sign in
+            </Link>{" "}
+            or{" "}
+            <Link href="/sign-up" className="font-semibold underline">
+              sign up
+            </Link>{" "}
+            to cancel orders or request a return/refund.
           </div>
         )}
         <div className="flex flex-wrap gap-3">
@@ -496,22 +623,33 @@ export function OrderDetailPage() {
               variant="outline"
               className="rounded-full gap-2 text-destructive border-destructive hover:bg-destructive/10"
               onClick={() => {
-                if (isGuest) { setShowLoginPrompt(true); return; }
-                setCancelOpen(true); setCancelReason(""); setCancelError("");
+                if (isGuest) {
+                  setShowLoginPrompt(true);
+                  return;
+                }
+                setCancelOpen(true);
+                setCancelReason("");
+                setCancelError("");
               }}
             >
               <XCircle className="h-4 w-4" />
               Cancel Order
             </Button>
           )}
-          {(order.orderStatus === "delivered" || order.orderStatus === "return_completed") && (
-            existingReturn ? (
-              <div className={`w-full border rounded-xl px-4 py-3.5 space-y-1.5 ${returnStatusConfig[existingReturn.status]?.bg ?? "bg-muted/30 border-border"}`}>
+          {(order.orderStatus === "delivered" || order.orderStatus === "return_completed") &&
+            (existingReturn ? (
+              <div
+                className={`w-full border rounded-xl px-4 py-3.5 space-y-1.5 ${getReturnStatusConfig(existingReturn.status).bannerBg}`}
+              >
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2">
-                    <RotateCcw className={`h-4 w-4 shrink-0 ${returnStatusConfig[existingReturn.status]?.color ?? ""}`} />
-                    <span className={`text-sm font-semibold ${returnStatusConfig[existingReturn.status]?.color ?? ""}`}>
-                      {returnStatusConfig[existingReturn.status]?.label ?? existingReturn.status}
+                    <RotateCcw
+                      className={`h-4 w-4 shrink-0 ${getReturnStatusConfig(existingReturn.status).color}`}
+                    />
+                    <span
+                      className={`text-sm font-semibold ${getReturnStatusConfig(existingReturn.status).color}`}
+                    >
+                      {getReturnStatusConfig(existingReturn.status).label}
                     </span>
                   </div>
                   {existingReturn.status === "completed" && existingReturn.refundAmount != null && (
@@ -524,32 +662,43 @@ export function OrderDetailPage() {
                   <p className="text-xs text-destructive">Admin note: {existingReturn.adminNote}</p>
                 )}
               </div>
-            ) : order.orderStatus === "delivered" ? (() => {
-              const deliveredAt = new Date((order as any).updatedAt ?? order.createdAt);
-              const expired = (Date.now() - deliveredAt.getTime()) / (1000 * 60 * 60 * 24) > 7;
-              return expired ? (
-                <div className="w-full border border-muted-foreground/20 rounded-xl px-4 py-3 bg-muted/30">
-                  <div className="flex items-center gap-2">
-                    <RotateCcw className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <span className="text-sm text-muted-foreground font-medium">Return window expired</span>
+            ) : order.orderStatus === "delivered" ? (
+              (() => {
+                const deliveredAt = new Date((order as any).updatedAt ?? order.createdAt);
+                const expired = (Date.now() - deliveredAt.getTime()) / (1000 * 60 * 60 * 24) > 7;
+                return expired ? (
+                  <div className="w-full border border-muted-foreground/20 rounded-xl px-4 py-3 bg-muted/30">
+                    <div className="flex items-center gap-2">
+                      <RotateCcw className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <span className="text-sm text-muted-foreground font-medium">
+                        Return window expired
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Returns must be requested within 7 days of delivery.
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">Returns must be requested within 7 days of delivery.</p>
-                </div>
-              ) : (
-                <Button
-                  variant="outline"
-                  className="rounded-full gap-2"
-                  onClick={() => {
-                    if (isGuest) { setShowLoginPrompt(true); return; }
-                    setReturnOpen(true); setReturnReason(""); setReturnError(""); setReturnSuccess(false);
-                  }}
-                >
-                  <RotateCcw className="h-4 w-4" />
-                  Request Return / Refund
-                </Button>
-              );
-            })() : null
-          )}
+                ) : (
+                  <Button
+                    variant="outline"
+                    className="rounded-full gap-2"
+                    onClick={() => {
+                      if (isGuest) {
+                        setShowLoginPrompt(true);
+                        return;
+                      }
+                      setReturnOpen(true);
+                      setReturnReason("");
+                      setReturnError("");
+                      setReturnSuccess(false);
+                    }}
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                    Request Return / Refund
+                  </Button>
+                );
+              })()
+            ) : null)}
         </div>
       </div>
 
@@ -557,7 +706,7 @@ export function OrderDetailPage() {
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Cancel Order #{orderRank ?? order.id}</DialogTitle>
+            <DialogTitle>Cancel Order #{order.id}</DialogTitle>
             <DialogDescription>
               This action cannot be undone. Please provide a reason for cancellation.
             </DialogDescription>
@@ -573,7 +722,11 @@ export function OrderDetailPage() {
             />
             {cancelError && <p className="text-xs text-destructive">{cancelError}</p>}
             <div className="flex gap-2">
-              <Button variant="outline" className="flex-1 rounded-full" onClick={() => setCancelOpen(false)}>
+              <Button
+                variant="outline"
+                className="flex-1 rounded-full"
+                onClick={() => setCancelOpen(false)}
+              >
                 Keep Order
               </Button>
               <Button
@@ -582,7 +735,11 @@ export function OrderDetailPage() {
                 onClick={handleCancelOrder}
                 disabled={cancelLoading}
               >
-                {cancelLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+                {cancelLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <XCircle className="h-4 w-4" />
+                )}
                 Confirm Cancel
               </Button>
             </div>
@@ -596,7 +753,8 @@ export function OrderDetailPage() {
           <DialogHeader>
             <DialogTitle>Request Return / Refund</DialogTitle>
             <DialogDescription>
-              Describe the issue with your order. Our team will review your request within 2-3 business days.
+              Describe the issue with your order. Our team will review your request within 2-3
+              business days.
             </DialogDescription>
           </DialogHeader>
           {returnSuccess ? (
@@ -605,7 +763,9 @@ export function OrderDetailPage() {
                 <CheckCircle2 className="h-6 w-6 text-success-foreground" />
               </div>
               <p className="font-medium">Return request submitted!</p>
-              <p className="text-sm text-muted-foreground">We'll review your request and get back to you soon.</p>
+              <p className="text-sm text-muted-foreground">
+                We'll review your request and get back to you soon.
+              </p>
             </div>
           ) : (
             <div className="space-y-3 mt-2">
@@ -624,14 +784,17 @@ export function OrderDetailPage() {
                 onClick={handleReturnRequest}
                 disabled={returnLoading || returnReason.trim().length < 10}
               >
-                {returnLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                {returnLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-4 w-4" />
+                )}
                 Submit Return Request
               </Button>
             </div>
           )}
         </DialogContent>
       </Dialog>
-
     </div>
   );
 }

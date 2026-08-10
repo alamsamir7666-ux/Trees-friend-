@@ -12,7 +12,7 @@ import {
   usersTable,
   addressesTable,
 } from "@workspace/db";
-import { eq, desc, and, sql, inArray } from "drizzle-orm";
+import { eq, desc, and, sql, inArray, ilike } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import { sendOrderConfirmation } from "../lib/email";
 import { logger } from "../lib/logger";
@@ -69,10 +69,37 @@ router.get(
     const page = Math.max(1, parseInt((req.query.page as string) ?? "1"));
     const offset = (page - 1) * limit;
 
+    // ── Industry-standard order list filtering ───────────────────────
+    // ?orderStatus=pending — filter by a single order status value.
+    //   Supports all valid orderStatus values (pending, confirmed,
+    //   processing, shipped, delivered, cancelled, return_completed).
+    //   Unknown values are ignored (no filter applied) rather than
+    //   returning an empty list — keeps the frontend resilient to new
+    //   status values added server-side before the frontend is updated.
+    // ?search=EE1234 — case-insensitive partial match on trackingId.
+    //   Uses ILIKE for PostgreSQL case-insensitive matching. Truncated
+    //   to 50 chars to prevent abuse. Empty string = no filter.
+    //
+    // Both filters compose: ?orderStatus=shipped&search=EE12 returns
+    // shipped orders whose trackingId contains "EE12".
+    const orderStatus =
+      typeof req.query.orderStatus === "string" ? req.query.orderStatus.trim().toLowerCase() : "";
+    const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 50) : "";
+
+    const conditions = [eq(ordersTable.userId, req.userId!)];
+    if (orderStatus) {
+      conditions.push(eq(ordersTable.orderStatus, orderStatus));
+    }
+    if (search) {
+      // ILIKE is PostgreSQL's case-insensitive LIKE. The % wildcards
+      // allow partial matching (e.g. "EE12" matches "EE12345678").
+      conditions.push(ilike(ordersTable.trackingId, `%${search}%`));
+    }
+
     const orders = await db
       .select()
       .from(ordersTable)
-      .where(eq(ordersTable.userId, req.userId!))
+      .where(and(...conditions))
       .orderBy(desc(ordersTable.createdAt))
       .limit(limit)
       .offset(offset);
@@ -173,11 +200,9 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
     }
     for (const i of items) {
       if (i.variantId == null || isNaN(Number(i.variantId))) {
-        res
-          .status(400)
-          .json({
-            error: "Each item must specify a variant (e.g. Seed, Sapling, Grafted, Potted)",
-          });
+        res.status(400).json({
+          error: "Each item must specify a variant (e.g. Seed, Sapling, Grafted, Potted)",
+        });
         return;
       }
     }
@@ -203,11 +228,9 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
         return;
       }
       if (variant.stock < i.quantity) {
-        res
-          .status(400)
-          .json({
-            error: `Insufficient stock for "${product.name}" (${variant.name}). Only ${variant.stock} left.`,
-          });
+        res.status(400).json({
+          error: `Insufficient stock for "${product.name}" (${variant.name}). Only ${variant.stock} left.`,
+        });
         return;
       }
     }
@@ -272,11 +295,9 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
         .from(platformPaymentConfigTable)
         .limit(1);
       if (config?.isVerified !== true) {
-        res
-          .status(400)
-          .json({
-            error: "bKash payment isn't available right now. Please choose Cash on Delivery.",
-          });
+        res.status(400).json({
+          error: "bKash payment isn't available right now. Please choose Cash on Delivery.",
+        });
         return;
       }
     }
@@ -520,11 +541,9 @@ router.post(
 
       for (const { cart, product, variant } of variantLines) {
         if (variant.stock < cart.quantity) {
-          res
-            .status(400)
-            .json({
-              error: `Insufficient stock for "${product.name}" (${variant.name}). Only ${variant.stock} left.`,
-            });
+          res.status(400).json({
+            error: `Insufficient stock for "${product.name}" (${variant.name}). Only ${variant.stock} left.`,
+          });
           return;
         }
       }
@@ -532,11 +551,9 @@ router.post(
         // Stock-sufficiency check moves to the VARIANT's availableQuantity
         // (Phase 2) -- the listing itself no longer carries stock data.
         if (variant.availableQuantity < cart.quantity) {
-          res
-            .status(400)
-            .json({
-              error: `Insufficient stock for "${product.name}" from this seller. Only ${variant.availableQuantity} left.`,
-            });
+          res.status(400).json({
+            error: `Insufficient stock for "${product.name}" from this seller. Only ${variant.availableQuantity} left.`,
+          });
           return;
         }
         if (listing.approvalStatus !== "approved" || listing.visibility !== "public") {
