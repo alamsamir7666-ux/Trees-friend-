@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
-import { useParams, useSearch } from "wouter";
+import { useParams, useSearch, Link, useLocation } from "wouter";
 import {
   useGetOrder,
+  useGetPublicSeller,
   createBkashPayment,
   createBkashPaymentGuest,
 } from "@workspace/api-client-react";
@@ -29,14 +30,221 @@ import {
   Loader2,
   AlertTriangle,
   ExternalLink,
+  MapPin,
+  MessageCircle,
+  ShieldCheck,
+  Store as StoreIcon,
+  Leaf,
+  Hash,
+  CreditCard,
+  Calendar,
+  Gift,
+  Clock,
 } from "lucide-react";
-import { Link } from "wouter";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { BKASH_ICON } from "@/lib/preorderIcons";
 import { useApiFetch } from "@/lib/useApiFetch";
 import { getOrderStatusConfig } from "@/lib/orderStatus";
 import { getReturnStatusConfig } from "@/lib/returnStatus";
+import { apiClient } from "@/lib/apiClient";
+import { useToast } from "@/hooks/use-toast";
+
+// ── Order item shape (per item in order.items[]) ───────────────────
+// Items can be either platform-direct (sellerId == null) or marketplace
+// (sellerId set). Each carries its own snapshot fields: productName,
+// productImage, quantity, price, deliveryCharge, and optionally
+// variantName (platform-direct) or sellerListingId/sellerListingVariantId
+// (marketplace). Typed as `any` here to match the existing rendering
+// pattern in this file — the underlying column is JSONB.
+type OrderItemRow = {
+  productId: number;
+  productName: string;
+  productImage?: string;
+  variantName?: string;
+  variantId?: number;
+  sellerListingId?: number;
+  sellerListingVariantId?: number;
+  sellerId?: number | null;
+  quantity: number;
+  price: number;
+  deliveryCharge?: number;
+  [key: string]: unknown;
+};
+
+/**
+ * One nursery's group inside an order: nursery header (logo, name,
+ * location, verified badge, Visit Store + Message buttons) + that
+ * nursery's line items + group subtotal/courier-fee summary. Falls back
+ * gracefully when the seller is no longer active (useGetPublicSeller 404s).
+ */
+function NurseryGroupCard({
+  sellerId,
+  items,
+  isGuest,
+}: {
+  sellerId: number;
+  items: OrderItemRow[];
+  isGuest: boolean;
+}) {
+  const { data: seller, isError } = useGetPublicSeller(sellerId, {
+    query: { enabled: !!sellerId, queryKey: ["seller", sellerId] },
+  });
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
+
+  async function handleMessage() {
+    if (isGuest) {
+      toast({
+        title: "Sign in to message this nursery",
+        description: "Create a free account to chat with sellers.",
+      });
+      return;
+    }
+    try {
+      const res = await apiClient.post("/api/conversations", { sellerId });
+      setLocation(`/messages/${(res.data as { id: number }).id}`);
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      let description = "Something went wrong. Please try again.";
+      try {
+        const jsonMatch = raw.match(/\{.*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.error) description = parsed.error;
+        }
+      } catch {
+        // Malformed error payload — fall back to the generic description.
+      }
+      toast({ title: "Could not start chat", description });
+    }
+  }
+
+  const subtotal = items.reduce((s, i) => s + Number(i.price) * i.quantity, 0);
+  const codDelivery = items.reduce(
+    (s, i) => s + (i.sellerId != null ? Number(i.deliveryCharge ?? 0) * i.quantity : 0),
+    0,
+  );
+
+  return (
+    <div className="bg-card border rounded-xl overflow-hidden">
+      {/* Nursery header */}
+      <div className="flex items-center justify-between gap-3 p-4 sm:p-5 border-b bg-muted/20">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="shrink-0 w-11 h-11 rounded-full overflow-hidden border bg-muted/40 flex items-center justify-center">
+            {seller?.logoUrl ? (
+              <img src={seller.logoUrl} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <StoreIcon className="w-5 h-5 text-muted-foreground" />
+            )}
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <h3 className="font-semibold text-sm truncate">
+                {seller?.nurseryName ?? (isError ? "Nursery unavailable" : "Loading nursery...")}
+              </h3>
+              {seller?.isVerified && <ShieldCheck className="w-3.5 h-3.5 text-accent shrink-0" />}
+            </div>
+            {seller?.location && (
+              <div className="flex items-center gap-1 mt-0.5">
+                <MapPin className="w-3 h-3 text-muted-foreground shrink-0" strokeWidth={1.5} />
+                <span className="text-[11px] text-muted-foreground truncate">
+                  {seller.location}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {seller && (
+            <Link
+              href={`/store/${seller.id}`}
+              className="text-xs font-medium text-accent hover:underline whitespace-nowrap"
+            >
+              Visit Store
+            </Link>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-xs rounded-full"
+            onClick={handleMessage}
+          >
+            <MessageCircle className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Message</span>
+          </Button>
+        </div>
+      </div>
+
+      {/* Items */}
+      <div className="divide-y">
+        {items.map((item) => (
+          <ItemLine
+            key={`${item.productId}-${item.variantId ?? item.sellerListingVariantId ?? ""}`}
+            item={item}
+          />
+        ))}
+      </div>
+
+      {/* Group summary */}
+      <div className="border-t bg-muted/10 px-4 sm:px-5 py-3 space-y-1 text-xs">
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">
+            Subtotal ({items.length} item{items.length > 1 ? "s" : ""})
+          </span>
+          <span className="font-medium">Tk{subtotal.toLocaleString()}</span>
+        </div>
+        {codDelivery > 0 && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Courier fee (pay on delivery)</span>
+            <span className="font-medium">Tk{codDelivery.toLocaleString()}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Single order item line: thumbnail + name + variant + qty + price +
+ * per-item courier fee. Used inside NurseryGroupCard so item rendering
+ * stays consistent across all nurseries.
+ */
+function ItemLine({ item }: { item: OrderItemRow }) {
+  const img = item.productImage ?? null;
+  return (
+    <div className="flex gap-4 p-4 sm:p-5">
+      {img ? (
+        <img
+          src={img}
+          alt={item.productName}
+          className="w-16 h-16 object-cover rounded-lg shrink-0"
+        />
+      ) : (
+        <NoImagePlaceholder className="w-16 h-16 rounded-lg shrink-0" compact />
+      )}
+      <div className="flex-1 flex justify-between items-start gap-2">
+        <div className="min-w-0">
+          <p className="font-medium text-sm">{item.productName}</p>
+          {item.variantName && (
+            <p className="text-xs text-muted-foreground mt-0.5">Variant: {item.variantName}</p>
+          )}
+          <p className="text-xs text-muted-foreground mt-0.5">Qty: {item.quantity}</p>
+          {item.sellerId != null && Number(item.deliveryCharge) > 0 && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Courier fee: Tk{(Number(item.deliveryCharge) * item.quantity).toLocaleString()} (pay
+              on delivery)
+            </p>
+          )}
+        </div>
+        <p className="font-medium text-sm whitespace-nowrap">
+          Tk{(item.price * item.quantity).toLocaleString()}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 interface GuestOrder {
   id: number;
@@ -351,6 +559,60 @@ export function OrderDetailPage() {
                 : order.orderStatus.charAt(0).toUpperCase() + order.orderStatus.slice(1)}
             </span>
           </div>
+
+          {/* ── Meta info chips ───────────────────────────────────────
+              Industry-standard "order facts" row — at-a-glance summary of
+              the order's stable identifiers (order #, tracking ID, payment
+              method, date placed, item count). Skips chips whose value
+              isn't available so we never show an empty pill. */}
+          <div className="flex flex-wrap gap-2 mt-5">
+            {!isGuest && (ord as any).orderNumber && (
+              <span className="inline-flex items-center gap-1.5 bg-card border rounded-full px-3 py-1 text-xs text-muted-foreground">
+                <Hash className="w-3 h-3" />
+                Order #{(ord as any).orderNumber}
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1.5 bg-card border rounded-full px-3 py-1 text-xs text-muted-foreground">
+              <Package className="w-3 h-3" />
+              <span className="font-mono">{order.trackingId}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 bg-card border rounded-full px-3 py-1 text-xs text-muted-foreground capitalize">
+              <CreditCard className="w-3 h-3" />
+              {order.paymentMethod}
+            </span>
+            <span className="inline-flex items-center gap-1.5 bg-card border rounded-full px-3 py-1 text-xs text-muted-foreground">
+              <Calendar className="w-3 h-3" />
+              Placed{" "}
+              {new Date(order.createdAt).toLocaleDateString("en-BD", {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              })}
+            </span>
+            <span className="inline-flex items-center gap-1.5 bg-card border rounded-full px-3 py-1 text-xs text-muted-foreground">
+              <Package className="w-3 h-3" />
+              {(order.items ?? []).length} item{(order.items ?? []).length === 1 ? "" : "s"}
+            </span>
+            {/* Source count — how many distinct nurseries this order is
+                sourced from. Same calculation as the grouped sections
+                below, surfaced here as a chip so buyers can tell at a
+                glance whether they're getting one delivery or several.
+                Only shown when the order spans more than one nursery. */}
+            {(() => {
+              const sellerIds = new Set<number>();
+              (order.items ?? []).forEach((i: any) => {
+                if (i.sellerId != null) sellerIds.add(Number(i.sellerId));
+              });
+              const count = sellerIds.size;
+              if (count <= 1) return null;
+              return (
+                <span className="inline-flex items-center gap-1.5 bg-accent/10 border border-accent/20 text-accent rounded-full px-3 py-1 text-xs">
+                  <Leaf className="w-3 h-3" />
+                  {count} nurseries
+                </span>
+              );
+            })()}
+          </div>
         </div>
       </div>
 
@@ -431,42 +693,86 @@ export function OrderDetailPage() {
         {/* Tracking steps — original horizontal progress bar, restored.
             The per-status timestamps (confirmedAt, shippedAt, deliveredAt)
             are now available on the order object for the return window
-            calculation + SLA reporting, but the visual UI stays as the
-            compact horizontal bar the user originally designed. */}
+            calculation + SLA reporting. The visual UI stays as the
+            compact horizontal bar the user originally designed, with
+            per-step timestamps shown under each label so the buyer can
+            see exactly when each milestone was reached. */}
         {order.orderStatus !== "cancelled" && order.orderStatus !== "return_completed" && (
           <div className="bg-card border rounded-xl p-6">
-            <h2 className="font-medium mb-6">Order Progress</h2>
-            <div className="flex items-center gap-0">
-              {STEPS.map((step, i) => {
-                const done = i < currentStep;
-                const active = i === currentStep;
-                const icons = [Circle, CheckCircle2, Package, Truck, Home];
-                const Icon = icons[Math.min(i, icons.length - 1)];
-                return (
-                  <div key={step} className="flex-1 flex flex-col items-center relative">
-                    {i < STEPS.length - 1 && (
-                      <div
-                        className={`absolute top-5 left-1/2 w-full h-0.5 ${done ? "bg-accent" : "bg-border"}`}
-                      />
-                    )}
-                    <div
-                      className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors ${done ? "bg-accent border-accent text-accent-foreground" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}
-                    >
-                      {done ? (
-                        <CheckCircle2 className="h-5 w-5 text-accent-foreground" />
-                      ) : (
-                        <Icon className="h-5 w-5" />
-                      )}
-                    </div>
-                    <p
-                      className={`text-xs mt-2 capitalize text-center ${active ? "font-medium" : "text-muted-foreground"}`}
-                    >
-                      {step}
-                    </p>
-                  </div>
-                );
-              })}
+            <div className="flex items-baseline justify-between mb-6">
+              <h2 className="font-medium">Order Progress</h2>
+              {order.orderStatus === "delivered" && (ord as any).deliveredAt && (
+                <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  Delivered{" "}
+                  {new Date((ord as any).deliveredAt).toLocaleDateString("en-BD", {
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </span>
+              )}
             </div>
+            {/* Per-step timestamp lookup — falls back to null when the
+                server hasn't recorded a timestamp for that step yet
+                (e.g. confirmedAt is null until the seller confirms).
+                Cast via `as any` because the generated Order type
+                doesn't expose confirmedAt/shippedAt/deliveredAt (the
+                API does return them — see formatOrder in
+                lib/formatters.ts — but the OpenAPI spec is incomplete). */}
+            {(() => {
+              const tsMap: Record<string, string | null> = {
+                pending: order.createdAt,
+                confirmed: (ord as any).confirmedAt ?? null,
+                processing: (ord as any).confirmedAt ?? null,
+                shipped: (ord as any).shippedAt ?? null,
+                delivered: (ord as any).deliveredAt ?? null,
+              };
+              return (
+                <div className="flex items-center gap-0">
+                  {STEPS.map((step, i) => {
+                    const done = i < currentStep;
+                    const active = i === currentStep;
+                    const icons = [Circle, CheckCircle2, Package, Truck, Home];
+                    const Icon = icons[Math.min(i, icons.length - 1)];
+                    const ts = tsMap[step];
+                    return (
+                      <div key={step} className="flex-1 flex flex-col items-center relative">
+                        {i < STEPS.length - 1 && (
+                          <div
+                            className={`absolute top-5 left-1/2 w-full h-0.5 ${done ? "bg-accent" : "bg-border"}`}
+                          />
+                        )}
+                        <div
+                          className={`relative z-10 h-10 w-10 rounded-full flex items-center justify-center border-2 transition-colors ${done ? "bg-accent border-accent text-accent-foreground" : active ? "bg-background border-primary" : "bg-background border-border text-muted-foreground"}`}
+                        >
+                          {done ? (
+                            <CheckCircle2 className="h-5 w-5 text-accent-foreground" />
+                          ) : (
+                            <Icon className="h-5 w-5" />
+                          )}
+                        </div>
+                        <p
+                          className={`text-xs mt-2 capitalize text-center ${active ? "font-medium" : "text-muted-foreground"}`}
+                        >
+                          {step}
+                        </p>
+                        {/* Per-step timestamp — only shown when the step
+                            has been reached (done or active) and the
+                            server has recorded a timestamp for it. */}
+                        {ts && (done || active) && (
+                          <p className="text-[10px] text-muted-foreground mt-0.5 text-center">
+                            {new Date(ts).toLocaleDateString("en-BD", {
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -508,42 +814,59 @@ export function OrderDetailPage() {
           </div>
         )}
 
-        {/* Items */}
-        <div className="bg-card border rounded-xl p-6">
-          <h2 className="font-medium mb-4">Items Ordered</h2>
-          <div className="divide-y">
-            {(order.items ?? []).map((item: any) => {
-              const img = item.productImage ?? null;
-              return (
-                <div key={item.productId} className="flex gap-4 py-4 first:pt-0 last:pb-0">
-                  {img ? (
-                    <img
-                      src={img}
-                      alt={item.productName}
-                      className="w-16 h-16 object-cover rounded-lg shrink-0"
-                    />
-                  ) : (
-                    <NoImagePlaceholder className="w-16 h-16 rounded-lg shrink-0" compact />
-                  )}
-                  <div className="flex-1 flex justify-between items-center">
-                    <div>
-                      <p className="font-medium text-sm">{item.productName}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">Qty: {item.quantity}</p>
-                      {item.sellerId != null && Number(item.deliveryCharge) > 0 && (
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          Pay on delivery: Tk
-                          {(Number(item.deliveryCharge) * item.quantity).toLocaleString()}
-                        </p>
-                      )}
-                    </div>
-                    <p className="font-medium text-sm">
-                      Tk{(item.price * item.quantity).toLocaleString()}
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
+        {/* ── Items grouped by nursery ───────────────────────────────
+            Industry-standard "shipped from" grouping — buyers see which
+            nursery(s) their order came from, with each nursery's items,
+            subtotal, and per-nursery courier fee broken out separately.
+            Replaces the previous flat single-list "Items Ordered" block
+            while keeping the same outer container styling so the page's
+            visual rhythm is preserved. */}
+        <div className="space-y-5">
+          <div className="flex items-baseline justify-between">
+            <h2 className="font-medium">Items Ordered</h2>
+            <span className="text-xs text-muted-foreground">
+              {(order.items ?? []).length} item{(order.items ?? []).length === 1 ? "" : "s"}{" "}
+              {(() => {
+                // Same source-count calc as the meta chips above —
+                // surfaces "from 1 nursery" or "from N nurseries" so
+                // the buyer knows upfront whether to expect one
+                // delivery or several.
+                const sellerIds = new Set<number>();
+                (order.items ?? []).forEach((i: any) => {
+                  if (i.sellerId != null) sellerIds.add(Number(i.sellerId));
+                });
+                const count = sellerIds.size;
+                return count === 1 ? "from 1 nursery" : `from ${count} nurseries`;
+              })()}
+            </span>
           </div>
+          {(() => {
+            // Group items by their per-item sellerId. Preserves the
+            // order in which each seller first appeared in the items[]
+            // array so the rendering stays stable across refetches.
+            // Every order item on this platform comes from a marketplace
+            // seller (sellerId is always set), so every group renders
+            // as a NurseryGroupCard.
+            const groups: { sellerId: number; items: OrderItemRow[] }[] = [];
+            for (const item of (order.items ?? []) as OrderItemRow[]) {
+              if (item.sellerId == null) continue;
+              const sid = Number(item.sellerId);
+              let g = groups.find((g) => g.sellerId === sid);
+              if (!g) {
+                g = { sellerId: sid, items: [] };
+                groups.push(g);
+              }
+              g.items.push(item);
+            }
+            return groups.map((g) => (
+              <NurseryGroupCard
+                key={g.sellerId}
+                sellerId={g.sellerId}
+                items={g.items}
+                isGuest={isGuest}
+              />
+            ));
+          })()}
         </div>
 
         {/* Summary + address */}
@@ -569,6 +892,30 @@ export function OrderDetailPage() {
                   {order.paymentStatus.replace(/_/g, " ")}
                 </span>
               </div>
+              {/* ── Paid-on date + transaction ID ──────────────────────
+                  Industry-standard payment transparency: when the
+                  payment actually settled (paidAt) and the gateway's
+                  transaction ID. Hidden when the order hasn't been paid
+                  yet or those fields aren't set (e.g. cash-on-delivery
+                  orders won't have a transactionId). */}
+              {ord.paidAt && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Paid on</span>
+                  <span>
+                    {new Date(ord.paidAt).toLocaleDateString("en-BD", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                  </span>
+                </div>
+              )}
+              {ord.transactionId && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-muted-foreground shrink-0">Transaction ID</span>
+                  <span className="font-mono text-xs text-right truncate">{ord.transactionId}</span>
+                </div>
+              )}
               {/* Part 2 of 4: "Pay with bKash" retry action -- shown for
                   any bkash order still awaiting a completed payment,
                   whether the buyer never finished checkout's own redirect,
@@ -680,6 +1027,40 @@ export function OrderDetailPage() {
             </div>
           )}
         </div>
+
+        {/* ── Gift Options ───────────────────────────────────────────
+            Shown only when the buyer selected gift wrap or wrote a gift
+            message at checkout. Both fields are snapshotted on the order
+            at checkout time (see routes/orders.ts) so this stays stable
+            even if the buyer later edits their gift preferences
+            elsewhere. Previously these fields existed in the data but
+            the order detail page never surfaced them. */}
+        {(ord.giftWrap || ord.giftMessage) && (
+          <div className="bg-card border rounded-xl p-5">
+            <h3 className="font-medium text-sm mb-3 uppercase tracking-wider flex items-center gap-2">
+              <Gift className="w-4 h-4" />
+              Gift Options
+            </h3>
+            <div className="space-y-3 text-sm">
+              {ord.giftWrap && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Gift wrap</span>
+                  <span className="capitalize">
+                    {ord.giftWrap === "yes" ? "Yes" : String(ord.giftWrap)}
+                  </span>
+                </div>
+              )}
+              {ord.giftMessage && (
+                <div>
+                  <p className="text-muted-foreground mb-1.5">Message</p>
+                  <p className="italic text-foreground bg-muted/40 rounded-md p-3 border-l-2 border-accent">
+                    &ldquo;{ord.giftMessage}&rdquo;
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Action Buttons */}
