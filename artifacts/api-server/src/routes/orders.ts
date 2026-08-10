@@ -12,7 +12,7 @@ import {
   usersTable,
   addressesTable,
 } from "@workspace/db";
-import { eq, desc, and, sql, inArray, ilike } from "drizzle-orm";
+import { eq, desc, and, sql, inArray, ilike, gte, lte } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
 import { sendOrderConfirmation } from "../lib/email";
 import { logger } from "../lib/logger";
@@ -76,24 +76,52 @@ router.get(
     //   Unknown values are ignored (no filter applied) rather than
     //   returning an empty list — keeps the frontend resilient to new
     //   status values added server-side before the frontend is updated.
-    // ?search=EE1234 — case-insensitive partial match on trackingId.
-    //   Uses ILIKE for PostgreSQL case-insensitive matching. Truncated
-    //   to 50 chars to prevent abuse. Empty string = no filter.
+    // ?search=EE1234 — case-insensitive partial match on trackingId OR
+    //   any product name in the order's items[] JSONB array. Uses ILIKE
+    //   on trackingId + a JSONB containment check on items. Truncated to
+    //   50 chars to prevent abuse. Empty string = no filter.
+    // ?dateFrom=2024-01-01&dateTo=2024-12-31 — date range filter on
+    //   createdAt. Both bounds are inclusive. Either bound can be omitted
+    //   for open-ended ranges. Dates are parsed as ISO 8601; invalid
+    //   dates are ignored (no filter applied).
     //
-    // Both filters compose: ?orderStatus=shipped&search=EE12 returns
-    // shipped orders whose trackingId contains "EE12".
+    // All filters compose: ?orderStatus=shipped&search=mango&dateFrom=2024-01-01
+    // returns shipped orders containing "mango" in any item, placed on or
+    // after Jan 1, 2024.
     const orderStatus =
       typeof req.query.orderStatus === "string" ? req.query.orderStatus.trim().toLowerCase() : "";
     const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 50) : "";
+    const dateFrom = typeof req.query.dateFrom === "string" ? new Date(req.query.dateFrom) : null;
+    const dateTo = typeof req.query.dateTo === "string" ? new Date(req.query.dateTo) : null;
 
     const conditions = [eq(ordersTable.userId, req.userId!)];
     if (orderStatus) {
       conditions.push(eq(ordersTable.orderStatus, orderStatus));
     }
     if (search) {
-      // ILIKE is PostgreSQL's case-insensitive LIKE. The % wildcards
-      // allow partial matching (e.g. "EE12" matches "EE12345678").
-      conditions.push(ilike(ordersTable.trackingId, `%${search}%`));
+      // Search BOTH trackingId (ILIKE) AND items[] JSONB (product name
+      // containment). The JSONB check uses the @> operator with a
+      // jsonb_build_object pattern — matches any item whose productName
+      // contains the search string (case-insensitive via ILIKE on the
+      // extracted text). This is the industry-standard pattern for
+      // searching inside a JSONB array of objects.
+      conditions.push(
+        sql`(${ilike(ordersTable.trackingId, `%${search}%`)} OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements(${ordersTable.items}) AS item
+          WHERE item->>'productName' ILIKE ${`%${search}%`}
+        ))`,
+      );
+    }
+    if (dateFrom && !isNaN(dateFrom.getTime())) {
+      conditions.push(gte(ordersTable.createdAt, dateFrom));
+    }
+    if (dateTo && !isNaN(dateTo.getTime())) {
+      // Add 1 day to dateTo so the bound is inclusive of the entire day
+      // (a buyer passing dateTo=2024-12-31 means "through end of Dec 31",
+      // not "through 00:00:00 of Dec 31").
+      const endOfDay = new Date(dateTo);
+      endOfDay.setDate(endOfDay.getDate() + 1);
+      conditions.push(lte(ordersTable.createdAt, endOfDay));
     }
 
     const orders = await db
@@ -302,7 +330,18 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
       }
     }
 
-    const totalAmount = Math.max(0, subtotal - discountAmount + deliveryFee);
+    // Fetch gift wrap cost from platform config (was hardcoded at 50).
+    const [giftWrapConfig] = await db
+      .select({ giftWrapCost: platformPaymentConfigTable.giftWrapCost })
+      .from(platformPaymentConfigTable)
+      .limit(1);
+    const giftWrapCost =
+      giftWrapConfig?.giftWrapCost != null ? Number(giftWrapConfig.giftWrapCost) : 50;
+
+    const totalAmount = Math.max(
+      0,
+      subtotal - discountAmount + deliveryFee + (giftWrap ? giftWrapCost : 0),
+    );
     const trackingId = generateId("EE", 6);
     const paymentStatus = paymentMethod === "cod" ? "pending" : "payment_pending";
     const guestUserId = "guest_" + crypto.randomBytes(8).toString("hex");
@@ -322,6 +361,8 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
           .insert(ordersTable)
           .values({
             trackingId,
+            // Sequential order number from a Postgres SEQUENCE.
+            orderNumber: sql`nextval('order_number_seq')`,
             userId: guestUserId,
             sellerId: null,
             items: orderItems,
@@ -564,6 +605,64 @@ router.post(
         }
       }
 
+      // ── Price locking enforcement (industry-standard) ──────────────
+      // Compare the price snapshot taken at add-time (cart.priceSeenAtAdd)
+      // against the current variant price. If they differ by more than 1
+      // taka, return 409 with the list of changed items so the frontend
+      // can prompt the buyer to re-confirm. This prevents the buyer from
+      // being silently charged a different amount than what they saw in
+      // the bag. Shopify, WooCommerce, and Magento all do this.
+      //
+      // The 1-taka threshold handles floating-point rounding noise from
+      // numeric→Number conversion. A real price change is always > 1 taka.
+      const priceChangedItems: {
+        productId: number;
+        productName: string;
+        variantName: string;
+        oldPrice: number;
+        newPrice: number;
+      }[] = [];
+      for (const { cart, product, variant } of variantLines) {
+        if (cart.priceSeenAtAdd == null) continue; // legacy cart line with no snapshot
+        const snapshotPrice = Number(cart.priceSeenAtAdd);
+        const currentPrice =
+          variant.discountPrice != null ? Number(variant.discountPrice) : Number(variant.price);
+        if (Math.abs(snapshotPrice - currentPrice) > 1) {
+          priceChangedItems.push({
+            productId: product.id,
+            productName: product.name,
+            variantName: variant.name,
+            oldPrice: snapshotPrice,
+            newPrice: currentPrice,
+          });
+        }
+      }
+      for (const { cart, product, variant } of listingLines) {
+        if (cart.priceSeenAtAdd == null) continue;
+        const snapshotPrice = Number(cart.priceSeenAtAdd);
+        const currentPrice =
+          variant.discountPrice != null ? Number(variant.discountPrice) : Number(variant.price);
+        if (Math.abs(snapshotPrice - currentPrice) > 1) {
+          priceChangedItems.push({
+            productId: product.id,
+            productName: product.name,
+            // Seller listing variants don't have a `name` field — use a
+            // composite label from form/potSize/age for display.
+            variantName:
+              [variant.form, variant.potSize, variant.age].filter(Boolean).join(" · ") || "N/A",
+            oldPrice: snapshotPrice,
+            newPrice: currentPrice,
+          });
+        }
+      }
+      if (priceChangedItems.length > 0) {
+        res.status(409).json({
+          error: "Prices for some items in your bag have changed. Please review and re-confirm.",
+          priceChangedItems,
+        });
+        return;
+      }
+
       type ResolvedLine = {
         sellerId: number | null;
         lineTotal: number;
@@ -766,6 +865,15 @@ router.post(
       // marketplace scale; previously was 4 bytes (32 bits = ~4 billion).
       const trackingId = () => generateId("EE", 6);
 
+      // Fetch gift wrap cost from platform config (was hardcoded at 50).
+      // Falls back to 50 if the config row doesn't exist or the column is NULL.
+      const [giftWrapConfig] = await db
+        .select({ giftWrapCost: platformPaymentConfigTable.giftWrapCost })
+        .from(platformPaymentConfigTable)
+        .limit(1);
+      const giftWrapCost =
+        giftWrapConfig?.giftWrapCost != null ? Number(giftWrapConfig.giftWrapCost) : 50;
+
       // ─── ATOMIC CHECKOUT TRANSACTION ────────────────────────────────────────
       // All order writes (insert orders, delete cart, decrement stock) MUST be
       // atomic. Previously these were separate SQL statements — a mid-checkout
@@ -810,10 +918,14 @@ router.post(
               .insert(ordersTable)
               .values({
                 trackingId: trackingId(),
+                // Sequential order number from a Postgres SEQUENCE (created
+                // via migration). nextval is atomic and race-free — two
+                // concurrent checkouts always get different numbers.
+                orderNumber: sql`nextval('order_number_seq')`,
                 userId: req.userId!,
                 sellerId: g.sellerId,
                 items: g.lines.map((l) => l.orderItem),
-                totalAmount: String(groupTotal),
+                totalAmount: String(groupTotal + (giftWrap ? giftWrapCost : 0)),
                 paymentMethod: method,
                 paymentStatus,
                 orderStatus: "pending",

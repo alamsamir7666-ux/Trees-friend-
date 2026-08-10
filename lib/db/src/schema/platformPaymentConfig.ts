@@ -1,4 +1,4 @@
-import { pgTable, serial, text, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, boolean, timestamp, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { type z } from "zod/v4";
 
@@ -79,11 +79,18 @@ export const platformPaymentConfigTable = pgTable("platform_payment_config", {
   merchantPassword: text("merchant_password").notNull(),
 
   isVerified: boolean("is_verified").notNull().default(false),
+  // Configurable gift wrap fee in taka. Previously hardcoded at 50 in
+  // CheckoutPage.tsx — now admins can set this via the platform config
+  // UI. Defaults to 50 for backward compatibility. NULL is treated as
+  // the default (50) by the checkout route.
+  giftWrapCost: numeric("gift_wrap_cost", { precision: 10, scale: 2 }).default("50"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const insertPlatformPaymentConfigSchema = createInsertSchema(platformPaymentConfigTable).omit({
+export const insertPlatformPaymentConfigSchema = createInsertSchema(
+  platformPaymentConfigTable,
+).omit({
   id: true,
   singleton: true,
   createdAt: true,

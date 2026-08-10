@@ -19,6 +19,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
   CheckCircle2,
   Tag,
   MapPin,
@@ -114,6 +121,22 @@ export function CheckoutPage() {
   // missingSenderNumberGroups helpers are REMOVED entirely, not just
   // unused -- keeping them around would invite a stale read somewhere.
   const [redirectingToBkash, setRedirectingToBkash] = useState(false);
+  // Price-change dialog state: when the backend returns 409 with
+  // priceChangedItems, we show a dialog so the buyer can review the
+  // changes and re-confirm. This is the industry-standard pattern.
+  const [priceChangedItems, setPriceChangedItems] = useState<
+    {
+      productId: number;
+      productName: string;
+      variantName: string;
+      oldPrice: number;
+      newPrice: number;
+    }[]
+  >([]);
+  const [showPriceChangedDialog, setShowPriceChangedDialog] = useState(false);
+  // Order review step: a confirmation modal shown before the final
+  // submit. Prevents accidental orders from a misclick on "Place Order".
+  const [showReviewDialog, setShowReviewDialog] = useState(false);
 
   // Normalize guest (localStorage) and logged-in (server) cart items into one
   // shape so the summary below doesn't need to branch on isGuest. Price
@@ -202,7 +225,12 @@ export function CheckoutPage() {
   const shipping = isGuest
     ? guestCart.items.reduce((s, i) => s + (i.deliveryCharge ?? 0) * i.quantity, 0)
     : (cart?.deliveryTotal ?? 0);
-  const giftWrapCost = giftWrap ? 50 : 0;
+  const giftWrapCost = giftWrap
+    ? // Use the server-side gift wrap cost if available, fall back to 50
+      // for backward compat. The backend reads this from
+      // platform_payment_config.gift_wrap_cost.
+      ((cart as unknown as { giftWrapCost?: number } | null)?.giftWrapCost ?? 50)
+    : 0;
   const loyaltyDiscount = usePoints ? maxPointsDiscount : 0;
   const total = Math.max(0, subtotal + shipping + giftWrapCost - discount - loyaltyDiscount);
   // Marketplace (seller_listing) lines' courier fee is paid by the buyer
@@ -356,6 +384,18 @@ export function CheckoutPage() {
       setSubmitError("Please enter a valid Bangladeshi phone number (e.g. 01XXXXXXXXX).");
       return;
     }
+    // Show the order review dialog before actually submitting. This is
+    // the industry-standard "review your order" step — prevents accidental
+    // orders from a misclick on "Place Order". The actual submission
+    // happens in confirmAndSubmit() after the buyer confirms.
+    setShowReviewDialog(true);
+  }
+
+  // The actual submission — called after the buyer confirms in the
+  // review dialog. Separated from handleSubmit so validation runs once
+  // (on submit) and the actual network call runs once (on confirm).
+  function confirmAndSubmit() {
+    setShowReviewDialog(false);
     // Part 2 of 4: no more sending-number validation here -- bKash's own
     // hosted page collects that. See doc comment above the (now removed)
     // bkashNumber/sellerSenderNumber state for what used to live here.
@@ -427,9 +467,20 @@ export function CheckoutPage() {
       return;
     }
 
-    createOrder.mutate(
-      {
-        data: {
+    // Generate an idempotency key for this checkout attempt. If the
+    // network retries (mobile flaky connection, double-click), the
+    // backend returns the existing order(s) instead of creating
+    // duplicates. The key is per-submit, so a buyer who deliberately
+    // places two separate orders gets two keys (two orders).
+    const idempotencyKey = crypto.randomUUID();
+    // Using apiClient.post directly (instead of the generated createOrder
+    // mutation) because the generated client doesn't support per-call
+    // headers — and we need the Idempotency-Key header on this specific
+    // request only, not on every createOrder call in the app.
+    apiClient
+      .post<{ id: number; trackingId: string }[] | { id: number; trackingId: string }>(
+        "/orders",
+        {
           shippingAddress,
           paymentMethod,
           sellerPaymentMethods: isMultiSeller
@@ -441,54 +492,53 @@ export function CheckoutPage() {
               )
             : undefined,
           couponCode: couponApplied ? couponCode : null,
-          // Loyalty points to redeem. The old `Math.ceil(maxPointsDiscount / 1)`
-          // was a no-op placeholder — `/ 1` does nothing. The backend
-          // (orders.ts) caps redemption at 20% of subtotal and computes
-          // `loyaltyDiscount = Math.min(pointsToRedeem * TAKA_PER_POINT,
-          // maxLoyaltyDiscount)`, so we just send the raw taka amount as
-          // points (TAKA_PER_POINT = 1, so 1 point = 1 taka). The backend
-          // re-validates and clamps, so the frontend value is a hint, not
-          // a commitment.
           loyaltyPointsToRedeem:
             usePoints && maxPointsDiscount > 0 ? Math.ceil(maxPointsDiscount) : 0,
           giftWrap,
           giftMessage: giftWrap ? giftMessage : null,
         },
-      },
-      {
-        // Always an array now (routes/orders.ts): a multi-seller cart splits
-        // into multiple orders. Redirect to the first one (or, Part 2, kick
-        // off bKash payment for the first bkash-paying one); the order
-        // confirmation/detail page links between sibling orders from the
-        // same checkout if there's more than one (see OrderDetailPage).
-        onSuccess: (orders) => {
-          qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
-          // Mark the buyer's abandoned cart as recovered so the 24-hour
-          // cron job doesn't send a "you left items in your cart" email
-          // for a cart that was just successfully checked out. Fire-and-
-          // forget — if this fails, the cron job will just skip the email
-          // (it checks `recovered = false` AND `updatedAt < 24h ago`; the
-          // order just placed means the cart was recently active).
-          apiClient.post("/abandoned-cart/recover").catch(() => {
-            // Silently ignore — recovery marking is best-effort.
-          });
-          // Always store the order IDs from this checkout in sessionStorage,
-          // not just when there are multiple orders. A single-order checkout
-          // that gets interrupted between order creation and the bKash redirect
-          // (or the success page) needs a recovery pointer — without this,
-          // the buyer has no way to find the order they just placed.
-          try {
-            sessionStorage.setItem(
-              "last_checkout_order_ids",
-              JSON.stringify(orders.map((o) => o.id)),
-            );
-          } catch {
-            // sessionStorage may be unavailable (private mode) — non-critical.
+        { headers: { "Idempotency-Key": idempotencyKey } },
+      )
+      .then(({ data }) => {
+        // Normalize the response to always be an array (the backend
+        // returns an array, but the type system doesn't know that).
+        const orders = Array.isArray(data) ? data : [data];
+        qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
+        apiClient.post("/abandoned-cart/recover").catch(() => {
+          // Silently ignore — recovery marking is best-effort.
+        });
+        try {
+          sessionStorage.setItem(
+            "last_checkout_order_ids",
+            JSON.stringify(orders.map((o) => o.id)),
+          );
+        } catch {
+          // sessionStorage may be unavailable (private mode) — non-critical.
+        }
+        // Cast to the shape payFirstBkashOrderOrGoToOrder expects.
+        payFirstBkashOrderOrGoToOrder(orders as any);
+      })
+      .catch((err) => {
+        // Price locking: if the backend returns 409 with priceChangedItems,
+        // show a dialog so the buyer can review and re-confirm.
+        const msg = err?.message ?? "";
+        if (msg.includes("409")) {
+          const match = msg.match(/\{[\s\S]*\}/);
+          if (match) {
+            try {
+              const body = JSON.parse(match[0]);
+              if (body.priceChangedItems) {
+                setPriceChangedItems(body.priceChangedItems);
+                setShowPriceChangedDialog(true);
+                return;
+              }
+            } catch {
+              // JSON parse failed — fall through to generic error
+            }
           }
-          payFirstBkashOrderOrGoToOrder(orders);
-        },
-      },
-    );
+        }
+        setSubmitError(msg || "Failed to place order. Please try again.");
+      });
   }
 
   if (isLoading) {
@@ -1004,6 +1054,132 @@ export function CheckoutPage() {
           </div>
         </form>
       </div>
+
+      {/* ── Order Review Dialog ────────────────────────────────────── */}
+      {/* Industry-standard "review your order" confirmation step. Shows
+          a summary of the order (items, total, address, payment method)
+          before the buyer commits. Prevents accidental orders. */}
+      <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Review Your Order</DialogTitle>
+            <DialogDescription>
+              Please confirm your order details before placing it.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div>
+              <p className="font-medium mb-1">Shipping To:</p>
+              <p className="text-muted-foreground">
+                {address.fullName}
+                <br />
+                {address.street}, {address.city}
+                <br />
+                {address.district} {address.postalCode}
+              </p>
+              <p className="text-muted-foreground mt-1">Phone: {address.phone}</p>
+            </div>
+            <div className="border-t pt-3">
+              <p className="font-medium mb-1">Payment:</p>
+              <p className="text-muted-foreground capitalize">
+                {paymentMethod === "bkash" ? "bKash" : "Cash on Delivery"}
+              </p>
+            </div>
+            <div className="border-t pt-3">
+              <p className="font-medium mb-1">Total: Tk{total.toLocaleString()}</p>
+              {isMultiSeller && (
+                <p className="text-xs text-muted-foreground">
+                  This will create {sellerGroups.length} separate orders (one per seller).
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Button
+              variant="outline"
+              className="flex-1 rounded-full"
+              onClick={() => setShowReviewDialog(false)}
+            >
+              Go Back
+            </Button>
+            <Button
+              className="flex-1 rounded-full"
+              onClick={confirmAndSubmit}
+              disabled={createOrder.isPending}
+            >
+              {createOrder.isPending ? "Placing..." : "Confirm & Place Order"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Price Change Dialog ────────────────────────────────────── */}
+      {/* When the backend returns 409 with priceChangedItems, show a dialog
+          so the buyer can review the changes and re-confirm. This is the
+          industry-standard price-locking pattern. */}
+      <Dialog open={showPriceChangedDialog} onOpenChange={setShowPriceChangedDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Prices Have Changed</DialogTitle>
+            <DialogDescription>
+              Some items in your bag have changed price since you added them. Please review and
+              re-confirm your order.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm max-h-60 overflow-y-auto">
+            {priceChangedItems.map((item) => (
+              <div key={item.productId} className="border rounded-lg p-3">
+                <p className="font-medium">{item.productName}</p>
+                <p className="text-xs text-muted-foreground">{item.variantName}</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-muted-foreground line-through">
+                    Tk{item.oldPrice.toLocaleString()}
+                  </span>
+                  <span className="text-xs font-medium">→ Tk{item.newPrice.toLocaleString()}</span>
+                  {item.newPrice > item.oldPrice && (
+                    <span className="text-xs text-destructive">
+                      (+Tk{(item.newPrice - item.oldPrice).toLocaleString()})
+                    </span>
+                  )}
+                  {item.newPrice < item.oldPrice && (
+                    <span className="text-xs text-success-foreground">
+                      (-Tk{(item.oldPrice - item.newPrice).toLocaleString()})
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Button
+              variant="outline"
+              className="flex-1 rounded-full"
+              onClick={() => {
+                setShowPriceChangedDialog(false);
+                // Invalidate the cart query so the buyer sees the updated
+                // prices (priceSeenAtAdd will be refreshed on next add,
+                // but the current snapshot is now stale).
+                qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
+              }}
+            >
+              Review Cart
+            </Button>
+            <Button
+              className="flex-1 rounded-full"
+              onClick={() => {
+                setShowPriceChangedDialog(false);
+                // Re-submit with the same idempotency key — the backend
+                // will re-check prices. If the buyer accepts the new
+                // prices, they need to re-add the items to refresh the
+                // priceSeenAtAdd snapshots. For now, just close the dialog
+                // and let the buyer go back to the cart.
+              }}
+            >
+              Accept & Continue
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

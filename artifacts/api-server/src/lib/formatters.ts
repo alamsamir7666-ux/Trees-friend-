@@ -19,10 +19,7 @@
  *    an options arg rather than duplicating the function.
  */
 
-import type {
-  sellersTable,
-  ordersTable,
-} from "@workspace/db";
+import type { sellersTable, ordersTable } from "@workspace/db";
 
 /**
  * Public seller shape returned by /sellers/* and /admin/sellers/*.
@@ -74,6 +71,7 @@ export function formatSeller(s: typeof sellersTable.$inferSelect) {
 export function formatOrder(o: typeof ordersTable.$inferSelect) {
   return {
     id: o.id,
+    orderNumber: o.orderNumber ?? null,
     trackingId: o.trackingId,
     userId: o.userId,
     sellerId: o.sellerId,

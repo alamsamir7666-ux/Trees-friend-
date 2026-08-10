@@ -86,6 +86,16 @@ export const ordersTable = pgTable(
   {
     id: serial("id").primaryKey(),
     trackingId: text("tracking_id").notNull().unique(),
+    // Industry-standard sequential order number for display (Shopify
+    // #1001, #1002; WooCommerce order numbers). Distinct from id (PK,
+    // never displayed) and trackingId (random hex, used as a bearer
+    // secret for guest order lookup). orderNumber is the friendly,
+    // sequential identifier shown to buyers and referenced in emails.
+    // Populated via a Postgres SEQUENCE (order_number_seq) for race-free
+    // sequential assignment — started at 1001 so the first order is
+    // #1001 (matches Shopify convention, avoids single-digit order
+    // numbers that look unprofessional).
+    orderNumber: integer("order_number"),
     userId: text("user_id")
       .notNull()
       .references(() => usersTable.clerkId, { onDelete: "restrict" }),

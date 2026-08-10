@@ -1,8 +1,8 @@
 import { Router } from "express";
-import type { z } from "zod";
+import { z } from "zod";
 import { db } from "@workspace/db";
 import { preOrdersTable, productsTable, sellerListingVariantsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { validateBody, validateParams } from "../lib/validateRequest";
 import { asyncHandler, HttpError } from "../lib/errors";
@@ -12,7 +12,12 @@ import type { ApiRequest } from "../types/apiRequest";
 const router = Router();
 
 function generateTrackingId() {
-  return "PRE-" + Date.now().toString(36).toUpperCase() + "-" + Math.random().toString(36).substring(2, 6).toUpperCase();
+  return (
+    "PRE-" +
+    Date.now().toString(36).toUpperCase() +
+    "-" +
+    Math.random().toString(36).substring(2, 6).toUpperCase()
+  );
 }
 
 /**
@@ -43,7 +48,11 @@ router.post(
       whatsappPhone,
     } = req.body;
 
-    const [product] = await db.select().from(productsTable).where(eq(productsTable.id, productId)).limit(1);
+    const [product] = await db
+      .select()
+      .from(productsTable)
+      .where(eq(productsTable.id, productId))
+      .limit(1);
     if (!product) throw new HttpError(404, "Product not found");
 
     const [variant] = await db
@@ -79,7 +88,9 @@ router.post(
       paymentStatus: paymentMethod === "cod" ? "pending" : "pending_verification",
       status: "pending",
     });
-    res.status(201).json({ message: "Pre-order placed!", trackingId, deliveryCharge, discountedPrice });
+    res
+      .status(201)
+      .json({ message: "Pre-order placed!", trackingId, deliveryCharge, discountedPrice });
   }),
 );
 
@@ -103,9 +114,44 @@ router.get(
   "/pre-orders/track/:trackingId",
   asyncHandler(async (req, res) => {
     const { trackingId } = req.params;
-    const [order] = await db.select().from(preOrdersTable).where(eq(preOrdersTable.trackingId, trackingId)).limit(1);
+    const [order] = await db
+      .select()
+      .from(preOrdersTable)
+      .where(eq(preOrdersTable.trackingId, trackingId))
+      .limit(1);
     if (!order) throw new HttpError(404, "Not found");
     res.json(order);
+  }),
+);
+
+/**
+ * POST /pre-orders/track-batch — batch lookup of multiple pre-orders by
+ * tracking ID. Solves the N+1 fetch problem: previously the OrdersPage
+ * fired N parallel GET /pre-orders/track/:trackingId requests for a
+ * guest with N pre-orders. Now one POST request with {trackingIds: [...]}
+ * returns all matching pre-orders in a single response.
+ *
+ * Public (no auth) — same trust model as the single track endpoint:
+ * the tracking ID itself is the bearer secret (unguessable random suffix).
+ * Returns only pre-orders whose trackingId is in the provided array;
+ * unknown tracking IDs are silently omitted (not an error).
+ *
+ * Caps at 50 tracking IDs per request to prevent abuse.
+ */
+const TrackBatchBody = z.object({
+  trackingIds: z.array(z.string().min(1).max(30)).min(1).max(50),
+});
+
+router.post(
+  "/pre-orders/track-batch",
+  validateBody(TrackBatchBody, "TrackBatchBody"),
+  asyncHandler(async (req, res) => {
+    const { trackingIds } = req.body as z.infer<typeof TrackBatchBody>;
+    const orders = await db
+      .select()
+      .from(preOrdersTable)
+      .where(inArray(preOrdersTable.trackingId, trackingIds));
+    res.json(orders);
   }),
 );
 
@@ -138,30 +184,39 @@ router.post(
   requireAdmin,
   validateParams(IdParam, "IdParam"),
   validateBody(UpdatePreOrderStatusBody, "UpdatePreOrderStatusBody"),
-  asyncHandler(async (req: ApiRequest<z.infer<typeof UpdatePreOrderStatusBody>, z.infer<typeof IdParam>>, res) => {
-    const { id } = req.params;
-    const { status, cancellationReason } = req.body;
+  asyncHandler(
+    async (
+      req: ApiRequest<z.infer<typeof UpdatePreOrderStatusBody>, z.infer<typeof IdParam>>,
+      res,
+    ) => {
+      const { id } = req.params;
+      const { status, cancellationReason } = req.body;
 
-    const [current] = await db.select().from(preOrdersTable).where(eq(preOrdersTable.id, id)).limit(1);
-    if (!current) throw new HttpError(404, "Not found");
-    if (current.status === "delivered" || current.status === "cancelled") {
-      throw new HttpError(400, "Cannot change status of delivered or cancelled pre-orders");
-    }
+      const [current] = await db
+        .select()
+        .from(preOrdersTable)
+        .where(eq(preOrdersTable.id, id))
+        .limit(1);
+      if (!current) throw new HttpError(404, "Not found");
+      if (current.status === "delivered" || current.status === "cancelled") {
+        throw new HttpError(400, "Cannot change status of delivered or cancelled pre-orders");
+      }
 
-    const updateData: Partial<typeof preOrdersTable.$inferInsert> = {
-      status,
-      updatedAt: new Date(),
-    };
-    if (status === "cancelled" && cancellationReason) {
-      updateData.cancellationReason = cancellationReason;
-    }
-    const [order] = await db
-      .update(preOrdersTable)
-      .set(updateData)
-      .where(eq(preOrdersTable.id, id))
-      .returning();
-    res.json(order);
-  }),
+      const updateData: Partial<typeof preOrdersTable.$inferInsert> = {
+        status,
+        updatedAt: new Date(),
+      };
+      if (status === "cancelled" && cancellationReason) {
+        updateData.cancellationReason = cancellationReason;
+      }
+      const [order] = await db
+        .update(preOrdersTable)
+        .set(updateData)
+        .where(eq(preOrdersTable.id, id))
+        .returning();
+      res.json(order);
+    },
+  ),
 );
 
 // `notifyPreOrderCustomers` was extracted to lib/preOrders.ts so it can be
