@@ -1,46 +1,141 @@
 import { db } from "@workspace/db";
-import { ordersTable, productVariantsTable, sellerListingVariantsTable } from "@workspace/db";
-import { eq, and, lt, sql } from "drizzle-orm";
+import {
+  ordersTable,
+  productVariantsTable,
+  sellerListingVariantsTable,
+  paymentSessionsTable,
+} from "@workspace/db";
+import { eq, and, lt, sql, isNull } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import type { OrderItem } from "@workspace/db";
 
 /**
- * Payment-pending order expiration job.
+ * Payment-pending expiration job.
  *
- * Finds all orders where:
- *   paymentStatus = 'payment_pending'
- *   AND paymentExpiresAt < now()
- *   AND orderStatus != 'cancelled'  (idempotency — don't re-process)
+ * TWO PHASES:
  *
- * For each expired order:
- *   1. Sets orderStatus = 'cancelled', paymentStatus = 'cancelled'
- *   2. Restores stock for every item in the order (reverses the
- *      decrement done at checkout time)
- *   3. Logs the cancellation for audit
+ * Phase 1 — Expire payment SESSIONS (multi-seller bKash):
+ *   Finds sessions where paymentStatus = 'payment_pending' AND
+ *   paymentExpiresAt < now(). For each expired session:
+ *     1. Cancels the session (paymentStatus → 'cancelled')
+ *     2. Cancels ALL linked orders (orderStatus → 'cancelled',
+ *        paymentStatus → 'cancelled')
+ *     3. Restores stock for every item in every linked order
  *
- * This is the industry-standard pattern for payment-pending order
- * cleanup. Shopify's default is 60 minutes (inventory_hold_minutes);
- * Magento has `cart/checkout/lifetime`; WooCommerce has "Hold Stock
- * for unpaid orders for X minutes". Without this, bKash orders that
- * the buyer abandoned at the hosted payment page sit at
- * payment_pending FOREVER, holding inventory that could be sold to
- * other buyers.
+ * Phase 2 — Expire individual ORDERS (legacy / per-order bKash):
+ *   Finds orders where paymentStatus = 'payment_pending' AND
+ *   paymentExpiresAt < now() AND orderStatus != 'cancelled' AND
+ *   paymentSessionId IS NULL (session-linked orders were already
+ *   cancelled in Phase 1). For each:
+ *     1. Sets orderStatus = 'cancelled', paymentStatus = 'cancelled'
+ *     2. Restores stock for every item in the order
  *
- * Idempotency: the query filters `orderStatus != 'cancelled'` so
- * re-running the job on the same expired order is a no-op. Stock
- * restoration is also idempotent — it uses `stock = stock + quantity`
- * (additive), so even if the job somehow runs twice on the same order
- * before the status flip commits, the stock is only restored once
- * (the second run's WHERE clause finds the order already cancelled and
- * skips it).
+ * Phase 1 runs BEFORE Phase 2 so that session-linked orders are already
+ * cancelled when Phase 2 runs — the `orderStatus != 'cancelled'` filter
+ * in Phase 2 skips them, avoiding double stock restoration.
  *
- * Scheduled via POST /api/cron/payment-expiration every 5 minutes
- * (see routes/cron.ts and vercel.json).
+ * Industry standard: Shopify's inventory_hold_minutes (60 min default),
+ * Magento cart/checkout/lifetime, WooCommerce "Hold Stock".
+ *
+ * Idempotent: both phases filter out already-cancelled orders/sessions,
+ * and stock restoration uses additive `stock = stock + quantity` (safe
+ * to run twice — though the filter prevents that).
  */
 export async function runPaymentExpirationJob(): Promise<void> {
   const now = new Date();
+  let cancelled = 0;
+  let stockRestored = 0;
 
-  // Find all expired payment-pending orders that haven't been cancelled yet.
+  // ── Phase 1: Expire payment sessions ────────────────────────────
+  const expiredSessions = await db
+    .select()
+    .from(paymentSessionsTable)
+    .where(
+      and(
+        eq(paymentSessionsTable.paymentStatus, "payment_pending"),
+        lt(paymentSessionsTable.paymentExpiresAt, now),
+      ),
+    );
+
+  if (expiredSessions.length > 0) {
+    logger.info(
+      { count: expiredSessions.length },
+      "Payment expiration job: processing expired payment sessions",
+    );
+
+    for (const session of expiredSessions) {
+      try {
+        // Find all orders linked to this session.
+        const linkedOrders = await db
+          .select()
+          .from(ordersTable)
+          .where(eq(ordersTable.paymentSessionId, session.id));
+
+        // Restore stock for every item in every linked order.
+        for (const order of linkedOrders) {
+          if (order.orderStatus === "cancelled") continue; // idempotency
+          const items = (order.items ?? []) as OrderItem[];
+          for (const item of items) {
+            if (item.variantId != null) {
+              await db
+                .update(productVariantsTable)
+                .set({ stock: sql`${productVariantsTable.stock} + ${item.quantity}` })
+                .where(eq(productVariantsTable.id, item.variantId));
+              stockRestored++;
+            } else if (item.sellerListingVariantId != null) {
+              await db
+                .update(sellerListingVariantsTable)
+                .set({
+                  stock: sql`${sellerListingVariantsTable.stock} + ${item.quantity}`,
+                  availableQuantity: sql`${sellerListingVariantsTable.availableQuantity} + ${item.quantity}`,
+                  updatedAt: new Date(),
+                })
+                .where(eq(sellerListingVariantsTable.id, item.sellerListingVariantId));
+              stockRestored++;
+            }
+          }
+          cancelled++;
+        }
+
+        // Cancel all linked orders in one update.
+        if (linkedOrders.length > 0) {
+          await db
+            .update(ordersTable)
+            .set({
+              orderStatus: "cancelled",
+              paymentStatus: "cancelled",
+              cancellationReason: "Payment session timed out (not completed within 60 minutes)",
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(ordersTable.paymentSessionId, session.id),
+                sql`${ordersTable.orderStatus} != 'cancelled'`,
+              ),
+            );
+        }
+
+        // Cancel the session itself.
+        await db
+          .update(paymentSessionsTable)
+          .set({
+            paymentStatus: "cancelled",
+            updatedAt: new Date(),
+          })
+          .where(eq(paymentSessionsTable.id, session.id));
+      } catch (err) {
+        logger.error(
+          { err, sessionId: session.id },
+          "Payment expiration job: failed to cancel session",
+        );
+      }
+    }
+  }
+
+  // ── Phase 2: Expire individual orders (no session) ──────────────
+  // Only processes orders that are NOT linked to a payment session
+  // (paymentSessionId IS NULL) — session-linked orders were already
+  // handled in Phase 1.
   const expiredOrders = await db
     .select()
     .from(ordersTable)
@@ -49,78 +144,69 @@ export async function runPaymentExpirationJob(): Promise<void> {
         eq(ordersTable.paymentStatus, "payment_pending"),
         lt(ordersTable.paymentExpiresAt, now),
         sql`${ordersTable.orderStatus} != 'cancelled'`,
+        isNull(ordersTable.paymentSessionId),
       ),
     );
 
-  if (expiredOrders.length === 0) {
-    return;
-  }
+  if (expiredOrders.length > 0) {
+    logger.info(
+      { count: expiredOrders.length },
+      "Payment expiration job: processing expired payment-pending orders (no session)",
+    );
 
-  logger.info(
-    { count: expiredOrders.length },
-    "Payment expiration job: processing expired payment-pending orders",
-  );
+    for (const order of expiredOrders) {
+      try {
+        const items = (order.items ?? []) as OrderItem[];
 
-  let cancelled = 0;
-  let stockRestored = 0;
-
-  for (const order of expiredOrders) {
-    try {
-      const items = (order.items ?? []) as OrderItem[];
-
-      // Restore stock for each item. Marketplace items (sellerListingVariantId
-      // set) restore sellerListingVariantsTable.stock + availableQuantity;
-      // admin-direct items (variantId set) restore productVariantsTable.stock.
-      // Uses additive `stock = stock + quantity` so it's idempotent.
-      for (const item of items) {
-        if (item.variantId != null) {
-          // Admin-direct variant line
-          await db
-            .update(productVariantsTable)
-            .set({
-              stock: sql`${productVariantsTable.stock} + ${item.quantity}`,
-            })
-            .where(eq(productVariantsTable.id, item.variantId));
-          stockRestored++;
-        } else if (item.sellerListingVariantId != null) {
-          // Marketplace seller-listing-variant line
-          await db
-            .update(sellerListingVariantsTable)
-            .set({
-              stock: sql`${sellerListingVariantsTable.stock} + ${item.quantity}`,
-              availableQuantity: sql`${sellerListingVariantsTable.availableQuantity} + ${item.quantity}`,
-              updatedAt: new Date(),
-            })
-            .where(eq(sellerListingVariantsTable.id, item.sellerListingVariantId));
-          stockRestored++;
+        for (const item of items) {
+          if (item.variantId != null) {
+            await db
+              .update(productVariantsTable)
+              .set({ stock: sql`${productVariantsTable.stock} + ${item.quantity}` })
+              .where(eq(productVariantsTable.id, item.variantId));
+            stockRestored++;
+          } else if (item.sellerListingVariantId != null) {
+            await db
+              .update(sellerListingVariantsTable)
+              .set({
+                stock: sql`${sellerListingVariantsTable.stock} + ${item.quantity}`,
+                availableQuantity: sql`${sellerListingVariantsTable.availableQuantity} + ${item.quantity}`,
+                updatedAt: new Date(),
+              })
+              .where(eq(sellerListingVariantsTable.id, item.sellerListingVariantId));
+            stockRestored++;
+          }
         }
+
+        await db
+          .update(ordersTable)
+          .set({
+            orderStatus: "cancelled",
+            paymentStatus: "cancelled",
+            cancellationReason: "Payment timed out (not completed within 60 minutes)",
+            updatedAt: new Date(),
+          })
+          .where(eq(ordersTable.id, order.id));
+
+        cancelled++;
+      } catch (err) {
+        logger.error(
+          { err, orderId: order.id, trackingId: order.trackingId },
+          "Payment expiration job: failed to cancel order",
+        );
       }
-
-      // Cancel the order. paymentStatus → 'cancelled' (distinct from
-      // 'failed' — this was a timeout, not a payment failure); orderStatus
-      // → 'cancelled'. The cancellationReason records why.
-      await db
-        .update(ordersTable)
-        .set({
-          orderStatus: "cancelled",
-          paymentStatus: "cancelled",
-          cancellationReason: "Payment timed out (not completed within 60 minutes)",
-          updatedAt: new Date(),
-        })
-        .where(eq(ordersTable.id, order.id));
-
-      cancelled++;
-    } catch (err) {
-      // Log but don't throw — one failed order shouldn't block the rest.
-      logger.error(
-        { err, orderId: order.id, trackingId: order.trackingId },
-        "Payment expiration job: failed to cancel order",
-      );
     }
   }
 
-  logger.info(
-    { cancelled, stockRestored, total: expiredOrders.length },
-    "Payment expiration job: completed",
-  );
+  if (cancelled > 0 || stockRestored > 0) {
+    logger.info(
+      {
+        cancelled,
+        stockRestored,
+        sessionsExpired: expiredSessions.length,
+        ordersExpired: expiredOrders.length,
+      },
+      "Payment expiration job: completed",
+    );
+  }
 }

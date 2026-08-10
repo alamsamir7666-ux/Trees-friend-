@@ -1,15 +1,15 @@
 import { logger } from "../lib/logger";
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { ordersTable } from "@workspace/db";
+import { ordersTable, paymentSessionsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { createPayment, executePayment, queryPayment, BkashApiError } from "../lib/bkash";
 import { checkoutLimiter, guestBkashLimiter } from "../middlewares/rateLimiter";
 import { CreateBkashPaymentBody, CreateBkashPaymentGuestBody } from "@workspace/api-zod";
 import { validateBody } from "../lib/validateRequest";
 import type { ApiRequest } from "../types/apiRequest";
-import type { z } from "zod";
 
 /**
  * bKash Tokenized Checkout create -> redirect -> callback -> execute cycle
@@ -165,6 +165,117 @@ async function handleCreatePayment(order: typeof ordersTable.$inferSelect, res: 
   });
 }
 
+// ── Payment Session-based Create Payment (Phase 1: multi-seller bKash) ──
+
+/**
+ * Zod schema for POST /bkash/create-payment-session. Takes a
+ * paymentSessionId (returned by POST /orders and POST /orders/guest when
+ * a bKash session was created). The session's totalAmount is the single
+ * bKash charge — covers ALL linked orders. The buyer pays once.
+ */
+const CreateBkashPaymentSessionBody = z.object({
+  paymentSessionId: z.number().int().positive(),
+});
+
+/**
+ * Shared session-based Create Payment logic. Creates ONE bKash payment
+ * for the session's totalAmount (sum of all linked bKash orders), so the
+ * buyer goes through bKash's hosted page ONCE for a multi-seller cart
+ * instead of N times. Industry-standard pattern (Shopify, Amazon, Etsy).
+ *
+ * The bKash invoiceNumber is "PS-{sessionId}" (not an order trackingId),
+ * so the callback can distinguish session-based payments from per-order
+ * payments by the invoice prefix.
+ *
+ * Idempotency: if the session already has a bkashPaymentId (buyer hit
+ * back/refresh), we re-fetch the existing bKash paymentURL instead of
+ * creating a new one. This matches bKash's own "don't create duplicate
+ * payments for the same invoice" guidance.
+ */
+async function handleCreateSessionPayment(
+  session: typeof paymentSessionsTable.$inferSelect,
+  res: any,
+) {
+  if (session.paymentStatus !== "payment_pending") {
+    res.status(400).json({
+      error: `This payment session's status is "${session.paymentStatus}", not payable via bKash right now.`,
+    });
+    return;
+  }
+
+  const callbackURL = `${process.env.APP_URL ?? "https://treefriend.com"}/api/bkash/callback`;
+  const invoiceNumber = `PS-${session.id}`;
+
+  let result;
+  try {
+    result = await createPayment({
+      amount: Number(session.totalAmount),
+      invoiceNumber,
+      callbackURL,
+    });
+  } catch (err) {
+    if (err instanceof BkashApiError) {
+      logger.error({ err, step: err.step }, "bkash create-payment (session) error");
+      res.status(502).json({ error: "Couldn't start bKash payment. Please try again shortly." });
+      return;
+    }
+    throw err;
+  }
+
+  // Persist the bKash paymentID on the session row so the callback can
+  // look up the session by paymentID (indexed) and cascade "paid" to all
+  // linked orders.
+  await db
+    .update(paymentSessionsTable)
+    .set({ bkashPaymentId: result.paymentID })
+    .where(eq(paymentSessionsTable.id, session.id));
+
+  res.json({
+    paymentID: result.paymentID,
+    bkashURL: result.bkashURL,
+    paymentSessionId: session.id,
+  });
+}
+
+/**
+ * POST /bkash/create-payment-session — PUBLIC (no auth). Takes
+ * paymentSessionId in the body. The session ID is a sequential integer,
+ * but security is enforced by:
+ *   1. The session must be in "payment_pending" status (can't pay an
+ *      already-paid or cancelled session).
+ *   2. The callback verifies the paid amount matches session.totalAmount.
+ *   3. The buyer must still authorize the payment on bKash's hosted page.
+ *
+ * This endpoint is called by the frontend right after checkout (both auth
+ * and guest paths) when the checkout response includes a paymentSessionId.
+ * For a multi-seller cart where 3 orders resolved to bKash, this creates
+ * ONE bKash payment for the sum of all 3 — the buyer pays once.
+ */
+router.post(
+  "/bkash/create-payment-session",
+  guestBkashLimiter,
+  validateBody(CreateBkashPaymentSessionBody, "CreateBkashPaymentSessionBody"),
+  async (req: ApiRequest<z.infer<typeof CreateBkashPaymentSessionBody>>, res) => {
+    try {
+      const { paymentSessionId } = req.body;
+      const [session] = await db
+        .select()
+        .from(paymentSessionsTable)
+        .where(eq(paymentSessionsTable.id, paymentSessionId))
+        .limit(1);
+
+      if (!session) {
+        res.status(404).json({ error: "Payment session not found" });
+        return;
+      }
+      await handleCreateSessionPayment(session, res);
+    } catch (err) {
+      logger.error({ err }, "bkash create-payment-session unexpected error");
+      res.status(500).json({ error: "Failed to start bKash payment" });
+    }
+  },
+);
+
 /**
  * POST /bkash/create-payment — AUTHENTICATED path, for a logged-in
  * buyer's own order (orderId in body). requireAuth-gated at the route
@@ -283,16 +394,113 @@ router.get("/bkash/callback", async (req, res) => {
       return;
     }
 
-    // Look up the order by the bKash paymentID that was persisted on the
-    // order row at Create Payment time (routes/bkashPayment.ts:
-    // handleCreatePayment writes bkashPaymentId). This is an indexed
-    // lookup (orders_bkash_payment_id_idx) — O(1) on the DB, no network
-    // call to bKash needed just to find the order.
-    //
-    // Fallback: if no order has this paymentID (e.g. the order was
-    // created before the bkashPaymentId column existed, or the
-    // handleCreatePayment write failed silently), fall back to the old
-    // queryPayment path to recover the merchantInvoiceNumber.
+    // ── Session-based lookup (Phase 1: multi-seller bKash) ──────────
+    // First, try to find a PAYMENT SESSION with this bkashPaymentId. If
+    // found, this is a session-based payment (one bKash charge covering
+    // multiple orders). The callback cascades "paid" to ALL linked orders.
+    const [session] = await db
+      .select()
+      .from(paymentSessionsTable)
+      .where(eq(paymentSessionsTable.bkashPaymentId, paymentID))
+      .limit(1);
+
+    if (session) {
+      // Session-based payment flow.
+      // Find the linked orders so we can redirect to the first one's
+      // detail page after the callback.
+      const linkedOrders = await db
+        .select()
+        .from(ordersTable)
+        .where(eq(ordersTable.paymentSessionId, session.id))
+        .orderBy(ordersTable.id);
+      const firstOrder = linkedOrders[0];
+
+      if (!firstOrder) {
+        logger.error(
+          { sessionId: session.id, paymentID },
+          "[bkash] callback: session has no linked orders",
+        );
+        res.redirect(`${frontendBase}/orders?bkash=order_not_found`);
+        return;
+      }
+
+      const orderPath = firstOrder.userId.startsWith("guest_")
+        ? `/orders/${firstOrder.trackingId}`
+        : `/orders/${firstOrder.id}`;
+
+      if (status && status !== "success") {
+        res.redirect(`${frontendBase}${orderPath}?bkash=${status}`);
+        return;
+      }
+
+      let executed;
+      try {
+        executed = await executePayment({ paymentID });
+      } catch (err) {
+        logger.error({ err: err }, "[bkash] callback: execute-payment (session) failed");
+        res.redirect(`${frontendBase}${orderPath}?bkash=execute_failed`);
+        return;
+      }
+
+      if (executed.transactionStatus !== "Completed") {
+        res.redirect(`${frontendBase}${orderPath}?bkash=not_completed`);
+        return;
+      }
+
+      // Amount verification: paid amount must match the SESSION total
+      // (not a single order's total — the session covers multiple orders).
+      const paidAmount = Number(executed.amount);
+      const expectedAmount = Number(session.totalAmount);
+      if (isNaN(paidAmount) || Math.abs(paidAmount - expectedAmount) > 0.01) {
+        logger.error(
+          { sessionId: session.id, expectedAmount, paidAmount, transactionId: executed.trxID },
+          "[bkash] callback: session amount mismatch — session NOT marked paid",
+        );
+        res.redirect(`${frontendBase}${orderPath}?bkash=amount_mismatch`);
+        return;
+      }
+
+      // ── Cascade: mark session paid + ALL linked orders paid ──────
+      // This is the key win of the session approach: ONE bKash payment
+      // marks ALL linked orders as paid atomically. The buyer doesn't
+      // need to pay each order separately.
+      await db.transaction(async (tx) => {
+        // Mark the session paid.
+        await tx
+          .update(paymentSessionsTable)
+          .set({
+            paymentStatus: "paid",
+            paidAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(paymentSessionsTable.id, session.id));
+
+        // Cascade to all linked orders: mark each one paid, set paidAt,
+        // clear paymentExpiresAt (no longer pending), store the same
+        // transactionId on each order (so order detail pages can show it).
+        await tx
+          .update(ordersTable)
+          .set({
+            paymentStatus: "paid",
+            transactionId: executed.trxID,
+            paidAt: new Date(),
+            paymentExpiresAt: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(ordersTable.paymentSessionId, session.id));
+      });
+
+      res.redirect(`${frontendBase}${orderPath}?bkash=success`);
+      return;
+    }
+
+    // ── Per-order lookup (legacy / single-order bKash) ─────────────
+    // No session matched this paymentID — fall back to the per-order flow.
+    // This handles:
+    //   1. Legacy orders created before payment_sessions existed.
+    //   2. Single-order bKash retry from the order detail page (the
+    //      "Pay with bKash" button calls POST /bkash/create-payment with
+    //      orderId, which doesn't create a session).
     const [orderByPaymentId] = await db
       .select()
       .from(ordersTable)

@@ -11,6 +11,7 @@ import {
   couponsTable,
   usersTable,
   addressesTable,
+  paymentSessionsTable,
 } from "@workspace/db";
 import { eq, desc, and, sql, inArray, ilike, gte, lte } from "drizzle-orm";
 import { requireAuth } from "../middlewares/auth";
@@ -411,7 +412,41 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
       { isolationLevel: "serializable" },
     );
 
-    res.status(201).json({ id: order.id, trackingId: order.trackingId });
+    // ── Payment Session creation (guest bKash) ──────────────────────
+    // Guest checkout produces exactly one order (admin-direct only), so
+    // there's no multi-seller problem. But for consistency with the
+    // authenticated flow, we still create a payment session for bKash
+    // orders — the frontend uses the same session-based endpoint for
+    // both paths, simplifying the client code.
+    let paymentSessionId: number | null = null;
+    if (order.paymentMethod === "bkash") {
+      try {
+        const [session] = await db
+          .insert(paymentSessionsTable)
+          .values({
+            // Guest sessions have no userId (guest orders use "guest_"
+            // prefixed userId on the order row itself).
+            userId: null,
+            totalAmount: String(totalAmount),
+            paymentStatus: "payment_pending",
+            paymentExpiresAt: paymentExpiryDate(),
+          })
+          .returning();
+        paymentSessionId = session.id;
+        await db
+          .update(ordersTable)
+          .set({ paymentSessionId: session.id })
+          .where(eq(ordersTable.id, order.id));
+      } catch (err) {
+        // Non-fatal: fallback to the old per-order flow.
+        logger.error(
+          { err, orderId: order.id },
+          "Guest payment session creation failed — falling back to per-order payment",
+        );
+      }
+    }
+
+    res.status(201).json({ id: order.id, trackingId: order.trackingId, paymentSessionId });
   } catch (err) {
     logger.error({ err }, "guest order error");
     res.status(500).json({ error: "Failed to place order" });
@@ -1077,12 +1112,77 @@ router.post(
         }
       }
 
+      // ── Payment Session creation (Phase 1: multi-seller bKash) ──────
+      // If ANY of the created orders is bKash, create ONE payment session
+      // covering all bKash orders from this checkout. The buyer then pays
+      // the session total (sum of all bKash orders) in a SINGLE bKash
+      // redirect, instead of N separate bKash redirects. This is the
+      // industry-standard pattern (Shopify, Amazon, Etsy all do this).
+      //
+      // COD orders are NOT linked to the session — they have no bKash
+      // charge to group. Only bKash orders get linked.
+      //
+      // The session is created OUTSIDE the checkout transaction because:
+      // 1. The orders are already committed (the transaction succeeded).
+      // 2. If session creation fails (DB blip), the orders still exist —
+      //    the buyer can retry payment per-order from the order detail
+      //    page (fallback to the old per-order flow).
+      // 3. The session is a payment-orchestration concern, not an order-
+      //    creation concern — they have different failure modes.
+      const bkashOrders = createdOrders.filter((o) => o.paymentMethod === "bkash");
+      let paymentSessionId: number | null = null;
+      if (bkashOrders.length > 0) {
+        try {
+          const sessionTotal = bkashOrders.reduce((s, o) => s + Number(o.totalAmount), 0);
+          const [session] = await db
+            .insert(paymentSessionsTable)
+            .values({
+              userId: req.userId!,
+              totalAmount: String(sessionTotal),
+              paymentStatus: "payment_pending",
+              paymentExpiresAt: paymentExpiryDate(),
+            })
+            .returning();
+          paymentSessionId = session.id;
+
+          // Link all bKash orders to this session. The callback will use
+          // this FK to cascade "paid" status to all linked orders when
+          // the single bKash payment succeeds.
+          await db
+            .update(ordersTable)
+            .set({ paymentSessionId: session.id })
+            .where(
+              inArray(
+                ordersTable.id,
+                bkashOrders.map((o) => o.id),
+              ),
+            );
+        } catch (err) {
+          // Non-fatal: if session creation fails, the orders still exist.
+          // The buyer falls back to the old per-order payment flow
+          // (POST /bkash/create-payment with orderId). Log so we know.
+          logger.error(
+            { err, userId: req.userId!, orderIds: bkashOrders.map((o) => o.id) },
+            "Payment session creation failed — falling back to per-order payment",
+          );
+        }
+      }
+
       // Always an array, even when checkout didn't split (single-seller or
       // all-admin-direct cart still produces exactly one order). A
       // conditional single-object-vs-wrapper response shape forces every
       // caller to branch on "did it split," which is worse than the one-time
       // cost of every caller expecting an array. See CheckoutPage.tsx.
-      res.status(201).json(createdOrders.map(formatOrder));
+      //
+      // paymentSessionId is included when a bKash session was created —
+      // the frontend uses it to call POST /bkash/create-payment-session
+      // (one bKash redirect for all orders) instead of POST /bkash/create-payment
+      // (one redirect per order). NULL for COD-only carts.
+      const formattedOrders = createdOrders.map(formatOrder);
+      res.status(201).json({
+        orders: formattedOrders,
+        paymentSessionId,
+      } as any);
     } catch (err) {
       logger.error({ err, userId: req.userId! }, "Order creation failed");
       res.status(500).json({ error: "Failed to create order" });

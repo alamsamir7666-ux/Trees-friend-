@@ -137,6 +137,11 @@ export const ordersTable = pgTable(
     // and restores stock. Nullable: NULL for COD orders (no payment
     // pending) and for orders created before this column existed.
     paymentExpiresAt: timestamp("payment_expires_at"),
+    // Payment session this order belongs to (for multi-seller bKash carts).
+    // NULL for COD orders (no bKash charge to group) and for legacy orders
+    // created before the payment_sessions table existed. See
+    // schema/paymentSessions.ts for the full rationale.
+    paymentSessionId: integer("payment_session_id"),
     shippingAddress: jsonb("shipping_address").$type<ShippingAddress>().notNull(),
     couponCode: text("coupon_code"),
     discountAmount: numeric("discount_amount", {
@@ -181,6 +186,9 @@ export const ordersTable = pgTable(
     // paymentID and needs to find the matching order. Without this index
     // the callback seq-scans orders on every bKash redirect.
     index("orders_bkash_payment_id_idx").on(table.bkashPaymentId),
+    // Index for payment session lookup: "find all orders linked to this
+    // session" (used by the callback cascade + the disbursement cron).
+    index("orders_payment_session_id_idx").on(table.paymentSessionId),
   ],
 );
 

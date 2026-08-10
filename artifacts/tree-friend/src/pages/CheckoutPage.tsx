@@ -298,32 +298,26 @@ export function CheckoutPage() {
   const [submitError, setSubmitError] = useState("");
 
   /**
-   * After AUTHENTICATED checkout creates order(s), kicks off bKash payment
-   * for the FIRST order that resolved to "bkash" and does a full browser
-   * redirect to bKash's hosted page (see PART2_HANDOFF.md's
-   * order-sequencing section for the full reasoning). A full redirect --
-   * not a popup -- because bKash's own flow is itself a full-page hosted
-   * checkout that redirects back to OUR /api/bkash/callback afterward; a
-   * popup would need postMessage/polling plumbing bKash's flow was never
-   * designed to support cleanly, and this codebase has no existing
-   * popup-based payment pattern to extend.
+   * After AUTHENTICATED checkout creates order(s), kicks off bKash payment.
    *
-   * MULTI-ORDER CARTS: bKash's Create Payment takes exactly one
-   * amount/invoice at a time -- there's no "pay N orders in one session."
-   * If MORE than one resulting order is "bkash", only the first is paid
-   * here; the rest stay at paymentStatus "payment_pending" and the buyer
-   * pays each remaining one from the order detail page afterward (a "Pay
-   * with bKash" action there calls the exact same create-payment
-   * endpoint -- see OrderDetailPage.tsx). This is a real, visible UX cost
-   * of bKash having no multi-invoice primitive, not hidden from the
-   * buyer: sessionStorage's existing "last_checkout_order_ids" list
-   * already lets the order detail page surface "N more orders from this
-   * checkout still need payment."
+   * PAYMENT SESSION (Phase 1): if the checkout response includes a
+   * paymentSessionId, the buyer pays ALL bKash orders in ONE bKash redirect
+   * (the session covers the sum of all bKash order totals). This is the
+   * industry-standard pattern — the buyer never pays N times for a
+   * multi-seller cart.
    *
-   * cod-only orders need no bKash call at all and are just navigated to
-   * directly.
+   * FALLBACK: if no paymentSessionId (session creation failed server-side,
+   * or COD-only cart), falls back to the old per-order flow: pay the first
+   * bKash order, leave the rest for the buyer to pay from the order detail
+   * page.
+   *
+   * COD-only orders need no bKash call at all — just navigate to the
+   * first order's detail page.
    */
-  async function payFirstBkashOrderOrGoToOrder(orders: { id: number; paymentMethod: string }[]) {
+  async function payFirstBkashOrderOrGoToOrder(
+    orders: { id: number; paymentMethod: string }[],
+    paymentSessionId?: number | null,
+  ) {
     const firstBkash = orders.find((o) => o.paymentMethod === "bkash");
     if (!firstBkash) {
       setLocation(`/orders/${orders[0].id}`);
@@ -331,10 +325,19 @@ export function CheckoutPage() {
     }
     setRedirectingToBkash(true);
     try {
-      const session = await createBkashPayment({ orderId: firstBkash.id });
-      window.location.href = session.bkashURL;
-      // No further navigation here -- the browser is leaving this page
-      // entirely for bKash's hosted checkout.
+      // If we have a payment session, use the session-based endpoint
+      // (ONE bKash redirect for ALL orders). Otherwise fall back to
+      // the per-order endpoint (first bKash order only).
+      if (paymentSessionId) {
+        const { data: sessionData } = await apiClient.post<{
+          bkashURL: string;
+          paymentID: string;
+        }>("/bkash/create-payment-session", { paymentSessionId });
+        window.location.href = sessionData.bkashURL;
+      } else {
+        const session = await createBkashPayment({ orderId: firstBkash.id });
+        window.location.href = session.bkashURL;
+      }
     } catch {
       setRedirectingToBkash(false);
       setSubmitError(
@@ -345,21 +348,32 @@ export function CheckoutPage() {
   }
 
   /**
-   * GUEST equivalent of the helper above -- guest checkout always
-   * produces exactly one order (routes/orders.ts's POST /orders/guest has
-   * no multi-seller split; guest orders are admin-direct only), so there's
-   * no "first of several" case to handle here, just "was this one order
-   * bkash or cod."
+   * GUEST equivalent — uses the same session-based endpoint when a
+   * paymentSessionId is available. Guest checkout always produces one
+   * order (admin-direct only), so there's no multi-seller problem, but
+   * using the session endpoint keeps the flow consistent.
    */
-  async function payGuestBkashOrderOrGoToOrder(trackingId: string, method: PaymentMethod) {
+  async function payGuestBkashOrderOrGoToOrder(
+    trackingId: string,
+    method: PaymentMethod,
+    paymentSessionId?: number | null,
+  ) {
     if (method !== "bkash") {
       setLocation(`/orders/${trackingId}`);
       return;
     }
     setRedirectingToBkash(true);
     try {
-      const session = await createBkashPaymentGuest({ trackingId });
-      window.location.href = session.bkashURL;
+      if (paymentSessionId) {
+        const { data: sessionData } = await apiClient.post<{
+          bkashURL: string;
+          paymentID: string;
+        }>("/bkash/create-payment-session", { paymentSessionId });
+        window.location.href = sessionData.bkashURL;
+      } else {
+        const session = await createBkashPaymentGuest({ trackingId });
+        window.location.href = session.bkashURL;
+      }
     } catch {
       setRedirectingToBkash(false);
       setSubmitError(
@@ -461,7 +475,11 @@ export function CheckoutPage() {
             // localStorage may be unavailable (private mode) — non-critical,
             // the guest order summary is a best-effort convenience.
           }
-          await payGuestBkashOrderOrGoToOrder(data.trackingId, paymentMethod);
+          await payGuestBkashOrderOrGoToOrder(
+            data.trackingId,
+            paymentMethod,
+            data.paymentSessionId ?? null,
+          );
         })
         .catch(() => setSubmitError("Failed to place order. Please try again."));
       return;
@@ -500,9 +518,14 @@ export function CheckoutPage() {
         { headers: { "Idempotency-Key": idempotencyKey } },
       )
       .then(({ data }) => {
-        // Normalize the response to always be an array (the backend
-        // returns an array, but the type system doesn't know that).
-        const orders = Array.isArray(data) ? data : [data];
+        // The backend now returns { orders, paymentSessionId } instead of
+        // a bare array. Extract both — paymentSessionId is null for COD-only
+        // carts or if session creation failed (fallback to per-order flow).
+        const responseBody = data as { orders?: any[]; paymentSessionId?: number | null } | any[];
+        const orders = Array.isArray(responseBody) ? responseBody : (responseBody.orders ?? []);
+        const paymentSessionId = Array.isArray(responseBody)
+          ? null
+          : (responseBody.paymentSessionId ?? null);
         qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
         apiClient.post("/abandoned-cart/recover").catch(() => {
           // Silently ignore — recovery marking is best-effort.
@@ -510,13 +533,14 @@ export function CheckoutPage() {
         try {
           sessionStorage.setItem(
             "last_checkout_order_ids",
-            JSON.stringify(orders.map((o) => o.id)),
+            JSON.stringify(orders.map((o: any) => o.id)),
           );
         } catch {
           // sessionStorage may be unavailable (private mode) — non-critical.
         }
-        // Cast to the shape payFirstBkashOrderOrGoToOrder expects.
-        payFirstBkashOrderOrGoToOrder(orders as any);
+        // Pass paymentSessionId so the buyer pays ALL bKash orders in ONE
+        // bKash redirect (session-based) instead of N redirects (per-order).
+        payFirstBkashOrderOrGoToOrder(orders as any, paymentSessionId);
       })
       .catch((err) => {
         // Price locking: if the backend returns 409 with priceChangedItems,

@@ -36,6 +36,7 @@ export * from "./orderShipments";
 export * from "./follows";
 
 export * from "./platformPaymentConfig";
+export * from "./paymentSessions";
 export * from "./sellerPayoutAccounts";
 export * from "./payouts";
 export * from "./conversations";
