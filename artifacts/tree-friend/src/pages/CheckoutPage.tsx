@@ -348,6 +348,14 @@ export function CheckoutPage() {
       setSubmitError("Please fill in all required address fields.");
       return;
     }
+    // BD phone format validation: 11 digits starting with 01[3-9].
+    // Matches the backend's BD_PHONE_REGEX in routes/orders.ts so the
+    // buyer gets immediate feedback instead of a 400 after submit.
+    const normalizedPhone = address.phone.replace(/[\s-]/g, "");
+    if (!/^01[3-9]\d{8}$/.test(normalizedPhone)) {
+      setSubmitError("Please enter a valid Bangladeshi phone number (e.g. 01XXXXXXXXX).");
+      return;
+    }
     // Part 2 of 4: no more sending-number validation here -- bKash's own
     // hosted page collects that. See doc comment above the (now removed)
     // bkashNumber/sellerSenderNumber state for what used to live here.
@@ -433,8 +441,16 @@ export function CheckoutPage() {
               )
             : undefined,
           couponCode: couponApplied ? couponCode : null,
+          // Loyalty points to redeem. The old `Math.ceil(maxPointsDiscount / 1)`
+          // was a no-op placeholder — `/ 1` does nothing. The backend
+          // (orders.ts) caps redemption at 20% of subtotal and computes
+          // `loyaltyDiscount = Math.min(pointsToRedeem * TAKA_PER_POINT,
+          // maxLoyaltyDiscount)`, so we just send the raw taka amount as
+          // points (TAKA_PER_POINT = 1, so 1 point = 1 taka). The backend
+          // re-validates and clamps, so the frontend value is a hint, not
+          // a commitment.
           loyaltyPointsToRedeem:
-            usePoints && maxPointsDiscount > 0 ? Math.ceil(maxPointsDiscount / 1) : 0,
+            usePoints && maxPointsDiscount > 0 ? Math.ceil(maxPointsDiscount) : 0,
           giftWrap,
           giftMessage: giftWrap ? giftMessage : null,
         },
@@ -456,15 +472,18 @@ export function CheckoutPage() {
           apiClient.post("/abandoned-cart/recover").catch(() => {
             // Silently ignore — recovery marking is best-effort.
           });
-          if (orders.length > 1) {
-            try {
-              sessionStorage.setItem(
-                "last_checkout_order_ids",
-                JSON.stringify(orders.map((o) => o.id)),
-              );
-            } catch {
-              // sessionStorage may be unavailable (private mode) — non-critical.
-            }
+          // Always store the order IDs from this checkout in sessionStorage,
+          // not just when there are multiple orders. A single-order checkout
+          // that gets interrupted between order creation and the bKash redirect
+          // (or the success page) needs a recovery pointer — without this,
+          // the buyer has no way to find the order they just placed.
+          try {
+            sessionStorage.setItem(
+              "last_checkout_order_ids",
+              JSON.stringify(orders.map((o) => o.id)),
+            );
+          } catch {
+            // sessionStorage may be unavailable (private mode) — non-critical.
           }
           payFirstBkashOrderOrGoToOrder(orders);
         },

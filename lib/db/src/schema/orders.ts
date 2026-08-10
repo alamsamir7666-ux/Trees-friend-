@@ -108,6 +108,25 @@ export const ordersTable = pgTable(
     paymentStatus: text("payment_status").notNull().default("pending"),
     orderStatus: text("order_status").notNull().default("pending"),
     transactionId: text("transaction_id"),
+    // Industry-standard idempotency: if the buyer's client sends an
+    // Idempotency-Key header on POST /orders, we store it here. A duplicate
+    // request with the same key returns the existing order(s) instead of
+    // creating new ones — prevents duplicate orders on network retry /
+    // double-click. Shopify uses X-Shopify-Checkout-Access-Token; Stripe
+    // uses Idempotency-Key. Nullable + unique: NULL for orders created
+    // before this column existed or when the client didn't send a key.
+    idempotencyKey: text("idempotency_key").unique(),
+    // bKash paymentID persisted at Create Payment time so the callback can
+    // look up the order directly without a queryPayment round-trip to
+    // bKash's API. Nullable: only set for bKash orders, and only after
+    // POST /bkash/create-payment has returned a paymentID.
+    bkashPaymentId: text("bkash_payment_id"),
+    // Industry-standard payment-pending order expiration: bKash orders
+    // start at paymentStatus='payment_pending' and must be completed within
+    // this window (default 60 minutes). A cron job cancels expired orders
+    // and restores stock. Nullable: NULL for COD orders (no payment
+    // pending) and for orders created before this column existed.
+    paymentExpiresAt: timestamp("payment_expires_at"),
     shippingAddress: jsonb("shipping_address").$type<ShippingAddress>().notNull(),
     couponCode: text("coupon_code"),
     discountAmount: numeric("discount_amount", {
@@ -142,14 +161,16 @@ export const ordersTable = pgTable(
     // past ~10k orders. Composite with createdAt DESC so the same index
     // also serves the common "list a user's/seller's orders, newest first"
     // pattern without a separate sort step.
-    index("orders_user_id_created_idx").on(
-      table.userId,
-      table.createdAt,
-    ),
-    index("orders_seller_id_created_idx").on(
-      table.sellerId,
-      table.createdAt,
-    ),
+    index("orders_user_id_created_idx").on(table.userId, table.createdAt),
+    index("orders_seller_id_created_idx").on(table.sellerId, table.createdAt),
+    // Index for payment-pending expiration cron: finds all orders where
+    // paymentStatus='payment_pending' AND paymentExpiresAt < now(). Without
+    // this index the cron job seq-scans the orders table every 5 minutes.
+    index("orders_payment_expires_at_idx").on(table.paymentExpiresAt),
+    // Index for bKash callback order lookup: the callback receives a
+    // paymentID and needs to find the matching order. Without this index
+    // the callback seq-scans orders on every bKash redirect.
+    index("orders_bkash_payment_id_idx").on(table.bkashPaymentId),
   ],
 );
 

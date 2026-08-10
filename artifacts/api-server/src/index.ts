@@ -5,6 +5,7 @@ import {
   runSellerSubscriptionReminderJob,
   runSellerSubscriptionExpiryJob,
 } from "./jobs/sellerSubscriptionJob";
+import { runPaymentExpirationJob } from "./jobs/paymentExpirationJob";
 
 // Note: ensureConversationsTables() is invoked from app.ts at module load,
 // so it runs on every cold start (including Vercel serverless). We do NOT
@@ -14,9 +15,7 @@ import {
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
+  throw new Error("PORT environment variable is required but was not provided.");
 }
 
 const port = Number(rawPort);
@@ -38,6 +37,11 @@ app.listen(port, (err) => {
 
   // Seller subscription reminder + expiry enforcement — runs every hour
   scheduleSellerSubscriptionChecks();
+
+  // Payment-pending order expiration — runs every 5 minutes, cancels
+  // bKash orders abandoned at the hosted payment page for 60+ minutes.
+  // Restores stock so the inventory is available to other buyers.
+  schedulePaymentExpiration();
 });
 
 // ─── Keep-alive: ping self every 14 min so Render free tier never sleeps ─────
@@ -94,5 +98,27 @@ function scheduleSellerSubscriptionChecks() {
 
   setInterval(() => {
     runChecks().catch(() => {});
+  }, CHECK_INTERVAL_MS);
+}
+
+/**
+ * Payment-pending order expiration scheduler (Render long-lived process).
+ * Runs every 5 minutes — cancels bKash orders that have been in
+ * payment_pending for 60+ minutes and restores their stock. On Vercel
+ * (serverless), this runs via POST /api/cron/payment-expiration instead
+ * (see routes/cron.ts + vercel.json).
+ */
+function schedulePaymentExpiration() {
+  const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+  // Run once at startup in case we missed expired orders while down.
+  runPaymentExpirationJob().catch((err) => {
+    logger.warn({ err }, "Payment expiration job failed at startup");
+  });
+
+  setInterval(() => {
+    runPaymentExpirationJob().catch((err) => {
+      logger.warn({ err }, "Payment expiration job failed");
+    });
   }, CHECK_INTERVAL_MS);
 }

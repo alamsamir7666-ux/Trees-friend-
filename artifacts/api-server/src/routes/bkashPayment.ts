@@ -6,10 +6,7 @@ import { eq } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { createPayment, executePayment, queryPayment, BkashApiError } from "../lib/bkash";
 import { checkoutLimiter, guestBkashLimiter } from "../middlewares/rateLimiter";
-import {
-  CreateBkashPaymentBody,
-  CreateBkashPaymentGuestBody,
-} from "@workspace/api-zod";
+import { CreateBkashPaymentBody, CreateBkashPaymentGuestBody } from "@workspace/api-zod";
 import { validateBody } from "../lib/validateRequest";
 import type { ApiRequest } from "../types/apiRequest";
 import type { z } from "zod";
@@ -104,7 +101,8 @@ async function loadGuestOrder(
     .from(ordersTable)
     .where(eq(ordersTable.trackingId, trackingId.toUpperCase()))
     .limit(1);
-  if (!order || !order.userId.startsWith("guest_")) return { error: "Order not found", status: 404 };
+  if (!order || !order.userId.startsWith("guest_"))
+    return { error: "Order not found", status: 404 };
   return { order };
 }
 
@@ -149,7 +147,22 @@ async function handleCreatePayment(order: typeof ordersTable.$inferSelect, res: 
     throw err;
   }
 
-  res.json({ paymentID: result.paymentID, bkashURL: result.bkashURL, orderId: order.id, trackingId: order.trackingId });
+  // Persist the bKash paymentID on the order row so the callback can look
+  // up the order directly by paymentID (indexed) instead of calling
+  // queryPayment (a network round-trip to bKash's API) just to discover
+  // which order the callback is for. This eliminates one API call per
+  // callback and makes the callback O(1) on the DB.
+  await db
+    .update(ordersTable)
+    .set({ bkashPaymentId: result.paymentID })
+    .where(eq(ordersTable.id, order.id));
+
+  res.json({
+    paymentID: result.paymentID,
+    bkashURL: result.bkashURL,
+    orderId: order.id,
+    trackingId: order.trackingId,
+  });
 }
 
 /**
@@ -166,19 +179,25 @@ async function handleCreatePayment(order: typeof ordersTable.$inferSelect, res: 
  * See order-sequencing doc comment at the top of this file for why this
  * acts on an ALREADY-CREATED order rather than creating one itself.
  */
-router.post("/bkash/create-payment", requireAuth, checkoutLimiter, validateBody(CreateBkashPaymentBody, "CreateBkashPaymentBody"), async (req: ApiRequest<z.infer<typeof CreateBkashPaymentBody>>, res) => {
-  try {
-    const loaded = await loadOwnOrder(req);
-    if ("error" in loaded) {
-      res.status(loaded.status).json({ error: loaded.error });
-      return;
+router.post(
+  "/bkash/create-payment",
+  requireAuth,
+  checkoutLimiter,
+  validateBody(CreateBkashPaymentBody, "CreateBkashPaymentBody"),
+  async (req: ApiRequest<z.infer<typeof CreateBkashPaymentBody>>, res) => {
+    try {
+      const loaded = await loadOwnOrder(req);
+      if ("error" in loaded) {
+        res.status(loaded.status).json({ error: loaded.error });
+        return;
+      }
+      await handleCreatePayment(loaded.order, res);
+    } catch (err) {
+      logger.error({ err: err }, "[bkash] create-payment unexpected error");
+      res.status(500).json({ error: "Failed to start bKash payment" });
     }
-    await handleCreatePayment(loaded.order, res);
-  } catch (err) {
-    logger.error({ err: err }, "[bkash] create-payment unexpected error");
-    res.status(500).json({ error: "Failed to start bKash payment" });
-  }
-});
+  },
+);
 
 /**
  * POST /bkash/create-payment/guest — PUBLIC path, for guest checkout
@@ -191,19 +210,24 @@ router.post("/bkash/create-payment", requireAuth, checkoutLimiter, validateBody(
  * routes/orders.ts (POST /orders/guest vs POST /orders) rather than one
  * route with conditional auth.
  */
-router.post("/bkash/create-payment/guest", guestBkashLimiter, validateBody(CreateBkashPaymentGuestBody, "CreateBkashPaymentGuestBody"), async (req: ApiRequest<z.infer<typeof CreateBkashPaymentGuestBody>>, res) => {
-  try {
-    const loaded = await loadGuestOrder(req);
-    if ("error" in loaded) {
-      res.status(loaded.status).json({ error: loaded.error });
-      return;
+router.post(
+  "/bkash/create-payment/guest",
+  guestBkashLimiter,
+  validateBody(CreateBkashPaymentGuestBody, "CreateBkashPaymentGuestBody"),
+  async (req: ApiRequest<z.infer<typeof CreateBkashPaymentGuestBody>>, res) => {
+    try {
+      const loaded = await loadGuestOrder(req);
+      if ("error" in loaded) {
+        res.status(loaded.status).json({ error: loaded.error });
+        return;
+      }
+      await handleCreatePayment(loaded.order, res);
+    } catch (err) {
+      logger.error({ err }, "bkash create-payment (guest) unexpected error");
+      res.status(500).json({ error: "Failed to start bKash payment" });
     }
-    await handleCreatePayment(loaded.order, res);
-  } catch (err) {
-    logger.error({ err }, "bkash create-payment (guest) unexpected error");
-    res.status(500).json({ error: "Failed to start bKash payment" });
-  }
-});
+  },
+);
 
 /**
  * GET /bkash/callback — bKash redirects the buyer's BROWSER here after
@@ -251,53 +275,72 @@ router.get("/bkash/callback", async (req, res) => {
   const frontendBase = process.env.APP_URL ?? "https://treefriend.com";
   try {
     const paymentID = typeof req.query.paymentID === "string" ? req.query.paymentID : undefined;
-    const status = typeof req.query.status === "string" ? req.query.status.toLowerCase() : undefined;
+    const status =
+      typeof req.query.status === "string" ? req.query.status.toLowerCase() : undefined;
 
     if (!paymentID) {
       res.redirect(`${frontendBase}/orders?bkash=missing_payment_id`);
       return;
     }
 
-    // Look up the order this paymentID belongs to. We don't store
-    // paymentID anywhere on the order row today (schema/orders.ts wasn't
-    // touched to add a column for it -- see PART2_HANDOFF.md's open items)
-    // -- Query Payment's merchantInvoiceNumber IS our trackingId though, so
-    // when we don't already know which order this is for, Query Payment
-    // itself is the lookup path. This also naturally covers "callback
-    // fired but we want independent confirmation before trusting the
-    // query string alone."
-    let merchantInvoiceNumber: string | null = null;
-    try {
-      const queried = await queryPayment({ paymentID });
-      merchantInvoiceNumber = queried.merchantInvoiceNumber ?? null;
-    } catch (err) {
-      logger.error({ err: err }, "[bkash] callback: query-payment lookup failed");
-    }
-
-    if (!merchantInvoiceNumber) {
-      res.redirect(`${frontendBase}/orders?bkash=lookup_failed&paymentID=${encodeURIComponent(paymentID)}`);
-      return;
-    }
-
-    const [order] = await db
+    // Look up the order by the bKash paymentID that was persisted on the
+    // order row at Create Payment time (routes/bkashPayment.ts:
+    // handleCreatePayment writes bkashPaymentId). This is an indexed
+    // lookup (orders_bkash_payment_id_idx) — O(1) on the DB, no network
+    // call to bKash needed just to find the order.
+    //
+    // Fallback: if no order has this paymentID (e.g. the order was
+    // created before the bkashPaymentId column existed, or the
+    // handleCreatePayment write failed silently), fall back to the old
+    // queryPayment path to recover the merchantInvoiceNumber.
+    const [orderByPaymentId] = await db
       .select()
       .from(ordersTable)
-      .where(eq(ordersTable.trackingId, merchantInvoiceNumber))
+      .where(eq(ordersTable.bkashPaymentId, paymentID))
       .limit(1);
 
+    let order: typeof ordersTable.$inferSelect | null = orderByPaymentId ?? null;
+
     if (!order) {
-      logger.error({ err: merchantInvoiceNumber }, "[bkash] callback: no order matches merchantInvoiceNumber");
-      res.redirect(`${frontendBase}/orders?bkash=order_not_found`);
-      return;
+      // Fallback: query bKash for the merchantInvoiceNumber (the old path).
+      // This handles legacy orders that don't have bkashPaymentId set.
+      let merchantInvoiceNumber: string | null = null;
+      try {
+        const queried = await queryPayment({ paymentID });
+        merchantInvoiceNumber = queried.merchantInvoiceNumber ?? null;
+      } catch (err) {
+        logger.error({ err: err }, "[bkash] callback: query-payment lookup failed");
+      }
+
+      if (!merchantInvoiceNumber) {
+        res.redirect(
+          `${frontendBase}/orders?bkash=lookup_failed&paymentID=${encodeURIComponent(paymentID)}`,
+        );
+        return;
+      }
+
+      const [legacyOrder] = await db
+        .select()
+        .from(ordersTable)
+        .where(eq(ordersTable.trackingId, merchantInvoiceNumber))
+        .limit(1);
+
+      if (!legacyOrder) {
+        logger.error(
+          { merchantInvoiceNumber },
+          "[bkash] callback: no order matches merchantInvoiceNumber",
+        );
+        res.redirect(`${frontendBase}/orders?bkash=order_not_found`);
+        return;
+      }
+      order = legacyOrder;
     }
 
-    const orderPath = order.userId.startsWith("guest_") ? `/orders/${order.trackingId}` : `/orders/${order.id}`;
+    const orderPath = order.userId.startsWith("guest_")
+      ? `/orders/${order.trackingId}`
+      : `/orders/${order.id}`;
 
     if (status && status !== "success") {
-      // Buyer cancelled or bKash reported failure before we'd even try to
-      // execute -- leave the order at "payment_pending" (see doc comment
-      // above) and send them back to the order page with a flag the
-      // frontend can use to show "payment not completed, try again."
       res.redirect(`${frontendBase}${orderPath}?bkash=${status}`);
       return;
     }
@@ -311,12 +354,26 @@ router.get("/bkash/callback", async (req, res) => {
       return;
     }
 
-    // "Completed" per every integration guide checked -- other observed
-    // values (e.g. "Failed", "Cancelled") leave the order untouched at
-    // "payment_pending" rather than guessing at a mapping for values this
-    // wasn't verified against.
     if (executed.transactionStatus !== "Completed") {
       res.redirect(`${frontendBase}${orderPath}?bkash=not_completed`);
+      return;
+    }
+
+    // ── Amount verification (security critical) ──────────────────────
+    // Verify the paid amount matches the order total. Previously the
+    // order was marked "paid" based purely on transactionStatus ===
+    // "Completed", without checking the amount — a partial payment or
+    // manipulated invoice would still mark the order as paid. Industry
+    // standard (Stripe, Shopify, every payment gateway): always assert
+    // paid_amount === expected_amount before fulfilling the order.
+    const paidAmount = Number(executed.amount);
+    const expectedAmount = Number(order.totalAmount);
+    if (isNaN(paidAmount) || Math.abs(paidAmount - expectedAmount) > 0.01) {
+      logger.error(
+        { orderId: order.id, expectedAmount, paidAmount, transactionId: executed.trxID },
+        "[bkash] callback: amount mismatch — order NOT marked paid",
+      );
+      res.redirect(`${frontendBase}${orderPath}?bkash=amount_mismatch`);
       return;
     }
 
@@ -326,26 +383,11 @@ router.get("/bkash/callback", async (req, res) => {
         paymentStatus: "paid",
         transactionId: executed.trxID,
         paidAt: new Date(),
+        // Clear the payment-pending expiry timer — the order is now paid.
+        paymentExpiresAt: null,
         updatedAt: new Date(),
       })
       .where(eq(ordersTable.id, order.id));
-
-    // No email sent here deliberately: routes/orders.ts already sends
-    // sendOrderConfirmation unconditionally at order-CREATION time for
-    // every order, bkash included (checked before writing this -- see
-    // that route's own call site, right after the insert loop). Sending
-    // ANOTHER confirmation email here on successful payment would
-    // double-send "your order is confirmed" to a buyer who already got
-    // that email the moment they submitted checkout, before they'd even
-    // reached bKash's hosted page. There's no existing "payment received"
-    // email template in lib/email.ts distinct from order-confirmation or
-    // the orderStatus-transition template (sendOrderStatusUpdate, whose
-    // statusMap is keyed by orderStatus values like "shipped"/"delivered",
-    // not paymentStatus values -- "paid" isn't a real key there and would
-    // only hit its generic unstyled fallback copy) -- adding a proper
-    // payment-confirmation template is flagged as a follow-up in
-    // PART2_HANDOFF.md rather than reusing either of the wrong-shaped
-    // existing ones here.
 
     res.redirect(`${frontendBase}${orderPath}?bkash=success`);
   } catch (err) {

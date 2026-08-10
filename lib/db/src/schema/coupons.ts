@@ -37,6 +37,27 @@ export const couponsTable = pgTable(
      * routes/orders.ts untouched.
      */
     sellerId: integer("seller_id"),
+    /**
+     * Industry-standard coupon usage limits (Shopify `usage_limit`,
+     * `usage_count`; WooCommerce `usage_limit` + `usage_count`; Magento
+     * `usage_limit` + `times_used`).
+     *
+     * usageLimit: NULL = unlimited. Non-NULL = maximum total redemptions
+     * across all buyers. Checked + incremented atomically inside the
+     * checkout transaction to prevent race conditions.
+     *
+     * timesUsed: running counter, incremented inside the checkout
+     * transaction each time this coupon is successfully applied. Resets
+     * to 0 only if an admin explicitly resets it (no auto-reset).
+     *
+     * perUserLimit: NULL = unlimited per buyer. Non-NULL = max redemptions
+     * per single buyer. Enforced via a separate coupon_usages table
+     * (couponId, userId, usedAt) — not yet implemented, but this column
+     * is the config flag that the future enforcement code will read.
+     */
+    usageLimit: integer("usage_limit"),
+    timesUsed: integer("times_used").notNull().default(0),
+    perUserLimit: integer("per_user_limit"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({

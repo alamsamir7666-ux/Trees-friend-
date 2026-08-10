@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { logger } from "../lib/logger";
-import { runSellerSubscriptionExpiryJob, runSellerSubscriptionReminderJob } from "../jobs/sellerSubscriptionJob";
+import {
+  runSellerSubscriptionExpiryJob,
+  runSellerSubscriptionReminderJob,
+} from "../jobs/sellerSubscriptionJob";
 import { runLowStockAlert } from "../jobs/lowStockJob";
+import { runPaymentExpirationJob } from "../jobs/paymentExpirationJob";
 import { archiveLastMonth } from "./monthlyRecords";
 import { runAbandonedCartJob } from "./abandonedCart";
 import type { ApiRequest } from "../types/apiRequest";
@@ -54,9 +58,9 @@ function safeCompare(a: string, b: string): boolean {
     // Still do a comparison to keep timing constant — use the longer
     // string's length so we always do the same amount of work.
     const maxLen = Math.max(a.length, b.length);
-    let diff = 1;
+    let _diff = 1;
     for (let i = 0; i < maxLen; i++) {
-      diff |= (a.charCodeAt(i % a.length) ?? 0) ^ (b.charCodeAt(i % b.length) ?? 0);
+      _diff |= (a.charCodeAt(i % a.length) ?? 0) ^ (b.charCodeAt(i % b.length) ?? 0);
     }
     return false; // length mismatch → not equal (loop above ran for constant-time)
   }
@@ -75,7 +79,9 @@ function safeCompare(a: string, b: string): boolean {
 function requireCronAuth(req: ApiRequest, res: any): boolean {
   if (!CRON_SECRET) {
     if (process.env.NODE_ENV === "production") {
-      logger.error("CRON_SECRET env var is not set — cron jobs cannot be authenticated. Set it in your Vercel project env vars.");
+      logger.error(
+        "CRON_SECRET env var is not set — cron jobs cannot be authenticated. Set it in your Vercel project env vars.",
+      );
       res.status(500).json({ error: "Cron authentication not configured" });
       return false;
     }
@@ -166,6 +172,25 @@ router.post("/cron/abandoned-cart", async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err }, "Cron: abandoned cart job failed");
+    res.status(500).json({ error: "Cron job failed" });
+  }
+});
+
+/**
+ * POST /api/cron/payment-expiration
+ * Every 5 minutes. Cancels bKash orders that have been in
+ * payment_pending for more than 60 minutes (the buyer abandoned the
+ * hosted payment page without completing). Restores stock for each
+ * cancelled order so the inventory is available to other buyers.
+ */
+router.post("/cron/payment-expiration", async (req, res) => {
+  if (!requireCronAuth(req, res)) return;
+  try {
+    logger.info("Cron: running payment-pending expiration job");
+    await runPaymentExpirationJob();
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Cron: payment expiration job failed");
     res.status(500).json({ error: "Cron job failed" });
   }
 });
