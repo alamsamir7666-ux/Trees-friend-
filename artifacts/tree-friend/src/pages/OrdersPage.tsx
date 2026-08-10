@@ -588,30 +588,31 @@ export function OrdersPage() {
           </div>
         </div>
 
-        {/* ── Date range filter (industry-standard) ─────────────────── */}
-        <div className="flex flex-col sm:flex-row gap-3 mb-6 items-start sm:items-center">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Calendar className="h-4 w-4" />
-            <span>Date range:</span>
+        {/* ── Date range filter + bulk actions ─────────────────────── */}
+        <div className="flex flex-wrap items-center gap-3 mb-6">
+          {/* Date range — compact card with From/To labels */}
+          <div className="flex items-center gap-2 px-3 py-1.5 border rounded-full bg-card">
+            <Calendar className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span className="text-xs font-medium text-muted-foreground shrink-0">From</span>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="text-xs bg-transparent border-none outline-none cursor-pointer w-[120px] text-foreground"
+            />
+            <span className="text-xs text-muted-foreground shrink-0">to</span>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="text-xs bg-transparent border-none outline-none cursor-pointer w-[120px] text-foreground"
+            />
           </div>
-          <Input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            className="rounded-full w-auto"
-          />
-          <span className="text-sm text-muted-foreground">to</span>
-          <Input
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            className="rounded-full w-auto"
-          />
           {(dateFrom || dateTo) && (
             <Button
               variant="ghost"
               size="sm"
-              className="rounded-full text-xs"
+              className="rounded-full text-xs h-7 px-2"
               onClick={() => {
                 setDateFrom("");
                 setDateTo("");
