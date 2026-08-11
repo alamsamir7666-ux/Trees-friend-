@@ -1,12 +1,15 @@
 import { useRef, useState, useEffect, useMemo } from "react";
-import { Link, useLocation } from "wouter";
-import { ArrowRight, ShieldCheck, Leaf, Truck, ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { Link } from "wouter";
+import { ArrowRight, ShieldCheck, Leaf, Truck, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ProductCard } from "@/components/ui/ProductCard";
 import { HomepageProductCard } from "@/components/ui/HomepageProductCard";
 import { ProductCardSkeleton, ProductGridSkeleton } from "@/components/ui/ProductCardSkeleton";
-import { useListProducts, useListCategories, getListCategoriesQueryKey } from "@workspace/api-client-react";
+import {
+  useListProducts,
+  useListCategories,
+  getListCategoriesQueryKey,
+} from "@workspace/api-client-react";
 import type { Category, Product } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/apiClient";
@@ -46,7 +49,6 @@ function CollectionSliderSkeleton() {
 function HomePageSkeleton() {
   return (
     <div className="min-h-screen">
-
       <CollectionSliderSkeleton />
       <section className="pt-8 pb-16 bg-background">
         <div className="container mx-auto px-4">
@@ -81,7 +83,7 @@ function CollectionSlider() {
     const parentId = (cat as { parentId?: number | null }).parentId;
     if (parentId != null) return true; // subcategory -- always a leaf
     const hasChildren = allCats.some(
-      (c) => (c as { parentId?: number | null }).parentId === cat.id
+      (c) => (c as { parentId?: number | null }).parentId === cat.id,
     );
     return !hasChildren; // top-level category is only a leaf if childless
   });
@@ -94,8 +96,12 @@ function CollectionSlider() {
       <div className="container mx-auto px-4">
         <div className="flex items-end justify-between mb-8">
           <div>
-            <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">Browse by Collection</p>
-            <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">Our Collections</h2>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">
+              Browse by Collection
+            </p>
+            <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">
+              Our Collections
+            </h2>
           </div>
           <div className="flex gap-2">
             <button
@@ -124,7 +130,8 @@ function CollectionSlider() {
             // FIX: was using `iconImage` (the small icon) as the card background
             // image — should use `image` (the category photo). The `iconImage`
             // is only for the small circular badge in the corner (below).
-            const img = (cat as Category & { image?: string | null }).image || DEFAULT_CATEGORY_IMAGE;
+            const img =
+              (cat as Category & { image?: string | null }).image || DEFAULT_CATEGORY_IMAGE;
             const bg = DEFAULT_CATEGORY_BG;
             return (
               <Link key={cat.slug} href={`/category/${cat.slug}`}>
@@ -142,18 +149,27 @@ function CollectionSlider() {
                   {/* Gradient only on the bottom third for text readability —
                       keeps the image at full brightness instead of fading it. */}
                   <div className="absolute bottom-0 left-0 right-0 h-1/2 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-                  {((cat as { icon?: string; iconImage?: string }).icon || (cat as { icon?: string; iconImage?: string }).iconImage) && (
+                  {((cat as { icon?: string; iconImage?: string }).icon ||
+                    (cat as { icon?: string; iconImage?: string }).iconImage) && (
                     <div className="absolute bottom-16 right-4 h-10 w-10 rounded-full flex items-center justify-center text-lg bg-card/90 backdrop-blur-sm shadow-md overflow-hidden">
                       {(cat as { iconImage?: string }).iconImage ? (
-                        <img src={(cat as { iconImage?: string }).iconImage} alt="" className="h-full w-full object-cover" />
+                        <img
+                          src={(cat as { iconImage?: string }).iconImage}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
                       ) : (
                         (cat as { icon?: string }).icon
                       )}
                     </div>
                   )}
                   <div className="absolute bottom-4 left-4 right-4 text-background">
-                    <p className="text-[10px] uppercase tracking-[0.15em] mb-1 opacity-70">Collection</p>
-                    <h3 className="font-serif text-lg font-medium leading-snug mb-1.5">{cat.name}</h3>
+                    <p className="text-[10px] uppercase tracking-[0.15em] mb-1 opacity-70">
+                      Collection
+                    </p>
+                    <h3 className="font-serif text-lg font-medium leading-snug mb-1.5">
+                      {cat.name}
+                    </h3>
                     <span className="text-xs opacity-80 flex items-center gap-1 group-hover:gap-2.5 transition-all duration-300">
                       Shop now <ArrowRight className="h-3 w-3" />
                     </span>
@@ -168,8 +184,6 @@ function CollectionSlider() {
   );
 }
 
-const PAGE_SIZE = 4;
-
 // Maximum products shown per homepage section before the "View all" link
 const MAX_FEATURED_PRODUCTS = 4;
 const MAX_CATEGORY_PRODUCTS = 8;
@@ -181,12 +195,16 @@ export function HomePage() {
   useSEO(); // Reset to default SEO on the homepage
   const [activeTab, setActiveTab] = useState<"trending" | "new_arrivals">("trending");
   const [bestTab, setBestTab] = useState("");
-  const [heroSearch, setHeroSearch] = useState("");
   const { setPageReady } = usePageContext();
-  const [, navigate] = useLocation();
 
-  const { data: trendingData,   isLoading: trendingLoading }   = useListProducts({ homepageTag: "trending",     limit: 22 });
-  const { data: newArrivalsData, isLoading: newArrivalsLoading } = useListProducts({ homepageTag: "new_arrivals", limit: 22 });
+  const { data: trendingData, isLoading: trendingLoading } = useListProducts({
+    homepageTag: "trending",
+    limit: 22,
+  });
+  const { data: newArrivalsData, isLoading: newArrivalsLoading } = useListProducts({
+    homepageTag: "new_arrivals",
+    limit: 22,
+  });
 
   // Product cards on the homepage show a category badge (e.g. "Fruit
   // Trees"), but Product only carries categoryId, not a name -- so we fetch
@@ -197,9 +215,10 @@ export function HomePage() {
   // PERF: useMemo so the Map isn't rebuilt on every render — only when
   // cardCategories actually changes.
   const categoryNameById = useMemo(
-    () => new Map<number, string>(
-      cardCategories.map((c: { id: number; name: string }) => [c.id, c.name])
-    ),
+    () =>
+      new Map<number, string>(
+        cardCategories.map((c: { id: number; name: string }) => [c.id, c.name]),
+      ),
     [cardCategories],
   );
 
@@ -214,8 +233,18 @@ export function HomePage() {
 
   const { data: activeBestData, isLoading: activeBestLoading } = useQuery({
     queryKey: ["products", "homepage", bestTab],
-    queryFn: async (): Promise<{ products: Product[]; total: number; page: number; totalPages: number }> => {
-      const { data } = await apiClient.get<{ products: Product[]; total: number; page: number; totalPages: number }>("/api/products", { params: { homepageTag: bestTab, limit: 15 } });
+    queryFn: async (): Promise<{
+      products: Product[];
+      total: number;
+      page: number;
+      totalPages: number;
+    }> => {
+      const { data } = await apiClient.get<{
+        products: Product[];
+        total: number;
+        page: number;
+        totalPages: number;
+      }>("/api/products", { params: { homepageTag: bestTab, limit: 15 } });
       return data;
     },
     enabled: !!bestTab,
@@ -238,31 +267,18 @@ export function HomePage() {
   // ── Derived values (after all hooks) ─────────────────────────────────────
   if (featuredLoading) return <HomePageSkeleton />;
 
-  const trendingProducts   = trendingData?.products   ?? [];
+  const trendingProducts = trendingData?.products ?? [];
   const newArrivalsProducts = newArrivalsData?.products ?? [];
-  const activeProducts     = activeTab === "trending" ? trendingProducts : newArrivalsProducts;
+  const activeProducts = activeTab === "trending" ? trendingProducts : newArrivalsProducts;
 
-  const BEST_TABS   = homepageSections;
+  const BEST_TABS = homepageSections;
   const bestProducts = activeBestData?.products ?? [];
-  const bestLoading  = activeBestLoading;
+  const bestLoading = activeBestLoading;
 
   return (
     <div className="min-h-screen">
       {/* Hero */}
       <section className="relative overflow-hidden pt-4 pb-4 bg-background">
-        <div className="absolute inset-0 flex items-start justify-end pr-2 lg:pr-16 pointer-events-none">
-          <img
-            // PERF-6b: f_auto,q_auto — Cloudinary serves WebP/AVIF (30-50%
-            // smaller than PNG) and picks optimal quality automatically.
-            src="https://res.cloudinary.com/dcfbtdp6r/image/upload/f_auto,q_auto/v1783747272/IMG_20260711_111454-removebg-preview_11zon_wsnwgd.png"
-            alt="Potted tree sapling"
-            className="h-full max-h-[380px] lg:max-h-[480px] w-auto object-contain opacity-90"
-            fetchPriority="high"
-            loading="eager"
-            decoding="sync"
-          />
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/10" />
         <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-xl w-full py-2 lg:py-10">
             <h1 className="font-serif text-6xl md:text-7xl lg:text-8xl font-medium leading-[0.95] mb-0 text-primary">
@@ -271,7 +287,11 @@ export function HomePage() {
               <em className="text-accent-text not-italic">nature.</em>
             </h1>
             <div className="mt-5 flex items-center gap-3">
-              <img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783747272/IMG_20260710_161008-removebg-preview_11zon_ieoekc.png" alt="" className="h-6 w-6 object-contain" />
+              <img
+                src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783747272/IMG_20260710_161008-removebg-preview_11zon_ieoekc.png"
+                alt=""
+                className="h-6 w-6 object-contain"
+              />
               <span className="h-px w-12 bg-accent-text/40" />
             </div>
             <p className="mt-3 text-lg text-muted-foreground max-w-md">
@@ -283,7 +303,20 @@ export function HomePage() {
                 className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-8 py-3.5 rounded-full text-sm font-medium tracking-wide hover:bg-accent hover:text-accent-foreground transition-colors duration-200"
               >
                 Browse All Trees
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M5 12h14" />
+                  <path d="m12 5 7 7-7 7" />
+                </svg>
               </Link>
             </div>
           </div>
@@ -300,17 +333,28 @@ export function HomePage() {
           <div className="mb-10">
             <div className="flex items-end justify-between mb-4">
               <div>
-                <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">{activeTab === "trending" ? "Trending Now" : "New Arrivals"}</p>
-                <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">{activeTab === "trending" ? "Discover Your Green Paradise" : "Fresh Off the Nursery"}</h2>
+                <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">
+                  {activeTab === "trending" ? "Trending Now" : "New Arrivals"}
+                </p>
+                <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">
+                  {activeTab === "trending"
+                    ? "Discover Your Green Paradise"
+                    : "Fresh Off the Nursery"}
+                </h2>
               </div>
               <Link href="/products">
-                <Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm gap-1 shrink-0">
+                <Button
+                  variant="ghost"
+                  className="text-muted-foreground hover:text-foreground text-sm gap-1 shrink-0"
+                >
                   View all <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
             </div>
             <p className="text-muted-foreground text-sm max-w-md mb-6">
-              {activeTab === "trending" ? "Explore the most loved trees and plants for a healthier, greener tomorrow." : "Be the first to discover our newest arrivals — fresh from the nursery to your doorstep."}
+              {activeTab === "trending"
+                ? "Explore the most loved trees and plants for a healthier, greener tomorrow."
+                : "Be the first to discover our newest arrivals — fresh from the nursery to your doorstep."}
             </p>
 
             {/* Tabs — pill group with border ring */}
@@ -318,11 +362,15 @@ export function HomePage() {
               <button
                 onClick={() => setActiveTab("trending")}
                 className={`px-5 py-2 rounded-full text-sm font-medium transition-all duration-200 ${activeTab === "trending" ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/60"}`}
-              >Trending</button>
+              >
+                Trending
+              </button>
               <button
                 onClick={() => setActiveTab("new_arrivals")}
                 className={`px-5 py-2 rounded-full text-sm font-medium transition-all duration-200 ${activeTab === "new_arrivals" ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/60"}`}
-              >New Arrivals</button>
+              >
+                New Arrivals
+              </button>
             </div>
           </div>
 
@@ -332,8 +380,14 @@ export function HomePage() {
                 <Leaf className="h-9 w-9 text-muted-foreground/60" />
               </div>
               <div className="text-center max-w-xs">
-                <p className="text-foreground font-semibold text-base mb-1">{activeTab === "trending" ? "No trending products yet" : "No new arrivals yet"}</p>
-                <p className="text-muted-foreground text-sm leading-relaxed">{activeTab === "trending" ? "We're picking the best for you. Check back soon or browse our full collection." : "We're adding fresh stock soon. In the meantime, explore what's trending!"}</p>
+                <p className="text-foreground font-semibold text-base mb-1">
+                  {activeTab === "trending" ? "No trending products yet" : "No new arrivals yet"}
+                </p>
+                <p className="text-muted-foreground text-sm leading-relaxed">
+                  {activeTab === "trending"
+                    ? "We're picking the best for you. Check back soon or browse our full collection."
+                    : "We're adding fresh stock soon. In the meantime, explore what's trending!"}
+                </p>
               </div>
               <Link href="/products">
                 <Button variant="outline" className="mt-1 rounded-full text-sm gap-1.5">
@@ -362,11 +416,18 @@ export function HomePage() {
           <div className="mb-10">
             <div className="flex items-end justify-between mb-4">
               <div>
-                <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">Based On Category</p>
-                <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">Best Plants &amp; Trees</h2>
+                <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-2">
+                  Based On Category
+                </p>
+                <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">
+                  Best Plants &amp; Trees
+                </h2>
               </div>
               <Link href="/products">
-                <Button variant="ghost" className="text-muted-foreground hover:text-foreground text-sm gap-1 shrink-0">
+                <Button
+                  variant="ghost"
+                  className="text-muted-foreground hover:text-foreground text-sm gap-1 shrink-0"
+                >
                   View all <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
@@ -380,13 +441,18 @@ export function HomePage() {
                 ))}
               </div>
             ) : BEST_TABS.length === 0 ? null : (
-              <div className="flex items-center rounded-full border border-border bg-muted/40 p-1 gap-1 mt-2 overflow-x-auto max-w-full" style={{ scrollbarWidth: "none" }}>
-                {BEST_TABS.map(tab => (
+              <div
+                className="flex items-center rounded-full border border-border bg-muted/40 p-1 gap-1 mt-2 overflow-x-auto max-w-full"
+                style={{ scrollbarWidth: "none" }}
+              >
+                {BEST_TABS.map((tab) => (
                   <button
                     key={tab.key}
                     onClick={() => setBestTab(tab.key)}
                     className={`px-5 py-2 rounded-full text-sm font-medium transition-all duration-200 whitespace-nowrap ${bestTab === tab.key ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/60"}`}
-                  >{tab.label}</button>
+                  >
+                    {tab.label}
+                  </button>
                 ))}
               </div>
             )}
@@ -394,7 +460,9 @@ export function HomePage() {
 
           {sectionsLoading || bestLoading ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              {Array.from({ length: 8 }).map((_, i) => <ProductCardSkeleton key={i} />)}
+              {Array.from({ length: 8 }).map((_, i) => (
+                <ProductCardSkeleton key={i} />
+              ))}
             </div>
           ) : BEST_TABS.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
@@ -402,7 +470,9 @@ export function HomePage() {
                 <Leaf className="h-9 w-9 text-muted-foreground/60" />
               </div>
               <p className="text-foreground font-medium text-base">No sections created yet.</p>
-              <p className="text-muted-foreground text-sm">Go to Admin → Homepage Sections to add tabs.</p>
+              <p className="text-muted-foreground text-sm">
+                Go to Admin → Homepage Sections to add tabs.
+              </p>
             </div>
           ) : bestProducts.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 gap-4">
@@ -410,8 +480,13 @@ export function HomePage() {
                 <Leaf className="h-9 w-9 text-muted-foreground/60" />
               </div>
               <div className="text-center max-w-xs">
-                <p className="text-foreground font-semibold text-base mb-1">No products in this category yet</p>
-                <p className="text-muted-foreground text-sm leading-relaxed">We're restocking this section. Try browsing a different category or check our full collection.</p>
+                <p className="text-foreground font-semibold text-base mb-1">
+                  No products in this category yet
+                </p>
+                <p className="text-muted-foreground text-sm leading-relaxed">
+                  We're restocking this section. Try browsing a different category or check our full
+                  collection.
+                </p>
               </div>
               <Link href="/products">
                 <Button variant="outline" className="mt-1 rounded-full text-sm gap-1.5">
@@ -421,12 +496,8 @@ export function HomePage() {
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              {bestProducts.slice(0, MAX_CATEGORY_PRODUCTS).map(product => (
-                <ProductCard
-                  key={product.id}
-                  product={product}
-                  backContext="category"
-                />
+              {bestProducts.slice(0, MAX_CATEGORY_PRODUCTS).map((product) => (
+                <ProductCard key={product.id} product={product} backContext="category" />
               ))}
             </div>
           )}
@@ -437,7 +508,9 @@ export function HomePage() {
       <section className="py-20 bg-background border-t">
         <div className="container mx-auto px-4">
           <div className="text-center mb-14">
-            <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-3">Why Choose Us</p>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-accent-text font-semibold mb-3">
+              Why Choose Us
+            </p>
             <h2 className="font-serif text-3xl md:text-4xl font-medium">Our Promise to You</h2>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
@@ -458,7 +531,10 @@ export function HomePage() {
                 desc: "We pack with care and deliver to your doorstep safely and on time. Your plant's safety is our promise.",
               },
             ].map(({ icon: Icon, title, desc }) => (
-              <div key={title} className="flex flex-col items-center text-center gap-4 px-4 py-6 rounded-2xl bg-card border border-border/60 hover:shadow-md transition-shadow duration-300">
+              <div
+                key={title}
+                className="flex flex-col items-center text-center gap-4 px-4 py-6 rounded-2xl bg-card border border-border/60 hover:shadow-md transition-shadow duration-300"
+              >
                 <div className="h-14 w-14 rounded-2xl bg-accent/10 flex items-center justify-center shrink-0">
                   <Icon className="h-6 w-6 text-accent" />
                 </div>
