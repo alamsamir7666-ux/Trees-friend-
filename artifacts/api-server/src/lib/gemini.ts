@@ -51,10 +51,10 @@ import { logger } from "./logger";
 // working model starts 404ing (Google deprecates it later), reset and
 // retry the chain.
 const MODEL_FALLBACK_CHAIN = [
+  "gemini-flash-latest", // Google's "latest" alias — usually points to the newest flash model
+  "gemini-2.5-flash-lite", // often still available when 2.5-flash is deprecated for new users
   "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
   "gemini-2.5-pro",
-  "gemini-flash-latest", // Google's "latest" alias — usually points to the newest flash
   "gemini-2.0-flash", // legacy fallback (still works for some older projects)
   "gemini-1.5-flash", // very old fallback
 ];
@@ -132,13 +132,25 @@ function isModelNotFoundError(err: unknown): boolean {
 }
 
 /**
- * Returns the model name to use. Tries the cached working model first,
- * then falls through the fallback chain. If no model works, throws.
+ * Calls a Gemini SDK function with automatic model fallback.
  *
- * Used by streamGeminiChat to resolve the model before each
- * generateContent / generateContentStream call.
+ * Tries the cached working model first. If it 404s (model deprecated
+ * for this API key / project), tries the next model in the fallback
+ * chain. The first model that succeeds is cached and tried first on
+ * subsequent calls.
+ *
+ * This is the ACTUAL fallback implementation — resolveModel() above was
+ * a stub that didn't actually probe whether the model works. This helper
+ * wraps the real SDK call so a 404 triggers a retry with the next model.
+ *
+ * @param fn - A function that takes a model name and returns a Promise.
+ *   Called with each model in the chain until one succeeds.
+ * @returns The result of the first successful call.
+ * @throws If ALL models in the chain return 404, or if a non-404 error occurs.
  */
-async function resolveModel(client: GoogleGenAI): Promise<string> {
+async function callWithFallback<T>(
+  fn: (modelName: string) => Promise<T>,
+): Promise<T> {
   const tryModels: string[] = [];
   if (_workingModel) tryModels.push(_workingModel);
   for (const m of getModelChain()) {
@@ -148,38 +160,51 @@ async function resolveModel(client: GoogleGenAI): Promise<string> {
   let lastErr: unknown = null;
   for (const modelName of tryModels) {
     try {
-      // Quick probe: list models and check if this one exists.
-      // Cheaper than a full generateContent call.
-      // Actually, the simplest probe is to just try generateContent
-      // with a trivial prompt. If it 404s, we move to the next model.
-      // But that adds latency. Instead, we just return the model name
-      // and let the actual generateContent call fail if it's deprecated.
-      // The caller's catch block will handle 404s and retry with the
-      // next model.
+      const result = await fn(modelName);
+      // Success — cache this model for future calls.
       if (_workingModel !== modelName) {
         logger.info(
           { model: modelName, previousModel: _workingModel },
-          "TreeBot: model selected and cached",
+          "TreeBot: model selected and cached for subsequent requests",
         );
         _workingModel = modelName;
       }
-      return modelName;
+      return result;
     } catch (err) {
       lastErr = err;
       if (isModelNotFoundError(err)) {
-        if (_workingModel === modelName) _workingModel = null;
+        // This model is deprecated/unavailable — try the next one.
+        if (_workingModel === modelName) {
+          logger.warn(
+            { model: modelName },
+            "TreeBot: previously-cached model is now unavailable, retrying fallback chain",
+          );
+          _workingModel = null;
+        } else {
+          logger.warn(
+            { model: modelName },
+            "TreeBot: model unavailable, trying next in fallback chain",
+          );
+        }
         continue;
       }
+      // Non-404 error (auth, rate limit, network, etc.) — don't try other
+      // models, just rethrow. The route handler will surface it.
       throw err;
     }
   }
+
+  // All models in the chain returned 404.
   logger.error(
     { err: lastErr, triedModels: tryModels },
-    "TreeBot: ALL models in the fallback chain returned 404",
+    "TreeBot: ALL models in the fallback chain returned 404. " +
+      "Either the API key is invalid OR Google has deprecated every model we know. " +
+      "Action: visit https://ai.google.dev/gemini-api/docs/models to find the current model name, " +
+      "then set it as the AI_MODEL env var.",
   );
   throw new Error(
     "All configured Gemini models are unavailable. " +
-      "Set the AI_MODEL env var to a current model name " +
+      "Please set the AI_MODEL env var to a currently-available model name " +
       "(see https://ai.google.dev/gemini-api/docs/models).",
   );
 }
@@ -257,11 +282,17 @@ export async function* streamGeminiChat(
     //
     // On the FINAL round (when Gemini returns text, not function calls),
     // we switch to streaming for real-time token delivery.
-    const response = await client.models.generateContent({
-      model: await resolveModel(client),
-      contents,
-      config,
-    });
+    //
+    // callWithFallback wraps the generateContent call so that if the model
+    // 404s (deprecated for this API key), it automatically retries with the
+    // next model in the fallback chain. The first model that works is cached.
+    const response: any = await callWithFallback((modelName) =>
+      client.models.generateContent({
+        model: modelName,
+        contents,
+        config,
+      }),
+    );
 
     const functionCalls = response.functionCalls;
 
@@ -315,15 +346,18 @@ export async function* streamGeminiChat(
     }
 
     // We went through tool rounds — re-stream the final answer.
-    const finalStream = await client.models.generateContentStream({
-      model: await resolveModel(client),
-      contents,
-      config: {
-        ...config,
-        // Don't expose tools on the final round — we want text, not more calls.
-        tools: undefined,
-      },
-    });
+    // Use callWithFallback here too so the streaming call retries on 404.
+    const finalStream: any = await callWithFallback((modelName) =>
+      client.models.generateContentStream({
+        model: modelName,
+        contents,
+        config: {
+          ...config,
+          // Don't expose tools on the final round — we want text, not more calls.
+          tools: undefined,
+        },
+      }),
+    );
 
     for await (const chunk of finalStream) {
       const text = chunk.text;
