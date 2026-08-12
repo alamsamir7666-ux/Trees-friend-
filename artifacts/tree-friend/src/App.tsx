@@ -31,6 +31,7 @@ const CategoryListingsPage = lazy(() => import("@/pages/CategoryListingsPage").t
 import { ThemeProvider } from "next-themes";
 import { CurrencyProvider } from "@/lib/currency";
 import { FloatingCartIcon } from "./components/ui/FloatingCartIcon";
+import { AssistantBubble } from "./components/ai/AssistantBubble";
 import { PageTransition } from "@/components/ui/PageTransition";
 import { ProfileSync } from "./components/auth/ProfileSync";
 // PERF: All page components are lazy-loaded to keep the entry bundle small.
@@ -61,6 +62,11 @@ const EmailPreferencesPage = lazy(() => import("@/pages/EmailPreferencesPage").t
 const LoyaltyPage = lazy(() => import("@/pages/LoyaltyPage"));
 const ReferralPage = lazy(() => import("@/pages/ReferralPage"));
 const ComparePage = lazy(() => import("@/pages/ComparePage"));
+const AssistantFullPage = lazy(() =>
+  import("@/components/ai/AssistantFullPage").then((m) => ({
+    default: m.AssistantFullPage,
+  })),
+);
 import { useMe } from "@/hooks/useMe";
 import { useUser } from "@clerk/react";
 import { useThemeColor } from "@/hooks/useThemeColor";
@@ -381,6 +387,7 @@ function AppLayout({ children }: { children: React.ReactNode }) {
           it would overlap the chat composer. Visible everywhere else
           including the /messages list page. */}
       {!isConversationRoute && <FloatingCartIcon />}
+      <AssistantBubble />
     </>
   );
 }
@@ -450,6 +457,7 @@ function ClerkProviderWithRoutes() {
                   {() => <ProtectedRoute component={ReferralPage} />}
                 </Route>
                 <Route path="/compare" component={ComparePage} />
+                <Route path="/assistant" component={AssistantFullPage} />
                 <Route path="/track" component={TrackOrderPage} />
                 <Route path="/track/:trackingId" component={TrackOrderPage} />
                 <Route path="/messages">

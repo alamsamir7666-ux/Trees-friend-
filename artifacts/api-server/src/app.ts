@@ -10,6 +10,7 @@ import { errorHandler } from "./lib/errors";
 import { responseHelpersMiddleware } from "./lib/responses";
 import { ensureConversationsTables } from "./lib/ensureConversationsTables";
 import { ensurePresenceTables } from "./lib/ensurePresenceTables";
+import { ensureAiTables } from "./lib/ensureAiTables";
 import { apiLimiter } from "./middlewares/rateLimiter";
 
 const app: Express = express();
@@ -29,6 +30,9 @@ ensureConversationsTables().catch((err) => {
 });
 ensurePresenceTables().catch((err) => {
   logger.error({ err }, "ensurePresenceTables failed at app init");
+});
+ensureAiTables().catch((err) => {
+  logger.error({ err }, "ensureAiTables failed at app init");
 });
 
 // ─── Security: Trust proxy (required if behind nginx/load balancer) ──────────

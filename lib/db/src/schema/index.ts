@@ -40,3 +40,6 @@ export * from "./paymentSessions";
 export * from "./sellerPayoutAccounts";
 export * from "./payouts";
 export * from "./conversations";
+
+// AI assistant chat (anonymous v1 — TreeBot / Gemini-powered)
+export * from "./aiChat";
