@@ -297,29 +297,12 @@ export function HomePage() {
             <p className="mt-3 text-lg text-muted-foreground max-w-md">
               Discover trees that enhance life and a greener tomorrow.
             </p>
-            <div className="mt-6 flex flex-wrap items-center gap-3">
+            <div className="mt-6 grid grid-cols-2 gap-2 sm:gap-3 max-w-md">
               {/* Primary: Browse All Trees — filled green pill */}
               <Link
                 href="/browse"
-                className="group inline-flex items-center gap-2.5 bg-primary text-primary-foreground px-7 py-3.5 rounded-full text-sm font-semibold tracking-wide shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
+                className="group inline-flex items-center justify-center gap-1.5 sm:gap-2 bg-primary text-primary-foreground px-3 sm:px-6 py-3 sm:py-3.5 rounded-full text-xs sm:text-sm font-semibold tracking-wide shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="opacity-90"
-                  aria-hidden="true"
-                >
-                  <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
-                  <path d="M2 21c0-3 1.85-5.36 5.08-6" />
-                </svg>
-                Browse All Trees
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   width="16"
@@ -330,7 +313,24 @@ export function HomePage() {
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  className="transition-transform duration-200 group-hover:translate-x-0.5"
+                  className="opacity-90 shrink-0"
+                  aria-hidden="true"
+                >
+                  <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
+                  <path d="M2 21c0-3 1.85-5.36 5.08-6" />
+                </svg>
+                <span className="truncate">Browse All Trees</span>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="transition-transform duration-200 group-hover:translate-x-0.5 shrink-0"
                   aria-hidden="true"
                 >
                   <path d="M5 12h14" />
@@ -341,26 +341,8 @@ export function HomePage() {
               {/* Secondary: Shop All — outlined pill */}
               <Link
                 href="/products"
-                className="group inline-flex items-center gap-2.5 bg-background text-primary border border-primary px-7 py-3.5 rounded-full text-sm font-semibold tracking-wide shadow-sm hover:shadow-md hover:-translate-y-0.5 hover:bg-primary/5 transition-all duration-200"
+                className="group inline-flex items-center justify-center gap-1.5 sm:gap-2 bg-background text-primary border border-primary px-3 sm:px-6 py-3 sm:py-3.5 rounded-full text-xs sm:text-sm font-semibold tracking-wide shadow-sm hover:shadow-md hover:-translate-y-0.5 hover:bg-primary/5 transition-all duration-200"
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="opacity-90"
-                  aria-hidden="true"
-                >
-                  <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z" />
-                  <path d="M3 6h18" />
-                  <path d="M16 10a4 4 0 0 1-8 0" />
-                </svg>
-                Shop All
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   width="16"
@@ -371,7 +353,25 @@ export function HomePage() {
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  className="transition-transform duration-200 group-hover:translate-x-0.5"
+                  className="opacity-90 shrink-0"
+                  aria-hidden="true"
+                >
+                  <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z" />
+                  <path d="M3 6h18" />
+                  <path d="M16 10a4 4 0 0 1-8 0" />
+                </svg>
+                <span className="truncate">Shop All</span>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="transition-transform duration-200 group-hover:translate-x-0.5 shrink-0"
                   aria-hidden="true"
                 >
                   <path d="M5 12h14" />
