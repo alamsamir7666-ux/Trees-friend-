@@ -204,13 +204,14 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
     where += ` AND p.sunlight = $${params.length}`;
   }
 
-  // Price filter: join to seller_listings + variants for the min price.
-  // We do this as a subquery so we can filter on it.
-  let priceJoin = "";
+  // Always join to prices so we can return min_price in the result (useful
+  // for the AI to mention a price range even when the user didn't filter on it).
+  // We only filter on it when maxPrice is provided.
+  const priceJoin =
+    "LEFT JOIN (SELECT product_id, MIN(price) AS min_price FROM seller_listings sl JOIN seller_listing_variants slv ON slv.seller_listing_id = sl.id WHERE sl.is_active = true AND sl.deleted_at IS NULL GROUP BY product_id) AS prices ON prices.product_id = p.id";
+
   let priceWhere = "";
   if (maxPrice != null) {
-    priceJoin =
-      "LEFT JOIN (SELECT product_id, MIN(price) AS min_price FROM seller_listings sl JOIN seller_listing_variants slv ON slv.seller_listing_id = sl.id WHERE sl.is_active = true AND sl.deleted_at IS NULL GROUP BY product_id) AS prices ON prices.product_id = p.id";
     params.push(maxPrice);
     priceWhere = ` AND (prices.min_price IS NULL OR prices.min_price <= $${params.length})`;
   }

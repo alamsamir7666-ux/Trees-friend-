@@ -303,6 +303,15 @@ export async function* streamGeminiChat(
         "TreeBot: executing function calls",
       );
 
+      // IMPORTANT: preserve the ORIGINAL parts from the model's response
+      // (not reconstructed ones). Gemini 2.5 thinking models emit a
+      // `thoughtSignature` on the function-call part that MUST be echoed
+      // back unchanged — otherwise the next generateContent call fails
+      // with "Function call is missing a thought_signature".
+      // response.candidates[0].content.parts contains the full original
+      // parts (including thought signatures, thought text, etc.).
+      const modelParts: any[] = response.candidates?.[0]?.content?.parts ?? [];
+
       const functionResponseParts = await Promise.all(
         functionCalls.map(async (fc: any) => {
           const result = await tools.execute(fc.name, fc.args ?? {}, userId ?? null);
@@ -315,14 +324,13 @@ export async function* streamGeminiChat(
         }),
       );
 
-      // Append the model's function call + our responses to the conversation.
-      // This lets Gemini "see" what the tools returned and generate a
-      // final text answer.
+      // Append the model's ORIGINAL parts (with thought signatures) + our
+      // function responses to the conversation.
       contents = [
         ...contents,
         {
           role: "model" as const,
-          parts: functionCalls.map((fc: any) => ({ functionCall: { name: fc.name, args: fc.args } })),
+          parts: modelParts,
         },
         {
           role: "user" as const,
