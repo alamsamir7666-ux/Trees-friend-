@@ -42,6 +42,8 @@ import {
   buildCatalogContext,
   buildSystemPrompt,
   hasBotanicalKeyword,
+  isPureGreeting,
+  GREETING_INTRO_MESSAGE,
 } from "../lib/aiContext";
 import { isGeminiConfigured, streamGeminiChat } from "../lib/gemini";
 import { describeError } from "../lib/describeError";
@@ -230,6 +232,27 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     return;
   }
 
+  // ─── 3b. Pure greeting shortcut ───
+  // For "Hi" / "Hello" / "Salam" etc., skip Gemini entirely and return a
+  // friendly canned intro. Saves API quota + gives the user an instant
+  // warm welcome instead of a 3-5 second wait for Gemini to say "hi back".
+  if (isPureGreeting(message)) {
+    try {
+      const session = await findOrCreateSession(token, message);
+      await persistMessage(session.id, "user", message);
+      await persistMessage(session.id, "assistant", GREETING_INTRO_MESSAGE);
+      res.json({
+        sessionToken: token,
+        message: GREETING_INTRO_MESSAGE,
+        greeting: true,
+      });
+    } catch (err) {
+      logger.error({ err }, "AI: greeting shortcut failed");
+      res.status(500).json({ error: "Failed to process request." });
+    }
+    return;
+  }
+
   // ─── 4. Find/create session + fetch history ───
   let session: SessionRow;
   try {
@@ -289,20 +312,36 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     }
     res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
   } catch (err) {
-    logger.error({ err }, "AI: Gemini stream failed");
+    // Extract the most useful bits from the SDK error so we can debug.
+    // @google/genai errors typically have: err.status, err.message, err.error
+    const sdkErr = err as any;
+    const errInfo = {
+      message: sdkErr?.message ?? String(err),
+      status: sdkErr?.status ?? sdkErr?.code ?? undefined,
+      errorDetails: sdkErr?.error?.message ?? sdkErr?.errorDetails ?? undefined,
+    };
+    logger.error({ err, errInfo }, "AI: Gemini stream failed");
+    // Send a slightly more helpful message to the user that hints at the
+    // likely cause, but doesn't leak internals.
+    const isAuthError =
+      errInfo.status === 401 ||
+      errInfo.status === 403 ||
+      /api key|permission|unauthorized|forbidden/i.test(errInfo.message);
+    const userMessage = isAuthError
+      ? "TreeBot is having trouble connecting to the AI service. " +
+        "This is likely a configuration issue on our side — please try again later."
+      : "I had trouble generating a response. Please try again in a moment.";
     res.write(
       `data: ${JSON.stringify({
         type: "error",
-        message:
-          "I had trouble generating a response. Please try again in a moment.",
+        message: userMessage,
       })}\n\n`,
     );
     // If we got a partial response before the error, persist what we have.
     // If we got nothing, persist a fallback message so the conversation
     // history isn't left in an inconsistent state (user msg with no reply).
     if (!fullResponse) {
-      fullResponse =
-        "Sorry, I couldn't generate a response just now. Please try again.";
+      fullResponse = userMessage;
     }
   } finally {
     res.end();

@@ -69,9 +69,27 @@ const BOTANICAL_KEYWORDS = [
 
 // ─── Public functions ────────────────────────────────────────────────────────
 
+// Greetings + polite openers. These get a FRIENDLY INTRO response (not the
+// off-topic refusal), because a user saying "Hi" or "Salam" is clearly
+// trying to start a conversation, not ask an off-topic question. We treat
+// these as "pass the gate, let Gemini handle it with a friendly intro".
+const GREETING_KEYWORDS = [
+  // English
+  "hi", "hello", "hey", "hiya", "yo", "howdy", "greetings",
+  "good morning", "good afternoon", "good evening",
+  "thanks", "thank you", "ty", "ok", "okay", "cool", "nice",
+  // Bangla (Unicode)
+  "হাই", "হ্যালো", "নমস্কার", "ধন্যবাদ", "ঠিক আছে",
+  // Banglish
+  "salam", "salaam", "assalamualaikum", "assalamu alaikum",
+  "walaikumassalam", "dhonnobad", "thik ache",
+] as const;
+
 /**
  * Hard topic gate. Returns true if the message contains at least one
- * botanical/gardening keyword (English, Bangla Unicode, or Banglish).
+ * botanical/gardening keyword (English, Bangla Unicode, or Banglish),
+ * OR is a common greeting/polite opener.
+ *
  * Used by the route to refuse off-topic questions without spending API quota.
  *
  * Case-insensitive substring match is intentional — we want to catch
@@ -81,8 +99,43 @@ const BOTANICAL_KEYWORDS = [
  */
 export function hasBotanicalKeyword(message: string): boolean {
   const lower = message.toLowerCase();
+  // Greetings always pass — they're not off-topic, just conversational.
+  if (GREETING_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()))) {
+    return true;
+  }
   return BOTANICAL_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
 }
+
+/**
+ * Detects pure greetings (very short messages that are ONLY a greeting,
+ * with no other botanical content). Used by the route to short-circuit
+ * with a friendly canned intro instead of calling Gemini — saves quota
+ * and gives the user an instant warm welcome.
+ *
+ * Returns true if the message is <= 20 chars AND matches a greeting.
+ */
+export function isPureGreeting(message: string): boolean {
+  const trimmed = message.trim();
+  if (trimmed.length > 20) return false;
+  const lower = trimmed.toLowerCase();
+  // Match if the WHOLE message (after trimming punctuation) is a greeting.
+  const cleaned = lower.replace(/[.!?_,]/g, "").trim();
+  return GREETING_KEYWORDS.some((kw) => cleaned === kw.toLowerCase());
+}
+
+/**
+ * The friendly intro message shown when a user sends a pure greeting.
+ * Kept here (not in the route) so it's co-located with the greeting
+ * detection logic.
+ */
+export const GREETING_INTRO_MESSAGE =
+  "Hi! I'm TreeBot, your plant assistant 🌱\n\n" +
+  "I can help you with:\n" +
+  "• Tree and plant care tips (watering, sunlight, soil)\n" +
+  "• Recommendations for your garden or balcony\n" +
+  "• Questions about trees available on TreeFriend\n" +
+  "• Gardening advice for Bangladesh's climate\n\n" +
+  "What would you like to know? You can ask in English, বাংলা, or Banglish.";
 
 /**
  * Queries the catalog for products and blog posts relevant to the user's
