@@ -47,7 +47,7 @@ import {
   isPureGreeting,
   GREETING_INTRO_MESSAGE,
 } from "../lib/aiContext";
-import { buildUserContext } from "../lib/userContext";
+import { AI_TOOL_DECLARATIONS, executeTool } from "../lib/aiTools";
 import { isGeminiConfigured, streamGeminiChat } from "../lib/gemini";
 import { describeError } from "../lib/describeError";
 
@@ -323,20 +323,14 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     logger.error({ err, sessionId: session.id }, "AI: fetchHistory failed");
   }
 
-  // ─── 5. Build catalog context (Naive RAG) + user context (v2.0) ───
-  // Run both in parallel to minimize added latency.
-  const [catalogContext, userContext] = await Promise.all([
-    buildCatalogContext(message),
-    buildUserContext(clerkUserId ?? undefined),
-  ]);
-  // Append user context to the system prompt. The prompt is built in two
-  // layers: the base (catalog + scope rules), then the user-specific block.
-  // We append (not prepend) so the strict scope + refusal rules at the
-  // bottom of the base prompt stay "closest" to the user's message in the
-  // token stream — models tend to weight later instructions more heavily.
-  const systemPrompt =
-    buildSystemPrompt(catalogContext) +
-    (userContext ? "\n\n" + userContext : "");
+  // ─── 5. Build catalog context (Naive RAG) ───
+  // v2.5: user context is now provided via function calling (get_user_orders
+  // tool) instead of being injected into the prompt. This is more accurate
+  // because Gemini decides WHEN to query the user's orders based on intent,
+  // rather than always having them in the prompt (wasting tokens for
+  // questions that don't need them).
+  const catalogContext = await buildCatalogContext(message);
+  const systemPrompt = buildSystemPrompt(catalogContext);
 
   // Convert DB rows to Gemini's expected shape (role: 'user' | 'model').
   const geminiHistory = history.map((h) => ({
@@ -366,7 +360,17 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   let fullResponse = "";
   let assistantMsgId: number | undefined;
   try {
-    const stream = streamGeminiChat(systemPrompt, geminiHistory, message);
+    const stream = streamGeminiChat(
+      systemPrompt,
+      geminiHistory,
+      message,
+      // v2.5: expose function-calling tools to Gemini
+      {
+        declarations: AI_TOOL_DECLARATIONS,
+        execute: executeTool,
+      },
+      clerkUserId,
+    );
     for await (const chunk of stream) {
       if (!chunk) continue;
       fullResponse += chunk;

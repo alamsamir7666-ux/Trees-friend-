@@ -297,4 +297,141 @@ router.get("/api/ai/admin/feedback", async (req: Request, res: Response) => {
   }
 });
 
+// ─── GET /api/ai/admin/conversations?limit=20&offset=0 ────────────────────────
+// Paginated list of ALL chat sessions (not just 👎 ones). Each row includes:
+//   - session metadata (token, title, created_at, updated_at, user_id)
+//   - message count
+//   - last message preview (truncated)
+//   - feedback counts (👍 / 👎)
+//
+// Used by the admin "Conversations" section to browse all TreeBot usage.
+router.get("/ai/admin/conversations", async (req: Request, res: Response) => {
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 100);
+  const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
+
+  try {
+    const result = await pool.query(
+      `SELECT
+         s.id,
+         s.session_token,
+         s.title,
+         s.user_id,
+         s.created_at,
+         s.updated_at,
+         (SELECT COUNT(*) FROM ai_chat_messages WHERE session_id = s.id)::int AS message_count,
+         (SELECT COUNT(*) FROM ai_chat_feedback WHERE session_id = s.id AND rating = 'up')::int AS positive_count,
+         (SELECT COUNT(*) FROM ai_chat_feedback WHERE session_id = s.id AND rating = 'down')::int AS negative_count,
+         (
+           SELECT content FROM ai_chat_messages
+           WHERE session_id = s.id
+           ORDER BY created_at DESC LIMIT 1
+         ) AS last_message,
+         (
+           SELECT created_at FROM ai_chat_messages
+           WHERE session_id = s.id
+           ORDER BY created_at DESC LIMIT 1
+         ) AS last_message_at
+       FROM ai_chat_sessions s
+       ORDER BY s.updated_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset],
+    );
+
+    const countResult = await pool.query("SELECT COUNT(*)::int AS count FROM ai_chat_sessions");
+
+    res.json({
+      total: countResult.rows[0].count,
+      limit,
+      offset,
+      conversations: result.rows.map((r) => ({
+        id: r.id,
+        sessionToken: r.session_token,
+        title: r.title,
+        userId: r.user_id,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        messageCount: r.message_count,
+        positiveFeedback: r.positive_count,
+        negativeFeedback: r.negative_count,
+        lastMessage: r.last_message
+          ? r.last_message.slice(0, 200)
+          : null,
+        lastMessageAt: r.last_message_at,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: conversations list failed");
+    res.status(500).json({ error: "Failed to load conversations." });
+  }
+});
+
+// ─── GET /api/ai/admin/conversations/:id ────────────────────────────────────
+// Full message thread for a specific session. Returns all messages (up to 100)
+// in chronological order, with feedback attached to each assistant message.
+router.get("/ai/admin/conversations/:id", async (req: Request, res: Response) => {
+  const sessionId = Number(req.params.id);
+  if (!Number.isFinite(sessionId)) {
+    res.status(400).json({ error: "Invalid session ID." });
+    return;
+  }
+
+  try {
+    // Fetch session metadata
+    const sessionResult = await pool.query(
+      `SELECT id, session_token, title, user_id, created_at, updated_at
+       FROM ai_chat_sessions WHERE id = $1`,
+      [sessionId],
+    );
+    if (sessionResult.rows.length === 0) {
+      res.status(404).json({ error: "Session not found." });
+      return;
+    }
+    const session = sessionResult.rows[0];
+
+    // Fetch messages (up to 100, chronological order)
+    const messagesResult = await pool.query(
+      `SELECT id, role, content, created_at, off_topic, greeting
+       FROM ai_chat_messages
+       WHERE session_id = $1
+       ORDER BY created_at ASC
+       LIMIT 100`,
+      [sessionId],
+    );
+
+    // Fetch feedback for all assistant messages in this session
+    const feedbackResult = await pool.query(
+      `SELECT message_id, rating, comment, created_at
+       FROM ai_chat_feedback
+       WHERE session_id = $1`,
+      [sessionId],
+    );
+    const feedbackByMsg = new Map(
+      feedbackResult.rows.map((f) => [f.message_id, f]),
+    );
+
+    res.json({
+      session: {
+        id: session.id,
+        sessionToken: session.session_token,
+        title: session.title,
+        userId: session.user_id,
+        createdAt: session.created_at,
+        updatedAt: session.updated_at,
+      },
+      messages: messagesResult.rows.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        createdAt: m.created_at,
+        offTopic: m.off_topic,
+        greeting: m.greeting,
+        feedback: feedbackByMsg.get(m.id) ?? null,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err, sessionId }, "AI admin: conversation detail failed");
+    res.status(500).json({ error: "Failed to load conversation." });
+  }
+});
+
 export default router;

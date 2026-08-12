@@ -6,6 +6,7 @@ import {
 } from "../jobs/sellerSubscriptionJob";
 import { runLowStockAlert } from "../jobs/lowStockJob";
 import { runPaymentExpirationJob } from "../jobs/paymentExpirationJob";
+import { runAiFeedbackDigest } from "../jobs/aiFeedbackDigest";
 import { archiveLastMonth } from "./monthlyRecords";
 import { runAbandonedCartJob } from "./abandonedCart";
 import type { ApiRequest } from "../types/apiRequest";
@@ -191,6 +192,24 @@ router.post("/cron/payment-expiration", async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err }, "Cron: payment expiration job failed");
+    res.status(500).json({ error: "Cron job failed" });
+  }
+});
+
+/**
+ * POST /api/cron/ai-feedback-digest
+ * Weekly (Mondays 9 AM). Sends a digest email to ADMIN_EMAIL with the
+ * week's 👎 feedback + headline stats. Skipped silently if
+ * RESEND_API_KEY or ADMIN_EMAIL is not configured.
+ */
+router.post("/cron/ai-feedback-digest", async (req, res) => {
+  if (!requireCronAuth(req, res)) return;
+  try {
+    logger.info("Cron: running AI feedback digest");
+    const result = await runAiFeedbackDigest();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "Cron: AI feedback digest failed");
     res.status(500).json({ error: "Cron job failed" });
   }
 });

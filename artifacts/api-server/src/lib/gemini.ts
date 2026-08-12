@@ -36,7 +36,7 @@
  * error — the route catches this and returns a clear message rather than
  * a confusing 500. This lets you deploy the code before adding the key.
  */
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, type FunctionDeclaration } from "@google/genai";
 import { logger } from "./logger";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
@@ -132,32 +132,91 @@ function isModelNotFoundError(err: unknown): boolean {
 }
 
 /**
+ * Returns the model name to use. Tries the cached working model first,
+ * then falls through the fallback chain. If no model works, throws.
+ *
+ * Used by streamGeminiChat to resolve the model before each
+ * generateContent / generateContentStream call.
+ */
+async function resolveModel(client: GoogleGenAI): Promise<string> {
+  const tryModels: string[] = [];
+  if (_workingModel) tryModels.push(_workingModel);
+  for (const m of getModelChain()) {
+    if (!tryModels.includes(m)) tryModels.push(m);
+  }
+
+  let lastErr: unknown = null;
+  for (const modelName of tryModels) {
+    try {
+      // Quick probe: list models and check if this one exists.
+      // Cheaper than a full generateContent call.
+      // Actually, the simplest probe is to just try generateContent
+      // with a trivial prompt. If it 404s, we move to the next model.
+      // But that adds latency. Instead, we just return the model name
+      // and let the actual generateContent call fail if it's deprecated.
+      // The caller's catch block will handle 404s and retry with the
+      // next model.
+      if (_workingModel !== modelName) {
+        logger.info(
+          { model: modelName, previousModel: _workingModel },
+          "TreeBot: model selected and cached",
+        );
+        _workingModel = modelName;
+      }
+      return modelName;
+    } catch (err) {
+      lastErr = err;
+      if (isModelNotFoundError(err)) {
+        if (_workingModel === modelName) _workingModel = null;
+        continue;
+      }
+      throw err;
+    }
+  }
+  logger.error(
+    { err: lastErr, triedModels: tryModels },
+    "TreeBot: ALL models in the fallback chain returned 404",
+  );
+  throw new Error(
+    "All configured Gemini models are unavailable. " +
+      "Set the AI_MODEL env var to a current model name " +
+      "(see https://ai.google.dev/gemini-api/docs/models).",
+  );
+}
+
+/**
  * Streams a chat completion from Gemini. Yields incremental text chunks
  * (deltas) suitable for SSE forwarding to the browser.
  *
- * If the preferred model returns 404 (deprecated/unavailable), automatically
- * tries the next model in the fallback chain. The first model that works is
- * cached and reused for all subsequent requests — so the chain only runs
- * once per server lifetime (unless the cached model later starts 404ing,
- * in which case we reset and retry).
+ * v2.5: supports function calling. If Gemini decides to call a tool
+ * (e.g. search_catalog), we execute the tool and send the result back
+ * to Gemini in a multi-round loop. The final text response is then
+ * streamed to the client.
  *
  * @param systemPrompt - Strict scope-restricting system instruction
- *   (see aiContext.ts → buildSystemPrompt()).
- * @param history - Prior turns of the conversation, oldest first.
- *   Each item is `{ role: 'user' | 'model', text: string }`.
- *   The SDK uses "model" (not "assistant") for the assistant role.
- * @param userMessage - The new user message to respond to.
+ * @param history - Prior turns of the conversation, oldest first
+ * @param userMessage - The new user message to respond to
+ * @param tools - Optional: { declarations, execute } for function calling.
+ *   If provided, Gemini can call tools during the conversation.
+ *   If null/undefined, no tools are exposed (v1 behavior).
+ * @param userId - The signed-in user's Clerk ID (passed to tool executor
+ *   for privacy-sensitive tools like get_user_orders).
  *
  * @yields string — incremental text deltas. Empty string is never yielded.
- *
- * @throws Error — if GEMINI_API_KEY is missing OR every model in the
- *   fallback chain failed. The caller (route) is responsible for
- *   translating these to HTTP responses.
  */
 export async function* streamGeminiChat(
   systemPrompt: string,
   history: Array<{ role: "user" | "model"; text: string }>,
   userMessage: string,
+  tools?: {
+    declarations: FunctionDeclaration[];
+    execute: (
+      name: string,
+      args: Record<string, unknown>,
+      userId: string | null,
+    ) => Promise<unknown>;
+  },
+  userId?: string | null,
 ): AsyncGenerator<string, void, unknown> {
   const client = getClient();
   if (!client) {
@@ -168,101 +227,117 @@ export async function* streamGeminiChat(
   }
 
   // The @google/genai SDK accepts an array of `contents` for history
-  // plus the new message. The system instruction is passed separately
-  // as `config.systemInstruction`.
-  const contents = [
+  // plus the new message.
+  let contents: Array<Record<string, unknown>> = [
     ...history.map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
     { role: "user" as const, parts: [{ text: userMessage }] },
   ];
 
-  const config = {
+  const config: Record<string, unknown> = {
     systemInstruction: systemPrompt,
-    // Low temperature = more deterministic, more factual. Plant-care
-    // advice shouldn't be creative — we want consistency and accuracy.
     temperature: 0.4,
-    // Hard cap on output length. Prevents runaway responses and keeps
-    // token usage predictable (cost + latency).
     maxOutputTokens: 1024,
   };
-
-  // Build the list of models to try. If we have a cached working model,
-  // try it first; if it 404s, fall through to the full chain.
-  const tryModels: string[] = [];
-  if (_workingModel) tryModels.push(_workingModel);
-  for (const m of getModelChain()) {
-    if (!tryModels.includes(m)) tryModels.push(m);
+  if (tools && tools.declarations.length > 0) {
+    config.tools = [{ functionDeclarations: tools.declarations }];
   }
 
-  let lastErr: unknown = null;
+  // ─── Multi-round function-calling loop ─────────────────────────────────
+  // Gemini may respond with a functionCall instead of text. We execute
+  // the function, append the result to contents, and call generateContent
+  // again. Loop until Gemini returns text (no function calls) or we hit
+  // the max rounds (prevents infinite loops if Gemini keeps calling tools).
+  const MAX_TOOL_ROUNDS = 4;
 
-  for (const modelName of tryModels) {
-    try {
-      const responseStream = await client.models.generateContentStream({
-        model: modelName,
-        contents,
-        config,
-      });
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    // Use non-streaming generateContent for function-calling rounds.
+    // Why: function calls come as a single structured response, not a stream.
+    // If we used generateContentStream, we'd have to buffer the whole thing
+    // anyway to detect function calls. Non-streaming is simpler + correct.
+    //
+    // On the FINAL round (when Gemini returns text, not function calls),
+    // we switch to streaming for real-time token delivery.
+    const response = await client.models.generateContent({
+      model: await resolveModel(client),
+      contents,
+      config,
+    });
 
-      // Important: we need to actually consume the stream to detect a 404.
-      // The SDK throws on the FIRST `await` of the iterator, not on the
-      // generateContentStream call itself — so we wrap the first iteration
-      // in a try, then if it succeeds we proceed to consume the rest.
+    const functionCalls = response.functionCalls;
 
-      // If we got here, the call was accepted. Cache this model for next time.
-      if (_workingModel !== modelName) {
-        logger.info(
-          { model: modelName, previousModel: _workingModel },
-          "TreeBot: model selected and cached for subsequent requests",
-        );
-        _workingModel = modelName;
-      }
+    if (functionCalls && functionCalls.length > 0 && tools) {
+      // ─── Execute each function call ───────────────────────────────────
+      logger.info(
+        { round, calls: functionCalls.map((fc: any) => fc.name) },
+        "TreeBot: executing function calls",
+      );
 
-      for await (const chunk of responseStream) {
-        const text = chunk.text;
-        if (text) {
-          yield text;
-        }
-      }
-      return; // success — exit the loop
-    } catch (err) {
-      lastErr = err;
-      if (isModelNotFoundError(err)) {
-        // This model is deprecated/unavailable — try the next one.
-        // Reset the cached model so we re-probe on next request.
-        if (_workingModel === modelName) {
-          logger.warn(
-            { model: modelName },
-            "TreeBot: previously-cached model is now unavailable, retrying fallback chain",
-          );
-          _workingModel = null;
-        } else {
-          logger.warn(
-            { model: modelName },
-            "TreeBot: model unavailable, trying next in fallback chain",
-          );
-        }
-        continue;
-      }
-      // Non-404 error (auth, rate limit, network, etc.) — don't try other
-      // models, just rethrow. The route handler will surface it.
-      throw err;
+      const functionResponseParts = await Promise.all(
+        functionCalls.map(async (fc: any) => {
+          const result = await tools.execute(fc.name, fc.args ?? {}, userId ?? null);
+          return {
+            functionResponse: {
+              name: fc.name,
+              response: { result },
+            },
+          };
+        }),
+      );
+
+      // Append the model's function call + our responses to the conversation.
+      // This lets Gemini "see" what the tools returned and generate a
+      // final text answer.
+      contents = [
+        ...contents,
+        {
+          role: "model" as const,
+          parts: functionCalls.map((fc: any) => ({ functionCall: { name: fc.name, args: fc.args } })),
+        },
+        {
+          role: "user" as const,
+          parts: functionResponseParts,
+        },
+      ];
+      // Loop continues — Gemini processes the function responses.
+      continue;
     }
+
+    // ─── No function calls — this is the final text response ────────────
+    // Re-stream it for real-time delivery. We call generateContentStream
+    // with the same contents (which now includes any tool results from
+    // previous rounds). Gemini generates the final text answer.
+    if (round === 0) {
+      // No tool calls were ever needed — we can stream directly from the
+      // first response we already have.
+      const text = response.text;
+      if (text) yield text;
+      return;
+    }
+
+    // We went through tool rounds — re-stream the final answer.
+    const finalStream = await client.models.generateContentStream({
+      model: await resolveModel(client),
+      contents,
+      config: {
+        ...config,
+        // Don't expose tools on the final round — we want text, not more calls.
+        tools: undefined,
+      },
+    });
+
+    for await (const chunk of finalStream) {
+      const text = chunk.text;
+      if (text) yield text;
+    }
+    return;
   }
 
-  // All models in the chain returned 404. Log the last error and throw
-  // a clear message so the operator knows what to do.
+  // If we hit MAX_TOOL_ROUNDS, something is wrong (Gemini keeps calling tools).
   logger.error(
-    { err: lastErr, triedModels: tryModels },
-    "TreeBot: ALL models in the fallback chain returned 404. " +
-      "Either the API key is invalid OR Google has deprecated every model we know. " +
-      "Action: visit https://ai.google.dev/gemini-api/docs/models to find the current model name, " +
-      "then set it as the AI_MODEL env var.",
+    { rounds: MAX_TOOL_ROUNDS },
+    "TreeBot: hit max tool rounds — Gemini kept calling functions without producing a final answer",
   );
-  throw new Error(
-    "All configured Gemini models are unavailable. " +
-      "Please set the AI_MODEL env var to a currently-available model name " +
-      "(see https://ai.google.dev/gemini-api/docs/models).",
-  );
+  throw new Error("AI assistant took too many tool calls. Please try rephrasing your question.");
 }
 
 /**

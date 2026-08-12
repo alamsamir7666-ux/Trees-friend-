@@ -420,6 +420,9 @@ export function AiInsightsTab() {
           </div>
         )}
       </div>
+
+      {/* ─── Conversations browser (v2.5) ──────────────────────────────── */}
+      <ConversationsSection />
     </div>
   );
 }
@@ -513,5 +516,253 @@ function EmptyChart() {
 function EmptyList({ text }: { text: string }) {
   return (
     <div className="text-sm text-muted-foreground py-8 text-center">{text}</div>
+  );
+}
+
+// ─── Conversations browser (v2.5) ───────────────────────────────────────
+
+interface ConversationListItem {
+  id: number;
+  sessionToken: string;
+  title: string | null;
+  userId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  positiveFeedback: number;
+  negativeFeedback: number;
+  lastMessage: string | null;
+  lastMessageAt: string | null;
+}
+
+interface ConversationMessage {
+  id: number;
+  role: string;
+  content: string;
+  createdAt: string;
+  offTopic: boolean;
+  greeting: boolean;
+  feedback: { rating: string; comment: string | null; created_at: string } | null;
+}
+
+function ConversationsSection() {
+  const { getToken } = useAuth();
+  const [conversations, setConversations] = useState<ConversationListItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [thread, setThread] = useState<ConversationMessage[] | null>(null);
+  const [threadLoading, setThreadLoading] = useState(false);
+  const PAGE = 10;
+
+  const fetchPage = useCallback(
+    async (newOffset: number) => {
+      setLoading(true);
+      try {
+        const token = await getToken();
+        const headers: Record<string, string> = token
+          ? { Authorization: `Bearer ${token}` }
+          : {};
+        const res = await fetch(
+          `${API}/api/ai/admin/conversations?limit=${PAGE}&offset=${newOffset}`,
+          { headers },
+        );
+        const data = await res.json();
+        setConversations(data.conversations ?? []);
+        setTotal(data.total ?? 0);
+        setOffset(newOffset);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [getToken],
+  );
+
+  useEffect(() => {
+    fetchPage(0);
+  }, [fetchPage]);
+
+  const openConversation = async (id: number) => {
+    setSelectedId(id);
+    setThreadLoading(true);
+    setThread(null);
+    try {
+      const token = await getToken();
+      const headers: Record<string, string> = token
+        ? { Authorization: `Bearer ${token}` }
+        : {};
+      const res = await fetch(`${API}/api/ai/admin/conversations/${id}`, { headers });
+      const data = await res.json();
+      setThread(data.messages ?? []);
+    } finally {
+      setThreadLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-card rounded-xl border p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-muted-foreground" />
+          All Conversations ({total})
+        </h3>
+        {total > PAGE && (
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={offset === 0 || loading}
+              onClick={() => fetchPage(Math.max(0, offset - PAGE))}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="text-xs text-muted-foreground px-2">
+              {offset + 1}–{Math.min(offset + PAGE, total)} of {total}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={offset + PAGE >= total || loading}
+              onClick={() => fetchPage(offset + PAGE)}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-16" />
+          ))}
+        </div>
+      ) : conversations.length === 0 ? (
+        <EmptyList text="No conversations yet." />
+      ) : (
+        <div className="space-y-2">
+          {conversations.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => openConversation(c.id)}
+              className="w-full text-left border rounded-lg p-3 hover:bg-muted/40 transition-colors"
+            >
+              <div className="flex items-start justify-between gap-2 mb-1">
+                <span className="text-sm font-medium truncate flex-1">
+                  {c.title ?? "(no title)"}
+                </span>
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {c.messageCount} msgs
+                </span>
+              </div>
+              {c.lastMessage && (
+                <p className="text-xs text-muted-foreground truncate">
+                  {c.lastMessage}
+                </p>
+              )}
+              <div className="flex items-center gap-2 mt-1.5">
+                <span className="text-[10px] text-muted-foreground">
+                  {new Date(c.updatedAt).toLocaleDateString()}
+                </span>
+                {c.userId && (
+                  <Badge variant="outline" className="text-[9px] py-0 h-4">
+                    signed-in
+                  </Badge>
+                )}
+                {c.positiveFeedback > 0 && (
+                  <Badge variant="outline" className="text-[9px] py-0 h-4 text-success border-success/30">
+                    👍 {c.positiveFeedback}
+                  </Badge>
+                )}
+                {c.negativeFeedback > 0 && (
+                  <Badge variant="outline" className="text-[9px] py-0 h-4 text-destructive border-destructive/30">
+                    👎 {c.negativeFeedback}
+                  </Badge>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ─── Conversation detail dialog ──────────────────────────────── */}
+      {selectedId && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+          onClick={() => {
+            setSelectedId(null);
+            setThread(null);
+          }}
+        >
+          <div
+            className="bg-background rounded-xl border max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <h3 className="text-sm font-semibold">
+                Conversation #{selectedId}
+              </h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSelectedId(null);
+                  setThread(null);
+                }}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {threadLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <Skeleton key={i} className="h-16" />
+                  ))}
+                </div>
+              ) : thread && thread.length > 0 ? (
+                thread.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                  >
+                    <div
+                      className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
+                        m.role === "user"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted border"
+                      }`}
+                    >
+                      <div className="whitespace-pre-wrap break-words">
+                        {m.content}
+                      </div>
+                      {m.offTopic && (
+                        <div className="text-[10px] opacity-70 mt-1">
+                          ⚠ off-topic refusal
+                        </div>
+                      )}
+                      {m.greeting && (
+                        <div className="text-[10px] opacity-70 mt-1">
+                          👋 greeting shortcut
+                        </div>
+                      )}
+                      {m.feedback && (
+                        <div className="text-[10px] mt-1 opacity-70">
+                          {m.feedback.rating === "up" ? "👍 rated" : "👎 rated"}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <EmptyList text="No messages in this conversation." />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
