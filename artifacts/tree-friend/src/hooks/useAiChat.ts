@@ -30,6 +30,10 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   createdAt?: string;
+  /** v2.0: true if this message was an off-topic refusal. */
+  offTopic?: boolean;
+  /** v2.0: true if this message was a pure-greeting shortcut response. */
+  greeting?: boolean;
 }
 
 interface UseAiChatResult {
@@ -79,6 +83,8 @@ export function useAiChat(): UseAiChatResult {
               role: m.role,
               content: m.content,
               createdAt: m.createdAt,
+              offTopic: m.offTopic,
+              greeting: m.greeting,
             })),
           );
         }
@@ -150,6 +156,8 @@ export function useAiChat(): UseAiChatResult {
                   ...m,
                   content: data.message ?? "(no response)",
                   id: typeof data.messageId === "number" ? data.messageId : m.id,
+                  offTopic: data.offTopic === true,
+                  greeting: data.greeting === true,
                 }
               : m,
           ),

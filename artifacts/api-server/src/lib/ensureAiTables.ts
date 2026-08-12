@@ -44,10 +44,6 @@ CREATE INDEX IF NOT EXISTS ai_chat_messages_session_created_idx
   ON ai_chat_messages (session_id, created_at);
 
 -- ─── AI Chat Feedback (v1.5) ─────────────────────────────────────────────────
--- One row per feedback action on an assistant message. A user can toggle
--- thumbs-up / thumbs-down; we store the LATEST rating per message (unique
--- constraint on message_id) so re-clicking the same button toggles to
--- 'none' (delete the row), and clicking the opposite button updates in place.
 CREATE TABLE IF NOT EXISTS ai_chat_feedback (
   id SERIAL PRIMARY KEY,
   message_id INTEGER NOT NULL REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
@@ -61,6 +57,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS ai_chat_feedback_message_unique
   ON ai_chat_feedback (message_id);
 CREATE INDEX IF NOT EXISTS ai_chat_feedback_rating_idx
   ON ai_chat_feedback (rating, created_at DESC);
+
+-- ─── v2.0 admin insights columns ────────────────────────────────────────────
+-- off_topic: TRUE when the hard topic gate refused the message (no botanical
+--   keyword matched). Used by the admin insights endpoint to compute the
+--   "refusal rate" metric — what % of questions are off-topic?
+-- greeting: TRUE when the pure-greeting shortcut fired. Excluded from
+--   refusal-rate calculations (a greeting isn't a refusal).
+-- Idempotent ALTER so existing rows just default to false.
+ALTER TABLE ai_chat_messages
+  ADD COLUMN IF NOT EXISTS off_topic BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS greeting BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Backfill not needed — ALTER DEFAULT only affects new rows. Existing rows
+-- get the default value (false) for the new columns automatically.
+
+-- Index for fast refusal-rate queries ("how many of last 1000 msgs were
+-- refusals?"). Partial index keeps it small (only off_topic rows).
+CREATE INDEX IF NOT EXISTS ai_chat_messages_off_topic_idx
+  ON ai_chat_messages (created_at DESC)
+  WHERE off_topic = TRUE;
 `;
 
 export async function ensureAiTables(): Promise<void> {

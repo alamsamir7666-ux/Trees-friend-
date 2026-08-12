@@ -29,7 +29,7 @@
  *   `ai_chat_messages` so history survives page refresh and server restart.
  *   The frontend rehydrates by calling GET /sessions/:token on mount.
  */
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import { pool } from "@workspace/db";
 import { eq, asc, desc } from "drizzle-orm";
 import {
@@ -37,6 +37,7 @@ import {
   aiChatMessagesTable,
   aiChatFeedbackTable,
 } from "@workspace/db";
+import { getAuth } from "@clerk/express";
 import { createRateLimiter } from "../middlewares/rateLimiter";
 import { logger } from "../lib/logger";
 import {
@@ -46,6 +47,7 @@ import {
   isPureGreeting,
   GREETING_INTRO_MESSAGE,
 } from "../lib/aiContext";
+import { buildUserContext } from "../lib/userContext";
 import { isGeminiConfigured, streamGeminiChat } from "../lib/gemini";
 import { describeError } from "../lib/describeError";
 
@@ -80,6 +82,8 @@ interface MessageRow {
   role: string;
   content: string;
   created_at: Date;
+  off_topic: boolean;
+  greeting: boolean;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -91,10 +95,17 @@ interface MessageRow {
  * On first message in a session, we also stamp the `title` column with a
  * truncated version of the message — useful for future UIs that list
  * conversations.
+ *
+ * v2.0: if `userId` is provided (signed-in user), it's stored on the
+ * session row. Anonymous sessions leave user_id NULL. If the session
+ * already existed anonymously and the user later signs in, we update
+ * user_id on the existing row (so a single conversation can transition
+ * from anon → authenticated without losing history).
  */
 async function findOrCreateSession(
   sessionToken: string,
   firstMessage: string,
+  userId?: string,
 ): Promise<SessionRow> {
   // Try to find existing first (the common case after the first turn).
   const existing = await pool.query<SessionRow>(
@@ -102,17 +113,24 @@ async function findOrCreateSession(
     [sessionToken],
   );
   if (existing.rows.length > 0) {
+    // If a userId is now provided but the session has NULL user_id, backfill.
+    if (userId) {
+      await pool.query(
+        `UPDATE ai_chat_sessions SET user_id = $1 WHERE session_token = $2 AND user_id IS NULL`,
+        [userId, sessionToken],
+      );
+    }
     return existing.rows[0];
   }
 
   // Race-safe insert: if another request created the same token in the
-  // meantime, ON CONLTICT DO NOTHING + a follow-up SELECT retrieves it.
+  // meantime, ON CONFLICT DO NOTHING + a follow-up SELECT retrieves it.
   const title = firstMessage.slice(0, 80).trim() || "New conversation";
   await pool.query(
-    `INSERT INTO ai_chat_sessions (session_token, title)
-     VALUES ($1, $2)
+    `INSERT INTO ai_chat_sessions (session_token, title, user_id)
+     VALUES ($1, $2, $3)
      ON CONFLICT (session_token) DO NOTHING`,
-    [sessionToken, title],
+    [sessionToken, title, userId ?? null],
   );
 
   const created = await pool.query<SessionRow>(
@@ -134,9 +152,9 @@ async function fetchHistory(
 ): Promise<MessageRow[]> {
   // Subquery: get the last N rows in DESC order, then re-sort ASC for use.
   const result = await pool.query<MessageRow>(
-    `SELECT id, session_id, role, content, created_at
+    `SELECT id, session_id, role, content, created_at, off_topic, greeting
      FROM (
-       SELECT id, session_id, role, content, created_at
+       SELECT id, session_id, role, content, created_at, off_topic, greeting
        FROM ai_chat_messages
        WHERE session_id = $1
        ORDER BY created_at DESC
@@ -155,18 +173,28 @@ async function fetchHistory(
  * Returns the inserted row's `id` (numeric DB primary key) so the caller
  * can forward it to the client (e.g. for feedback buttons that need to
  * reference a specific message). Returns undefined if the insert failed.
+ *
+ * v2.0: accepts `off_topic` and `greeting` flags so admin insights can
+ * compute refusal rate. Defaults to false (no flag = regular message).
  */
 async function persistMessage(
   sessionId: number,
   role: "user" | "assistant",
   content: string,
+  options: { offTopic?: boolean; greeting?: boolean } = {},
 ): Promise<number | undefined> {
   try {
     const result = await pool.query<{ id: number }>(
-      `INSERT INTO ai_chat_messages (session_id, role, content)
-       VALUES ($1, $2, $3)
+      `INSERT INTO ai_chat_messages (session_id, role, content, off_topic, greeting)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id`,
-      [sessionId, role, content],
+      [
+        sessionId,
+        role,
+        content,
+        options.offTopic ?? false,
+        options.greeting ?? false,
+      ],
     );
     // Bump updated_at on the session so we can sort by "most recently active"
     // if we ever build a conversation list.
@@ -204,6 +232,13 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       ? sessionToken
       : crypto.randomUUID();
 
+  // ─── 1b. Resolve signed-in user (OPTIONAL) ───
+  // v2.0: if the user is signed in via Clerk (or mobile JWT — handled by the
+  // middleware that runs before us), we attach their identity to the session
+  // and inject their orders + wishlist into the system prompt. If not signed
+  // in, we proceed as anonymous (v1 behavior).
+  const clerkUserId = req.userId ?? getAuth(req)?.userId ?? null;
+
   // ─── 2. Service availability check ───
   if (!isGeminiConfigured()) {
     res.status(503).json({
@@ -221,7 +256,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     // We still need to send back a sessionToken so the client can store it.
     // Persist the user message + refusal so the conversation is consistent.
     try {
-      const session = await findOrCreateSession(token, message);
+      const session = await findOrCreateSession(token, message, clerkUserId ?? undefined);
       await persistMessage(session.id, "user", message);
       const refusal =
         "I'm TreeFriend's plant assistant and can only help with trees, plants, and gardening. " +
@@ -247,12 +282,13 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // warm welcome instead of a 3-5 second wait for Gemini to say "hi back".
   if (isPureGreeting(message)) {
     try {
-      const session = await findOrCreateSession(token, message);
+      const session = await findOrCreateSession(token, message, clerkUserId ?? undefined);
       await persistMessage(session.id, "user", message);
       const assistantMsgId = await persistMessage(
         session.id,
         "assistant",
         GREETING_INTRO_MESSAGE,
+        { greeting: true },
       );
       res.json({
         sessionToken: token,
@@ -270,7 +306,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // ─── 4. Find/create session + fetch history ───
   let session: SessionRow;
   try {
-    session = await findOrCreateSession(token, message);
+    session = await findOrCreateSession(token, message, clerkUserId ?? undefined);
   } catch (err) {
     logger.error({ err }, "AI: findOrCreateSession failed");
     res.status(500).json({ error: "Failed to start chat session." });
@@ -287,9 +323,20 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     logger.error({ err, sessionId: session.id }, "AI: fetchHistory failed");
   }
 
-  // ─── 5. Build catalog context (Naive RAG) ───
-  const catalogContext = await buildCatalogContext(message);
-  const systemPrompt = buildSystemPrompt(catalogContext);
+  // ─── 5. Build catalog context (Naive RAG) + user context (v2.0) ───
+  // Run both in parallel to minimize added latency.
+  const [catalogContext, userContext] = await Promise.all([
+    buildCatalogContext(message),
+    buildUserContext(clerkUserId ?? undefined),
+  ]);
+  // Append user context to the system prompt. The prompt is built in two
+  // layers: the base (catalog + scope rules), then the user-specific block.
+  // We append (not prepend) so the strict scope + refusal rules at the
+  // bottom of the base prompt stay "closest" to the user's message in the
+  // token stream — models tend to weight later instructions more heavily.
+  const systemPrompt =
+    buildSystemPrompt(catalogContext) +
+    (userContext ? "\n\n" + userContext : "");
 
   // Convert DB rows to Gemini's expected shape (role: 'user' | 'model').
   const geminiHistory = history.map((h) => ({
@@ -426,6 +473,8 @@ router.get(
           role: m.role,
           content: m.content,
           createdAt: m.created_at,
+          offTopic: m.off_topic,
+          greeting: m.greeting,
         })),
       });
     } catch (err) {

@@ -1,0 +1,300 @@
+/**
+ * TreeBot Admin Insights API (v2.0).
+ *
+ * All endpoints are mounted under /api/ai/admin/* and require the
+ * `requireAdmin` middleware (the user must have role='admin' in the
+ * users table — see middlewares/auth.ts).
+ *
+ * Provides aggregated metrics about TreeBot usage for the new "TreeBot
+ * Insights" admin tab:
+ *
+ *   GET  /api/ai/admin/overview        — headline counts + refusal rate
+ *   GET  /api/ai/admin/timeseries      — daily message volume (last N days)
+ *   GET  /api/ai/admin/top-questions   — top keywords from user messages
+ *   GET  /api/ai/admin/top-products    — most-mentioned [[products]] in AI replies
+ *   GET  /api/ai/admin/feedback        — paginated list of 👍/👎 rated messages
+ *
+ * Design notes:
+ *   - All queries are read-only (SELECT) — no writes.
+ *   - All queries use indexes (we created them in ensureAiTables.ts).
+ *   - Time-bucketed queries use date_trunc('day', created_at) for
+ *     cross-Postgres compatibility (Supabase/Neon/RDS all support it).
+ *   - Pagination is cursor-style (offset + limit) — simple, and the
+ *     admin UI doesn't need infinite scroll for feedback.
+ *   - All endpoints return JSON; no streaming.
+ */
+import { Router, type Request, type Response } from "express";
+import { pool } from "@workspace/db";
+import { requireAdmin } from "../middlewares/auth";
+import { logger } from "../lib/logger";
+
+const router = Router();
+
+// All routes in this file require admin.
+router.use(requireAdmin);
+
+// ─── GET /api/ai/admin/overview ──────────────────────────────────────────────
+// Headline stats for the dashboard cards.
+//   - totalSessions: distinct ai_chat_sessions count
+//   - totalMessages: distinct ai_chat_messages count
+//   - totalFeedback: distinct ai_chat_feedback count (any rating)
+//   - positiveFeedback, negativeFeedback: count by rating
+//   - refusalRate: off_topic user messages / total user messages
+//   - greetingCount: messages where greeting=true (excluded from refusal rate)
+router.get("/ai/admin/overview", async (_req: Request, res: Response) => {
+  try {
+    const [sessions, messages, feedback, refusals, greetings] = await Promise.all([
+      pool.query("SELECT COUNT(*)::int AS count FROM ai_chat_sessions"),
+      pool.query(
+        "SELECT COUNT(*)::int AS count, COUNT(*) FILTER (WHERE role = 'user')::int AS user_count FROM ai_chat_messages",
+      ),
+      pool.query(
+        "SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE rating = 'up')::int AS positive, COUNT(*) FILTER (WHERE rating = 'down')::int AS negative FROM ai_chat_feedback",
+      ),
+      pool.query(
+        "SELECT COUNT(*)::int AS count FROM ai_chat_messages WHERE role = 'user' AND off_topic = TRUE",
+      ),
+      pool.query(
+        "SELECT COUNT(*)::int AS count FROM ai_chat_messages WHERE greeting = TRUE",
+      ),
+    ]);
+
+    const userMessageCount = messages.rows[0].user_count;
+    const refusalCount = refusals.rows[0].count;
+    // Refusal rate = off_topic user messages / (user messages excluding greetings).
+    // Greetings are excluded because they aren't questions, so they shouldn't
+    // count toward the "what % of questions did we refuse?" denominator.
+    const refusalDenominator = Math.max(0, userMessageCount - greetings.rows[0].count);
+    const refusalRate =
+      refusalDenominator > 0 ? (refusalCount / refusalDenominator) * 100 : 0;
+
+    res.json({
+      totalSessions: sessions.rows[0].count,
+      totalMessages: messages.rows[0].count,
+      totalUserMessages: userMessageCount,
+      totalAssistantMessages: messages.rows[0].count - userMessageCount,
+      totalFeedback: feedback.rows[0].total,
+      positiveFeedback: feedback.rows[0].positive,
+      negativeFeedback: feedback.rows[0].negative,
+      refusalCount,
+      refusalRate: Math.round(refusalRate * 10) / 10, // 1 decimal place
+      greetingCount: greetings.rows[0].count,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: overview failed");
+    res.status(500).json({ error: "Failed to load overview stats." });
+  }
+});
+
+// ─── GET /api/ai/admin/timeseries?days=30 ────────────────────────────────────
+// Daily message volume for the last N days. Returns:
+//   [{ date: "2026-08-01", user: 12, assistant: 11, refusals: 1 }, ...]
+router.get("/api/ai/admin/timeseries", async (req: Request, res: Response) => {
+  const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 90);
+  try {
+    const result = await pool.query(
+      `SELECT
+         to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS date,
+         COUNT(*) FILTER (WHERE role = 'user')::int AS user_count,
+         COUNT(*) FILTER (WHERE role = 'assistant')::int AS assistant_count,
+         COUNT(*) FILTER (WHERE role = 'user' AND off_topic = TRUE)::int AS refusals
+       FROM ai_chat_messages
+       WHERE created_at >= NOW() - ($1 || ' days')::INTERVAL
+       GROUP BY date_trunc('day', created_at)
+       ORDER BY date_trunc('day', created_at) ASC`,
+      [String(days)],
+    );
+    res.json({
+      days,
+      data: result.rows.map((r) => ({
+        date: r.date,
+        user: r.user_count,
+        assistant: r.assistant_count,
+        refusals: r.refusals,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: timeseries failed");
+    res.status(500).json({ error: "Failed to load timeseries." });
+  }
+});
+
+// ─── GET /api/ai/admin/top-questions?limit=20 ────────────────────────────────
+// Top keywords from user messages. We extract word tokens (>=4 chars,
+// alpha-only) from user messages, exclude stop words, count frequency.
+// Returns: [{ word: "mango", count: 15 }, ...]
+router.get("/api/ai/admin/top-questions", async (req: Request, res: Response) => {
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 100);
+  try {
+    // Use Postgres regex to extract words, then aggregate in SQL.
+    // This avoids pulling all messages into Node — much faster for large tables.
+    const result = await pool.query(
+      `SELECT word, COUNT(*)::int AS count
+       FROM (
+         SELECT lower(match[1]) AS word
+         FROM ai_chat_messages,
+              regexp_matches(content, '([a-zA-Z]{4,})', 'g') AS match
+         WHERE role = 'user'
+           AND off_topic = FALSE
+           AND greeting = FALSE
+       ) AS words
+       WHERE word NOT IN (
+         'that', 'this', 'with', 'from', 'have', 'they', 'will', 'what',
+         'when', 'where', 'which', 'your', 'their', 'there', 'about',
+         'would', 'could', 'should', 'please', 'tell', 'want', 'need',
+         'know', 'like', 'just', 'also', 'some', 'them', 'then', 'than'
+       )
+       GROUP BY word
+       ORDER BY count DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json({
+      keywords: result.rows.map((r) => ({ word: r.word, count: r.count })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: top-questions failed");
+    res.status(500).json({ error: "Failed to load top questions." });
+  }
+});
+
+// ─── GET /api/ai/admin/top-products?limit=20 ────────────────────────────────
+// Most-mentioned [[product name]] tokens in assistant messages.
+// Returns: [{ name: "Alphonso Mango", count: 8 }, ...]
+router.get("/api/ai/admin/top-products", async (req: Request, res: Response) => {
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 100);
+  try {
+    // Extract [[...]] tokens via regex, strip brackets, aggregate.
+    const result = await pool.query(
+      `SELECT name, COUNT(*)::int AS count
+       FROM (
+         SELECT match[1] AS name
+         FROM ai_chat_messages,
+              regexp_matches(content, '\\[\\[([^\\]]+)\\]\\]', 'g') AS match
+         WHERE role = 'assistant'
+       ) AS mentions
+       GROUP BY name
+       ORDER BY count DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json({
+      products: result.rows.map((r) => ({ name: r.name, count: r.count })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: top-products failed");
+    res.status(500).json({ error: "Failed to load top products." });
+  }
+});
+
+// ─── GET /api/ai/admin/feedback?rating=down&limit=50&offset=0 ───────────────
+// Paginated list of feedback-rated messages. Default: 👎 only (so the admin
+// can see what's broken). Pass rating=all to get everything.
+router.get("/api/ai/admin/feedback", async (req: Request, res: Response) => {
+  const rating = (req.query.rating as string | undefined) ?? "down";
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+  const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
+
+  try {
+    let queryText: string;
+    const params: unknown[] = [limit, offset];
+
+    if (rating === "all") {
+      queryText = `
+        SELECT
+          f.id AS feedback_id,
+          f.rating,
+          f.comment,
+          f.created_at AS feedback_at,
+          m.id AS message_id,
+          m.content AS assistant_content,
+          m.created_at AS message_at,
+          m.session_id,
+          s.session_token,
+          s.user_id,
+          -- The user message that triggered this assistant response.
+          -- Look up the message immediately before this one in the same session.
+          (
+            SELECT content
+            FROM ai_chat_messages prev
+            WHERE prev.session_id = m.session_id
+              AND prev.created_at < m.created_at
+              AND prev.role = 'user'
+            ORDER BY prev.created_at DESC
+            LIMIT 1
+          ) AS user_question
+        FROM ai_chat_feedback f
+        JOIN ai_chat_messages m ON m.id = f.message_id
+        JOIN ai_chat_sessions s ON s.id = f.session_id
+        ORDER BY f.created_at DESC
+        LIMIT $1 OFFSET $2`;
+    } else if (rating === "up" || rating === "down") {
+      params.unshift(rating);
+      queryText = `
+        SELECT
+          f.id AS feedback_id,
+          f.rating,
+          f.comment,
+          f.created_at AS feedback_at,
+          m.id AS message_id,
+          m.content AS assistant_content,
+          m.created_at AS message_at,
+          m.session_id,
+          s.session_token,
+          s.user_id,
+          (
+            SELECT content
+            FROM ai_chat_messages prev
+            WHERE prev.session_id = m.session_id
+              AND prev.created_at < m.created_at
+              AND prev.role = 'user'
+            ORDER BY prev.created_at DESC
+            LIMIT 1
+          ) AS user_question
+        FROM ai_chat_feedback f
+        JOIN ai_chat_messages m ON m.id = f.message_id
+        JOIN ai_chat_sessions s ON s.id = f.session_id
+        WHERE f.rating = $1
+        ORDER BY f.created_at DESC
+        LIMIT $2 OFFSET $3`;
+    } else {
+      res.status(400).json({ error: 'rating must be "up", "down", or "all".' });
+      return;
+    }
+
+    const result = await pool.query(queryText, params);
+
+    // Also fetch total count for pagination UI.
+    const countText =
+      rating === "all"
+        ? "SELECT COUNT(*)::int AS count FROM ai_chat_feedback"
+        : "SELECT COUNT(*)::int AS count FROM ai_chat_feedback WHERE rating = $1";
+    const countParams = rating === "all" ? [] : [rating];
+    const countResult = await pool.query(countText, countParams);
+
+    res.json({
+      rating,
+      total: countResult.rows[0].count,
+      limit,
+      offset,
+      items: result.rows.map((r) => ({
+        feedbackId: r.feedback_id,
+        rating: r.rating,
+        comment: r.comment,
+        feedbackAt: r.feedback_at,
+        messageId: r.message_id,
+        assistantContent: r.assistant_content,
+        messageAt: r.message_at,
+        sessionId: r.session_id,
+        sessionToken: r.session_token,
+        userId: r.user_id,
+        userQuestion: r.user_question,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: feedback failed");
+    res.status(500).json({ error: "Failed to load feedback." });
+  }
+});
+
+export default router;

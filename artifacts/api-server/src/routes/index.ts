@@ -55,6 +55,7 @@ import bkashPaymentRouter from "./bkashPayment";
 import conversationsRouter from "./conversations";
 import presenceRouter from "./presence";
 import aiRouter from "./ai";
+import aiAdminRouter from "./aiAdmin";
 
 const router: IRouter = Router();
 
@@ -110,6 +111,7 @@ router.use(bkashPaymentRouter);
 router.use(conversationsRouter);
 router.use(presenceRouter);
 router.use(aiRouter);
+router.use(aiAdminRouter);
 // Cron job endpoints (Vercel scheduled tasks). Authenticated via
 // CRON_SECRET Bearer token, not requireAuth — see routes/cron.ts.
 router.use(cronRouter);

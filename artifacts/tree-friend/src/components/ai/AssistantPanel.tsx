@@ -20,7 +20,8 @@
  *   2. As the main content of the /assistant full-page route.
  */
 import { useEffect, useRef, useState, type FormEvent, type Key } from "react";
-import { Sparkles, Send, Trash2, X, Loader2 } from "lucide-react";
+import { useAuth } from "@clerk/react";
+import { Sparkles, Send, Trash2, X, Loader2, UserCircle2 } from "lucide-react";
 import { useAiChat, type ChatMessage } from "@/hooks/useAiChat";
 import { MarkdownText } from "./MarkdownText";
 import { ProductChips } from "./ProductChips";
@@ -48,6 +49,7 @@ interface AssistantPanelProps {
 
 export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps) {
   const { messages, loading, error, send, clear } = useAiChat();
+  const { user, isSignedIn } = useAuth();
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -98,8 +100,19 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
           </div>
           <div className="min-w-0">
             <div className="font-semibold leading-tight">TreeBot</div>
-            <div className="text-xs text-primary-foreground/70 truncate">
-              Plant assistant · trees & gardening
+            <div className="text-xs text-primary-foreground/70 truncate flex items-center gap-1">
+              {isSignedIn && user ? (
+                <>
+                  <UserCircle2 className="h-3 w-3" />
+                  <span className="truncate max-w-[120px]">
+                    {user.firstName ?? user.username ?? "Signed in"}
+                  </span>
+                  <span className="text-primary-foreground/40">·</span>
+                  <span className="truncate">trees & gardening</span>
+                </>
+              ) : (
+                <span>Plant assistant · trees & gardening</span>
+              )}
             </div>
           </div>
         </div>
@@ -256,6 +269,13 @@ function Bubble({
             <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-current opacity-60 animate-pulse" />
           )}
         </div>
+
+        {/* v2.0: off-topic / greeting badges (small, muted) */}
+        {message.offTopic && (
+          <div className="text-[10px] text-muted-foreground/70 mt-1 ml-1">
+            ⚠ Off-topic — refused
+          </div>
+        )}
 
         {/* ─── v1.5: Product chips ─── */}
         {!isStreaming && productMentions.length > 0 && (

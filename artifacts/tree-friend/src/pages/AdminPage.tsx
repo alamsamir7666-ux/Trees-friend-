@@ -39,7 +39,7 @@ import {
   ChevronRight, X, Menu, BarChart3, CheckCircle2, Clock, Truck,
   AlertCircle, XCircle, Layers, MessageSquare, MapPin, Ban, UserCheck, ChevronDown, Archive,
   Calendar, RotateCcw, Activity, Upload, HelpCircle,
-  BookOpen, FileText, Save, LayoutGrid, Store, Boxes, Wallet,
+  BookOpen, FileText, Save, LayoutGrid, Store, Boxes, Wallet, Sparkles,
 } from "lucide-react";
 import { useAuth } from "@clerk/react";
 import { apiClient } from "@/lib/apiClient";
@@ -66,6 +66,7 @@ import { ReviewsTab } from "@/components/admin/tabs/ReviewsTab";
 import { ArchivedOrdersTab } from "@/components/admin/tabs/ArchivedOrdersTab";
 import { MonthlyHistoryTab } from "@/components/admin/tabs/MonthlyHistoryTab";
 import { PaymentsTab } from "@/components/admin/tabs/PaymentsTab";
+import { AiInsightsTab } from "@/components/admin/tabs/AiInsightsTab";
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -99,6 +100,7 @@ const navItems = [
   { id: "qa",         label: "Q&A",              icon: HelpCircle },
   { id: "bulkimport",        label: "Bulk Import",       icon: Upload },
   { id: "homepage-sections", label: "Homepage Sections", icon: LayoutGrid },
+  { id: "ai-insights",       label: "TreeBot Insights",   icon: Sparkles },
   { id: "settings",   label: "Settings",         icon: Settings },
 ];
 
@@ -432,6 +434,7 @@ export function AdminPage() {
       case "qa":         return <QATab />;
       case "bulkimport":        return <BulkImportTab />;
       case "homepage-sections": return <HomepageSectionsTab />;
+      case "ai-insights":       return <AiInsightsTab />;
       default:                  return <DashboardTab />;
     }
   }
