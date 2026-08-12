@@ -327,10 +327,21 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       errInfo.status === 401 ||
       errInfo.status === 403 ||
       /api key|permission|unauthorized|forbidden/i.test(errInfo.message);
-    const userMessage = isAuthError
-      ? "TreeBot is having trouble connecting to the AI service. " +
-        "This is likely a configuration issue on our side — please try again later."
-      : "I had trouble generating a response. Please try again in a moment.";
+    const isAllModelsUnavailable = /all configured gemini models/i.test(
+      errInfo.message,
+    );
+    const isRateLimit =
+      errInfo.status === 429 || /rate limit|quota|too many/i.test(errInfo.message);
+
+    const userMessage = isAllModelsUnavailable
+      ? "TreeBot is temporarily unavailable — we're updating our AI service. " +
+        "Please try again in a few minutes."
+      : isAuthError
+        ? "TreeBot is having trouble connecting to the AI service. " +
+          "This is likely a configuration issue on our side — please try again later."
+        : isRateLimit
+          ? "TreeBot is getting too many requests right now. Please wait a minute and try again."
+          : "I had trouble generating a response. Please try again in a moment.";
     res.write(
       `data: ${JSON.stringify({
         type: "error",
