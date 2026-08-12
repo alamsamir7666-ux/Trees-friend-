@@ -57,7 +57,7 @@ function getClient(): GoogleGenAI {
   }
   _client = new GoogleGenAI({ apiKey });
   logger.info(
-    { model: process.env.AI_MODEL ?? "gemini-2.0-flash" },
+    { model: process.env.AI_MODEL ?? "gemini-2.5-flash" },
     "Google GenAI client initialized for TreeBot",
   );
   return _client;
@@ -65,7 +65,7 @@ function getClient(): GoogleGenAI {
 
 // ─── Public helpers ──────────────────────────────────────────────────────────
 
-export const GEMINI_MODEL = process.env.AI_MODEL ?? "gemini-2.0-flash";
+export const GEMINI_MODEL = process.env.AI_MODEL ?? "gemini-2.5-flash";
 
 /**
  * Streams a chat completion from Gemini. Yields incremental text chunks

@@ -188,7 +188,7 @@ export async function buildCatalogContext(userMessage: string): Promise<string> 
       for (const b of blogRows) {
         const excerpt = b.excerpt
           ? truncate(b.excerpt, MAX_SUMMARY_LEN)
-          : truncate(stripHtml(b.body ?? ""), MAX_SUMMARY_LEN);
+          : truncate(stripHtml(b.content ?? ""), MAX_SUMMARY_LEN);
         lines.push(`- "${b.title}" (slug: ${b.slug}) — ${excerpt}`);
       }
     }
@@ -264,7 +264,7 @@ interface BlogRow {
   title: string;
   slug: string;
   excerpt: string | null;
-  body: string | null;
+  content: string | null;
 }
 
 function extractSearchTokens(message: string): string[] {
@@ -291,6 +291,9 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
   if (tokens.length === 0) return [];
   // Build a single OR ILIKE clause: (name ILIKE '%t1%' OR scientific_name ILIKE '%t1%' OR ...)
   // Same tokens searched across name + scientific_name + description.
+  //
+  // Schema: products uses `deleted_at TIMESTAMP` (null = live), not a
+  // boolean `is_deleted` column. Filter: deleted_at IS NULL.
   const conditions: string[] = [];
   const params: unknown[] = [];
   for (const t of tokens) {
@@ -307,12 +310,12 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
   const namePriorityParam = `$${params.length}`;
 
   try {
-    // Primary path: respect the soft-delete column.
+    // Primary path: respect the soft-delete column (deleted_at IS NULL).
     const result = await pool.query(
       `SELECT name, slug, scientific_name, description, sunlight, watering,
               soil_type, mature_height, product_status
        FROM products
-       WHERE is_deleted = false AND (${where})
+       WHERE deleted_at IS NULL AND (${where})
        ORDER BY
          CASE WHEN name ILIKE ${namePriorityParam} THEN 0 ELSE 1 END,
          created_at DESC
@@ -321,7 +324,8 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
     );
     return result.rows as ProductRow[];
   } catch {
-    // Fallback: older DBs may not have the is_deleted column yet.
+    // Fallback: older DBs may not have the deleted_at column yet (e.g. if
+    // migrations were only partially applied). Drop the soft-delete filter.
     const result = await pool.query(
       `SELECT name, slug, scientific_name, description, sunlight, watering,
               soil_type, mature_height, product_status
@@ -337,6 +341,9 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
 
 async function searchBlogPosts(tokens: string[]): Promise<BlogRow[]> {
   if (tokens.length === 0) return [];
+  // Schema: blog_posts has `content` (not `body`) and `published_at`
+  // (null = draft). No `is_published` boolean column — filter on
+  // published_at IS NOT NULL for "live" posts.
   const conditions: string[] = [];
   const params: unknown[] = [];
   for (const t of tokens) {
@@ -345,24 +352,25 @@ async function searchBlogPosts(tokens: string[]): Promise<BlogRow[]> {
     params.push(`%${t}%`);
     conditions.push(`excerpt ILIKE $${params.length}`);
     params.push(`%${t}%`);
-    conditions.push(`body ILIKE $${params.length}`);
+    conditions.push(`content ILIKE $${params.length}`);
   }
   const where = conditions.join(" OR ");
 
   try {
     const result = await pool.query(
-      `SELECT title, slug, excerpt, body
+      `SELECT title, slug, excerpt, content
        FROM blog_posts
-       WHERE is_published = true AND (${where})
+       WHERE published_at IS NOT NULL AND (${where})
        ORDER BY published_at DESC NULLS LAST, created_at DESC
        LIMIT ${MAX_BLOG_POSTS}`,
       params,
     );
     return result.rows as BlogRow[];
   } catch {
-    // Fallback: no is_published / published_at column.
+    // Fallback: if published_at column doesn't exist (very old DB), just
+    // return all matches. Better to have context than none.
     const result = await pool.query(
-      `SELECT title, slug, excerpt, body
+      `SELECT title, slug, excerpt, content
        FROM blog_posts
        WHERE (${where})
        ORDER BY created_at DESC
