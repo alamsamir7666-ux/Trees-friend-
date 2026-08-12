@@ -1,26 +1,36 @@
 /**
  * AssistantPanel — the chat UI itself. Renders the message list + composer.
  *
- * Used in two contexts:
- *   1. Inside a Sheet/Drawer (mobile bottom sheet / desktop side panel)
- *      triggered by the floating AssistantBubble.
- *   2. As the main content of the /assistant full-page route.
+ * v1.5 upgrades:
+ *   - Markdown rendering (bold, italic, code, bullet lists, paragraphs)
+ *     via MarkdownText.tsx — no react-markdown dependency.
+ *   - Auto-linkified product mentions: AI wraps product names in
+ *     [[double brackets]]; we extract them via parseMessage.ts and render
+ *     as clickable chips below the bubble (ProductChips.tsx) that
+ *     navigate to /products?q=<name>.
+ *   - Suggested follow-up chips: AI appends a [followups]...[/followups]
+ *     block to each reply; we extract it and render as clickable chips
+ *     (FollowupChips.tsx) that send the suggested question as a new
+ *     user message.
+ *   - Feedback buttons (👍/👎) on each assistant message (FeedbackButtons.tsx).
+ *     Persisted to ai_chat_feedback table via POST /api/ai/feedback.
  *
- * Design:
- *   - Message bubbles: user = green-filled right-aligned, assistant = gray
- *     outline left-aligned. Same pattern as WhatsApp/iMessage — instantly
- *     recognizable to Bangladesh users.
- *   - Empty state: friendly greeting + 4 suggested prompts (clickable) to
- *     help users discover what TreeBot can do.
- *   - Streaming: assistant bubble grows in real-time as deltas arrive.
- *   - Auto-scroll: stays pinned to the latest message while streaming.
- *   - Composer: textarea + send button. Enter to send, Shift+Enter for newline.
- *   - Clear button: deletes the session, starts fresh.
+ * Used in two contexts:
+ *   1. Inside a Sheet/Drawer triggered by the floating AssistantBubble.
+ *   2. As the main content of the /assistant full-page route.
  */
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type Key } from "react";
 import { Sparkles, Send, Trash2, X, Loader2 } from "lucide-react";
-import type { Key } from "react";
 import { useAiChat, type ChatMessage } from "@/hooks/useAiChat";
+import { MarkdownText } from "./MarkdownText";
+import { ProductChips } from "./ProductChips";
+import { FollowupChips } from "./FollowupChips";
+import { FeedbackButtons } from "./FeedbackButtons";
+import {
+  extractFollowups,
+  extractProductMentions,
+  stripProductMentionMarkers,
+} from "./parseMessage";
 
 const SUGGESTIONS = [
   "What indoor plants are easy to care for in Bangladesh?",
@@ -138,13 +148,16 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
         ) : (
           messages.map((m, i) => (
             <Bubble
-              key={m.id ?? i}
+              key={(m.id ?? `m${i}`) as Key}
               message={m}
               isStreaming={
                 loading &&
                 m.role === "assistant" &&
                 i === messages.length - 1
               }
+              onPickFollowup={send}
+              disabled={loading}
+              onClose={onClose}
             />
           ))
         )}
@@ -198,24 +211,69 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
 function Bubble({
   message,
   isStreaming,
+  onPickFollowup,
+  disabled,
+  onClose,
 }: {
   message: ChatMessage;
   isStreaming: boolean;
-  key?: Key;
+  onPickFollowup: (s: string) => void;
+  disabled?: boolean;
+  onClose?: () => void;
 }) {
   const isUser = message.role === "user";
+
+  // ─── Parse the AI response for v1.5 features ───
+  // For user messages: just render the raw content. For assistant: extract
+  // the [followups] block + [[product mentions]] + strip their markers.
+  if (isUser) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] sm:max-w-[75%] px-4 py-2.5 text-sm whitespace-pre-wrap break-words bg-primary text-primary-foreground rounded-2xl rounded-br-md">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
+
+  // Assistant message — apply parsing.
+  const { cleanedContent, followups } = extractFollowups(message.content);
+  const displayContent = stripProductMentionMarkers(cleanedContent);
+  const productMentions = extractProductMentions(cleanedContent);
+
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[85%] sm:max-w-[75%] px-4 py-2.5 text-sm whitespace-pre-wrap break-words ${
-          isUser
-            ? "bg-primary text-primary-foreground rounded-2xl rounded-br-md"
-            : "bg-muted/60 text-foreground rounded-2xl rounded-bl-md border"
-        }`}
-      >
-        {message.content}
-        {isStreaming && (
-          <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-current opacity-60 animate-pulse" />
+    <div className="flex justify-start">
+      <div className="max-w-[85%] sm:max-w-[75%]">
+        <div className="px-4 py-2.5 text-sm bg-muted/60 text-foreground rounded-2xl rounded-bl-md border">
+          {displayContent ? (
+            <MarkdownText content={displayContent} />
+          ) : (
+            <span className="text-muted-foreground italic">
+              {isStreaming ? "Thinking…" : "(empty response)"}
+            </span>
+          )}
+          {isStreaming && (
+            <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-current opacity-60 animate-pulse" />
+          )}
+        </div>
+
+        {/* ─── v1.5: Product chips ─── */}
+        {!isStreaming && productMentions.length > 0 && (
+          <ProductChips names={productMentions} onClose={onClose} />
+        )}
+
+        {/* ─── v1.5: Follow-up suggestion chips ─── */}
+        {!isStreaming && followups.length > 0 && (
+          <FollowupChips
+            followups={followups}
+            onPick={onPickFollowup}
+            disabled={disabled}
+          />
+        )}
+
+        {/* ─── v1.5: Feedback buttons ─── */}
+        {!isStreaming && typeof message.id === "number" && (
+          <FeedbackButtons messageId={message.id} />
         )}
       </div>
     </div>

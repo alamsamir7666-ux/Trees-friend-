@@ -3,7 +3,9 @@ import {
   serial,
   text,
   timestamp,
+  integer,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -85,6 +87,38 @@ export const aiChatMessagesTable = pgTable(
 // Useful type exports for the API server to consume via @workspace/db.
 export type AiChatSession = typeof aiChatSessionsTable.$inferSelect;
 export type AiChatMessage = typeof aiChatMessagesTable.$inferSelect;
+
+/**
+ * Per-message feedback (v1.5). One row per assistant message that the user
+ * rated with 👍 or 👎. The UNIQUE constraint on `messageId` enforces
+ * "one rating per message" — toggling to the opposite rating updates the
+ * existing row in place (no duplicate rows).
+ *
+ * Cascade rules: deleting the message OR the session removes the feedback.
+ */
+export const aiChatFeedbackTable = pgTable(
+  "ai_chat_feedback",
+  {
+    id: serial("id").primaryKey(),
+    messageId: integer("message_id")
+      .notNull()
+      .references(() => aiChatMessagesTable.id, { onDelete: "cascade" }),
+    sessionId: integer("session_id")
+      .notNull()
+      .references(() => aiChatSessionsTable.id, { onDelete: "cascade" }),
+    rating: text("rating").notNull(), // "up" | "down"
+    comment: text("comment"), // optional free-text feedback
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // One rating per message — UPSERT pattern in the route relies on this.
+    uniqueIndex("ai_chat_feedback_message_unique").on(table.messageId),
+    // "Show me all 👎 ratings from last week" — for the future admin panel.
+    uniqueIndex("ai_chat_feedback_rating_idx").on(table.rating, table.createdAt),
+  ],
+);
+
+export type AiChatFeedback = typeof aiChatFeedbackTable.$inferSelect;
 
 // Mark the module as side-effectful for the schema barrel — drizzle needs
 // the table objects to be imported so they're included in the schema bag.

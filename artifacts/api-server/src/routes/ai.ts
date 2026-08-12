@@ -35,6 +35,7 @@ import { eq, asc, desc } from "drizzle-orm";
 import {
   aiChatSessionsTable,
   aiChatMessagesTable,
+  aiChatFeedbackTable,
 } from "@workspace/db";
 import { createRateLimiter } from "../middlewares/rateLimiter";
 import { logger } from "../lib/logger";
@@ -150,16 +151,21 @@ async function fetchHistory(
 /**
  * Persist a single message (user or assistant). Fire-and-forget — the
  * caller doesn't wait for this to send the SSE response.
+ *
+ * Returns the inserted row's `id` (numeric DB primary key) so the caller
+ * can forward it to the client (e.g. for feedback buttons that need to
+ * reference a specific message). Returns undefined if the insert failed.
  */
 async function persistMessage(
   sessionId: number,
   role: "user" | "assistant",
   content: string,
-): Promise<void> {
+): Promise<number | undefined> {
   try {
-    await pool.query(
+    const result = await pool.query<{ id: number }>(
       `INSERT INTO ai_chat_messages (session_id, role, content)
-       VALUES ($1, $2, $3)`,
+       VALUES ($1, $2, $3)
+       RETURNING id`,
       [sessionId, role, content],
     );
     // Bump updated_at on the session so we can sort by "most recently active"
@@ -168,9 +174,11 @@ async function persistMessage(
       `UPDATE ai_chat_sessions SET updated_at = NOW() WHERE id = $1`,
       [sessionId],
     );
+    return result.rows[0]?.id;
   } catch (err) {
     logger.error({ err, sessionId, role }, "AI: failed to persist message");
     // Non-fatal — the response was already streamed to the user.
+    return undefined;
   }
 }
 
@@ -218,11 +226,12 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       const refusal =
         "I'm TreeFriend's plant assistant and can only help with trees, plants, and gardening. " +
         "Feel free to ask me about plant care or browse our catalog at /browse.";
-      await persistMessage(session.id, "assistant", refusal);
+      const assistantMsgId = await persistMessage(session.id, "assistant", refusal);
 
       res.json({
         sessionToken: token,
         message: refusal,
+        messageId: assistantMsgId,
         offTopic: true,
       });
     } catch (err) {
@@ -240,10 +249,15 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     try {
       const session = await findOrCreateSession(token, message);
       await persistMessage(session.id, "user", message);
-      await persistMessage(session.id, "assistant", GREETING_INTRO_MESSAGE);
+      const assistantMsgId = await persistMessage(
+        session.id,
+        "assistant",
+        GREETING_INTRO_MESSAGE,
+      );
       res.json({
         sessionToken: token,
         message: GREETING_INTRO_MESSAGE,
+        messageId: assistantMsgId,
         greeting: true,
       });
     } catch (err) {
@@ -303,12 +317,21 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
 
   // ─── 8. Stream Gemini response ───
   let fullResponse = "";
+  let assistantMsgId: number | undefined;
   try {
     const stream = streamGeminiChat(systemPrompt, geminiHistory, message);
     for await (const chunk of stream) {
       if (!chunk) continue;
       fullResponse += chunk;
       res.write(`data: ${JSON.stringify({ type: "delta", text: chunk })}\n\n`);
+    }
+    // ─── Persist the assistant message BEFORE sending done ───
+    // We need its DB id so the frontend can wire up feedback buttons.
+    assistantMsgId = await persistMessage(session.id, "assistant", fullResponse);
+    if (assistantMsgId != null) {
+      res.write(
+        `data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`,
+      );
     }
     res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
   } catch (err) {
@@ -359,7 +382,12 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   }
 
   // ─── 9. Persist the assistant response (fire-and-forget) ───
-  if (fullResponse) {
+  // Note: the assistant message was already persisted in step 8 (before
+  // sending the "done" event) so we could send its ID to the frontend for
+  // feedback wiring. This fallback handles the case where the stream
+  // errored BEFORE step 8 could run (so assistantMsgId is undefined) but
+  // fullResponse still has the error-fallback content from the catch block.
+  if (fullResponse && assistantMsgId == null) {
     await persistMessage(session.id, "assistant", fullResponse);
   }
 });
@@ -440,5 +468,147 @@ void eq;
 void asc;
 void desc;
 void describeError;
+
+// ─── POST /ai/feedback ──────────────────────────────────────────────────────
+// Records a 👍/👎 rating on a specific assistant message. Idempotent via
+// the unique constraint on message_id — re-clicking the same rating
+// removes it (toggle behavior), clicking the opposite rating updates
+// the row in place.
+//
+// Body: { messageId: number, rating: "up" | "down" }
+// Returns: { ok: true, rating: "up" | "down" | null }
+router.post("/ai/feedback", async (req: Request, res: Response) => {
+  const { messageId, rating } = (req.body ?? {}) as {
+    messageId?: number;
+    rating?: "up" | "down";
+  };
+
+  if (!messageId || typeof messageId !== "number") {
+    res.status(400).json({ error: "messageId is required." });
+    return;
+  }
+  if (rating !== "up" && rating !== "down") {
+    res.status(400).json({ error: 'rating must be "up" or "down".' });
+    return;
+  }
+
+  try {
+    // Look up the message to (a) verify it exists, (b) get its session_id
+    // for the FK on the feedback row.
+    const msgResult = await pool.query<{ session_id: number }>(
+      `SELECT session_id FROM ai_chat_messages WHERE id = $1`,
+      [messageId],
+    );
+    if (msgResult.rows.length === 0) {
+      res.status(404).json({ error: "Message not found." });
+      return;
+    }
+    const sessionId = msgResult.rows[0].session_id;
+
+    // Check if feedback already exists for this message.
+    const existing = await pool.query<{ id: number; rating: string }>(
+      `SELECT id, rating FROM ai_chat_feedback WHERE message_id = $1`,
+      [messageId],
+    );
+
+    if (existing.rows.length > 0) {
+      const row = existing.rows[0];
+      if (row.rating === rating) {
+        // Same rating clicked again → toggle OFF (delete the row).
+        await pool.query(`DELETE FROM ai_chat_feedback WHERE id = $1`, [row.id]);
+        res.json({ ok: true, rating: null });
+        return;
+      }
+      // Opposite rating → update in place.
+      await pool.query(
+        `UPDATE ai_chat_feedback SET rating = $1, created_at = NOW() WHERE id = $2`,
+        [rating, row.id],
+      );
+      res.json({ ok: true, rating });
+      return;
+    }
+
+    // No existing feedback → insert.
+    await pool.query(
+      `INSERT INTO ai_chat_feedback (message_id, session_id, rating)
+       VALUES ($1, $2, $3)`,
+      [messageId, sessionId, rating],
+    );
+    res.json({ ok: true, rating });
+  } catch (err) {
+    logger.error({ err, messageId, rating }, "AI: feedback POST failed");
+    res.status(500).json({ error: "Failed to record feedback." });
+  }
+});
+
+// ─── GET /ai/products-by-slug?slugs=alpha,beta ──────────────────────────────
+// Resolves an array of product slugs (extracted from AI responses by the
+// frontend) to minimal product info: { slug, name, image, price }.
+// Used by the frontend to render clickable product chips under each AI reply.
+//
+// The frontend calls this with the slugs it parsed out of the AI response.
+// We return enough info to render a small product card / chip without
+// another round-trip.
+router.get("/ai/products-by-slug", async (req: Request, res: Response) => {
+  const slugsParam = (req.query.slugs as string | undefined) ?? "";
+  const slugs = slugsParam
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .slice(0, 10); // hard cap to prevent abuse
+
+  if (slugs.length === 0) {
+    res.json({ products: [] });
+    return;
+  }
+
+  try {
+    // Build parameterized IN clause: $1, $2, ...
+    const placeholders = slugs.map((_, i) => `$${i + 1}`).join(", ");
+    const result = await pool.query<{
+      slug: string;
+      name: string;
+      image: string | null;
+      price: string | null;
+      currency: string | null;
+    }>(
+      `SELECT
+         p.slug,
+         p.name,
+         (p.images::jsonb->0->>'url') AS image,
+         -- Cheapest variant price across active seller listings for this product.
+         -- If no listings exist, returns NULL.
+         (
+           SELECT MIN(sl.price::text)
+           FROM seller_listings sl
+           JOIN seller_listing_variants slv ON slv.seller_listing_id = sl.id
+           WHERE sl.product_id = p.id
+             AND sl.is_active = true
+             AND sl.deleted_at IS NULL
+         ) AS price,
+         'BDT' AS currency
+       FROM products p
+       WHERE p.slug IN (${placeholders})
+         AND p.deleted_at IS NULL`,
+      slugs,
+    );
+
+    // Preserve the input slug order in the response.
+    const bySlug = new Map(result.rows.map((r) => [r.slug, r]));
+    const ordered = slugs
+      .map((s) => bySlug.get(s))
+      .filter(Boolean) as typeof result.rows;
+
+    res.json({ products: ordered });
+  } catch (err) {
+    logger.error({ err, slugs }, "AI: products-by-slug failed");
+    // Don't fail the whole UI over a chip-rendering issue.
+    res.json({ products: [] });
+  }
+});
+
+// Touch the feedback table export so unused-imports lint is happy in
+// environments where it isn't otherwise referenced.
+void aiChatFeedbackTable;
 
 export default router;

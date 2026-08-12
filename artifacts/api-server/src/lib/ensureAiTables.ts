@@ -42,6 +42,25 @@ CREATE TABLE IF NOT EXISTS ai_chat_messages (
 
 CREATE INDEX IF NOT EXISTS ai_chat_messages_session_created_idx
   ON ai_chat_messages (session_id, created_at);
+
+-- ─── AI Chat Feedback (v1.5) ─────────────────────────────────────────────────
+-- One row per feedback action on an assistant message. A user can toggle
+-- thumbs-up / thumbs-down; we store the LATEST rating per message (unique
+-- constraint on message_id) so re-clicking the same button toggles to
+-- 'none' (delete the row), and clicking the opposite button updates in place.
+CREATE TABLE IF NOT EXISTS ai_chat_feedback (
+  id SERIAL PRIMARY KEY,
+  message_id INTEGER NOT NULL REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
+  session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+  rating TEXT NOT NULL,
+  comment TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ai_chat_feedback_message_unique
+  ON ai_chat_feedback (message_id);
+CREATE INDEX IF NOT EXISTS ai_chat_feedback_rating_idx
+  ON ai_chat_feedback (rating, created_at DESC);
 `;
 
 export async function ensureAiTables(): Promise<void> {

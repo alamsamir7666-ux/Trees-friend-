@@ -214,6 +214,10 @@ export async function buildCatalogContext(userMessage: string): Promise<string> 
  *   4. Catalog honesty: never invent prices, IDs, or availability.
  *   5. Length: concise (2-4 short paragraphs max).
  *   6. Recommendations: suggest /browse or /products when relevant.
+ *   7. Product mentions: wrap exact product names in [[brackets]] so the
+ *      frontend can auto-linkify them to /products/:slug.
+ *   8. Follow-up suggestions: end EVERY reply with a parseable block of
+ *      3 short follow-up questions the user might ask next.
  */
 export function buildSystemPrompt(catalogContext: string): string {
   const contextBlock = catalogContext
@@ -236,14 +240,24 @@ LANGUAGE: Reply in the same language as the user's message. Support English, ব
 
 RULES:
 - Never invent product prices, IDs, slugs, or availability you didn't see in the CATALOG CONTEXT.
-- If a tree is in the catalog, recommend it by exact name (and mention it's available on TreeFriend).
-- If a tree is NOT in the catalog, answer from general botanical knowledge — don't claim it's for sale.
+- If a tree is in the catalog, mention its EXACT name wrapped in double square brackets like [[Alphonso Mango]] or [[Mango Sapling]] — the frontend will auto-link these to the product page. Use the exact name as it appears in the CATALOG CONTEXT.
+- If a tree is NOT in the catalog, answer from general botanical knowledge — don't wrap it in brackets and don't claim it's for sale.
 - Be concise: 2-4 short paragraphs max. Use short sentences.
-- Use bullet points for care instructions (e.g. "Water: 2x/week", "Sunlight: 4-6 hours").
-- Suggest /browse (all trees) or /products (full catalog) when the user is shopping-oriented.
-- Don't be sycophantic ("Great question!"). Just answer.${contextBlock}
+- Use Markdown for formatting: **bold** for key terms, bullet lists (- item) for care instructions, line breaks (double newline) between sections.
+- Don't be sycophantic ("Great question!"). Just answer.
 
-REMEMBER: Stay strictly on-topic. If you're unsure whether a question is botanical, refuse politely.`;
+FORMATTING — STRICTLY FOLLOW:
+After your main answer, ALWAYS append a follow-up suggestions block in this EXACT format (the frontend parses it to render clickable chips):
+
+[followups]
+- First short question the user might ask next
+- Second short question
+- Third short question
+[/followups]
+
+The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.${contextBlock}
+
+REMEMBER: Stay strictly on-topic. If you're unsure whether a question is botanical, refuse politely. Always include the [followups]...[/followups] block at the end.`;
 }
 
 // ─── Internals ───────────────────────────────────────────────────────────────

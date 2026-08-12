@@ -149,6 +149,7 @@ export function useAiChat(): UseAiChatResult {
               ? {
                   ...m,
                   content: data.message ?? "(no response)",
+                  id: typeof data.messageId === "number" ? data.messageId : m.id,
                 }
               : m,
           ),
@@ -198,6 +199,17 @@ export function useAiChat(): UseAiChatResult {
               prev.map((m) =>
                 m.id === assistantMsg.id
                   ? { ...m, content: received }
+                  : m,
+              ),
+            );
+          } else if (payload.type === "messageId" && typeof payload.messageId === "number") {
+            // Backend persisted the assistant message and is telling us its
+            // DB id. We replace the ephemeral placeholder id with the real
+            // numeric id so FeedbackButtons can reference it.
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsg.id
+                  ? { ...m, id: payload.messageId as number }
                   : m,
               ),
             );
