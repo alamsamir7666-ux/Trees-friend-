@@ -72,7 +72,7 @@ export function FeedbackButtons({
 
   if (!messageId) return null;
 
-  const btn = "p-1 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
+  const btn = "p-1.5 rounded-md transition-all hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed";
 
   return (
     <div className="flex items-center gap-1 -ml-1 mt-1">

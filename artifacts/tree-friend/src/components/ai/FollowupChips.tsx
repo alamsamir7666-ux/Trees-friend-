@@ -1,12 +1,9 @@
 /**
- * FollowupChips — renders the suggested follow-up questions extracted
- * from the AI's [followups]...[/followups] block as clickable chips.
+ * FollowupChips — suggested follow-up questions as clickable chips.
  *
- * Clicking a chip sends that question as a new user message — the same
- * as if the user had typed it. This keeps the conversation flowing with
- * minimal friction (no typing required).
+ * v3.0: refined design — pill-shaped, subtle bg, hover lift.
  */
-import { Send } from "lucide-react";
+import { MessageCircle } from "lucide-react";
 
 interface FollowupChipsProps {
   followups: string[];
@@ -24,10 +21,10 @@ export function FollowupChips({ followups, onPick, disabled }: FollowupChipsProp
           type="button"
           onClick={() => onPick(q)}
           disabled={disabled}
-          className="group inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-muted/50 hover:bg-primary/10 hover:border-primary/30 border border-border text-xs text-foreground/80 hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background hover:bg-primary hover:text-primary-foreground border border-border text-xs text-muted-foreground hover:border-primary transition-all hover:shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <span className="truncate max-w-[220px]">{q}</span>
-          <Send className="h-2.5 w-2.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+          <MessageCircle className="h-3 w-3 opacity-50 group-hover:opacity-100" />
+          <span className="truncate max-w-[200px]">{q}</span>
         </button>
       ))}
     </div>
