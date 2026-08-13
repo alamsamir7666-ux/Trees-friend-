@@ -995,8 +995,20 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       logger.warn("AI: stream completed but produced no text, using fallback");
     }
 
-    // v3.0: extract token count from usage metadata (if Gemini provided it).
-    // The shape is: { promptTokenCount, candidatesTokenCount, totalTokenCount }
+    // v3.0: extract token count from usage metadata (if the provider sent it).
+    // Gemini shape: { promptTokenCount, candidatesTokenCount, totalTokenCount }
+    // Groq shape (mapped in groq.ts onMetadata): same field names as Gemini
+    //   (prompt_tokens → promptTokenCount, completion_tokens → candidatesTokenCount,
+    //    total_tokens → totalTokenCount)
+    //
+    // Bug #9 fix: Groq now sends usage via stream_options.include_usage = true
+    // (captured in groq.ts + mapped to the Gemini shape in onMetadata).
+    //
+    // Bug #10 fix: the old code fell back from totalTokenCount to
+    // candidatesTokenCount (completion tokens) — WRONG. candidatesTokenCount
+    // is the OUTPUT token count, not the total. If totalTokenCount is
+    // missing, we now compute total = prompt + completion (the correct
+    // derivation) instead of using completion as the total.
     let tokenCount: number | undefined;
     let promptTokens: number | undefined;
     let completionTokens: number | undefined;
@@ -1006,9 +1018,23 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
         candidatesTokenCount?: number;
         promptTokenCount?: number;
       };
-      tokenCount = usage.totalTokenCount ?? usage.candidatesTokenCount;
       promptTokens = usage.promptTokenCount;
       completionTokens = usage.candidatesTokenCount;
+      // Bug #10 fix: derive total correctly.
+      //   1. If totalTokenCount is provided → use it (most accurate).
+      //   2. Else if both prompt + completion are provided → sum them.
+      //   3. Else if only completion is provided → use it as a lower bound
+      //      (not ideal, but better than 0 — the old code did this but
+      //      labeled it as "total" which was misleading).
+      if (typeof usage.totalTokenCount === "number") {
+        tokenCount = usage.totalTokenCount;
+      } else if (typeof promptTokens === "number" && typeof completionTokens === "number") {
+        tokenCount = promptTokens + completionTokens;
+      } else if (typeof completionTokens === "number") {
+        // Fallback: only completion tokens available (rare — means the
+        // provider didn't send prompt tokens). Use as lower bound.
+        tokenCount = completionTokens;
+      }
     }
 
     // v3.2: calculate USD cost from token usage

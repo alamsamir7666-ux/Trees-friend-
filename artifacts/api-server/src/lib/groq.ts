@@ -147,6 +147,11 @@ interface GroqChatRequest {
   stream?: boolean;
   tools?: GroqTool[];
   tool_choice?: "auto" | "none";
+  // Bug #9 fix: request usage stats in the stream. Groq (OpenAI-compatible)
+  // sends a final chunk with `usage` after the [DONE] marker when this is set.
+  // Without it, the streaming response has NO usage data → token counts are
+  // undefined → cost computes to $0.
+  stream_options?: { include_usage?: boolean };
 }
 
 interface GroqChatResponse {
@@ -292,6 +297,13 @@ async function callGroq(
 interface StreamResult {
   toolCalls: GroqMessage["tool_calls"] | null;
   finishReason: string | null;
+  // Bug #9 fix: capture usage stats from the final stream chunk.
+  // Groq sends this when stream_options.include_usage = true.
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 }
 
 async function* streamGroqCompletion(
@@ -310,6 +322,11 @@ async function* streamGroqCompletion(
     temperature: getTemperature(),
     max_tokens: getMaxOutputTokens(),
     stream: true,
+    // Bug #9 fix: request usage stats in the stream. Groq sends a final
+    // chunk with `usage` (prompt_tokens, completion_tokens, total_tokens)
+    // after the [DONE] marker. Without this, we have NO token count data
+    // → cost tracking returns $0.
+    stream_options: { include_usage: true },
   };
   if (tools && tools.length > 0) {
     body.tools = tools;
@@ -348,6 +365,10 @@ async function* streamGroqCompletion(
     function: { name: string; arguments: string };
   }>();
   let finishReason: string | null = null;
+  // Bug #9 fix: accumulate usage stats from the final stream chunk.
+  // Groq sends a chunk with `usage` (and empty choices) after all content
+  // chunks, before [DONE]. We capture it here and return it in StreamResult.
+  let usage: StreamResult["usage"] | undefined;
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -372,13 +393,13 @@ async function* streamGroqCompletion(
       const payloadStr = dataLines.join("");
 
       if (payloadStr === "[DONE]") {
-        // Stream complete — return accumulated tool calls
+        // Stream complete — return accumulated tool calls + usage stats
         const toolCalls = toolCallAccumulator.size > 0
           ? Array.from(toolCallAccumulator.entries())
               .sort(([a], [b]) => a - b)
               .map(([_, tc]) => tc)
           : null;
-        return { toolCalls, finishReason };
+        return { toolCalls, finishReason, usage };
       }
 
       try {
@@ -418,6 +439,13 @@ async function* streamGroqCompletion(
         if (choice?.finish_reason) {
           finishReason = choice.finish_reason;
         }
+
+        // Bug #9 fix: capture usage stats from the final chunk. Groq sends
+        // this when stream_options.include_usage = true. The chunk has
+        // `usage` at the top level (not inside choices) + empty choices.
+        if (payload.usage && typeof payload.usage === "object") {
+          usage = payload.usage;
+        }
       } catch {
         // skip malformed chunks
       }
@@ -430,7 +458,7 @@ async function* streamGroqCompletion(
         .sort(([a], [b]) => a - b)
         .map(([_, tc]) => tc)
     : null;
-  return { toolCalls, finishReason };
+  return { toolCalls, finishReason, usage };
 }
 
 // ─── Error classification ───────────────────────────────────────────────────
@@ -647,10 +675,26 @@ export async function* streamGroqChat(
         // list. This lets the route decide cache policy (skip cache for
         // user-scoped tools like get_user_orders, short-TTL for catalog tools
         // like search_catalog, normal long-TTL for no-tool responses).
+        //
+        // Bug #9 fix: also pass the captured `usage` from the last round's
+        // StreamResult. With stream_options.include_usage = true, Groq sends
+        // a final chunk with prompt_tokens / completion_tokens / total_tokens.
+        // The route uses this for cost tracking (calculateCost).
         if (onMetadata) {
           onMetadata({
             model: modelName,
-            usage: undefined, // Groq streaming doesn't return usage
+            // Bug #9 fix: pass the captured usage (was `undefined` before).
+            // Map Groq's OpenAI-style field names to the generic shape the
+            // route expects (promptTokenCount / candidatesTokenCount /
+            // totalTokenCount — Gemini names, since the route's extraction
+            // code was originally written for Gemini).
+            usage: result?.usage
+              ? {
+                  promptTokenCount: result.usage.prompt_tokens,
+                  candidatesTokenCount: result.usage.completion_tokens,
+                  totalTokenCount: result.usage.total_tokens,
+                }
+              : undefined,
             toolCalls: toolCallsCalled,
           });
         }
