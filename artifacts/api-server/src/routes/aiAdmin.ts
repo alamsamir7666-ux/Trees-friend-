@@ -30,6 +30,7 @@ import { logger } from "../lib/logger";
 import {
   getModelDebugInfo,
   discoverAvailableModels,
+  forceRediscover,
   isGeminiConfigured,
 } from "../lib/gemini";
 
@@ -716,13 +717,21 @@ router.get("/api/ai/admin/top-questions-v2", async (req: Request, res: Response)
 // you exactly which models your GCP project has access to, so you know
 // whether the issue is "no models available" (API key / billing problem)
 // or "all models 429'd" (quota problem).
-router.get("/ai/admin/models", async (_req: Request, res: Response) => {
+router.get("/ai/admin/models", async (req: Request, res: Response) => {
   try {
+    // v3.0.2: ?refresh=1 forces a re-discovery by clearing the cache.
+    // Use this after swapping API keys to see the new key's available models
+    // without restarting the server.
+    if (req.query.refresh === "1") {
+      forceRediscover();
+      logger.info("AI admin: forced model re-discovery (cache cleared)");
+    }
+
     const debugInfo = getModelDebugInfo();
     const geminiConfigured = isGeminiConfigured();
 
-    // If discovery hasn't run yet (no chat requests have come in), try
-    // running it now so the admin sees actual data instead of null.
+    // If discovery hasn't run yet (or was just cleared by refresh=1),
+    // run it now so the admin sees actual data.
     let discovered = debugInfo.discoveredModels;
     if (!discovered && geminiConfigured) {
       discovered = await discoverAvailableModels();
@@ -734,7 +743,7 @@ router.get("/ai/admin/models", async (_req: Request, res: Response) => {
       discoveredModels: discovered,
       discoveryAttempted: debugInfo.discoveryAttempted,
       staticChain: debugInfo.staticChain,
-      effectiveChain: discovered ?? debugInfo.staticChain,
+      effectiveChain: discovered && discovered.length > 0 ? discovered : debugInfo.staticChain,
       cooldowns: debugInfo.cooldowns,
       aiModelEnv: debugInfo.aiModelEnv,
       hint: !geminiConfigured
@@ -743,7 +752,7 @@ router.get("/ai/admin/models", async (_req: Request, res: Response) => {
           ? "ListModels returned 0 models. Check if your API key is valid."
           : discovered && discovered.length > 0
             ? `Discovered ${discovered.length} available model(s). These are the only models your API key can use.`
-            : "Discovery not yet run. Send a chat message to trigger it, or restart the server.",
+            : "Discovery not yet run. Send a chat message to trigger it, or call with ?refresh=1.",
     });
   } catch (err) {
     logger.error({ err }, "AI admin: models debug failed");

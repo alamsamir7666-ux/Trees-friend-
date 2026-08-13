@@ -206,18 +206,88 @@ export async function discoverAvailableModels(): Promise<string[] | null> {
     const available: string[] = [];
     const response = await client.models.list();
 
-    // The SDK returns an async iterable. Iterate it.
-    // Each model has: { name: "models/gemini-3.6-flash", supportedGenerationMethods: ["generateContent", ...] }
-    for await (const model of response as any) {
-      const name: string = model.name ?? ""; // e.g. "models/gemini-3.6-flash"
-      const methods: string[] = model.supportedGenerationMethods ?? [];
-      // Strip the "models/" prefix to get the bare model name.
+    // The @google/genai SDK's models.list() can return different shapes
+    // depending on the SDK version:
+    //   v1.52+: an async-iterable Pager yielding model objects directly
+    //   older:  an object { models: [...] } or { page: [...] }
+    // We handle ALL cases so discovery works regardless of SDK version.
+
+    const extractModel = (model: any): { name: string; methods: string[] } | null => {
+      if (!model || typeof model !== "object") return null;
+      const name: string = model.name ?? model.model ?? "";
+      // Field name varies: supportedGenerationMethods (REST) vs supported_methods (SDK)
+      const methods: string[] =
+        model.supportedGenerationMethods ??
+        model.supported_methods ??
+        model.methods ??
+        [];
       const bareName = name.replace(/^models\//, "");
-      // Only include models that support generateContent (excludes embedding
-      // models, image generation models, etc.)
-      if (bareName && methods.includes("generateContent")) {
-        available.push(bareName);
+      if (!bareName) return null;
+      return { name: bareName, methods };
+    };
+
+    // Case 1: response is directly async-iterable (Pager) — yields model objects
+    if (response && typeof (response as any)[Symbol.asyncIterator] === "function") {
+      for await (const model of response as any) {
+        const extracted = extractModel(model);
+        if (extracted && extracted.methods.includes("generateContent")) {
+          available.push(extracted.name);
+        }
       }
+    }
+    // Case 2: response is an object with a .models array (REST-style)
+    else if (response && Array.isArray((response as any).models)) {
+      for (const model of (response as any).models) {
+        const extracted = extractModel(model);
+        if (extracted && extracted.methods.includes("generateContent")) {
+          available.push(extracted.name);
+        }
+      }
+    }
+    // Case 3: response is an object with a .page array
+    else if (response && Array.isArray((response as any).page)) {
+      for (const model of (response as any).page) {
+        const extracted = extractModel(model);
+        if (extracted && extracted.methods.includes("generateContent")) {
+          available.push(extracted.name);
+        }
+      }
+    }
+    // Case 4: response is directly an array
+    else if (Array.isArray(response)) {
+      for (const model of response) {
+        const extracted = extractModel(model);
+        if (extracted && extracted.methods.includes("generateContent")) {
+          available.push(extracted.name);
+        }
+      }
+    }
+    // Case 5: unexpected shape — log it so we can debug
+    else {
+      logger.warn(
+        {
+          responseType: typeof response,
+          responseKeys: response && typeof response === "object" ? Object.keys(response) : null,
+          responsePreview: JSON.stringify(response).slice(0, 500),
+        },
+        "TreeBot: ListModels returned an unexpected response shape. " +
+          "Discovery will be skipped (falling back to static chain). " +
+          "Please report this shape so the extraction logic can be updated.",
+      );
+    }
+
+    // If we got 0 models despite a successful call, that's suspicious —
+    // probably the response shape wasn't recognized. Fall back to null
+    // so getModelChain() uses the static chain instead of an empty array.
+    if (available.length === 0) {
+      logger.warn(
+        { responseType: typeof response, responsePreview: JSON.stringify(response).slice(0, 500) },
+        "TreeBot: ListModels returned 0 models that support generateContent. " +
+          "This is likely a response-shape mismatch — falling back to static chain. " +
+          "The static chain will be used, but may waste time on 404s.",
+      );
+      _discoveredModels = null;
+      return null;
     }
 
     // Sort: prefer "flash" models first (faster + cheaper), then "pro".
@@ -251,11 +321,15 @@ export async function discoverAvailableModels(): Promise<string[] | null> {
 /**
  * The list of models we'll try, in order. Priority:
  *   1. If AI_MODEL env var is set, use ONLY that (no fallback).
- *   2. If model discovery succeeded, use the discovered list (filtered to
- *      models we know exist for this API key — avoids 404s).
+ *   2. If model discovery succeeded AND found >0 models, use the discovered list.
  *   3. Fall back to the static MODEL_FALLBACK_CHAIN.
  *
  * v3.0.1: also filters out models currently on cooldown (recently 429'd).
+ *
+ * v3.0.2: treats empty discovered list same as null — falls back to static
+ * chain. This fixes the bug where discovery "succeeded" but returned 0
+ * models (due to unrecognized response shape), causing getModelChain()
+ * to return [] and the for-loop to try 0 models.
  */
 function getModelChain(): string[] {
   const explicit = process.env.AI_MODEL;
@@ -263,8 +337,13 @@ function getModelChain(): string[] {
     return [explicit.trim()];
   }
 
-  // Use discovered models if available, otherwise static chain.
-  const baseChain = _discoveredModels ?? MODEL_FALLBACK_CHAIN;
+  // Use discovered models if available AND non-empty, otherwise static chain.
+  // The `&& _discoveredModels.length > 0` check is the v3.0.2 fix —
+  // previously an empty array would be used, causing 0 models to be tried.
+  const baseChain =
+    _discoveredModels && _discoveredModels.length > 0
+      ? _discoveredModels
+      : MODEL_FALLBACK_CHAIN;
 
   // Filter out models on cooldown (recently 429'd).
   // If ALL models are on cooldown, return the full chain anyway (better
@@ -856,6 +935,25 @@ export function isGeminiConfigured(): boolean {
  */
 export function getWorkingModel(): string | null {
   return _workingModel;
+}
+
+/**
+ * v3.0.2: Force a re-discovery of available models. Resets the
+ * _discoveryAttempted flag and clears the cache so the next
+ * discoverAvailableModels() call actually hits the ListModels API again.
+ *
+ * Used by the /api/ai/admin/models?refresh=1 endpoint so admins can
+ * re-check availability after swapping API keys (without restarting
+ * the server).
+ */
+export function forceRediscover(): void {
+  _discoveryAttempted = false;
+  _discoveredModels = null;
+  // Also clear the working model cache — if the API key changed, the
+  // previously-cached model may no longer be available.
+  _workingModel = null;
+  // Clear cooldowns too — new key = fresh quotas.
+  _modelCooldowns.clear();
 }
 
 /**
