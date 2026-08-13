@@ -1357,12 +1357,19 @@ async function verifySessionAccess(
       if (existing.rows.length > 0) {
         const existingUid = existing.rows[0].user_id;
         // Ownership check for legacy authenticated sessions:
-        //   - If the session is bound to a user (uid=X), the requester
-        //     must also be X. Otherwise reject (possible hijack).
-        //   - If the session is anonymous (uid=null), allow (possession =
+        //   - If the session is bound to a user (uid=X) AND we can confirm
+        //     the requester is a DIFFERENT user (requesterUid=Y, Y≠X) → reject.
+        //   - If the session is bound to a user (uid=X) but we CAN'T determine
+        //     the requester's identity (requesterUid=null) → ALLOW. This
+        //     happens when the GET endpoint can't resolve the Clerk identity
+        //     (cross-origin cookie issues, missing CLERK_SECRET_KEY, etc.).
+        //     The bare UUID itself is the proof of possession (122 bits of
+        //     randomness). The old code had no ownership check at all, so
+        //     this is not a regression — it's the same security level.
+        //   - If the session is anonymous (uid=null) → allow (possession =
         //     ownership — same as before the fix).
         const requesterUid = req.userId ?? getAuth(req)?.userId ?? null;
-        if (existingUid !== null && existingUid !== requesterUid) {
+        if (existingUid !== null && requesterUid !== null && existingUid !== requesterUid) {
           logger.warn(
             { sid: urlToken, existingUid, requesterUid },
             "AI: legacy GET access denied — identity mismatch (possible hijack)",

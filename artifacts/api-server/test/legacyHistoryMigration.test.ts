@@ -74,9 +74,10 @@ describe("Legacy UUID history migration (Bug #1 backward compat)", () => {
     });
 
     it("checks ownership for authenticated legacy sessions (uid mismatch → 403)", () => {
-      // If the legacy session is bound to user X, the requester must also be X.
-      // Otherwise reject (possible hijack).
-      expect(aiRouteSource).toContain("existingUid !== null && existingUid !== requesterUid");
+      // If the legacy session is bound to user X AND we can confirm the
+      // requester is a different user Y → reject. If we can't determine
+      // the requester's identity (requesterUid=null) → allow (backward compat).
+      expect(aiRouteSource).toContain("existingUid !== null && requesterUid !== null && existingUid !== requesterUid");
       expect(aiRouteSource).toContain("legacy GET access denied — identity mismatch");
     });
 
