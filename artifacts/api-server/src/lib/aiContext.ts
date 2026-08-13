@@ -188,6 +188,58 @@ const BOTANICAL_KEYWORDS = [
   "golap",
 ] as const;
 
+// v3.5: Account/order queries are IN-SCOPE for a marketplace bot.
+// The bot has get_user_orders + get_order_details tools specifically for
+// these queries. Without this list, the hard topic gate blocks order
+// questions before the AI can use the tools — a real bug.
+//
+// These keywords let the query through the gate so the AI can call the
+// appropriate tool. If the user isn't signed in, the tool returns
+// "not signed in" and the AI handles it gracefully.
+const ACCOUNT_KEYWORDS = [
+  // English — order/checkout/account
+  "order",
+  "orders",
+  "my order",
+  "my orders",
+  "last order",
+  "track order",
+  "order status",
+  "where is my order",
+  "what did i buy",
+  "delivery",
+  "shipping",
+  "tracking",
+  "package",
+  "cart",
+  "checkout",
+  "payment",
+  "paid",
+  "invoice",
+  "receipt",
+  "refund",
+  "return",
+  "cancel",
+  "cancelled",
+  "account",
+  "my account",
+  "profile",
+  "address",
+  "wishlist",
+  // Bangla (Unicode) — order/account
+  "অর্ডার",
+  "আমার অর্ডার",
+  "ডেলিভারি",
+  "পেমেন্ট",
+  "অ্যাকাউন্ট",
+  // Banglish — order/account
+  "order",
+  "amar order",
+  "delivery",
+  "payment",
+  "account",
+] as const;
+
 // ─── Public functions ────────────────────────────────────────────────────────
 
 // Greetings + polite openers. These get a FRIENDLY INTRO response (not the
@@ -245,6 +297,13 @@ export function hasBotanicalKeyword(message: string): boolean {
   const lower = message.toLowerCase();
   // Greetings always pass — they're not off-topic, just conversational.
   if (GREETING_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()))) {
+    return true;
+  }
+  // v3.5: Account/order queries pass — the bot has tools for these.
+  // The AI will call get_user_orders / get_order_details to answer.
+  // If the user isn't signed in, the tool returns "not signed in" and
+  // the AI handles it gracefully.
+  if (ACCOUNT_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()))) {
     return true;
   }
   return BOTANICAL_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
@@ -378,8 +437,11 @@ You answer ONLY questions about:
 - Pests, diseases, propagation, pruning, grafting
 - TreeFriend products, categories, blog articles
 - Gardening in Bangladesh specifically (climate, monsoon, local species)
+- Order/checkout/account queries (use the get_user_orders / get_order_details tools)
 
 YOU MUST POLITELY REFUSE anything else (politics, sports, coding, math, celebrities, news, medical advice, etc.). Refusal template: "I'm TreeFriend's plant assistant and can only help with trees, plants, and gardening. Feel free to ask me about plant care or browse our catalog at /browse."
+
+IMPORTANT: Order/account queries are IN-SCOPE. When a user asks about their order, do NOT refuse — call the get_user_orders tool. If the tool returns "not signed in", tell the user to sign in to view their orders.
 
 LANGUAGE: Reply in the same language as the user's message. Support English, বাংলা (Bengali Unicode), and Banglish (Bengali written in Latin script). If the user mixes languages, mirror their mix.
 
