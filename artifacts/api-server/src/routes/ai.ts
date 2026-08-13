@@ -259,6 +259,38 @@ async function persistMessage(
   }
 }
 
+/**
+ * v3.5: Streams a complete text response word-by-word via SSE.
+ *
+ * Used for cached responses (exact-match + semantic cache) that arrive as
+ * a single string. Instead of sending the whole text in one delta (which
+ * appears instantly — jarring UX), we split into words and send each as
+ * a separate delta with a small delay.
+ *
+ * This gives the "ChatGPT typing" effect even for cache hits — the user
+ * sees text appearing progressively, not all at once.
+ *
+ * @param res - The SSE response to write to
+ * @param text - The full text to stream
+ * @param delayMs - Delay between words (default 15ms — fast enough to not
+ *   feel slow, slow enough to see the typing animation)
+ */
+async function streamTextWordByWord(
+  res: Response,
+  text: string,
+  delayMs: number = 15,
+): Promise<void> {
+  // Split into tokens: words + whitespace (preserves spacing)
+  const tokens = text.match(/\S+\s*/g) ?? [text];
+  for (const token of tokens) {
+    res.write(`data: ${JSON.stringify({ type: "delta", text: token })}\n\n`);
+    // Small delay to create the typing effect
+    if (delayMs > 0) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
 // ─── POST /ai/chat ──────────────────────────────────────────────────────────
 
 router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
@@ -446,9 +478,10 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   if (cached) {
     logger.info(
       { cache: "exact", model: cached.model, provider: cached.provider, hitCount: cached.hitCount },
-      "AI: cache HIT, streaming cached response",
+      "AI: cache HIT, streaming cached response word-by-word",
     );
-    res.write(`data: ${JSON.stringify({ type: "delta", text: cached.response })}\n\n`);
+    // v3.5: Stream word-by-word for the typing animation effect
+    await streamTextWordByWord(res, cached.response);
     const assistantMsgId = await persistMessage(session.id, "assistant", cached.response, {
       model: cached.model,
       provider: cached.provider,
@@ -474,9 +507,10 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
         provider: semanticCached.provider,
         similarity: Math.round(semanticCached.similarity * 100) / 100,
       },
-      "AI: semantic cache HIT, streaming cached response",
+      "AI: semantic cache HIT, streaming cached response word-by-word",
     );
-    res.write(`data: ${JSON.stringify({ type: "delta", text: semanticCached.response })}\n\n`);
+    // v3.5: Stream word-by-word for the typing animation effect
+    await streamTextWordByWord(res, semanticCached.response);
     const assistantMsgId = await persistMessage(session.id, "assistant", semanticCached.response, {
       model: semanticCached.model,
       provider: semanticCached.provider,
@@ -541,7 +575,8 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     if (!fullResponse.trim()) {
       const fallback = "I'm sorry, I couldn't generate a response for that. Could you try rephrasing your question?";
       fullResponse = fallback;
-      res.write(`data: ${JSON.stringify({ type: "delta", text: fallback })}\n\n`);
+      // v3.5: Stream the fallback word-by-word too (consistent UX)
+      await streamTextWordByWord(res, fallback);
       logger.warn("AI: stream completed but produced no text, using fallback");
     }
 

@@ -359,7 +359,10 @@ function MessageRow({
             )
           )}
           {isStreaming && (
-            <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-primary rounded-sm animate-pulse align-middle" />
+            <span
+              className="inline-block w-2 h-2 ml-1 bg-primary rounded-full align-middle animate-pulse"
+              style={{ animationDuration: "1s" }}
+            />
           )}
         </div>
 
