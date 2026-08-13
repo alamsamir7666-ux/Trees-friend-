@@ -54,9 +54,7 @@ router.get("/ai/admin/overview", async (_req: Request, res: Response) => {
       pool.query(
         "SELECT COUNT(*)::int AS count FROM ai_chat_messages WHERE role = 'user' AND off_topic = TRUE",
       ),
-      pool.query(
-        "SELECT COUNT(*)::int AS count FROM ai_chat_messages WHERE greeting = TRUE",
-      ),
+      pool.query("SELECT COUNT(*)::int AS count FROM ai_chat_messages WHERE greeting = TRUE"),
     ]);
 
     const userMessageCount = messages.rows[0].user_count;
@@ -65,8 +63,7 @@ router.get("/ai/admin/overview", async (_req: Request, res: Response) => {
     // Greetings are excluded because they aren't questions, so they shouldn't
     // count toward the "what % of questions did we refuse?" denominator.
     const refusalDenominator = Math.max(0, userMessageCount - greetings.rows[0].count);
-    const refusalRate =
-      refusalDenominator > 0 ? (refusalCount / refusalDenominator) * 100 : 0;
+    const refusalRate = refusalDenominator > 0 ? (refusalCount / refusalDenominator) * 100 : 0;
 
     res.json({
       totalSessions: sessions.rows[0].count,
@@ -353,9 +350,7 @@ router.get("/ai/admin/conversations", async (req: Request, res: Response) => {
         messageCount: r.message_count,
         positiveFeedback: r.positive_count,
         negativeFeedback: r.negative_count,
-        lastMessage: r.last_message
-          ? r.last_message.slice(0, 200)
-          : null,
+        lastMessage: r.last_message ? r.last_message.slice(0, 200) : null,
         lastMessageAt: r.last_message_at,
       })),
     });
@@ -405,9 +400,7 @@ router.get("/ai/admin/conversations/:id", async (req: Request, res: Response) =>
        WHERE session_id = $1`,
       [sessionId],
     );
-    const feedbackByMsg = new Map(
-      feedbackResult.rows.map((f) => [f.message_id, f]),
-    );
+    const feedbackByMsg = new Map(feedbackResult.rows.map((f) => [f.message_id, f]));
 
     res.json({
       session: {
@@ -431,6 +424,279 @@ router.get("/ai/admin/conversations/:id", async (req: Request, res: Response) =>
   } catch (err) {
     logger.error({ err, sessionId }, "AI admin: conversation detail failed");
     res.status(500).json({ error: "Failed to load conversation." });
+  }
+});
+
+// ─── v3.0 new endpoints below ────────────────────────────────────────────────
+
+// ─── GET /api/ai/admin/model-usage ──────────────────────────────────────────
+// Model distribution + per-model latency stats. Returns:
+//   [{ model, count, avg_response_ms, p95_response_ms, avg_tokens }, ...]
+//
+// v3.0: helps admins understand which Gemini model is actually serving
+// traffic (the fallback chain may differ from what AI_MODEL is set to)
+// and whether a particular model is slower than expected.
+router.get("/ai/admin/model-usage", async (_req: Request, res: Response) => {
+  try {
+    const result = await pool.query(
+      `SELECT
+         COALESCE(model, '(canned/greeting)') AS model,
+         COUNT(*)::int AS count,
+         ROUND(AVG(response_ms))::int AS avg_response_ms,
+         PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY response_ms)::int AS p95_response_ms,
+         ROUND(AVG(token_count))::int AS avg_tokens
+       FROM ai_chat_messages
+       WHERE role = 'assistant'
+         AND created_at >= NOW() - INTERVAL '30 days'
+       GROUP BY model
+       ORDER BY count DESC`,
+    );
+    res.json({
+      models: result.rows.map((r) => ({
+        model: r.model,
+        count: r.count,
+        avgResponseMs: r.avg_response_ms,
+        p95ResponseMs: r.p95_response_ms,
+        avgTokens: r.avg_tokens,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: model-usage failed");
+    res.status(500).json({ error: "Failed to load model usage stats." });
+  }
+});
+
+// ─── GET /api/ai/admin/pii-stats ────────────────────────────────────────────
+// PII redaction statistics. Returns:
+//   {
+//     totalUserMessages: number,
+//     piiRedactedCount: number,
+//     piiRate: number,            // % of user messages that had PII
+//     byType: [{ type, count }]   // breakdown by PII type from events
+//   }
+//
+// v3.0: helps admins understand how often users accidentally expose PII
+// in chat (e.g. "call me at 017XXXXXXXX") and tune the regex patterns
+// if needed.
+router.get("/api/ai/admin/pii-stats", async (_req: Request, res: Response) => {
+  try {
+    const totalsResult = await pool.query<{
+      total: number;
+      redacted: number;
+    }>(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE pii_redacted = TRUE)::int AS redacted
+       FROM ai_chat_messages
+       WHERE role = 'user'
+         AND created_at >= NOW() - INTERVAL '30 days'`,
+    );
+    const total = totalsResult.rows[0]?.total ?? 0;
+    const redacted = totalsResult.rows[0]?.redacted ?? 0;
+    const piiRate = total > 0 ? Math.round((redacted / total) * 1000) / 10 : 0;
+
+    // Breakdown by PII type from the events table (v3.0 logs each redaction
+    // with the detected types in the payload JSON).
+    const byTypeResult = await pool.query<{ types_json: string; event_count: number }>(
+      `SELECT
+         (payload::json->>'detectedTypes') AS types_json,
+         COUNT(*)::int AS event_count
+       FROM ai_chat_events
+       WHERE type = 'pii_redacted'
+         AND created_at >= NOW() - INTERVAL '30 days'
+       GROUP BY types_json`,
+    );
+
+    // Aggregate type counts across all events (each event may have multiple types).
+    const typeCounts = new Map<string, number>();
+    for (const row of byTypeResult.rows) {
+      try {
+        const types = JSON.parse(row.types_json ?? "[]") as string[];
+        for (const t of types) {
+          typeCounts.set(t, (typeCounts.get(t) ?? 0) + row.event_count);
+        }
+      } catch {
+        // skip malformed payloads
+      }
+    }
+
+    res.json({
+      totalUserMessages: total,
+      piiRedactedCount: redacted,
+      piiRate,
+      byType: Array.from(typeCounts.entries())
+        .map(([type, count]) => ({ type, count }))
+        .sort((a, b) => b.count - a.count),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: pii-stats failed");
+    res.status(500).json({ error: "Failed to load PII stats." });
+  }
+});
+
+// ─── GET /api/ai/admin/latency?days=30 ──────────────────────────────────────
+// Daily latency trend. Returns:
+//   [{ date, avg_ms, p95_ms, count }, ...]
+//
+// v3.0: tracks whether Gemini response times are degrading over time
+// (e.g. due to model deprecation forcing fallback to slower models).
+router.get("/ai/admin/latency", async (req: Request, res: Response) => {
+  const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 90);
+  try {
+    const result = await pool.query(
+      `SELECT
+         to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS date,
+         ROUND(AVG(response_ms))::int AS avg_ms,
+         PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY response_ms)::int AS p95_ms,
+         COUNT(*)::int AS count
+       FROM ai_chat_messages
+       WHERE role = 'assistant'
+         AND response_ms IS NOT NULL
+         AND created_at >= NOW() - ($1 || ' days')::INTERVAL
+       GROUP BY date_trunc('day', created_at)
+       ORDER BY date_trunc('day', created_at) ASC`,
+      [String(days)],
+    );
+    res.json({
+      days,
+      data: result.rows.map((r) => ({
+        date: r.date,
+        avgMs: r.avg_ms,
+        p95Ms: r.p95_ms,
+        count: r.count,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: latency failed");
+    res.status(500).json({ error: "Failed to load latency stats." });
+  }
+});
+
+// ─── GET /api/ai/admin/events?sessionId=X&type=Y&limit=50 ───────────────────
+// Append-only audit trail of significant AI events (v3.0). Returns events
+// filtered by session and/or type, newest-first.
+//
+// Used by admins debugging a specific conversation (e.g. "why did this
+// response take 10 seconds?") to see the event timeline: tool calls,
+// retries, model fallbacks, summary generations, PII redactions, etc.
+router.get("/ai/admin/events", async (req: Request, res: Response) => {
+  const sessionId = req.query.sessionId ? Number(req.query.sessionId) : null;
+  const type = (req.query.type as string | undefined) ?? null;
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+
+  try {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (sessionId != null && Number.isFinite(sessionId)) {
+      params.push(sessionId);
+      conditions.push(`session_id = $${params.length}`);
+    }
+    if (type) {
+      params.push(type);
+      conditions.push(`type = $${params.length}`);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    params.push(limit);
+
+    const result = await pool.query(
+      `SELECT id, session_id, type, payload, created_at
+       FROM ai_chat_events
+       ${where}
+       ORDER BY created_at DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+
+    res.json({
+      events: result.rows.map((r) => ({
+        id: r.id,
+        sessionId: r.session_id,
+        type: r.type,
+        payload: r.payload ? safeJsonParse(r.payload) : null,
+        createdAt: r.created_at,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: events failed");
+    res.status(500).json({ error: "Failed to load events." });
+  }
+});
+
+/**
+ * Safe JSON parse for event payloads. Returns the parsed object if valid,
+ * or the raw string if parsing fails (defensive — never throw).
+ */
+function safeJsonParse(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
+}
+
+// ─── GET /api/ai/admin/top-questions (v3.0 upgrade) ─────────────────────────
+// v3.0: now returns STEMMED keywords grouped by stem (e.g. "mango" and
+// "mangos" both count toward the "mango" stem). This gives a more
+// accurate picture of what users are asking about than the v2.0 raw-word
+// count.
+//
+// Implementation: we apply a simple suffix-stripping stemmer in SQL
+// (plural 's' removal + common 'ing'/'ed' suffixes). This isn't as
+// sophisticated as the Porter stemmer, but it's good enough for
+// analytics and runs entirely in Postgres (no Node.js post-processing).
+router.get("/api/ai/admin/top-questions-v2", async (req: Request, res: Response) => {
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 100);
+  try {
+    const result = await pool.query(
+      `SELECT stem, COUNT(*)::int AS count, ARRAY_AGG(DISTINCT original) AS variants
+       FROM (
+         SELECT
+           lower(match[1]) AS original,
+           -- Simple stemmer: strip trailing 's', 'es', 'ing', 'ed'.
+           -- Not perfect but groups "mango"/"mangos", "plant"/"plants",
+           -- "watering"/"water" together.
+           lower(
+             regexp_replace(
+               regexp_replace(
+                 regexp_replace(
+                   regexp_replace(match[1], 'ing$', '', 'i'),
+                   'ed$', '', 'i'
+                 ),
+                 'es$', '', 'i'
+               ),
+               's$', '', 'i'
+             )
+           ) AS stem
+         FROM ai_chat_messages,
+              regexp_matches(content, '([a-zA-Z]{4,})', 'g') AS match
+         WHERE role = 'user'
+           AND off_topic = FALSE
+           AND greeting = FALSE
+       ) AS words
+       WHERE stem NOT IN (
+         'that', 'thi', 'with', 'from', 'have', 'they', 'will', 'what',
+         'when', 'where', 'which', 'your', 'their', 'there', 'about',
+         'would', 'could', 'should', 'pleas', 'tell', 'want', 'need',
+         'know', 'like', 'just', 'also', 'some', 'them', 'then', 'than'
+       )
+         AND length(stem) >= 3
+       GROUP BY stem
+       ORDER BY count DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json({
+      keywords: result.rows.map((r) => ({
+        stem: r.stem,
+        count: r.count,
+        variants: r.variants,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: top-questions-v2 failed");
+    res.status(500).json({ error: "Failed to load top questions." });
   }
 });
 

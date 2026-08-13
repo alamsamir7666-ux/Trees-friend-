@@ -1,42 +1,49 @@
 /**
- * AI assistant route — "TreeBot" powered by Google Gemini Flash.
+ * AI assistant route -- "TreeBot" powered by Google Gemini Flash.
  *
  * Three endpoints:
- *   POST /api/ai/chat              — streaming chat (Server-Sent Events)
- *   GET  /api/ai/sessions/:token   — fetch conversation history
- *   DELETE /api/ai/sessions/:token — clear a conversation
+ *   POST /api/ai/chat              -- streaming chat (Server-Sent Events)
+ *   GET  /api/ai/sessions/:token   -- fetch conversation history
+ *   DELETE /api/ai/sessions/:token -- clear a conversation
+ *   POST /api/ai/feedback          -- record thumbs up/down on a message
+ *   GET  /api/ai/products-by-slug  -- resolve [[product]] mentions to product data
  *
- * Auth model (v1 — ANONYMOUS):
+ * Auth model (v1 -- ANONYMOUS):
  *   No `requireAuth`. Every visitor gets a TreeBot, even signed-out users.
  *   The conversation is keyed by a client-generated `sessionToken`
  *   (stored in localStorage by the frontend), so the same anonymous
  *   visitor can resume their conversation across page refreshes.
  *
  * Topic restriction (two-tier, defense in depth):
- *   - HARD gate: hasBotanicalKeyword() — instant refuse, no Gemini call.
+ *   - HARD gate: hasBotanicalKeyword() -- instant refuse, no Gemini call.
  *     Saves quota + blocks obvious off-topic abuse.
- *   - SOFT gate: buildSystemPrompt() — strict scope instructions. Catches
- *     edge cases that sneak past the keyword gate (e.g. "tell me a joke
- *     about trees" — the gate lets it through, the system prompt refuses).
+ *   - SOFT gate: buildSystemPrompt() -- strict scope instructions. Catches
+ *     edge cases that sneak past the keyword gate.
  *
  * Rate limit:
  *   30 req / hour / IP. Generous for legitimate use, blocks scripted abuse.
  *   Gemini's free tier is 15 RPM / 1,500 RPD, so even 30/hr/IP across
  *   many users won't blow the daily quota.
  *
+ * v3.0 upgrades:
+ *   - PII redaction on user messages before persisting + before sending to Gemini.
+ *   - Conversation summarization (long-term memory) when history exceeds
+ *     AI_SUMMARY_THRESHOLD. Summary is stored on the session row and
+ *     injected into the system prompt.
+ *   - Observability: model name, response time (ms), token count, and PII
+ *     flag persisted on each assistant message.
+ *   - Retry on transient Gemini errors (5xx, 429, network) with exponential
+ *     backoff (handled in lib/gemini.ts).
+ *
  * Persistence:
  *   Both user messages AND assistant responses are persisted to
  *   `ai_chat_messages` so history survives page refresh and server restart.
  *   The frontend rehydrates by calling GET /sessions/:token on mount.
  */
-import { Router, type Request, type Response, type NextFunction } from "express";
+import { Router, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 import { eq, asc, desc } from "drizzle-orm";
-import {
-  aiChatSessionsTable,
-  aiChatMessagesTable,
-  aiChatFeedbackTable,
-} from "@workspace/db";
+import { aiChatSessionsTable, aiChatMessagesTable, aiChatFeedbackTable } from "@workspace/db";
 import { getAuth } from "@clerk/express";
 import { createRateLimiter } from "../middlewares/rateLimiter";
 import { logger } from "../lib/logger";
@@ -50,6 +57,14 @@ import {
 import { AI_TOOL_DECLARATIONS, executeTool } from "../lib/aiTools";
 import { isGeminiConfigured, streamGeminiChat } from "../lib/gemini";
 import { describeError } from "../lib/describeError";
+import { redactPii } from "../lib/piiRedaction";
+import {
+  loadSessionMemory,
+  maybeSummarize,
+  fetchHistoryForGemini,
+  buildSummaryPromptBlock,
+  logAiEvent,
+} from "../lib/aiMemory";
 
 const router = Router();
 
@@ -93,14 +108,14 @@ interface MessageRow {
  * Returns the row's id (numeric primary key) so messages can FK to it.
  *
  * On first message in a session, we also stamp the `title` column with a
- * truncated version of the message — useful for future UIs that list
+ * truncated version of the message -- useful for future UIs that list
  * conversations.
  *
  * v2.0: if `userId` is provided (signed-in user), it's stored on the
  * session row. Anonymous sessions leave user_id NULL. If the session
  * already existed anonymously and the user later signs in, we update
  * user_id on the existing row (so a single conversation can transition
- * from anon → authenticated without losing history).
+ * from anon -> authenticated without losing history).
  */
 async function findOrCreateSession(
   sessionToken: string,
@@ -144,12 +159,14 @@ async function findOrCreateSession(
  * Fetches the last N messages for a session, oldest-first (so they can be
  * appended to the Gemini `contents` array in chronological order).
  *
- * N defaults to AI_MAX_HISTORY (10) — keeps token usage predictable.
+ * N defaults to AI_MAX_HISTORY (10) -- keeps token usage predictable.
+ *
+ * Note: this is the LEGACY fetchHistory used by the GET /sessions/:token
+ * endpoint for displaying the conversation in the UI. The Gemini-facing
+ * history fetch (which respects the summary cutoff) is in lib/aiMemory.ts
+ * as fetchHistoryForGemini().
  */
-async function fetchHistory(
-  sessionId: number,
-  limit: number,
-): Promise<MessageRow[]> {
+async function fetchHistory(sessionId: number, limit: number): Promise<MessageRow[]> {
   // Subquery: get the last N rows in DESC order, then re-sort ASC for use.
   const result = await pool.query<MessageRow>(
     `SELECT id, session_id, role, content, created_at, off_topic, greeting
@@ -167,7 +184,7 @@ async function fetchHistory(
 }
 
 /**
- * Persist a single message (user or assistant). Fire-and-forget — the
+ * Persist a single message (user or assistant). Fire-and-forget -- the
  * caller doesn't wait for this to send the SSE response.
  *
  * Returns the inserted row's `id` (numeric DB primary key) so the caller
@@ -176,17 +193,29 @@ async function fetchHistory(
  *
  * v2.0: accepts `off_topic` and `greeting` flags so admin insights can
  * compute refusal rate. Defaults to false (no flag = regular message).
+ *
+ * v3.0: accepts `piiRedacted` flag (set when PII was detected and stripped
+ * from a user message) and observability metadata (`model`, `responseMs`,
+ * `tokenCount`) for assistant messages.
  */
 async function persistMessage(
   sessionId: number,
   role: "user" | "assistant",
   content: string,
-  options: { offTopic?: boolean; greeting?: boolean } = {},
+  options: {
+    offTopic?: boolean;
+    greeting?: boolean;
+    piiRedacted?: boolean;
+    model?: string;
+    responseMs?: number;
+    tokenCount?: number;
+  } = {},
 ): Promise<number | undefined> {
   try {
     const result = await pool.query<{ id: number }>(
-      `INSERT INTO ai_chat_messages (session_id, role, content, off_topic, greeting)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO ai_chat_messages (session_id, role, content, off_topic, greeting,
+                                      pii_redacted, model, response_ms, token_count)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id`,
       [
         sessionId,
@@ -194,18 +223,19 @@ async function persistMessage(
         content,
         options.offTopic ?? false,
         options.greeting ?? false,
+        options.piiRedacted ?? false,
+        options.model ?? null,
+        options.responseMs ?? null,
+        options.tokenCount ?? null,
       ],
     );
     // Bump updated_at on the session so we can sort by "most recently active"
     // if we ever build a conversation list.
-    await pool.query(
-      `UPDATE ai_chat_sessions SET updated_at = NOW() WHERE id = $1`,
-      [sessionId],
-    );
+    await pool.query(`UPDATE ai_chat_sessions SET updated_at = NOW() WHERE id = $1`, [sessionId]);
     return result.rows[0]?.id;
   } catch (err) {
     logger.error({ err, sessionId, role }, "AI: failed to persist message");
-    // Non-fatal — the response was already streamed to the user.
+    // Non-fatal -- the response was already streamed to the user.
     return undefined;
   }
 }
@@ -213,6 +243,9 @@ async function persistMessage(
 // ─── POST /ai/chat ──────────────────────────────────────────────────────────
 
 router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
+  // Track the request start time so we can measure end-to-end response time.
+  const requestStartTime = Date.now();
+
   // ─── 1. Validate body ───
   const { message, sessionToken } = (req.body ?? {}) as ChatRequestBody;
   if (typeof message !== "string" || message.trim().length === 0) {
@@ -233,7 +266,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       : crypto.randomUUID();
 
   // ─── 1b. Resolve signed-in user (OPTIONAL) ───
-  // v2.0: if the user is signed in via Clerk (or mobile JWT — handled by the
+  // v2.0: if the user is signed in via Clerk (or mobile JWT -- handled by the
   // middleware that runs before us), we attach their identity to the session
   // and inject their orders + wishlist into the system prompt. If not signed
   // in, we proceed as anonymous (v1 behavior).
@@ -249,19 +282,40 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  // ─── 3. Hard topic gate ───
+  // ─── 3. v3.0 PII redaction ───
+  // Scan the user's message for PII (phone, email, NID, card numbers,
+  // Bangladesh-style addresses). Replace with [PHONE], [EMAIL], etc.
+  // The REDACTED version is what we persist + send to Gemini. The original
+  // is never stored in the AI tables.
+  const piiResult = redactPii(message);
+  const safeMessage = piiResult.redacted;
+  if (piiResult.hadPii) {
+    await logAiEvent(0, "pii_redacted", {
+      types: piiResult.detectedTypes,
+      count: piiResult.count,
+    }).catch(() => {}); // event logging is best-effort
+  }
+
+  // ─── 4. Hard topic gate ───
   // If the message has zero botanical keywords, refuse WITHOUT calling
   // Gemini. Saves quota and prevents off-topic abuse.
-  if (!hasBotanicalKeyword(message)) {
+  // NOTE: we run the gate on the REDACTED message. PII placeholders like
+  // [PHONE] don't contain botanical keywords, so they don't affect the gate.
+  if (!hasBotanicalKeyword(safeMessage)) {
     // We still need to send back a sessionToken so the client can store it.
     // Persist the user message + refusal so the conversation is consistent.
     try {
-      const session = await findOrCreateSession(token, message, clerkUserId ?? undefined);
-      await persistMessage(session.id, "user", message);
+      const session = await findOrCreateSession(token, safeMessage, clerkUserId ?? undefined);
+      await persistMessage(session.id, "user", safeMessage, {
+        piiRedacted: piiResult.hadPii,
+      });
       const refusal =
         "I'm TreeFriend's plant assistant and can only help with trees, plants, and gardening. " +
         "Feel free to ask me about plant care or browse our catalog at /browse.";
-      const assistantMsgId = await persistMessage(session.id, "assistant", refusal);
+      const assistantMsgId = await persistMessage(session.id, "assistant", refusal, {
+        offTopic: true,
+        responseMs: Date.now() - requestStartTime,
+      });
 
       res.json({
         sessionToken: token,
@@ -276,20 +330,20 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  // ─── 3b. Pure greeting shortcut ───
+  // ─── 4b. Pure greeting shortcut ───
   // For "Hi" / "Hello" / "Salam" etc., skip Gemini entirely and return a
   // friendly canned intro. Saves API quota + gives the user an instant
   // warm welcome instead of a 3-5 second wait for Gemini to say "hi back".
-  if (isPureGreeting(message)) {
+  if (isPureGreeting(safeMessage)) {
     try {
-      const session = await findOrCreateSession(token, message, clerkUserId ?? undefined);
-      await persistMessage(session.id, "user", message);
-      const assistantMsgId = await persistMessage(
-        session.id,
-        "assistant",
-        GREETING_INTRO_MESSAGE,
-        { greeting: true },
-      );
+      const session = await findOrCreateSession(token, safeMessage, clerkUserId ?? undefined);
+      await persistMessage(session.id, "user", safeMessage, {
+        piiRedacted: piiResult.hadPii,
+      });
+      const assistantMsgId = await persistMessage(session.id, "assistant", GREETING_INTRO_MESSAGE, {
+        greeting: true,
+        responseMs: Date.now() - requestStartTime,
+      });
       res.json({
         sessionToken: token,
         message: GREETING_INTRO_MESSAGE,
@@ -303,47 +357,48 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  // ─── 4. Find/create session + fetch history ───
+  // ─── 5. Find/create session ───
   let session: SessionRow;
   try {
-    session = await findOrCreateSession(token, message, clerkUserId ?? undefined);
+    session = await findOrCreateSession(token, safeMessage, clerkUserId ?? undefined);
   } catch (err) {
     logger.error({ err }, "AI: findOrCreateSession failed");
     res.status(500).json({ error: "Failed to start chat session." });
     return;
   }
 
-  const maxHistory = Number(process.env.AI_MAX_HISTORY ?? 10);
-  let history: MessageRow[] = [];
-  try {
-    history = await fetchHistory(session.id, maxHistory);
-  } catch (err) {
-    // Non-fatal: proceed with empty history. The model will still answer,
-    // just without conversational continuity for this turn.
-    logger.error({ err, sessionId: session.id }, "AI: fetchHistory failed");
-  }
+  // ─── 6. v3.0 Conversation memory: load + maybe summarize ───
+  // Load the existing summary (if any) for this session. Then check if
+  // we need to summarize (or re-summarize) the conversation. This runs
+  // BEFORE we persist the user's new message, so the new message is
+  // NOT included in the summary -- it goes into the live history array.
+  const existingMemory = await loadSessionMemory(session.id);
 
-  // ─── 5. Build catalog context (Naive RAG) ───
-  // v2.5: user context is now provided via function calling (get_user_orders
-  // tool) instead of being injected into the prompt. This is more accurate
-  // because Gemini decides WHEN to query the user's orders based on intent,
-  // rather than always having them in the prompt (wasting tokens for
-  // questions that don't need them).
-  const catalogContext = await buildCatalogContext(message);
-  const systemPrompt = buildSystemPrompt(catalogContext);
-
-  // Convert DB rows to Gemini's expected shape (role: 'user' | 'model').
-  const geminiHistory = history.map((h) => ({
-    role: h.role === "assistant" ? ("model" as const) : ("user" as const),
-    text: h.content,
-  }));
-
-  // ─── 6. Persist the user message BEFORE streaming ───
+  // ─── 7. Persist the user message BEFORE streaming ───
   // We do this now (not after) so that even if the streaming fails midway,
   // the user's message is preserved and the conversation can resume.
-  await persistMessage(session.id, "user", message);
+  // v3.0: persist the REDACTED message + the piiRedacted flag.
+  await persistMessage(session.id, "user", safeMessage, {
+    piiRedacted: piiResult.hadPii,
+  });
 
-  // ─── 7. Set up SSE response ───
+  // v3.0: Now that the user message is persisted, check if we should
+  // summarize the conversation. This may call Gemini (to generate the
+  // summary) -- if it fails, we proceed without a summary (non-fatal).
+  const memory = await maybeSummarize(session.id, existingMemory);
+
+  // ─── 8. Build Gemini history (respects summary cutoff) ───
+  // If a summary exists, only messages with id > cutoffId are included.
+  // The summary itself is injected into the system prompt.
+  const maxHistory = Number(process.env.AI_MAX_HISTORY ?? 10);
+  const geminiHistory = await fetchHistoryForGemini(session.id, memory.cutoffId, maxHistory);
+
+  // ─── 9. Build system prompt (with summary + catalog context) ───
+  const catalogContext = await buildCatalogContext(safeMessage);
+  const summaryBlock = buildSummaryPromptBlock(memory.summary);
+  const systemPrompt = buildSystemPrompt(catalogContext, summaryBlock);
+
+  // ─── 10. Set up SSE response ───
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
@@ -356,38 +411,68 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // resume from on reconnect.
   res.write(`data: ${JSON.stringify({ type: "session", sessionToken: token })}\n\n`);
 
-  // ─── 8. Stream Gemini response ───
+  // ─── 11. Stream Gemini response ───
   let fullResponse = "";
   let assistantMsgId: number | undefined;
+  let firstChunkTime: number | null = null;
+  // v3.0: holder object so TypeScript's control-flow analysis doesn't
+  // narrow the type to `never` after the closure assigns to it. Using
+  // `let` directly with a closure assignment breaks CFA because TS
+  // assumes closures may not run; an object property access bypasses
+  // the narrowing.
+  const metaHolder: { value: { model: string; usage?: unknown } | null } = { value: null };
+
   try {
     const stream = streamGeminiChat(
       systemPrompt,
       geminiHistory,
-      message,
+      safeMessage,
       // v2.5: expose function-calling tools to Gemini
       {
         declarations: AI_TOOL_DECLARATIONS,
         execute: executeTool,
       },
       clerkUserId,
+      // v3.0: metadata callback -- Gemini calls this with model + usage
+      // info so we can persist it on the assistant message row.
+      (meta) => {
+        metaHolder.value = meta;
+      },
     );
     for await (const chunk of stream) {
       if (!chunk) continue;
+      if (firstChunkTime === null) {
+        firstChunkTime = Date.now();
+      }
       fullResponse += chunk;
       res.write(`data: ${JSON.stringify({ type: "delta", text: chunk })}\n\n`);
     }
+
+    // v3.0: extract token count from usage metadata (if Gemini provided it).
+    // The shape is: { promptTokenCount, candidatesTokenCount, totalTokenCount }
+    let tokenCount: number | undefined;
+    if (metaHolder.value?.usage && typeof metaHolder.value.usage === "object") {
+      const usage = metaHolder.value.usage as {
+        totalTokenCount?: number;
+        candidatesTokenCount?: number;
+      };
+      tokenCount = usage.totalTokenCount ?? usage.candidatesTokenCount;
+    }
+
     // ─── Persist the assistant message BEFORE sending done ───
     // We need its DB id so the frontend can wire up feedback buttons.
-    assistantMsgId = await persistMessage(session.id, "assistant", fullResponse);
+    // v3.0: also persist model, response_ms, and token_count.
+    assistantMsgId = await persistMessage(session.id, "assistant", fullResponse, {
+      model: metaHolder.value?.model,
+      responseMs: Date.now() - requestStartTime,
+      tokenCount,
+    });
     if (assistantMsgId != null) {
-      res.write(
-        `data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`,
-      );
+      res.write(`data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`);
     }
     res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
   } catch (err) {
     // Extract the most useful bits from the SDK error so we can debug.
-    // @google/genai errors typically have: err.status, err.message, err.error
     const sdkErr = err as any;
     const errInfo = {
       message: sdkErr?.message ?? String(err),
@@ -401,18 +486,16 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       errInfo.status === 401 ||
       errInfo.status === 403 ||
       /api key|permission|unauthorized|forbidden/i.test(errInfo.message);
-    const isAllModelsUnavailable = /all configured gemini models/i.test(
-      errInfo.message,
-    );
+    const isAllModelsUnavailable = /all configured gemini models/i.test(errInfo.message);
     const isRateLimit =
       errInfo.status === 429 || /rate limit|quota|too many/i.test(errInfo.message);
 
     const userMessage = isAllModelsUnavailable
-      ? "TreeBot is temporarily unavailable — we're updating our AI service. " +
+      ? "TreeBot is temporarily unavailable -- we're updating our AI service. " +
         "Please try again in a few minutes."
       : isAuthError
         ? "TreeBot is having trouble connecting to the AI service. " +
-          "This is likely a configuration issue on our side — please try again later."
+          "This is likely a configuration issue on our side -- please try again later."
         : isRateLimit
           ? "TreeBot is getting too many requests right now. Please wait a minute and try again."
           : "I had trouble generating a response. Please try again in a moment.";
@@ -428,89 +511,90 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     if (!fullResponse) {
       fullResponse = userMessage;
     }
+
+    // v3.0: log the error as an event for debugging.
+    await logAiEvent(session.id, "stream_error", {
+      status: errInfo.status,
+      message: errInfo.message,
+      partialResponse: fullResponse.length > 0 && fullResponse !== userMessage,
+    }).catch(() => {});
   } finally {
     res.end();
   }
 
-  // ─── 9. Persist the assistant response (fire-and-forget) ───
-  // Note: the assistant message was already persisted in step 8 (before
+  // ─── 12. Fallback persistence (only if step 11 didn't persist) ───
+  // Note: the assistant message was already persisted in step 11 (before
   // sending the "done" event) so we could send its ID to the frontend for
   // feedback wiring. This fallback handles the case where the stream
-  // errored BEFORE step 8 could run (so assistantMsgId is undefined) but
+  // errored BEFORE step 11 could run (so assistantMsgId is undefined) but
   // fullResponse still has the error-fallback content from the catch block.
   if (fullResponse && assistantMsgId == null) {
-    await persistMessage(session.id, "assistant", fullResponse);
+    await persistMessage(session.id, "assistant", fullResponse, {
+      model: metaHolder.value?.model,
+      responseMs: Date.now() - requestStartTime,
+    });
   }
 });
 
 // ─── GET /ai/sessions/:token ────────────────────────────────────────────────
 // Returns the message history for a session, oldest-first. Used by the
 // frontend on mount to rehydrate the conversation.
-router.get(
-  "/ai/sessions/:token",
-  async (req: Request, res: Response) => {
-    const { token } = req.params;
-    if (!token || token.length < 8) {
-      res.status(400).json({ error: "Invalid session token." });
+router.get("/ai/sessions/:token", async (req: Request, res: Response) => {
+  const { token } = req.params;
+  if (!token || token.length < 8) {
+    res.status(400).json({ error: "Invalid session token." });
+    return;
+  }
+
+  try {
+    const sessionResult = await pool.query<SessionRow>(
+      `SELECT id, session_token, title FROM ai_chat_sessions WHERE session_token = $1`,
+      [token],
+    );
+    if (sessionResult.rows.length === 0) {
+      // No session yet -- return empty array so the frontend can start fresh.
+      res.json({ sessionToken: token, title: null, messages: [] });
       return;
     }
+    const session = sessionResult.rows[0];
 
-    try {
-      const sessionResult = await pool.query<SessionRow>(
-        `SELECT id, session_token, title FROM ai_chat_sessions WHERE session_token = $1`,
-        [token],
-      );
-      if (sessionResult.rows.length === 0) {
-        // No session yet — return empty array so the frontend can start fresh.
-        res.json({ sessionToken: token, title: null, messages: [] });
-        return;
-      }
-      const session = sessionResult.rows[0];
-
-      const maxHistory = Number(process.env.AI_MAX_HISTORY ?? 20); // more for view
-      const messages = await fetchHistory(session.id, maxHistory);
-      res.json({
-        sessionToken: token,
-        title: session.title,
-        messages: messages.map((m) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          createdAt: m.created_at,
-          offTopic: m.off_topic,
-          greeting: m.greeting,
-        })),
-      });
-    } catch (err) {
-      logger.error({ err, token }, "AI: GET session failed");
-      res.status(500).json({ error: "Failed to load chat history." });
-    }
-  },
-);
+    const maxHistory = Number(process.env.AI_MAX_HISTORY ?? 20); // more for view
+    const messages = await fetchHistory(session.id, maxHistory);
+    res.json({
+      sessionToken: token,
+      title: session.title,
+      messages: messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        createdAt: m.created_at,
+        offTopic: m.off_topic,
+        greeting: m.greeting,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err, token }, "AI: GET session failed");
+    res.status(500).json({ error: "Failed to load chat history." });
+  }
+});
 
 // ─── DELETE /ai/sessions/:token ─────────────────────────────────────────────
 // Clears a conversation. CASCADE deletes the associated messages.
-router.delete(
-  "/ai/sessions/:token",
-  async (req: Request, res: Response) => {
-    const { token } = req.params;
-    if (!token || token.length < 8) {
-      res.status(400).json({ error: "Invalid session token." });
-      return;
-    }
+router.delete("/ai/sessions/:token", async (req: Request, res: Response) => {
+  const { token } = req.params;
+  if (!token || token.length < 8) {
+    res.status(400).json({ error: "Invalid session token." });
+    return;
+  }
 
-    try {
-      await pool.query(
-        `DELETE FROM ai_chat_sessions WHERE session_token = $1`,
-        [token],
-      );
-      res.json({ ok: true });
-    } catch (err) {
-      logger.error({ err, token }, "AI: DELETE session failed");
-      res.status(500).json({ error: "Failed to clear chat history." });
-    }
-  },
-);
+  try {
+    await pool.query(`DELETE FROM ai_chat_sessions WHERE session_token = $1`, [token]);
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, token }, "AI: DELETE session failed");
+    res.status(500).json({ error: "Failed to clear chat history." });
+  }
+});
 
 // Touch the imports so unused-imports lint doesn't complain (these are
 // used via the type system and the table objects exported by @workspace/db
@@ -523,10 +607,10 @@ void desc;
 void describeError;
 
 // ─── POST /ai/feedback ──────────────────────────────────────────────────────
-// Records a 👍/👎 rating on a specific assistant message. Idempotent via
-// the unique constraint on message_id — re-clicking the same rating
-// removes it (toggle behavior), clicking the opposite rating updates
-// the row in place.
+// Records a thumbs up/down rating on a specific assistant message. Idempotent via
+// the unique constraint on message_id -- re-clicking the same rating
+// removes it (toggle behavior), clicking the opposite rating updates the
+// row in place.
 //
 // Body: { messageId: number, rating: "up" | "down" }
 // Returns: { ok: true, rating: "up" | "down" | null }
@@ -567,12 +651,12 @@ router.post("/ai/feedback", async (req: Request, res: Response) => {
     if (existing.rows.length > 0) {
       const row = existing.rows[0];
       if (row.rating === rating) {
-        // Same rating clicked again → toggle OFF (delete the row).
+        // Same rating clicked again -> toggle OFF (delete the row).
         await pool.query(`DELETE FROM ai_chat_feedback WHERE id = $1`, [row.id]);
         res.json({ ok: true, rating: null });
         return;
       }
-      // Opposite rating → update in place.
+      // Opposite rating -> update in place.
       await pool.query(
         `UPDATE ai_chat_feedback SET rating = $1, created_at = NOW() WHERE id = $2`,
         [rating, row.id],
@@ -581,7 +665,7 @@ router.post("/ai/feedback", async (req: Request, res: Response) => {
       return;
     }
 
-    // No existing feedback → insert.
+    // No existing feedback -> insert.
     await pool.query(
       `INSERT INTO ai_chat_feedback (message_id, session_id, rating)
        VALUES ($1, $2, $3)`,
@@ -648,9 +732,7 @@ router.get("/ai/products-by-slug", async (req: Request, res: Response) => {
 
     // Preserve the input slug order in the response.
     const bySlug = new Map(result.rows.map((r) => [r.slug, r]));
-    const ordered = slugs
-      .map((s) => bySlug.get(s))
-      .filter(Boolean) as typeof result.rows;
+    const ordered = slugs.map((s) => bySlug.get(s)).filter(Boolean) as typeof result.rows;
 
     res.json({ products: ordered });
   } catch (err) {

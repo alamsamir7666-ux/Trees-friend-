@@ -27,6 +27,14 @@
     {
       "path": "/api/cron/payment-expiration",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/ai-feedback-digest",
+      "schedule": "0 9 * * 1"
+    },
+    {
+      "path": "/api/cron/ai-session-cleanup",
+      "schedule": "0 3 * * *"
     }
   ],
   "routes": [

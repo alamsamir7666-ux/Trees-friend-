@@ -12,6 +12,16 @@
  * can't be created for some reason (e.g. transient DB issue), the AI route
  * will return a 503 for individual requests, which is preferable to taking
  * down the entire API.
+ *
+ * v3.0 additions:
+ *   - `summary`, `summary_cutoff_id`, `summarized_count`, `summary_updated_at`
+ *     columns on ai_chat_sessions (for conversation summarization)
+ *   - `model`, `response_ms`, `token_count`, `pii_redacted`, `summarized`
+ *     columns on ai_chat_messages (for observability)
+ *   - New `ai_chat_events` table (append-only audit trail)
+ *   - pg_trgm extension + GIN index on products (for fuzzy semantic search)
+ *   - `ai_chat_sessions_updated_at_idx` index (for TTL cleanup job)
+ *   - `ai_chat_messages_model_idx` index (for model-usage analytics)
  */
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
@@ -77,12 +87,75 @@ ALTER TABLE ai_chat_messages
 CREATE INDEX IF NOT EXISTS ai_chat_messages_off_topic_idx
   ON ai_chat_messages (created_at DESC)
   WHERE off_topic = TRUE;
+
+-- ─── v3.0 conversation memory + observability ────────────────────────────────
+-- These columns power:
+--   - Conversation summarization (summary, summary_cutoff_id, summarized_count,
+--     summary_updated_at on sessions)
+--   - Observability (model, response_ms, token_count on messages)
+--   - PII redaction tracking (pii_redacted on messages)
+--   - Summary compression tracking (summarized on messages)
+
+ALTER TABLE ai_chat_sessions
+  ADD COLUMN IF NOT EXISTS summary TEXT,
+  ADD COLUMN IF NOT EXISTS summary_cutoff_id INTEGER,
+  ADD COLUMN IF NOT EXISTS summarized_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS summary_updated_at TIMESTAMP;
+
+-- Index for the TTL cleanup job (queries WHERE updated_at < NOW() - INTERVAL).
+CREATE INDEX IF NOT EXISTS ai_chat_sessions_updated_at_idx
+  ON ai_chat_sessions (updated_at);
+
+ALTER TABLE ai_chat_messages
+  ADD COLUMN IF NOT EXISTS model TEXT,
+  ADD COLUMN IF NOT EXISTS response_ms INTEGER,
+  ADD COLUMN IF NOT EXISTS token_count INTEGER,
+  ADD COLUMN IF NOT EXISTS pii_redacted BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS summarized BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Index for model-usage analytics (GROUP BY model, COUNT, AVG(response_ms)).
+CREATE INDEX IF NOT EXISTS ai_chat_messages_model_idx
+  ON ai_chat_messages (model);
+
+-- ─── v3.0 AI event log (append-only audit trail) ────────────────────────────
+-- Stores events like "summary_generated", "pii_redacted", "retry",
+-- "model_fallback", "tool_call", "truncated". Used for debugging + admin
+-- observability. Cascade-deletes with the session.
+CREATE TABLE IF NOT EXISTS ai_chat_events (
+  id SERIAL PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  payload TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ai_chat_events_session_idx
+  ON ai_chat_events (session_id, created_at);
+CREATE INDEX IF NOT EXISTS ai_chat_events_type_idx
+  ON ai_chat_events (type, created_at);
+
+-- ─── v3.0 pg_trgm extension for fuzzy search ────────────────────────────────
+-- Enables trigram-based similarity matching (e.g. "mangoo" → "mango") as a
+-- fallback when ILIKE finds nothing. Available on Supabase, Neon, RDS, and
+-- vanilla Postgres 9.1+. CREATE EXTENSION requires superuser on some
+-- providers — if it fails, we catch it and the search_catalog tool falls
+-- back to ILIKE-only (the route already has try/catch fallbacks).
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- GIN index on products.name + description for fast trigram similarity
+-- queries. IF NOT EXISTS so this is idempotent.
+CREATE INDEX IF NOT EXISTS products_name_trgm_idx
+  ON products USING gin (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS products_description_trgm_idx
+  ON products USING gin (description gin_trgm_ops);
 `;
 
 export async function ensureAiTables(): Promise<void> {
   try {
     await pool.query(MIGRATION_SQL);
-    logger.info("AI chat tables ensured (ai_chat_sessions, ai_chat_messages)");
+    logger.info(
+      "AI chat tables ensured (ai_chat_sessions, ai_chat_messages, ai_chat_events, v3.0 columns)",
+    );
   } catch (err) {
     logger.error({ err }, "Failed to ensure AI chat tables");
     // Do NOT throw — same rationale as ensureConversationsTables: it's

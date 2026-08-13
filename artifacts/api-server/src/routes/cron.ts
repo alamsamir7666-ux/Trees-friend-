@@ -7,6 +7,7 @@ import {
 import { runLowStockAlert } from "../jobs/lowStockJob";
 import { runPaymentExpirationJob } from "../jobs/paymentExpirationJob";
 import { runAiFeedbackDigest } from "../jobs/aiFeedbackDigest";
+import { runAiSessionCleanup } from "../jobs/aiSessionCleanup";
 import { archiveLastMonth } from "./monthlyRecords";
 import { runAbandonedCartJob } from "./abandonedCart";
 import type { ApiRequest } from "../types/apiRequest";
@@ -210,6 +211,27 @@ router.post("/cron/ai-feedback-digest", async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     logger.error({ err }, "Cron: AI feedback digest failed");
+    res.status(500).json({ error: "Cron job failed" });
+  }
+});
+
+/**
+ * POST /api/cron/ai-session-cleanup
+ * Daily at 3 AM. Deletes anonymous AI chat sessions whose updated_at is
+ * older than AI_SESSION_TTL_DAYS (default 30). CASCADE deletes the
+ * associated messages, feedback, and events.
+ *
+ * Only anonymous sessions (user_id IS NULL) are deleted -- logged-in
+ * users' sessions are part of their history and persist indefinitely.
+ */
+router.post("/cron/ai-session-cleanup", async (req, res) => {
+  if (!requireCronAuth(req, res)) return;
+  try {
+    logger.info("Cron: running AI session cleanup");
+    const result = await runAiSessionCleanup();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "Cron: AI session cleanup failed");
     res.status(500).json({ error: "Cron job failed" });
   }
 });

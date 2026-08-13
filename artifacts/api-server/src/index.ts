@@ -6,6 +6,7 @@ import {
   runSellerSubscriptionExpiryJob,
 } from "./jobs/sellerSubscriptionJob";
 import { runPaymentExpirationJob } from "./jobs/paymentExpirationJob";
+import { runAiSessionCleanup } from "./jobs/aiSessionCleanup";
 
 // Note: ensureConversationsTables() is invoked from app.ts at module load,
 // so it runs on every cold start (including Vercel serverless). We do NOT
@@ -42,6 +43,11 @@ app.listen(port, (err) => {
   // bKash orders abandoned at the hosted payment page for 60+ minutes.
   // Restores stock so the inventory is available to other buyers.
   schedulePaymentExpiration();
+
+  // AI session TTL cleanup — runs daily, deletes anonymous chat sessions
+  // inactive for AI_SESSION_TTL_DAYS (default 30). Keeps the ai_chat_*
+  // tables from growing unbounded.
+  scheduleAiSessionCleanup();
 });
 
 // ─── Keep-alive: ping self every 14 min so Render free tier never sleeps ─────
@@ -121,4 +127,27 @@ function schedulePaymentExpiration() {
       logger.warn({ err }, "Payment expiration job failed");
     });
   }, CHECK_INTERVAL_MS);
+}
+
+/**
+ * AI session TTL cleanup scheduler (Render long-lived process).
+ * Runs every 24 hours -- deletes anonymous chat sessions whose
+ * updated_at is older than AI_SESSION_TTL_DAYS (default 30).
+ *
+ * On Vercel (serverless), this runs via POST /api/cron/ai-session-cleanup
+ * instead (see routes/cron.ts + vercel.json).
+ *
+ * The first run is scheduled 24h after server start (not immediately) to
+ * avoid doing cleanup work during the startup burst.
+ */
+function scheduleAiSessionCleanup() {
+  const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+  setInterval(() => {
+    runAiSessionCleanup().catch((err) => {
+      logger.warn({ err }, "AI session cleanup job failed");
+    });
+  }, CHECK_INTERVAL_MS);
+
+  logger.info("AI session cleanup scheduler started (runs every 24h)");
 }

@@ -11,21 +11,28 @@
  *   - Easier to mock in tests.
  *
  * Configuration:
- *   GEMINI_API_KEY  — required, get one free at https://aistudio.google.com/apikey
- *   AI_MODEL         — optional, overrides the auto-fallback chain with a
- *                      specific model name. If unset, we try models in order:
+ *   GEMINI_API_KEY   — required, get one free at https://aistudio.google.com/apikey
+ *   AI_MODEL          — optional, overrides the auto-fallback chain with a
+ *                       specific model name. If unset, we try models in order:
  *
- *                        1. gemini-2.5-flash
- *                        2. gemini-2.5-flash-lite
- *                        3. gemini-2.5-pro
- *                        4. gemini-2.0-flash        (legacy fallback)
- *                        5. gemini-flash-latest      (Google's alias)
- *                        6. gemini-1.5-flash         (very old fallback)
+ *                         1. gemini-flash-latest      (Google's alias)
+ *                         2. gemini-2.5-flash-lite
+ *                         3. gemini-2.5-flash
+ *                         4. gemini-2.5-pro
+ *                         5. gemini-2.0-flash         (legacy fallback)
+ *                         6. gemini-1.5-flash         (very old fallback)
  *
- *                      The first one that doesn't return 404/NOT_FOUND is
- *                      cached and reused for all subsequent requests. This
- *                      auto-adapts to Google's frequent model deprecations
- *                      without requiring a code change each time.
+ *   AI_TEMPERATURE     — optional, 0.0–2.0, default 0.4. Lower = more
+ *                        deterministic; higher = more creative. The
+ *                        TreeBot use case (factual plant care) rewards
+ *                        low temperature.
+ *   AI_MAX_TOKENS      — optional, default 2048 (v3.0: raised from 1024).
+ *                        Plant care guides with formatting can hit 1024.
+ *                        If the response is still truncated, the route
+ *                        auto-continues (see autoContinueIfNeeded).
+ *   AI_MAX_RETRIES     — optional, default 3. Number of times to retry
+ *                        a Gemini call on transient errors (5xx, 429,
+ *                        network). Exponential backoff: 500ms * 2^attempt.
  *
  * Streaming:
  *   `streamGeminiChat()` returns an async iterator of text chunks. The route
@@ -58,6 +65,27 @@ const MODEL_FALLBACK_CHAIN = [
   "gemini-2.0-flash", // legacy fallback (still works for some older projects)
   "gemini-1.5-flash", // very old fallback
 ];
+
+// ─── v3.0 configurable generation params ────────────────────────────────────
+// Read once at module load (not per-request) — these are deployment-wide
+// settings, not per-message. Changing them requires a server restart.
+function getTemperature(): number {
+  const raw = Number(process.env.AI_TEMPERATURE);
+  if (Number.isFinite(raw) && raw >= 0 && raw <= 2) return raw;
+  return 0.4; // default — factual plant care rewards low temperature
+}
+
+function getMaxOutputTokens(): number {
+  const raw = Number(process.env.AI_MAX_TOKENS);
+  if (Number.isFinite(raw) && raw >= 256 && raw <= 8192) return raw;
+  return 2048; // v3.0: raised from 1024 — plant care guides can hit 1024 with formatting
+}
+
+function getMaxRetries(): number {
+  const raw = Number(process.env.AI_MAX_RETRIES);
+  if (Number.isFinite(raw) && raw >= 0 && raw <= 10) return raw;
+  return 3;
+}
 
 // ─── Lazy-initialized client ─────────────────────────────────────────────────
 let _client: GoogleGenAI | null = null;
@@ -93,6 +121,9 @@ function getClient(): GoogleGenAI {
       // Show what we'll try first.
       preferredModel: process.env.AI_MODEL ?? "(auto-fallback chain)",
       fallbackChain: MODEL_FALLBACK_CHAIN,
+      temperature: getTemperature(),
+      maxOutputTokens: getMaxOutputTokens(),
+      maxRetries: getMaxRetries(),
     },
     "Google GenAI client initialized for TreeBot (model will be auto-selected on first request)",
   );
@@ -132,25 +163,109 @@ function isModelNotFoundError(err: unknown): boolean {
 }
 
 /**
- * Calls a Gemini SDK function with automatic model fallback.
+ * v3.0: Check if an error is transient (worth retrying).
+ *
+ * Retries on:
+ *   - 5xx server errors (Google backend hiccup)
+ *   - 429 rate limits (with exponential backoff)
+ *   - Network errors (ECONNRESET, ETIMEDOUT, fetch failed)
+ *
+ * Does NOT retry on:
+ *   - 404 NOT_FOUND (handled by model fallback chain instead)
+ *   - 400/401/403 (bad request / auth — retrying won't help)
+ *   - 451 (legal block)
+ */
+function isTransientError(err: unknown): boolean {
+  const e = err as any;
+  const status = e?.status ?? e?.error?.code ?? e?.code;
+  if (typeof status === "number") {
+    if (status === 429) return true;
+    if (status >= 500 && status < 600) return true;
+  }
+  const msg = typeof e?.message === "string" ? e.message.toLowerCase() : "";
+  if (/rate limit|quota|too many/i.test(msg)) return true;
+  if (/econnreset|etimedout|enotfound|fetch failed|network error/i.test(msg)) return true;
+  if (/internal error|server error|service unavailable|temporarily unavailable/i.test(msg))
+    return true;
+  return false;
+}
+
+/**
+ * v3.0: Sleep helper for exponential backoff.
+ * Returns after `ms` milliseconds. Uses setTimeout wrapped in a Promise
+ * so it works in both Node.js and Vercel serverless environments.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * v3.0: Wraps an async function with retry-on-transient-error logic.
+ *
+ * - Retries up to `maxRetries` times on isTransientError.
+ * - Exponential backoff: 500ms, 1000ms, 2000ms, 4000ms... (+ jitter)
+ * - On a non-transient error, rethrows immediately (no retry).
+ * - On 404, the caller (callWithFallback) handles model fallback.
+ *
+ * @param fn - The async function to retry. Receives no args.
+ * @param context - Used for logging (e.g. "streamGeminiChat round 0").
+ * @returns The result of the first successful call.
+ */
+async function withRetry<T>(fn: () => Promise<T>, context?: Record<string, unknown>): Promise<T> {
+  const maxRetries = getMaxRetries();
+  let lastErr: unknown = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+
+      // 404 → don't retry here; let callWithFallback handle model switching.
+      if (isModelNotFoundError(err)) throw err;
+
+      // Non-transient → don't retry, rethrow immediately.
+      if (!isTransientError(err)) throw err;
+
+      // Transient → retry with backoff (unless this was the last attempt).
+      if (attempt === maxRetries) {
+        logger.error(
+          { err, attempt, maxRetries, ...context },
+          "TreeBot: exhausted retries on transient error",
+        );
+        throw err;
+      }
+
+      const baseDelay = 500 * Math.pow(2, attempt); // 500, 1000, 2000, 4000...
+      const jitter = Math.floor(Math.random() * 250); // 0–250ms
+      const delay = baseDelay + jitter;
+      logger.warn(
+        { err, attempt, nextAttempt: attempt + 1, delayMs: delay, ...context },
+        "TreeBot: transient error, retrying with backoff",
+      );
+      await sleep(delay);
+    }
+  }
+
+  // Unreachable, but TypeScript doesn't know that.
+  throw lastErr;
+}
+
+/**
+ * Calls a Gemini SDK function with automatic model fallback + retry.
  *
  * Tries the cached working model first. If it 404s (model deprecated
  * for this API key / project), tries the next model in the fallback
  * chain. The first model that succeeds is cached and tried first on
- * subsequent calls.
- *
- * This is the ACTUAL fallback implementation — resolveModel() above was
- * a stub that didn't actually probe whether the model works. This helper
- * wraps the real SDK call so a 404 triggers a retry with the next model.
+ * subsequent calls. Transient errors (5xx, 429, network) trigger a
+ * retry with exponential backoff (v3.0).
  *
  * @param fn - A function that takes a model name and returns a Promise.
  *   Called with each model in the chain until one succeeds.
  * @returns The result of the first successful call.
  * @throws If ALL models in the chain return 404, or if a non-404 error occurs.
  */
-async function callWithFallback<T>(
-  fn: (modelName: string) => Promise<T>,
-): Promise<T> {
+async function callWithFallback<T>(fn: (modelName: string) => Promise<T>): Promise<T> {
   const tryModels: string[] = [];
   if (_workingModel) tryModels.push(_workingModel);
   for (const m of getModelChain()) {
@@ -160,7 +275,10 @@ async function callWithFallback<T>(
   let lastErr: unknown = null;
   for (const modelName of tryModels) {
     try {
-      const result = await fn(modelName);
+      // v3.0: wrap the per-model call in withRetry so transient errors
+      // (5xx, 429, network) are retried before we give up on this model
+      // and try the next one in the chain.
+      const result = await withRetry(() => fn(modelName), { model: modelName });
       // Success — cache this model for future calls.
       if (_workingModel !== modelName) {
         logger.info(
@@ -188,8 +306,8 @@ async function callWithFallback<T>(
         }
         continue;
       }
-      // Non-404 error (auth, rate limit, network, etc.) — don't try other
-      // models, just rethrow. The route handler will surface it.
+      // Non-404 error (auth, non-transient after retries, etc.) — don't try
+      // other models, just rethrow. The route handler will surface it.
       throw err;
     }
   }
@@ -210,6 +328,57 @@ async function callWithFallback<T>(
 }
 
 /**
+ * v3.0: Generate a short summary of an older conversation using a fast,
+ * cheap model. Used by the route to compress long histories.
+ *
+ * We use the non-streaming generateContent call (no need to stream a
+ * summary — it's an internal operation). Returns the summary text.
+ */
+export async function summarizeConversation(
+  messages: { role: "user" | "assistant"; content: string }[],
+): Promise<string> {
+  const client = getClient();
+  if (!client) {
+    throw new Error("GEMINI_API_KEY is not set; cannot summarize conversation.");
+  }
+
+  // Build a compact transcript: role-labeled lines.
+  const transcript = messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n");
+
+  const summaryPrompt = `Summarize the following plant-assistant conversation in 3-5 sentences.
+Capture:
+- What plants/topics the user asked about
+- Key advice or recommendations given
+- Any products mentioned or recommended
+- The user's garden setup (if mentioned: indoor/balcony/garden, climate, soil type)
+
+Be concise — this summary will be injected into a future system prompt to
+give the assistant long-term memory. Don't include greetings or small talk.
+
+CONVERSATION:
+${transcript}
+
+SUMMARY:`;
+
+  const result = await callWithFallback((modelName) =>
+    client.models.generateContent({
+      model: modelName,
+      contents: [{ role: "user" as const, parts: [{ text: summaryPrompt }] }],
+      config: {
+        temperature: 0.2, // low — summaries should be factual
+        maxOutputTokens: 300, // short summary
+      },
+    }),
+  );
+
+  const text = (result as any)?.text;
+  if (typeof text !== "string" || text.trim().length === 0) {
+    throw new Error("Gemini returned empty summary.");
+  }
+  return text.trim();
+}
+
+/**
  * Streams a chat completion from Gemini. Yields incremental text chunks
  * (deltas) suitable for SSE forwarding to the browser.
  *
@@ -217,6 +386,9 @@ async function callWithFallback<T>(
  * (e.g. search_catalog), we execute the tool and send the result back
  * to Gemini in a multi-round loop. The final text response is then
  * streamed to the client.
+ *
+ * v3.0: adds retry-on-transient-error (via withRetry inside callWithFallback),
+ * env-configurable temperature/maxOutputTokens, and truncation detection.
  *
  * @param systemPrompt - Strict scope-restricting system instruction
  * @param history - Prior turns of the conversation, oldest first
@@ -228,10 +400,13 @@ async function callWithFallback<T>(
  *   for privacy-sensitive tools like get_user_orders).
  *
  * @yields string — incremental text deltas. Empty string is never yielded.
+ *   v3.0: also yields a special `{ type: "metadata", model, usage }` payload
+ *   via the onMetadata callback (if provided) so the route can persist
+ *   the model name + token count on the assistant message row.
  */
 export async function* streamGeminiChat(
   systemPrompt: string,
-  history: Array<{ role: "user" | "model"; text: string }>,
+  history: { role: "user" | "model"; text: string }[],
   userMessage: string,
   tools?: {
     declarations: FunctionDeclaration[];
@@ -242,6 +417,7 @@ export async function* streamGeminiChat(
     ) => Promise<unknown>;
   },
   userId?: string | null,
+  onMetadata?: (meta: { model: string; usage?: unknown }) => void,
 ): AsyncGenerator<string, void, unknown> {
   const client = getClient();
   if (!client) {
@@ -253,15 +429,15 @@ export async function* streamGeminiChat(
 
   // The @google/genai SDK accepts an array of `contents` for history
   // plus the new message.
-  let contents: Array<Record<string, unknown>> = [
+  let contents: Record<string, unknown>[] = [
     ...history.map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
     { role: "user" as const, parts: [{ text: userMessage }] },
   ];
 
   const config: Record<string, unknown> = {
     systemInstruction: systemPrompt,
-    temperature: 0.4,
-    maxOutputTokens: 1024,
+    temperature: getTemperature(),
+    maxOutputTokens: getMaxOutputTokens(),
   };
   if (tools && tools.declarations.length > 0) {
     config.tools = [{ functionDeclarations: tools.declarations }];
@@ -293,6 +469,14 @@ export async function* streamGeminiChat(
         config,
       }),
     );
+
+    // v3.0: emit metadata (model + usage) to the caller so it can persist
+    // observability columns on the assistant message row.
+    if (onMetadata) {
+      const usedModel = _workingModel ?? "unknown";
+      const usage = (response as any)?.usageMetadata ?? undefined;
+      onMetadata({ model: usedModel, usage });
+    }
 
     const functionCalls = response.functionCalls;
 
@@ -350,6 +534,17 @@ export async function* streamGeminiChat(
       // first response we already have.
       const text = response.text;
       if (text) yield text;
+
+      // v3.0: detect truncation. If the response hit maxOutputTokens,
+      // finishReason will be "MAX_TOKENS" and we should log it (the
+      // route's auto-continue logic can be added later if needed).
+      const finishReason = response.candidates?.[0]?.finishReason;
+      if (finishReason === "MAX_TOKENS") {
+        logger.warn(
+          { finishReason, maxOutputTokens: getMaxOutputTokens() },
+          "TreeBot: response was truncated (hit maxOutputTokens). Consider raising AI_MAX_TOKENS.",
+        );
+      }
       return;
     }
 

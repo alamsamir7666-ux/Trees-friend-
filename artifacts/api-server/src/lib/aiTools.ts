@@ -35,6 +35,7 @@
  *   - search_catalog and get_product_care are public (same data as the
  *     public product pages).
  */
+import { Type } from "@google/genai";
 import type { FunctionDeclaration } from "@google/genai";
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
@@ -50,20 +51,20 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       "Use this when the user is looking for specific plants, asking what's available, or wants recommendations. " +
       "Optional filters: max_price (in BDT), sunlight requirement.",
     parameters: {
-      type: "object",
+      type: Type.OBJECT,
       properties: {
         query: {
-          type: "string",
+          type: Type.STRING,
           description:
             "Search keywords — plant name, scientific name, or description keywords. " +
             'e.g. "mango", "indoor", "shade loving", "Mangifera indica"',
         },
         max_price: {
-          type: "number",
+          type: Type.NUMBER,
           description: "Optional maximum price in BDT (Bangladeshi Taka). e.g. 500",
         },
         sunlight: {
-          type: "string",
+          type: Type.STRING,
           description: "Optional sunlight requirement filter.",
           enum: ["full_sun", "partial_shade", "full_shade"],
         },
@@ -79,11 +80,11 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       "bloom season, key benefits, best for (indoor/balcony/garden), and care tips. " +
       "Use this AFTER search_catalog when the user asks about a specific product's care.",
     parameters: {
-      type: "object",
+      type: Type.OBJECT,
       properties: {
         product_slug: {
-          type: "string",
-          description: "The product's slug (URL identifier). e.g. \"alphonso-mango\"",
+          type: Type.STRING,
+          description: 'The product\'s slug (URL identifier). e.g. "alphonso-mango"',
         },
       },
       required: ["product_slug"],
@@ -96,7 +97,7 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       "Use this when the user asks 'where is my order', 'what did I buy', 'my orders', etc. " +
       "Only works for signed-in users — anonymous users get a 'not signed in' response.",
     parameters: {
-      type: "object",
+      type: Type.OBJECT,
       properties: {},
     },
   },
@@ -108,10 +109,10 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       "and per-status timestamps (confirmed, shipped, delivered). " +
       "Only works for the signed-in user's OWN orders.",
     parameters: {
-      type: "object",
+      type: Type.OBJECT,
       properties: {
         order_number: {
-          type: "number",
+          type: Type.NUMBER,
           description: "The order number shown to the user (e.g. 1001, 1002). NOT the tracking ID.",
         },
       },
@@ -195,7 +196,9 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
   const params: unknown[] = [];
   for (const t of tokens) {
     params.push(`%${t}%`);
-    conditions.push(`(p.name ILIKE $${params.length} OR p.scientific_name ILIKE $${params.length} OR p.description ILIKE $${params.length})`);
+    conditions.push(
+      `(p.name ILIKE $${params.length} OR p.scientific_name ILIKE $${params.length} OR p.description ILIKE $${params.length})`,
+    );
   }
   let where = conditions.join(" OR ");
 
@@ -249,6 +252,7 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
 
 async function getProductCare(args: Record<string, unknown>): Promise<{
   product: unknown | null;
+  error?: string;
 }> {
   const slug = String(args.product_slug ?? "").trim();
   if (!slug) return { product: null };
@@ -274,6 +278,7 @@ async function getProductCare(args: Record<string, unknown>): Promise<{
 async function getUserOrders(userId: string | null): Promise<{
   signed_in: boolean;
   orders: unknown[];
+  message?: string;
 }> {
   if (!userId) {
     return {
@@ -310,9 +315,14 @@ async function getUserOrders(userId: string | null): Promise<{
       status: r.order_status,
       payment_status: r.payment_status,
       total: r.total_amount,
-      date: r.created_at instanceof Date ? r.created_at.toISOString().slice(0, 10) : String(r.created_at).slice(0, 10),
+      date:
+        r.created_at instanceof Date
+          ? r.created_at.toISOString().slice(0, 10)
+          : String(r.created_at).slice(0, 10),
       delivered: r.delivered_at instanceof Date ? r.delivered_at.toISOString().slice(0, 10) : null,
-      items: (r.items as Array<{ productName: string; quantity: number }>)?.map((i) => `${i.quantity}× ${i.productName}`),
+      items: (r.items as { productName: string; quantity: number }[])?.map(
+        (i) => `${i.quantity}× ${i.productName}`,
+      ),
       location: [r.city, r.district].filter(Boolean).join(", ") || null,
     })),
   };
@@ -321,7 +331,7 @@ async function getUserOrders(userId: string | null): Promise<{
 async function getOrderDetails(
   args: Record<string, unknown>,
   userId: string | null,
-): Promise<{ order: unknown | null }> {
+): Promise<{ order: unknown | null; error?: string; signed_in?: boolean; message?: string }> {
   const orderNumber = Number(args.order_number);
   if (!Number.isFinite(orderNumber)) {
     return { order: null, error: "Invalid order number." };
@@ -371,12 +381,18 @@ async function getOrderDetails(
       payment_status: r.payment_status,
       payment_method: r.payment_method,
       total: r.total_amount,
-      placed_at: r.created_at instanceof Date ? r.created_at.toISOString().slice(0, 10) : String(r.created_at).slice(0, 10),
-      confirmed_at: r.confirmed_at instanceof Date ? r.confirmed_at.toISOString().slice(0, 10) : null,
+      placed_at:
+        r.created_at instanceof Date
+          ? r.created_at.toISOString().slice(0, 10)
+          : String(r.created_at).slice(0, 10),
+      confirmed_at:
+        r.confirmed_at instanceof Date ? r.confirmed_at.toISOString().slice(0, 10) : null,
       shipped_at: r.shipped_at instanceof Date ? r.shipped_at.toISOString().slice(0, 10) : null,
-      delivered_at: r.delivered_at instanceof Date ? r.delivered_at.toISOString().slice(0, 10) : null,
-      cancelled_at: r.cancelled_at instanceof Date ? r.cancelled_at.toISOString().slice(0, 10) : null,
-      items: (r.items as Array<{ productName: string; quantity: number; price: number }>)?.map((i) => ({
+      delivered_at:
+        r.delivered_at instanceof Date ? r.delivered_at.toISOString().slice(0, 10) : null,
+      cancelled_at:
+        r.cancelled_at instanceof Date ? r.cancelled_at.toISOString().slice(0, 10) : null,
+      items: (r.items as { productName: string; quantity: number; price: number }[])?.map((i) => ({
         name: i.productName,
         qty: i.quantity,
         price: i.price,

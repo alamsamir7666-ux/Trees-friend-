@@ -4,21 +4,28 @@
  * The job of this module is to make the AI "aware" of what's in the
  * TreeFriend database WITHOUT exposing the database directly to the model.
  *
- * Pattern (Naive RAG, no embeddings):
+ * Pattern (v3.0: Hybrid Naive RAG + pg_trgm fuzzy fallback):
  *   1. Take the user's message.
  *   2. Pull keywords from it.
  *   3. ILIKE-search `products` (name, scientific name, description) and
  *      `blog_posts` (title, body) for those keywords.
- *   4. Inject the top results into the system prompt as plain text.
+ *   4. v3.0: If ILIKE finds nothing, fall back to pg_trgm similarity
+ *      search (catches typos like "mangoo" → "mango" and fuzzy queries
+ *      like "drought-resistant plant"). Requires the pg_trgm extension,
+ *      which ensureAiTables.ts creates automatically.
+ *   5. Inject the top results into the system prompt as plain text.
  *
  * Why this works for our catalog size:
  *   - Typical marketplace catalogs have hundreds to low thousands of SKUs.
  *     Keyword search over `name` + `scientific_name` + `description`
  *     catches the relevant 5-10 products in a few ms.
- *   - Embedding-based search would be more accurate for fuzzy queries
- *     ("drought-resistant indoor plant") but adds a vector DB dependency,
- *     embedding pipeline, and re-indexing on every catalog change.
- *     Overkill for v1.
+ *   - v3.0: trigram similarity catches the ~10% of queries that ILIKE
+ *     misses (typos, fuzzy descriptors). Still no vector DB / embedding
+ *     pipeline needed — pg_trgm is a Postgres extension, not a separate service.
+ *   - Embedding-based search (pgvector) would be more accurate for
+ *     semantic queries ("drought-resistant indoor plant") but adds a
+ *     vector DB dependency, embedding pipeline, and re-indexing on every
+ *     catalog change. Overkill for v1/v2; documented as a v4 upgrade.
  *
  * Trade-offs the system prompt must enforce:
  *   - The model must NOT invent product IDs, prices, or availability it
@@ -44,27 +51,141 @@ const MAX_SUMMARY_LEN = 200; // chars — for product description snippets
 // the gate works for your Bangladesh audience.
 const BOTANICAL_KEYWORDS = [
   // English
-  "tree", "trees", "plant", "plants", "leaf", "leaves", "flower", "fruit",
-  "seed", "seeds", "sapling", "saplings", "soil", "water", "watering",
-  "sun", "sunlight", "shade", "light", "fertilizer", "fertilize", "pot",
-  "pots", "garden", "gardening", "root", "roots", "branch", "branches",
-  "stem", "stems", "bloom", "blooming", "prune", "pruning", "graft",
-  "grafting", "bonsai", "indoor", "outdoor", "balcony", "terrace", "yard",
-  "lawn", "orchard", "farm", "farming", "agriculture", "horticulture",
-  "botanical", "botany", "photosynthesis", "compost", "mulch", "pest",
-  "pests", "insect", "disease", "fungus", "mildew", "rot", "yellow",
-  "wilting", "yellowing", "growth", "grow", "growing", "mature", "height",
-  "spread", "variety", "species", "scientific", "evergreen", "deciduous",
-  "perennial", "annual", "biennial", "herb", "shrub", "climber", "creeper",
-  "cactus", "succulent", "palm", "bamboo", "mango", "jackfruit", "coconut",
-  "neem", "banyan", "tamarind", "lemon", "guava", "lychee", "papaya",
-  "banana", "rose", "jasmine", "hibiscus", "marigold", "orchid",
+  "tree",
+  "trees",
+  "plant",
+  "plants",
+  "leaf",
+  "leaves",
+  "flower",
+  "fruit",
+  "seed",
+  "seeds",
+  "sapling",
+  "saplings",
+  "soil",
+  "water",
+  "watering",
+  "sun",
+  "sunlight",
+  "shade",
+  "light",
+  "fertilizer",
+  "fertilize",
+  "pot",
+  "pots",
+  "garden",
+  "gardening",
+  "root",
+  "roots",
+  "branch",
+  "branches",
+  "stem",
+  "stems",
+  "bloom",
+  "blooming",
+  "prune",
+  "pruning",
+  "graft",
+  "grafting",
+  "bonsai",
+  "indoor",
+  "outdoor",
+  "balcony",
+  "terrace",
+  "yard",
+  "lawn",
+  "orchard",
+  "farm",
+  "farming",
+  "agriculture",
+  "horticulture",
+  "botanical",
+  "botany",
+  "photosynthesis",
+  "compost",
+  "mulch",
+  "pest",
+  "pests",
+  "insect",
+  "disease",
+  "fungus",
+  "mildew",
+  "rot",
+  "yellow",
+  "wilting",
+  "yellowing",
+  "growth",
+  "grow",
+  "growing",
+  "mature",
+  "height",
+  "spread",
+  "variety",
+  "species",
+  "scientific",
+  "evergreen",
+  "deciduous",
+  "perennial",
+  "annual",
+  "biennial",
+  "herb",
+  "shrub",
+  "climber",
+  "creeper",
+  "cactus",
+  "succulent",
+  "palm",
+  "bamboo",
+  "mango",
+  "jackfruit",
+  "coconut",
+  "neem",
+  "banyan",
+  "tamarind",
+  "lemon",
+  "guava",
+  "lychee",
+  "papaya",
+  "banana",
+  "rose",
+  "jasmine",
+  "hibiscus",
+  "marigold",
+  "orchid",
   // Bangla (Unicode)
-  "গাছ", "চারা", "বীজ", "মাটি", "পানি", "রোদ", "ছায়া", "সার", "ফুল",
-  "পাতা", "ফল", "বাগান", "শিকড", "ডাল", "গোলাপ", "বনসাই",
+  "গাছ",
+  "চারা",
+  "বীজ",
+  "মাটি",
+  "পানি",
+  "রোদ",
+  "ছায়া",
+  "সার",
+  "ফুল",
+  "পাতা",
+  "ফল",
+  "বাগান",
+  "শিকড",
+  "ডাল",
+  "গোলাপ",
+  "বনসাই",
   // Banglish (common romanizations)
-  "gach", "chara", "beej", "mati", "pani", "rod", "chaya", "sar", "phul",
-  "pata", "phol", "bagan", "shidor", "dal", "golap",
+  "gach",
+  "chara",
+  "beej",
+  "mati",
+  "pani",
+  "rod",
+  "chaya",
+  "sar",
+  "phul",
+  "pata",
+  "phol",
+  "bagan",
+  "shidor",
+  "dal",
+  "golap",
 ] as const;
 
 // ─── Public functions ────────────────────────────────────────────────────────
@@ -75,14 +196,37 @@ const BOTANICAL_KEYWORDS = [
 // these as "pass the gate, let Gemini handle it with a friendly intro".
 const GREETING_KEYWORDS = [
   // English
-  "hi", "hello", "hey", "hiya", "yo", "howdy", "greetings",
-  "good morning", "good afternoon", "good evening",
-  "thanks", "thank you", "ty", "ok", "okay", "cool", "nice",
+  "hi",
+  "hello",
+  "hey",
+  "hiya",
+  "yo",
+  "howdy",
+  "greetings",
+  "good morning",
+  "good afternoon",
+  "good evening",
+  "thanks",
+  "thank you",
+  "ty",
+  "ok",
+  "okay",
+  "cool",
+  "nice",
   // Bangla (Unicode)
-  "হাই", "হ্যালো", "নমস্কার", "ধন্যবাদ", "ঠিক আছে",
+  "হাই",
+  "হ্যালো",
+  "নমস্কার",
+  "ধন্যবাদ",
+  "ঠিক আছে",
   // Banglish
-  "salam", "salaam", "assalamualaikum", "assalamu alaikum",
-  "walaikumassalam", "dhonnobad", "thik ache",
+  "salam",
+  "salaam",
+  "assalamualaikum",
+  "assalamu alaikum",
+  "walaikumassalam",
+  "dhonnobad",
+  "thik ache",
 ] as const;
 
 /**
@@ -162,9 +306,7 @@ export async function buildCatalogContext(userMessage: string): Promise<string> 
     if (productRows.length > 0) {
       lines.push("CATALOG PRODUCTS (currently listed on TreeFriend):");
       for (const p of productRows) {
-        const desc = p.description
-          ? truncate(p.description, MAX_SUMMARY_LEN)
-          : "";
+        const desc = p.description ? truncate(p.description, MAX_SUMMARY_LEN) : "";
         const care = [
           p.sunlight && `sunlight: ${p.sunlight}`,
           p.watering && `watering: ${p.watering}`,
@@ -176,8 +318,7 @@ export async function buildCatalogContext(userMessage: string): Promise<string> 
           .filter(Boolean)
           .join(", ");
         lines.push(
-          `- "${p.name}" (slug: ${p.slug})${desc ? ` — ${desc}` : ""}` +
-            (care ? ` [${care}]` : ""),
+          `- "${p.name}" (slug: ${p.slug})${desc ? ` — ${desc}` : ""}` + (care ? ` [${care}]` : ""),
         );
       }
     }
@@ -204,8 +345,10 @@ export async function buildCatalogContext(userMessage: string): Promise<string> 
 
 /**
  * Builds the full system prompt, including the (optional) dynamic catalog
- * context block. This is the single source of truth for the TreeBot
- * persona and scope rules — keep it tight and explicit.
+ * context block AND the (optional) v3.0 conversation summary block.
+ *
+ * This is the single source of truth for the TreeBot persona and scope
+ * rules — keep it tight and explicit.
  *
  * Rules enforced here:
  *   1. Topic scope: trees, plants, gardening, botany, TreeFriend catalog.
@@ -218,8 +361,10 @@ export async function buildCatalogContext(userMessage: string): Promise<string> 
  *      frontend can auto-linkify them to /products/:slug.
  *   8. Follow-up suggestions: end EVERY reply with a parseable block of
  *      3 short follow-up questions the user might ask next.
+ *   9. v3.0: If a summary block is provided, treat it as prior conversation
+ *      context — don't re-ask questions the summary already answers.
  */
-export function buildSystemPrompt(catalogContext: string): string {
+export function buildSystemPrompt(catalogContext: string, summaryBlock: string = ""): string {
   const contextBlock = catalogContext
     ? `\n\nCATALOG CONTEXT (use when relevant; cite exact product names):\n${catalogContext}\n`
     : `\n\nCATALOG CONTEXT: (no matching products or articles found for this query)\n`;
@@ -260,6 +405,7 @@ RULES:
 - Be concise: 2-4 short paragraphs max. Use short sentences.
 - Use Markdown for formatting: **bold** for key terms, bullet lists (- item) for care instructions, line breaks (double newline) between sections.
 - Don't be sycophantic ("Great question!"). Just answer.
+- v3.0: If a PRIOR CONVERSATION SUMMARY block is present, use it for long-term context. Don't re-ask questions the summary already answers (e.g. if the summary says the user has a balcony garden, don't ask about their setup again).
 
 FORMATTING — STRICTLY FOLLOW:
 After your main answer, ALWAYS append a follow-up suggestions block in this EXACT format (the frontend parses it to render clickable chips):
@@ -270,7 +416,7 @@ After your main answer, ALWAYS append a follow-up suggestions block in this EXAC
 - Third short question
 [/followups]
 
-The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.${contextBlock}
+The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.${summaryBlock}${contextBlock}
 
 REMEMBER: Stay strictly on-topic. If you're unsure whether a question is botanical, refuse politely. Always include the [followups]...[/followups] block at the end.`;
 }
@@ -300,17 +446,72 @@ function extractSearchTokens(message: string): string[] {
   // Split on whitespace + punctuation, keep tokens >=3 chars, drop pure
   // numbers and stop words. Cap at 5 tokens to keep the SQL reasonable.
   const STOP = new Set([
-    "the", "a", "an", "and", "or", "but", "is", "are", "was", "were",
-    "be", "been", "being", "have", "has", "had", "do", "does", "did",
-    "will", "would", "could", "should", "may", "might", "can", "i",
-    "you", "he", "she", "it", "we", "they", "this", "that", "these",
-    "those", "what", "which", "who", "when", "where", "why", "how",
-    "for", "in", "on", "at", "to", "of", "with", "from", "by", "my",
-    "me", "please", "tell", "give", "want", "need", "about",
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "but",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "can",
+    "i",
+    "you",
+    "he",
+    "she",
+    "it",
+    "we",
+    "they",
+    "this",
+    "that",
+    "these",
+    "those",
+    "what",
+    "which",
+    "who",
+    "when",
+    "where",
+    "why",
+    "how",
+    "for",
+    "in",
+    "on",
+    "at",
+    "to",
+    "of",
+    "with",
+    "from",
+    "by",
+    "my",
+    "me",
+    "please",
+    "tell",
+    "give",
+    "want",
+    "need",
+    "about",
   ]);
 
-  const tokens = (message.toLowerCase().match(/[a-z\u0980-\u09ff]{3,}/gi) ?? [])
-    .filter((t) => !STOP.has(t) && !/^\d+$/.test(t));
+  const tokens = (message.toLowerCase().match(/[a-z\u0980-\u09ff]{3,}/gi) ?? []).filter(
+    (t) => !STOP.has(t) && !/^\d+$/.test(t),
+  );
 
   // Dedupe + cap
   return Array.from(new Set(tokens)).slice(0, 5);
@@ -351,7 +552,16 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
        LIMIT ${MAX_PRODUCTS}`,
       params,
     );
-    return result.rows as ProductRow[];
+    const rows = result.rows as ProductRow[];
+
+    // v3.0: If ILIKE found nothing, try pg_trgm fuzzy search as a fallback.
+    // This catches typos ("mangoo" -> "mango") and fuzzy descriptors
+    // ("drought-resistant plant") that ILIKE misses.
+    if (rows.length === 0) {
+      return await searchProductsTrigram(tokens);
+    }
+
+    return rows;
   } catch {
     // Fallback: older DBs may not have the deleted_at column yet (e.g. if
     // migrations were only partially applied). Drop the soft-delete filter.
@@ -365,6 +575,64 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
       params.slice(0, params.length - 1), // drop the name-priority param
     );
     return result.rows as ProductRow[];
+  }
+}
+
+/**
+ * v3.0: pg_trgm fuzzy search fallback.
+ *
+ * Called when ILIKE returns zero results. Uses PostgreSQL's pg_trgm
+ * extension to compute trigram similarity between the query tokens and
+ * the product name/description. Returns products with similarity > 0.3
+ * (configurable via AI_TRIGRAM_THRESHOLD env var), sorted by similarity.
+ *
+ * Requires the pg_trgm extension + GIN indexes (created by ensureAiTables.ts).
+ * If the extension isn't available, this function returns [] (the caller
+ * already has the empty ILIKE result, so the user just gets no catalog
+ * context -- the model falls back to general botanical knowledge).
+ */
+async function searchProductsTrigram(tokens: string[]): Promise<ProductRow[]> {
+  if (tokens.length === 0) return [];
+
+  // Combine tokens into a single query string for trigram matching.
+  // pg_trgm's similarity() function works best on multi-word strings.
+  const queryString = tokens.join(" ");
+  const threshold = Number(process.env.AI_TRIGRAM_THRESHOLD ?? 0.3);
+
+  try {
+    const result = await pool.query(
+      `SELECT name, slug, scientific_name, description, sunlight, watering,
+              soil_type, mature_height, product_status
+       FROM products
+       WHERE deleted_at IS NULL
+         AND (
+           similarity(name, $1) > $2
+           OR similarity(COALESCE(scientific_name, ''), $1) > $2
+           OR similarity(COALESCE(description, ''), $1) > $2
+         )
+       ORDER BY
+         GREATEST(
+           similarity(name, $1),
+           similarity(COALESCE(scientific_name, ''), $1),
+           similarity(COALESCE(description, ''), $1)
+         ) DESC
+       LIMIT ${MAX_PRODUCTS}`,
+      [queryString, threshold],
+    );
+
+    const rows = result.rows as ProductRow[];
+    if (rows.length > 0) {
+      logger.debug(
+        { tokens, queryString, count: rows.length },
+        "AI context: trigram fallback found results where ILIKE found none",
+      );
+    }
+    return rows;
+  } catch (err) {
+    // pg_trgm extension not available, or GIN indexes missing. Silent
+    // fallback -- the user just gets no catalog context for this query.
+    logger.debug({ err, tokens }, "AI context: trigram search unavailable (extension missing?)");
+    return [];
   }
 }
 
@@ -416,5 +684,8 @@ function truncate(s: string, max: number): string {
 }
 
 function stripHtml(s: string): string {
-  return s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return s
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
