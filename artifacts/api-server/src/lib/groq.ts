@@ -468,7 +468,7 @@ export async function* streamGroqChat(
     ) => Promise<unknown>;
   },
   userId?: string | null,
-  onMetadata?: (meta: { model: string; usage?: unknown }) => void,
+  onMetadata?: (meta: { model: string; usage?: unknown; toolCalls?: string[] }) => void,
 ): AsyncGenerator<string, void, unknown> {
   if (!isGroqConfigured()) {
     throw new Error("GROQ_API_KEY is not set. Get one at https://console.groq.com");
@@ -525,6 +525,12 @@ export async function* streamGroqChat(
       // deltas and executed between rounds.
       const MAX_TOOL_ROUNDS = 4;
 
+      // Bug #4 fix: track all tool calls across all rounds so we can emit
+      // them in the final metadata callback. The route uses this to decide
+      // cache policy (skip cache for user-scoped tools, short-TTL for catalog
+      // tools).
+      const toolCallsCalled: string[] = [];
+
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         // v3.2: truncate history to fit the model's context window.
         // This prevents 400 errors when the conversation is very long.
@@ -570,15 +576,20 @@ export async function* streamGroqChat(
           }
         }
 
-        // Emit metadata (model name; Groq streaming doesn't return usage
-        // in the stream — we'd need a separate call for exact token counts).
-        if (onMetadata) {
-          onMetadata({ model: modelName, usage: undefined });
-        }
+        // NOTE: we no longer emit metadata here per-round. We emit it ONCE
+        // after the loop completes, with the accumulated toolCalls list.
+        // (Bug #4 fix — the route needs the final toolCalls info to decide
+        // cache policy.)
 
         const toolCalls = result?.toolCalls;
 
         if (toolCalls && toolCalls.length > 0 && tools) {
+          // Bug #4 fix: record the tool names for the final metadata emission.
+          for (const tc of toolCalls) {
+            if (typeof tc?.function?.name === "string") {
+              toolCallsCalled.push(tc.function.name);
+            }
+          }
           // Execute each tool call + append results to messages
           logger.info(
             { round, calls: toolCalls.map((tc) => tc.function.name) },
@@ -630,6 +641,18 @@ export async function* streamGroqChat(
             "Groq: model selected and cached for subsequent requests",
           );
           _workingModel = modelName;
+        }
+
+        // Bug #4 fix: emit the FINAL metadata with the accumulated toolCalls
+        // list. This lets the route decide cache policy (skip cache for
+        // user-scoped tools like get_user_orders, short-TTL for catalog tools
+        // like search_catalog, normal long-TTL for no-tool responses).
+        if (onMetadata) {
+          onMetadata({
+            model: modelName,
+            usage: undefined, // Groq streaming doesn't return usage
+            toolCalls: toolCallsCalled,
+          });
         }
         return;
       }

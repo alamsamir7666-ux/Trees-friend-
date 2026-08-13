@@ -42,6 +42,49 @@ import { logger } from "./logger";
 
 // ─── Tool declarations (sent to Gemini) ──────────────────────────────────────
 
+/**
+ * Tools that return USER-SCOPED data (orders, account info).
+ *
+ * ─── Bug #4 fix: cache policy ─────────────────────────────────────────────────
+ *
+ * When ANY of these tools is called during a request, the response must
+ * NEVER be cached — neither exact-match nor semantic. The data is specific
+ * to the authenticated user (or their anonymous session) and caching it
+ * would leak it to other users who ask a similar question.
+ *
+ * The route checks `toolCallsCalled ∩ USER_SCOPED_TOOLS` — if non-empty,
+ * both cache writes are skipped AND the existing `isPrivateQuery` flag is
+ * set to true (so the cache READ is also skipped, in case a previous
+ * non-tool response was cached for the same message).
+ *
+ * The catalog tools (search_catalog, get_product_care) return PUBLIC data
+ * that changes slowly (the product catalog). These CAN be cached — but
+ * with a shorter TTL (5 min instead of 1 hour) because prices and
+ * availability can change when sellers update their listings.
+ */
+export const USER_SCOPED_TOOLS: ReadonlySet<string> = new Set([
+  "get_user_orders",
+  "get_order_details",
+]);
+
+/**
+ * Tools that return PUBLIC but TIME-SENSITIVE catalog data.
+ *
+ * Responses that called these tools CAN be cached (the data is public,
+ * no privacy issue), but with a SHORT TTL (default 5 min, configurable
+ * via AI_TOOL_CACHE_TTL_SECONDS). The short TTL balances freshness
+ * (sellers update prices / availability) vs cost (avoid re-calling the
+ * AI + the catalog search for every similar question).
+ *
+ * If the TTL is 0, tool-call responses are NOT cached at all (treated
+ * the same as user-scoped tools). This is the safest setting — admins
+ * who want maximum freshness can set AI_TOOL_CACHE_TTL_SECONDS=0.
+ */
+export const CATALOG_TOOLS: ReadonlySet<string> = new Set([
+  "search_catalog",
+  "get_product_care",
+]);
+
 export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: "search_catalog",

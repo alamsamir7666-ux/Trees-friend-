@@ -26,15 +26,42 @@
  *     from the admin product update route — not implemented yet)
  *
  * What's NOT cached:
- *   - Messages that triggered tool calls (the tool result may have changed)
+ *   - Messages that triggered USER-SCOPED tool calls (get_user_orders,
+ *     get_order_details — private data). Caching would leak user data.
  *   - Messages from signed-in users asking about their orders (private data)
  *   - Messages shorter than 10 chars (too generic, cache hit rate too high)
+ *
+ * ─── Bug #4 fix: tool-call cache policy ──────────────────────────────────────
+ *
+ * Previously the route always passed `hadToolCalls: false` to the cache
+ * setters, even when tool calls happened. This meant responses containing
+ * live product data (search_catalog results with current prices) got
+ * cached and served stale for 1 hour. If a seller updated a price, the
+ * cache still showed the old price.
+ *
+ * The new policy (3 tiers):
+ *   1. NO tools called → normal long-TTL cache (1 hour, configurable).
+ *   2. CATALOG tools called (search_catalog, get_product_care) → short-TTL
+ *      cache (5 min, configurable via AI_TOOL_CACHE_TTL_SECONDS). The data
+ *      is public so no privacy issue, but it changes (prices, availability)
+ *      so we use a shorter TTL. If AI_TOOL_CACHE_TTL_SECONDS=0, skip caching
+ *      entirely (maximum freshness).
+ *   3. USER-SCOPED tools called (get_user_orders, get_order_details) →
+ *      NEVER cache. The data is private to the authenticated user.
+ *
+ * The cache key includes a `t:` suffix for tool-call responses so they
+ * don't collide with non-tool responses for the same message (which would
+ * cause the short-TTL entry to be served when a long-TTL entry exists,
+ * or vice versa).
  */
 import { getRedis } from "./redisClient";
 import { logger } from "./logger";
 import { createHash } from "crypto";
 
 const CACHE_TTL_SECONDS = Number(process.env.AI_CACHE_TTL_SECONDS ?? 3600); // 1 hour
+// Bug #4 fix: short TTL for tool-call responses (catalog data changes).
+// Default 5 min. Set to 0 to disable caching tool-call responses entirely.
+const TOOL_CACHE_TTL_SECONDS = Number(process.env.AI_TOOL_CACHE_TTL_SECONDS ?? 300);
 const MIN_MESSAGE_LENGTH = 10;
 
 // ─── Cache key generation ───────────────────────────────────────────────────
@@ -54,6 +81,9 @@ function generateCacheKey(
   systemPrompt: string,
   history: { role: string; text: string }[],
   userMessage: string,
+  /** Bug #4 fix: include a tool-call marker in the key so tool-call + non-tool-call
+   * responses for the same message don't collide (different TTLs). */
+  hasToolCalls: boolean = false,
 ): string {
   // Normalize the user message: trim, lowercase, collapse whitespace
   const normalizedMessage = userMessage.trim().toLowerCase().replace(/\s+/g, " ");
@@ -73,7 +103,10 @@ function generateCacheKey(
     .digest("hex")
     .slice(0, 16);
 
-  return `ai:cache:${promptHash}:${historyHash}:${createHash("sha256").update(normalizedMessage).digest("hex").slice(0, 16)}`;
+  // Bug #4 fix: add a `t:1` segment for tool-call responses so they're
+  // stored separately from non-tool responses (different TTLs).
+  const toolSegment = hasToolCalls ? ":t:1" : "";
+  return `ai:cache:${promptHash}:${historyHash}:${createHash("sha256").update(normalizedMessage).digest("hex").slice(0, 16)}${toolSegment}`;
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -89,8 +122,14 @@ export interface CacheEntry {
 /**
  * Checks the cache for a matching response.
  *
+ * Bug #4 fix: checks BOTH the non-tool key (long TTL) AND the tool-call
+ * key (short TTL) for the same message. If both exist, the tool-call entry
+ * is fresher (shorter TTL) so we prefer it — but only if it's still valid.
+ * In practice, only one will exist per message (a given message either
+ * triggered tools or it didn't), so the dual-check is just defensive.
+ *
  * Returns the cached response if found, or null if not cached / cache
- * is disabled / the message is too short to cache.
+ * is disabled / the message is too short to cache / isPrivate is true.
  *
  * @param systemPrompt - The system prompt (used in cache key for invalidation)
  * @param history - Conversation history (last 3 messages used in key)
@@ -113,8 +152,21 @@ export async function getCachedResponse(
   if (!redis) return null; // cache disabled in dev
 
   try {
-    const key = generateCacheKey(systemPrompt, history, userMessage);
-    const raw = await redis.get<string>(key);
+    // Bug #4 fix: check the non-tool key first (long TTL, more likely to
+    // exist for general questions). If miss, check the tool-call key
+    // (short TTL, exists for search_catalog responses).
+    const nonToolKey = generateCacheKey(systemPrompt, history, userMessage, false);
+    const toolKey = generateCacheKey(systemPrompt, history, userMessage, true);
+
+    const [nonToolRaw, toolRaw] = await Promise.all([
+      redis.get<string>(nonToolKey),
+      redis.get<string>(toolKey),
+    ]);
+
+    // Prefer the tool-call entry if it exists (it's fresher — shorter TTL
+    // means it was written more recently relative to any catalog changes).
+    const raw = toolRaw ?? nonToolRaw;
+    const key = toolRaw ? toolKey : nonToolKey;
     if (!raw) return null;
 
     const entry = JSON.parse(raw) as CacheEntry;
@@ -123,7 +175,7 @@ export async function getCachedResponse(
     entry.hitCount++;
     redis.set(key, JSON.stringify(entry), { ex: CACHE_TTL_SECONDS }).catch(() => {});
 
-    logger.debug({ key, model: entry.model, hitCount: entry.hitCount }, "AI cache: HIT");
+    logger.debug({ key, model: entry.model, hitCount: entry.hitCount, hadToolCalls: !!toolRaw }, "AI cache: HIT");
     return entry;
   } catch (err) {
     logger.debug({ err }, "AI cache: get failed (non-fatal)");
@@ -134,9 +186,19 @@ export async function getCachedResponse(
 /**
  * Stores a response in the cache.
  *
- * Only called after a successful (non-error) response. Tool-call responses
- * are NOT cached (the tool result may have changed since the cache entry
- * was created).
+ * Bug #4 fix: the `hadToolCalls` parameter now controls the TTL, not whether
+ * to cache at all:
+ *   - `hadToolCalls = false` (default) → long TTL (1 hour). For general
+ *     plant-care questions with no tool calls.
+ *   - `hadToolCalls = true` → short TTL (5 min, configurable via
+ *     AI_TOOL_CACHE_TTL_SECONDS). For search_catalog / get_product_care
+ *     responses where the data is public but changes (prices, availability).
+ *     If AI_TOOL_CACHE_TTL_SECONDS = 0, skip caching entirely.
+ *   - `isPrivate = true` → NEVER cache. For get_user_orders / get_order_details
+ *     responses (user-scoped data).
+ *
+ * The cache key includes a `:t:1` segment for tool-call responses so they
+ * don't collide with non-tool responses (which have a different TTL).
  *
  * @param systemPrompt - The system prompt
  * @param history - Conversation history
@@ -144,8 +206,8 @@ export async function getCachedResponse(
  * @param response - The AI's full response text
  * @param model - The model that generated the response
  * @param provider - The provider ("gemini" or "groq")
- * @param hadToolCalls - If true, don't cache (tool results may change)
- * @param isPrivate - If true, don't cache (user-specific data)
+ * @param hadToolCalls - If true, use short TTL (catalog data changes)
+ * @param isPrivate - If true, don't cache at all (user-specific data)
  */
 export async function setCachedResponse(
   systemPrompt: string,
@@ -157,8 +219,12 @@ export async function setCachedResponse(
   hadToolCalls: boolean = false,
   isPrivate: boolean = false,
 ): Promise<void> {
-  // Don't cache tool-call responses or private queries
-  if (hadToolCalls || isPrivate) return;
+  // Never cache private queries (user-scoped tool data, order lookups).
+  if (isPrivate) return;
+
+  // Bug #4 fix: if tool calls happened AND the tool-cache TTL is 0, skip
+  // caching entirely (admin configured maximum freshness).
+  if (hadToolCalls && TOOL_CACHE_TTL_SECONDS <= 0) return;
 
   // Don't cache very short messages
   if (userMessage.trim().length < MIN_MESSAGE_LENGTH) return;
@@ -170,7 +236,8 @@ export async function setCachedResponse(
   if (!redis) return;
 
   try {
-    const key = generateCacheKey(systemPrompt, history, userMessage);
+    const key = generateCacheKey(systemPrompt, history, userMessage, hadToolCalls);
+    const ttl = hadToolCalls ? TOOL_CACHE_TTL_SECONDS : CACHE_TTL_SECONDS;
     const entry: CacheEntry = {
       response,
       model,
@@ -178,8 +245,8 @@ export async function setCachedResponse(
       cachedAt: Date.now(),
       hitCount: 0,
     };
-    await redis.set(key, JSON.stringify(entry), { ex: CACHE_TTL_SECONDS });
-    logger.debug({ key, model, provider }, "AI cache: SET");
+    await redis.set(key, JSON.stringify(entry), { ex: ttl });
+    logger.debug({ key, model, provider, ttl, hadToolCalls }, "AI cache: SET");
   } catch (err) {
     logger.debug({ err }, "AI cache: set failed (non-fatal)");
   }

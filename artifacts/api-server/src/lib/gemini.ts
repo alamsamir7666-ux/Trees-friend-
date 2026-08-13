@@ -750,7 +750,7 @@ export async function* streamGeminiChat(
     ) => Promise<unknown>;
   },
   userId?: string | null,
-  onMetadata?: (meta: { model: string; usage?: unknown }) => void,
+  onMetadata?: (meta: { model: string; usage?: unknown; toolCalls?: string[] }) => void,
 ): AsyncGenerator<string, void, unknown> {
   const client = getClient();
   if (!client) {
@@ -783,6 +783,13 @@ export async function* streamGeminiChat(
   // the max rounds (prevents infinite loops if Gemini keeps calling tools).
   const MAX_TOOL_ROUNDS = 4;
 
+  // Bug #4 fix: track all tool calls across all rounds so we can emit them
+  // in the final metadata callback. The route uses this to decide cache
+  // policy (skip cache for user-scoped tools, short-TTL for catalog tools).
+  const toolCallsCalled: string[] = [];
+  let lastUsage: unknown = undefined;
+  let lastModel: string = _workingModel ?? "unknown";
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     // Use non-streaming generateContent for function-calling rounds.
     // Why: function calls come as a single structured response, not a stream.
@@ -803,18 +810,21 @@ export async function* streamGeminiChat(
       }),
     );
 
-    // v3.0: emit metadata (model + usage) to the caller so it can persist
-    // observability columns on the assistant message row.
-    if (onMetadata) {
-      const usedModel = _workingModel ?? "unknown";
-      const usage = (response as any)?.usageMetadata ?? undefined;
-      onMetadata({ model: usedModel, usage });
-    }
+    // Track model + usage for the final metadata emission.
+    lastModel = _workingModel ?? "unknown";
+    lastUsage = (response as any)?.usageMetadata ?? undefined;
 
     const functionCalls = response.functionCalls;
 
     if (functionCalls && functionCalls.length > 0 && tools) {
       // ─── Execute each function call ───────────────────────────────────
+      // Bug #4 fix: record the tool names so we can emit them in the final
+      // metadata callback (used by the route for cache policy decisions).
+      for (const fc of functionCalls) {
+        if (typeof fc?.name === "string") {
+          toolCallsCalled.push(fc.name);
+        }
+      }
       logger.info(
         { round, calls: functionCalls.map((fc: any) => fc.name) },
         "TreeBot: executing function calls",
@@ -878,6 +888,17 @@ export async function* streamGeminiChat(
           "TreeBot: response was truncated (hit maxOutputTokens). Consider raising AI_MAX_TOKENS.",
         );
       }
+
+      // Bug #4 fix: emit the FINAL metadata with toolCalls info.
+      // This is called once after the streaming completes (not per-round).
+      // toolCallsCalled is empty here (round 0 = no tools called).
+      if (onMetadata) {
+        onMetadata({
+          model: lastModel,
+          usage: lastUsage,
+          toolCalls: toolCallsCalled,
+        });
+      }
       return;
     }
 
@@ -898,6 +919,17 @@ export async function* streamGeminiChat(
     for await (const chunk of finalStream) {
       const text = chunk.text;
       if (text) yield text;
+    }
+
+    // Bug #4 fix: emit the FINAL metadata with the accumulated toolCalls list.
+    // This lets the route decide cache policy (skip for user-scoped tools,
+    // short-TTL for catalog tools).
+    if (onMetadata) {
+      onMetadata({
+        model: lastModel,
+        usage: lastUsage,
+        toolCalls: toolCallsCalled,
+      });
     }
     return;
   }

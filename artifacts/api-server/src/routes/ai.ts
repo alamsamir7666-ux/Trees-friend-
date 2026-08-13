@@ -54,8 +54,9 @@ import {
   hasBotanicalKeyword,
   isPureGreeting,
   GREETING_INTRO_MESSAGE,
+  ACCOUNT_KEYWORDS,
 } from "../lib/aiContext";
-import { AI_TOOL_DECLARATIONS, executeTool } from "../lib/aiTools";
+import { AI_TOOL_DECLARATIONS, executeTool, USER_SCOPED_TOOLS } from "../lib/aiTools";
 import { streamChat, isAnyProviderConfigured } from "../lib/aiRouter";
 import { describeError } from "../lib/describeError";
 import { redactPii } from "../lib/piiRedaction";
@@ -848,7 +849,25 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // If either hits, stream the cached response — zero API cost, instant.
   //
   // Skip cache for private queries (user asking about their orders, etc.)
-  const isPrivateQuery = /my order|where is my order|what did i buy|my orders/i.test(safeMessage);
+  //
+  // Bug #4 fix (also Bug #5 from the analysis): the old regex only matched
+  // 4 English phrases ("my order", "where is my order", "what did I buy",
+  // "my orders"). It missed:
+  //   - "track my package", "when will my delivery arrive", "show me my cart"
+  //   - All Bangla/Banglish equivalents ("amar order", "আমার অর্ডার")
+  //
+  // The new check uses the exported ACCOUNT_KEYWORDS list (which already
+  // includes English + Bangla + Banglish order/account terms) via the
+  // existing hasBotanicalKeyword-style substring match. This is the same
+  // list used by the hard topic gate, so the definitions stay in sync.
+  //
+  // We ALSO override isPrivateQuery post-stream (in the cache-write
+  // section below) if the AI actually called a user-scoped tool
+  // (get_user_orders, get_order_details) — that catches anything the
+  // keyword check missed.
+  const isPrivateQuery = ACCOUNT_KEYWORDS.some((kw) =>
+    safeMessage.toLowerCase().includes(kw.toLowerCase()),
+  );
 
   // 1. Exact-match cache (fastest — Redis GET)
   const cached = await getCachedResponse(systemPrompt, geminiHistory, safeMessage, isPrivateQuery);
@@ -913,7 +932,23 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // `let` directly with a closure assignment breaks CFA because TS
   // assumes closures may not run; an object property access bypasses
   // the narrowing.
-  const metaHolder: { value: { model: string; usage?: unknown; provider?: string } | null } = { value: null };
+  //
+  // Bug #4 fix: the holder now also captures `toolCalls` — the names of
+  // tools called during this request (e.g. ["search_catalog"] or
+  // ["get_user_orders"]). The route uses this to decide cache policy:
+  //   - Any user-scoped tool (get_user_orders, get_order_details) →
+  //     isPrivateQuery = true (never cache, treat as private).
+  //   - Any catalog tool (search_catalog, get_product_care) →
+  //     hadToolCalls = true (short-TTL cache, 5 min default).
+  //   - No tools called → normal long-TTL cache (1 hour).
+  const metaHolder: {
+    value: {
+      model: string;
+      usage?: unknown;
+      provider?: string;
+      toolCalls?: string[];
+    } | null;
+  } = { value: null };
 
   // Note: promptVersionInfo was already fetched above (step 9) — we reuse
   // it here for the prompt_version tracking column on the assistant message.
@@ -1030,12 +1065,42 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     // v3.2/v3.4: store the response in BOTH caches for future hits.
     // - Exact-match (Redis): fast, deterministic key
     // - Semantic (pgvector): catches similar phrasings via embedding similarity
-    // Skip if the response was too long, had tool calls, or was a private query.
-    if (fullResponse && !isPrivateQuery) {
+    //
+    // ─── Bug #4 fix: tool-call-aware cache policy ─────────────────────────
+    //
+    // Previously the route ALWAYS passed `hadToolCalls: false` to both cache
+    // setters, even when tool calls happened. This meant responses containing
+    // search_catalog results (current prices, availability) got cached with
+    // the same 1-hour TTL as general questions. If a seller updated a price,
+    // the cache still showed the old price.
+    //
+    // The new policy (3 tiers):
+    //   1. NO tools called → hadToolCalls=false, isPrivateQuery=false.
+    //      Normal long-TTL cache (1 hour).
+    //   2. CATALOG tools called (search_catalog, get_product_care) →
+    //      hadToolCalls=true, isPrivateQuery=false. Short-TTL cache (5 min)
+    //      via the AI_TOOL_CACHE_TTL_SECONDS env var.
+    //   3. USER-SCOPED tools called (get_user_orders, get_order_details) →
+    //      isPrivateQuery=true (override). NEVER cache (private data).
+    //
+    // The `isPrivateQuery` flag is RECOMPUTED here (not just the original
+    // regex check) so we catch cases where the AI called get_user_orders
+    // for a message that didn't match the regex (e.g. "track my package"
+    // didn't match the old regex but did trigger the tool).
+    const toolCalls = metaHolder.value?.toolCalls ?? [];
+    const hadUserScopedTool = toolCalls.some((name) => USER_SCOPED_TOOLS.has(name));
+    const hadAnyTool = toolCalls.length > 0;
+    // Override isPrivateQuery if a user-scoped tool was called — this
+    // ensures we NEVER cache responses that contain user-specific data
+    // (orders, account info), even if the original regex missed it.
+    const effectiveIsPrivate = isPrivateQuery || hadUserScopedTool;
+
+    if (fullResponse && !effectiveIsPrivate) {
       const model = metaHolder.value?.model ?? "unknown";
       const provider = metaHolder.value?.provider ?? "unknown";
 
-      // Exact-match cache (fire-and-forget)
+      // Exact-match cache (fire-and-forget).
+      // hadToolCalls controls the TTL: false=1h, true=5min.
       setCachedResponse(
         systemPrompt,
         geminiHistory,
@@ -1043,19 +1108,32 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
         fullResponse,
         model,
         provider,
-        false,
-        isPrivateQuery,
+        hadAnyTool,
+        effectiveIsPrivate,
       ).catch(() => {});
 
-      // Semantic cache (fire-and-forget — embedding generation takes ~100ms)
+      // Semantic cache (fire-and-forget — embedding generation takes ~100ms).
       setSemanticCachedResponse(
         safeMessage,
         fullResponse,
         model,
         provider,
-        false,
-        isPrivateQuery,
+        hadAnyTool,
+        effectiveIsPrivate,
       ).catch(() => {});
+    }
+
+    // Log the tool-call cache decision for observability (debug only).
+    if (hadAnyTool) {
+      logger.debug(
+        {
+          toolCalls,
+          hadUserScopedTool,
+          cached: !effectiveIsPrivate,
+          cacheTtl: hadUserScopedTool ? "skipped" : hadAnyTool ? "5min" : "1h",
+        },
+        "AI: tool-call cache decision",
+      );
     }
 
     if (assistantMsgId != null) {

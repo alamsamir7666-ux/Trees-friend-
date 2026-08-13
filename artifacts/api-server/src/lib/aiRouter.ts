@@ -167,6 +167,15 @@ function shouldFallBackToNextProvider(err: unknown): boolean {
  *     router rethrows — we can't switch providers mid-stream because the
  *     user has already received partial output.
  *
+ * ─── Bug #4 fix: toolCalls in metadata ───────────────────────────────────────
+ *
+ * The `onMetadata` callback now receives an optional `toolCalls` field —
+ * the names of tools that were called during this request. The route
+ * handler uses this to:
+ *   - Skip caching entirely if any user-scoped tool was called (orders).
+ *   - Use a short-TTL cache if any catalog tool was called (search).
+ *   - Use the normal long-TTL cache if no tools were called.
+ *
  * @yields string — incremental text deltas
  */
 export async function* streamChat(
@@ -175,7 +184,13 @@ export async function* streamChat(
   userMessage: string,
   tools?: ChatTools,
   userId?: string | null,
-  onMetadata?: (meta: { model: string; usage?: unknown; provider?: ProviderName }) => void,
+  onMetadata?: (meta: {
+    model: string;
+    usage?: unknown;
+    provider?: ProviderName;
+    /** Bug #4 fix: names of tools called during this request. */
+    toolCalls?: string[];
+  }) => void,
 ): AsyncGenerator<string, void, unknown> {
   const providers = getProviderChain();
 

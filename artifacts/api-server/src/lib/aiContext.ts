@@ -196,7 +196,11 @@ const BOTANICAL_KEYWORDS = [
 // These keywords let the query through the gate so the AI can call the
 // appropriate tool. If the user isn't signed in, the tool returns
 // "not signed in" and the AI handles it gracefully.
-const ACCOUNT_KEYWORDS = [
+//
+// Bug #4 fix: exported so the route can use it for a more comprehensive
+// isPrivateQuery check (the old regex only matched 4 English phrases,
+// missing Bangla/Banglish like "amar order" / "আমার অর্ডার").
+export const ACCOUNT_KEYWORDS = [
   // English — order/checkout/account
   "order",
   "orders",

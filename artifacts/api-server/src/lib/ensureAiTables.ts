@@ -243,6 +243,31 @@ CREATE INDEX IF NOT EXISTS ai_response_cache_embedding_idx
 CREATE INDEX IF NOT EXISTS ai_response_cache_created_at_idx
   ON ai_response_cache (created_at);
 
+-- ─── Bug #4 fix: track tool-call responses for TTL-aware caching ───────────
+-- The "had_tool_calls" column lets the semantic cache apply different TTLs:
+--   - FALSE (or NULL for legacy rows) -> long TTL (1 hour, AI_CACHE_TTL_SECONDS)
+--     for general plant-care questions with no tool calls.
+--   - TRUE -> short TTL (5 min, AI_TOOL_CACHE_TTL_SECONDS) for search_catalog /
+--     get_product_care responses where the data is public but changes (prices,
+--     availability).
+--
+-- User-scoped tool calls (get_user_orders, get_order_details) are NEVER cached
+-- (the route passes isPrivate=true, which skips both cache writes).
+ALTER TABLE ai_response_cache
+  ADD COLUMN IF NOT EXISTS had_tool_calls BOOLEAN;
+
+-- Backfill legacy rows (had_tool_calls IS NULL) to FALSE so they use the
+-- long TTL (the old behavior). New rows always have a non-NULL value.
+UPDATE ai_response_cache
+  SET had_tool_calls = FALSE
+  WHERE had_tool_calls IS NULL;
+
+-- Partial index for fast filtering on tool-call entries (the short-TTL
+-- cleanup job would query WHERE had_tool_calls = TRUE AND created_at < ...).
+CREATE INDEX IF NOT EXISTS ai_response_cache_tool_calls_idx
+  ON ai_response_cache (created_at)
+  WHERE had_tool_calls = TRUE;
+
 -- ─── v3.6: Feedback ownership (Bug #2 fix) ─────────────────────────────────
 -- The original ai_chat_feedback schema had ONLY (message_id) as a unique
 -- constraint, which meant:

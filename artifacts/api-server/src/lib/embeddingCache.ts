@@ -28,10 +28,28 @@
  *     webhook from product update routes)
  *
  * What's NOT cached (same rules as exact-match cache):
- *   - Private queries (order lookups, user-specific data)
+ *   - Private queries (USER-SCOPED tool calls: get_user_orders, get_order_details)
  *   - Messages < 10 chars (too generic)
  *   - Responses > 10K chars (too large for Redis/DB storage)
- *   - Tool-call responses (tool results may have changed)
+ *
+ * ─── Bug #4 fix: tool-call cache policy ──────────────────────────────────────
+ *
+ * Previously the route always passed `hadToolCalls: false`, so tool-call
+ * responses (including search_catalog results with current prices) got
+ * cached with the same 1-hour TTL as general questions. Sellers updating
+ * prices wouldn't propagate to the AI's responses until the cache expired.
+ *
+ * The new policy:
+ *   - CATALOG tool calls (search_catalog, get_product_care) → cached with
+ *     a SHORT TTL (5 min, configurable via AI_TOOL_CACHE_TTL_SECONDS).
+ *   - USER-SCOPED tool calls (get_user_orders, get_order_details) →
+ *     NEVER cached (private data).
+ *   - No tool calls → normal long-TTL cache (1 hour).
+ *
+ * The `hadToolCalls` flag is stored as a new column on ai_response_cache
+ * so the READ side can filter (e.g., "only return tool-call entries fresher
+ * than 5 min"). For backward compat with existing rows (which have no
+ * flag), we treat NULL as "long-TTL" (the old behavior).
  */
 
 import { GoogleGenAI } from "@google/genai";
@@ -40,6 +58,9 @@ import { logger } from "./logger";
 
 const SIMILARITY_THRESHOLD = Number(process.env.AI_SEMANTIC_SIMILARITY ?? 0.92);
 const CACHE_TTL_SECONDS = Number(process.env.AI_CACHE_TTL_SECONDS ?? 3600);
+// Bug #4 fix: short TTL for tool-call responses (catalog data changes).
+// Default 5 min. Set to 0 to disable caching tool-call responses entirely.
+const TOOL_CACHE_TTL_SECONDS = Number(process.env.AI_TOOL_CACHE_TTL_SECONDS ?? 300);
 const MIN_MESSAGE_LENGTH = 10;
 const EMBEDDING_MODEL = "text-embedding-004";
 
@@ -128,9 +149,82 @@ export async function getSemanticCachedResponse(
   if (!embedding) return null; // embedding failed — fall back to exact-match cache
 
   try {
-    // Query pgvector for similar entries (cosine similarity)
-    // <=> operator = cosine distance (1 - similarity)
-    // We want similarity > threshold, so we filter on 1 - (embedding <=> $1) > threshold
+    // Bug #4 fix: query with TTL-aware filtering. Tool-call entries
+    // (had_tool_calls = TRUE) are only valid for TOOL_CACHE_TTL_SECONDS
+    // (5 min default). Non-tool entries (had_tool_calls = FALSE OR NULL
+    // for legacy rows) are valid for CACHE_TTL_SECONDS (1 hour default).
+    //
+    // We use a CASE expression to pick the right TTL per row, then filter
+    // `created_at > NOW() - ttl`. This is a single query that handles
+    // both types correctly.
+    //
+    // The COALESCE handles legacy rows (had_tool_calls IS NULL) by
+    // treating them as non-tool (long TTL) — preserves backward compat.
+    const result = await pool.query(
+      `SELECT
+         response,
+         model,
+         provider,
+         1 - (embedding <=> $1::vector) AS similarity,
+         created_at,
+         had_tool_calls
+       FROM ai_response_cache
+       WHERE created_at > NOW() - (
+         CASE
+           WHEN COALESCE(had_tool_calls, FALSE) THEN ($3 || ' seconds')::INTERVAL
+           ELSE ($2 || ' seconds')::INTERVAL
+         END
+       )
+         AND 1 - (embedding <=> $1::vector) > $4
+       ORDER BY embedding <=> $1::vector
+       LIMIT 1`,
+      [
+        `[${embedding.join(",")}]`,
+        String(CACHE_TTL_SECONDS),       // long TTL (1h) for non-tool
+        String(TOOL_CACHE_TTL_SECONDS),  // short TTL (5min) for tool
+        SIMILARITY_THRESHOLD,
+      ],
+    );
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    const row = result.rows[0];
+    logger.info(
+      {
+        similarity: Math.round((row.similarity as number) * 100) / 100,
+        model: row.model,
+        provider: row.provider,
+        hadToolCalls: row.had_tool_calls,
+      },
+      "Semantic cache: HIT",
+    );
+
+    return {
+      response: row.response,
+      model: row.model,
+      provider: row.provider,
+      similarity: row.similarity,
+      cachedAt: new Date(row.created_at).getTime(),
+    };
+  } catch (err) {
+    // pgvector not available, or table doesn't exist, or query error
+    // (e.g., had_tool_calls column doesn't exist yet — ensureAiTables
+    // migration hasn't run. Fall back to the old query without the column.)
+    logger.debug({ err: (err as any)?.message }, "Semantic cache: search failed (pgvector unavailable? or schema not migrated?)");
+    return getSemanticCachedResponseLegacy(embedding);
+  }
+}
+
+/**
+ * Legacy fallback query — used when the `had_tool_calls` column doesn't
+ * exist yet (ensureAiTables migration hasn't run). Uses the old single-TTL
+ * filter. This is non-fatal: the route still works, just without the
+ * tool-call TTL distinction until the migration runs.
+ */
+async function getSemanticCachedResponseLegacy(embedding: number[]): Promise<SemanticCacheEntry | null> {
+  try {
     const result = await pool.query(
       `SELECT
          response,
@@ -146,20 +240,9 @@ export async function getSemanticCachedResponse(
       [`[${embedding.join(",")}]`, String(CACHE_TTL_SECONDS), SIMILARITY_THRESHOLD],
     );
 
-    if (result.rows.length === 0) {
-      return null;
-    }
+    if (result.rows.length === 0) return null;
 
     const row = result.rows[0];
-    logger.info(
-      {
-        similarity: Math.round((row.similarity as number) * 100) / 100,
-        model: row.model,
-        provider: row.provider,
-      },
-      "Semantic cache: HIT",
-    );
-
     return {
       response: row.response,
       model: row.model,
@@ -168,8 +251,7 @@ export async function getSemanticCachedResponse(
       cachedAt: new Date(row.created_at).getTime(),
     };
   } catch (err) {
-    // pgvector not available, or table doesn't exist, or query error
-    logger.debug({ err: (err as any)?.message }, "Semantic cache: search failed (pgvector unavailable?)");
+    logger.debug({ err: (err as any)?.message }, "Semantic cache: legacy search also failed");
     return null;
   }
 }
@@ -195,7 +277,13 @@ export async function setSemanticCachedResponse(
   hadToolCalls: boolean = false,
   isPrivate: boolean = false,
 ): Promise<void> {
-  if (hadToolCalls || isPrivate) return;
+  // Never cache private queries (user-scoped tool data, order lookups).
+  if (isPrivate) return;
+
+  // Bug #4 fix: if tool calls happened AND the tool-cache TTL is 0, skip
+  // caching entirely (admin configured maximum freshness).
+  if (hadToolCalls && TOOL_CACHE_TTL_SECONDS <= 0) return;
+
   if (userMessage.trim().length < MIN_MESSAGE_LENGTH) return;
   if (response.length > 10_000) return;
 
@@ -203,20 +291,42 @@ export async function setSemanticCachedResponse(
   if (!embedding) return; // embedding failed — exact-match cache handles it
 
   try {
+    // Bug #4 fix: store the had_tool_calls flag so the READ side can
+    // apply the correct TTL filter (short for tool-call entries, long
+    // for non-tool entries). The column is added by ensureAiTables.ts
+    // (idempotent ALTER ADD COLUMN IF NOT EXISTS).
     await pool.query(
-      `INSERT INTO ai_response_cache (query_text, response, embedding, model, provider)
-       VALUES ($1, $2, $3::vector, $4, $5)`,
+      `INSERT INTO ai_response_cache (query_text, response, embedding, model, provider, had_tool_calls)
+       VALUES ($1, $2, $3::vector, $4, $5, $6)`,
       [
         userMessage.slice(0, 1000),
         response,
         `[${embedding.join(",")}]`,
         model,
         provider,
+        hadToolCalls,
       ],
     );
-    logger.debug({ model, provider }, "Semantic cache: STORED");
+    logger.debug({ model, provider, hadToolCalls }, "Semantic cache: STORED");
   } catch (err) {
-    logger.debug({ err: (err as any)?.message }, "Semantic cache: store failed (pgvector unavailable?)");
+    // If the had_tool_calls column doesn't exist yet (migration hasn't
+    // run), fall back to the old INSERT without it. This is non-fatal —
+    // the entry just won't have the flag (treated as non-tool on read).
+    const errMsg = (err as any)?.message ?? "";
+    if (errMsg.includes("had_tool_calls") || errMsg.includes("column") || errMsg.includes("does not exist")) {
+      try {
+        await pool.query(
+          `INSERT INTO ai_response_cache (query_text, response, embedding, model, provider)
+           VALUES ($1, $2, $3::vector, $4, $5)`,
+          [userMessage.slice(0, 1000), response, `[${embedding.join(",")}]`, model, provider],
+        );
+        logger.debug({ model, provider, hadToolCalls, fallback: true }, "Semantic cache: STORED (legacy schema, no had_tool_calls column)");
+      } catch (legacyErr) {
+        logger.debug({ err: (legacyErr as any)?.message }, "Semantic cache: legacy store also failed");
+      }
+    } else {
+      logger.debug({ err: errMsg }, "Semantic cache: store failed (pgvector unavailable?)");
+    }
   }
 }
 
