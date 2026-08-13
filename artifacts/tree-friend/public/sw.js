@@ -1,7 +1,9 @@
 // FIX: was "envyenhance-v1" (leftover from a previous project). Now
-// "treefriend-v1" — matches the app name. Bump the version suffix when
+// "treefriend-v2" — matches the app name. Bump the version suffix when
 // you want to invalidate all cached assets (e.g. after a major deploy).
-const CACHE_NAME = "treefriend-v1";
+// v2: bumped to invalidate cached JS bundles from v1 (users were seeing
+// old AssistantPanel.tsx code instead of the new pulsating dot animation).
+const CACHE_NAME = "treefriend-v2";
 const STATIC_ASSETS = ["/", "/manifest.json", "/logo.webp", "/favicon.svg"];
 
 // Install: cache static shell
