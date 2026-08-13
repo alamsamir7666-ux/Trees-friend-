@@ -534,6 +534,17 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       res.write(`data: ${JSON.stringify({ type: "delta", text: chunk })}\n\n`);
     }
 
+    // v3.5: Handle empty response — the AI completed but produced no text.
+    // This happens when the AI only called tools but didn't generate a final
+    // text response, or when the model returned an empty completion.
+    // Show a friendly fallback instead of "(empty response)".
+    if (!fullResponse.trim()) {
+      const fallback = "I'm sorry, I couldn't generate a response for that. Could you try rephrasing your question?";
+      fullResponse = fallback;
+      res.write(`data: ${JSON.stringify({ type: "delta", text: fallback })}\n\n`);
+      logger.warn("AI: stream completed but produced no text, using fallback");
+    }
+
     // v3.0: extract token count from usage metadata (if Gemini provided it).
     // The shape is: { promptTokenCount, candidatesTokenCount, totalTokenCount }
     let tokenCount: number | undefined;

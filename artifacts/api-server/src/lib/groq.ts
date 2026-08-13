@@ -613,6 +613,15 @@ export async function* streamGroqChat(
         }
 
         // ─── No tool calls — response is complete (already streamed) ────
+        // v3.5: If the stream produced no text, log a warning. The route
+        // handler will show a friendly fallback to the user.
+        if (round > 0) {
+          // After tool rounds, we expect text. If empty, something went wrong.
+          logger.warn(
+            { model: modelName, round, hadToolCallsInPrevRound: true },
+            "Groq: completed tool rounds but produced no final text",
+          );
+        }
         // Success — record with circuit breaker + cache this model.
         await recordSuccess("groq", modelName);
         if (_workingModel !== modelName) {
