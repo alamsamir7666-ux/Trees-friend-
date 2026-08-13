@@ -156,6 +156,22 @@ const aiFeedbackLimiter = createRateLimiter({
   keyPrefix: "ai-feedback",
 });
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Checks if a string looks like a legacy bare v4 UUID (the old session
+ * token format from before the Bug #1 fix). Used by:
+ *   - resolveSessionToken (POST /ai/chat) — legacy migration path
+ *   - verifySessionAccess (GET /ai/sessions/:token) — legacy history fetch
+ *
+ * We only honor strings that match this exact format (36 chars, dashes at
+ * the right positions, hex chars). This prevents random strings from
+ * hitting the DB lookup (which would be a no-op but wasteful).
+ */
+function isLegacyUuid(token: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface ChatRequestBody {
@@ -376,9 +392,7 @@ async function resolveSessionToken(
     // We only honor legacy bare UUIDs that look like v4 UUIDs (36 chars,
     // dashes at the right positions). This prevents random strings from
     // being looked up in the DB (which would be a no-op but wasteful).
-    const isLegacyUuid =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawToken);
-    if (isLegacyUuid) {
+    if (isLegacyUuid(rawToken)) {
       // Check if a session with this sid already exists in the DB.
       const existing = await pool.query<{ user_id: string | null }>(
         `SELECT user_id FROM ai_chat_sessions WHERE session_token = $1`,
@@ -1307,7 +1321,79 @@ async function verifySessionAccess(
         return await lookupSessionBySid(cookieVerified, res);
       }
     }
-    // Invalid signature and no cookie fallback → reject.
+
+    // ─── Legacy UUID migration (GET only) ─────────────────────────────────
+    // Existing users have a bare crypto.randomUUID() in their localStorage
+    // from before the Bug #1 fix. When they load the chat page, the frontend
+    // sends GET /api/ai/sessions/<bare-uuid>. The bare UUID has no HMAC
+    // signature, so verifySessionToken() rejects it. Without this migration
+    // path, existing users would lose access to their previous chat history
+    // on first load after deploy.
+    //
+    // We accept the bare UUID ONCE for GET requests (history fetch). We:
+    //   1. Validate it looks like a v4 UUID (36 chars, dashes at the right
+    //      positions) — prevents random strings from hitting the DB.
+    //   2. Look it up in the DB by session_token.
+    //   3. If found → mint a NEW signed token carrying the existing sid +
+    //      user_id (preserving the binding), set it as a cookie, and return
+    //      the history. The frontend's next request will use the cookie.
+    //   4. If not found → return empty history (the user is new, no
+    //      existing conversation to load).
+    //
+    // SECURITY: this is safe because the bare UUID is 122 bits of randomness
+    // — an attacker can't guess it. They'd need to already have the UUID
+    // (via Referer leak, server logs, shared browser, etc.) to access the
+    // history. The same risk existed before the Bug #1 fix; we're not
+    // making it worse, just preserving backward compat during the migration.
+    //
+    // We do NOT honor bare UUIDs for DELETE (irreversible — requires the
+    // signed cookie). This limits the blast radius of any leaked UUID.
+    if (req.method === "GET" && urlToken && isLegacyUuid(urlToken)) {
+      // Look up the bare UUID in the DB.
+      const existing = await pool.query<{ user_id: string | null }>(
+        `SELECT user_id FROM ai_chat_sessions WHERE session_token = $1`,
+        [urlToken],
+      );
+      if (existing.rows.length > 0) {
+        const existingUid = existing.rows[0].user_id;
+        // Ownership check for legacy authenticated sessions:
+        //   - If the session is bound to a user (uid=X), the requester
+        //     must also be X. Otherwise reject (possible hijack).
+        //   - If the session is anonymous (uid=null), allow (possession =
+        //     ownership — same as before the fix).
+        const requesterUid = req.userId ?? getAuth(req)?.userId ?? null;
+        if (existingUid !== null && existingUid !== requesterUid) {
+          logger.warn(
+            { sid: urlToken, existingUid, requesterUid },
+            "AI: legacy GET access denied — identity mismatch (possible hijack)",
+          );
+          res.status(403).json({ error: "You do not have access to this session." });
+          return null;
+        }
+        // Mint a new signed token carrying the existing sid + uid.
+        const newToken = signSessionToken({ sid: urlToken, uid: existingUid });
+        // Set it as a cookie so the frontend's next request uses the cookie
+        // (and the bare UUID in localStorage can be cleared).
+        setSessionCookie(res, newToken);
+        logger.info(
+          { sid: urlToken, uid: existingUid },
+          "AI: legacy UUID migrated to signed token on GET (history preserved)",
+        );
+        // Build the verified payload + look up the session row.
+        const verifiedLegacy: SessionTokenPayload = {
+          v: 1,
+          sid: urlToken,
+          uid: existingUid,
+          iat: Date.now(),
+        };
+        return await lookupSessionBySid(verifiedLegacy, res);
+      }
+      // Bare UUID not in DB → treat as new visitor (no history yet).
+      // Return null with no error response — the caller returns empty history.
+      return null;
+    }
+
+    // Invalid signature, no cookie fallback, and not a legacy UUID → reject.
     // Don't reveal whether the session exists (info leak).
     res.status(401).json({ error: "Invalid or expired session token." });
     return null;
