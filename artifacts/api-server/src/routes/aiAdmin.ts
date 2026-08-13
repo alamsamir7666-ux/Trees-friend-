@@ -27,6 +27,11 @@ import { Router, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 import { requireAdmin } from "../middlewares/auth";
 import { logger } from "../lib/logger";
+import {
+  getModelDebugInfo,
+  discoverAvailableModels,
+  isGeminiConfigured,
+} from "../lib/gemini";
 
 const router = Router();
 
@@ -697,6 +702,52 @@ router.get("/api/ai/admin/top-questions-v2", async (req: Request, res: Response)
   } catch (err) {
     logger.error({ err }, "AI admin: top-questions-v2 failed");
     res.status(500).json({ error: "Failed to load top questions." });
+  }
+});
+
+// ─── GET /api/ai/admin/models ───────────────────────────────────────────────
+// v3.0.1: Debug endpoint showing the model selection state. Helps diagnose:
+//   - "Which models are actually available for my API key?"
+//   - "Which model is currently cached as working?"
+//   - "Which models are on cooldown (recently 429'd)?"
+//   - "What's the full fallback chain?"
+//
+// This is the FIRST endpoint to check when TreeBot is failing. It tells
+// you exactly which models your GCP project has access to, so you know
+// whether the issue is "no models available" (API key / billing problem)
+// or "all models 429'd" (quota problem).
+router.get("/ai/admin/models", async (_req: Request, res: Response) => {
+  try {
+    const debugInfo = getModelDebugInfo();
+    const geminiConfigured = isGeminiConfigured();
+
+    // If discovery hasn't run yet (no chat requests have come in), try
+    // running it now so the admin sees actual data instead of null.
+    let discovered = debugInfo.discoveredModels;
+    if (!discovered && geminiConfigured) {
+      discovered = await discoverAvailableModels();
+    }
+
+    res.json({
+      geminiConfigured,
+      workingModel: debugInfo.workingModel,
+      discoveredModels: discovered,
+      discoveryAttempted: debugInfo.discoveryAttempted,
+      staticChain: debugInfo.staticChain,
+      effectiveChain: discovered ?? debugInfo.staticChain,
+      cooldowns: debugInfo.cooldowns,
+      aiModelEnv: debugInfo.aiModelEnv,
+      hint: !geminiConfigured
+        ? "GEMINI_API_KEY is not set. Set it and restart the server."
+        : discovered && discovered.length === 0
+          ? "ListModels returned 0 models. Check if your API key is valid."
+          : discovered && discovered.length > 0
+            ? `Discovered ${discovered.length} available model(s). These are the only models your API key can use.`
+            : "Discovery not yet run. Send a chat message to trigger it, or restart the server.",
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: models debug failed");
+    res.status(500).json({ error: "Failed to load model debug info." });
   }
 });
 

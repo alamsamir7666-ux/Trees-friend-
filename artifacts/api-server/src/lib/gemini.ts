@@ -47,30 +47,74 @@ import { GoogleGenAI, type FunctionDeclaration } from "@google/genai";
 import { logger } from "./logger";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
-// Google frequently deprecates Gemini models. As of 2026:
-//   - gemini-2.0-flash      — DEPRECATED (returns 404 for everyone)
-//   - gemini-2.5-flash      — DEPRECATED for NEW users (404 if your GCP
-//                             project was created recently)
-//   - gemini-2.5-flash-lite — still available, 1500 RPD free tier
-//   - gemini-2.5-pro        — still available (smarter, slower)
+// Google frequently deprecates Gemini models and rotates which ones are
+// available to new GCP projects. As of Aug 2026:
 //
-// v3.0 lesson learned: `gemini-flash-latest` alias resolves to whatever
-// Google's "latest" flash model is — which may have a MUCH more restrictive
-// free tier than the explicitly-named models. Example: in Aug 2026, the
-// alias resolved to `gemini-3.6-flash` which has a free-tier quota of
-// only 20 requests/day (vs 1500/day for gemini-2.5-flash-lite).
+//   - gemini-1.5-flash      — DEPRECATED (404 for everyone)
+//   - gemini-2.0-flash      — DEPRECATED (404 for everyone)
+//   - gemini-2.5-*          — 404 for NEW GCP projects (created after ~Jun 2026)
+//   - gemini-3.0-flash      — available, moderate free tier
+//   - gemini-3.5-flash      — available, moderate free tier
+//   - gemini-3.6-flash      — available, VERY restrictive free tier (20 RPD!)
+//   - gemini-flash-latest   — alias, resolves unpredictably (may 404)
 //
-// Strategy: try explicitly-named models with known generous quotas FIRST.
-// Only fall back to `gemini-flash-latest` as a last resort (it may resolve
-// to a model we haven't validated). This gives us predictable quota behavior.
+// v3.0 incidents:
+//   1. gemini-flash-latest resolved to gemini-3.6-flash (20 RPD) → 429 storm
+//   2. Reordered chain to put 2.5-* first → ALL 404 (new GCP project)
+//
+// v3.0.1 fix: auto-discover available models at startup via ListModels API.
+// This way we never waste time trying models that will 404. We also add
+// the 3.x models to the static chain as a fallback if discovery fails.
 const MODEL_FALLBACK_CHAIN = [
-  "gemini-2.5-flash-lite", // 1500 RPD free tier — most reliable for production
-  "gemini-2.5-flash", // 1500 RPD free tier (may 404 for new GCP projects)
-  "gemini-2.5-pro", // smarter but slower, lower quota
-  "gemini-flash-latest", // Google's alias — UNPREDICTABLE quota, last resort
-  "gemini-2.0-flash", // legacy fallback (still works for some older projects)
-  "gemini-1.5-flash", // very old fallback
+  // 3.x models — available to new GCP projects (post-Jun 2026)
+  "gemini-3.0-flash", // moderate free tier
+  "gemini-3.5-flash", // moderate free tier
+  "gemini-3.6-flash", // VERY restrictive (20 RPD) but works for new projects
+  // 2.x models — available to older GCP projects (pre-Jun 2026)
+  "gemini-2.5-flash-lite", // 1500 RPD free tier — best for production
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+  // Aliases — unpredictable, last resort
+  "gemini-flash-latest",
+  // Legacy — almost certainly 404, but try anyway
+  "gemini-2.0-flash",
+  "gemini-1.5-flash",
 ];
+
+// ─── v3.0.1: Auto-discovered model list ──────────────────────────────────────
+// On the first request, we call client.models.list() to discover which
+// models are actually available for this API key. This replaces the static
+// fallback chain with a dynamic one, avoiding wasted 404 round-trips.
+//
+// _discoveredModels is null before discovery, an array after. If discovery
+// fails (network error, auth error), we fall back to MODEL_FALLBACK_CHAIN.
+let _discoveredModels: string[] | null = null;
+let _discoveryAttempted = false;
+
+// ─── v3.0.1: Per-model cooldown for 429 quota exhaustion ────────────────────
+// When a model returns 429, we add it to this map with a cooldown timestamp.
+// Until the cooldown expires, we skip that model entirely (don't even try it).
+// This prevents wasting the 20 RPD quota of gemini-3.6-flash on rapid retries.
+//
+// Default cooldown: 60 seconds. Configurable via AI_QUOTA_COOLDOWN_MS.
+// Rationale: per-MINUTE quotas reset in 60s. Per-DAY quotas won't reset
+// during the cooldown, but at least we don't waste requests trying.
+const _modelCooldowns = new Map<string, number>(); // model -> cooldown-until-ms
+const COOLDOWN_MS = Number(process.env.AI_QUOTA_COOLDOWN_MS ?? 60_000);
+
+function isOnCooldown(modelName: string): boolean {
+  const until = _modelCooldowns.get(modelName);
+  if (!until) return false;
+  if (Date.now() >= until) {
+    _modelCooldowns.delete(modelName);
+    return false;
+  }
+  return true;
+}
+
+function setCooldown(modelName: string): void {
+  _modelCooldowns.set(modelName, Date.now() + COOLDOWN_MS);
+}
 
 // ─── v3.0 configurable generation params ────────────────────────────────────
 // Read once at module load (not per-request) — these are deployment-wide
@@ -139,15 +183,94 @@ function getClient(): GoogleGenAI {
 // ─── Public helpers ──────────────────────────────────────────────────────────
 
 /**
- * The list of models we'll try, in order. If AI_MODEL env var is set,
- * we use ONLY that model (no fallback). Otherwise we try the chain.
+ * v3.0.1: Discovers which Gemini models are available for this API key by
+ * calling the ListModels API. Returns model names (without the "models/"
+ * prefix) that support generateContent.
+ *
+ * Called once on the first chat request. The result is cached in
+ * _discoveredModels so subsequent requests skip the discovery round-trip.
+ *
+ * If discovery fails (network, auth, etc.), returns null — the caller
+ * falls back to the static MODEL_FALLBACK_CHAIN.
+ *
+ * @internal — exported only for the /api/ai/admin/models debug endpoint.
+ */
+export async function discoverAvailableModels(): Promise<string[] | null> {
+  if (_discoveryAttempted) return _discoveredModels;
+  _discoveryAttempted = true;
+
+  const client = getClient();
+  if (!client) return null;
+
+  try {
+    const available: string[] = [];
+    const response = await client.models.list();
+
+    // The SDK returns an async iterable. Iterate it.
+    // Each model has: { name: "models/gemini-3.6-flash", supportedGenerationMethods: ["generateContent", ...] }
+    for await (const model of response as any) {
+      const name: string = model.name ?? ""; // e.g. "models/gemini-3.6-flash"
+      const methods: string[] = model.supportedGenerationMethods ?? [];
+      // Strip the "models/" prefix to get the bare model name.
+      const bareName = name.replace(/^models\//, "");
+      // Only include models that support generateContent (excludes embedding
+      // models, image generation models, etc.)
+      if (bareName && methods.includes("generateContent")) {
+        available.push(bareName);
+      }
+    }
+
+    // Sort: prefer "flash" models first (faster + cheaper), then "pro".
+    // Within each tier, prefer newer versions (higher numbers).
+    available.sort((a, b) => {
+      const aFlash = a.includes("flash");
+      const bFlash = b.includes("flash");
+      if (aFlash && !bFlash) return -1;
+      if (!aFlash && bFlash) return 1;
+      return b.localeCompare(a, undefined, { numeric: true });
+    });
+
+    _discoveredModels = available;
+    logger.info(
+      { count: available.length, models: available },
+      "TreeBot: discovered available Gemini models via ListModels API",
+    );
+    return available;
+  } catch (err) {
+    logger.warn(
+      { err: (err as any)?.message ?? String(err) },
+      "TreeBot: model discovery failed, falling back to static chain. " +
+        "This is non-fatal — the static chain will be used, but may waste " +
+        "time on 404s for models not available to your API key.",
+    );
+    _discoveredModels = null;
+    return null;
+  }
+}
+
+/**
+ * The list of models we'll try, in order. Priority:
+ *   1. If AI_MODEL env var is set, use ONLY that (no fallback).
+ *   2. If model discovery succeeded, use the discovered list (filtered to
+ *      models we know exist for this API key — avoids 404s).
+ *   3. Fall back to the static MODEL_FALLBACK_CHAIN.
+ *
+ * v3.0.1: also filters out models currently on cooldown (recently 429'd).
  */
 function getModelChain(): string[] {
   const explicit = process.env.AI_MODEL;
   if (explicit && explicit.trim().length > 0) {
     return [explicit.trim()];
   }
-  return MODEL_FALLBACK_CHAIN;
+
+  // Use discovered models if available, otherwise static chain.
+  const baseChain = _discoveredModels ?? MODEL_FALLBACK_CHAIN;
+
+  // Filter out models on cooldown (recently 429'd).
+  // If ALL models are on cooldown, return the full chain anyway (better
+  // to try and get a 429 than to return an empty chain and crash).
+  const filtered = baseChain.filter((m) => !isOnCooldown(m));
+  return filtered.length > 0 ? filtered : baseChain;
 }
 
 /**
@@ -327,6 +450,14 @@ async function withRetry<T>(fn: () => Promise<T>, context?: Record<string, unkno
  * @throws If ALL models in the chain return 404, or if a non-404 error occurs.
  */
 async function callWithFallback<T>(fn: (modelName: string) => Promise<T>): Promise<T> {
+  // v3.0.1: trigger model discovery on the first call. This populates
+  // _discoveredModels so getModelChain() returns only models that actually
+  // exist for this API key (avoids wasting time on 404s).
+  // If discovery already ran (or fails), this is a fast no-op.
+  if (!_discoveryAttempted) {
+    await discoverAvailableModels();
+  }
+
   const tryModels: string[] = [];
   if (_workingModel) tryModels.push(_workingModel);
   for (const m of getModelChain()) {
@@ -368,36 +499,31 @@ async function callWithFallback<T>(fn: (modelName: string) => Promise<T>): Promi
         continue;
       }
       if (isQuotaExhaustedError(err)) {
-        // v3.0: This model's quota is exhausted (429 RESOURCE_EXHAUSTED).
+        // v3.0.1: This model's quota is exhausted (429 RESOURCE_EXHAUSTED).
         // Don't retry it — try the next model in the chain. This handles
         // both per-day quotas (e.g. gemini-3.6-flash free tier = 20/day)
         // and per-minute rate limits. The next model has its own separate
         // quota, so it will likely succeed.
         //
-        // If this was the CACHED working model, clear the cache so the
-        // NEXT request starts fresh from the top of the fallback chain.
-        // Rationale: if gemini-flash-latest (cached) just 429'd because it
-        // resolved to a 20/day model, we don't want every subsequent
-        // request to waste a round-trip trying it first. Clearing the
-        // cache makes the next request go straight to gemini-2.5-flash-lite.
-        //
-        // Exception: per-minute rate limits clear themselves quickly, so
-        // we use a time-based cache invalidation. If the cache is older
-        // than 60 seconds, clear it (per-minute quota likely reset).
-        // If younger than 60s, keep it (per-minute quota might still be
-        // exhausted, but the next request will try other models first
-        // via the fallback chain anyway).
+        // v3.0.1: Set a cooldown on this model so we DON'T try it again
+        // for AI_QUOTA_COOLDOWN_MS (default 60s). This prevents wasting
+        // the 20 RPD quota of gemini-3.6-flash on rapid retries within
+        // the same minute. After the cooldown, we'll try it again (per-minute
+        // quotas may have reset; per-day quotas won't have, but the 429
+        // will tell us that quickly).
+        setCooldown(modelName);
+
         const wasCached = _workingModel === modelName;
         if (wasCached) {
           logger.warn(
-            { model: modelName, err: describeErrorForLog(err) },
-            "TreeBot: cached model quota exhausted (429), clearing cache + trying next in fallback chain",
+            { model: modelName, err: describeErrorForLog(err), cooldownMs: COOLDOWN_MS },
+            "TreeBot: cached model quota exhausted (429), clearing cache + on cooldown, trying next in fallback chain",
           );
           _workingModel = null;
         } else {
           logger.warn(
-            { model: modelName, err: describeErrorForLog(err) },
-            "TreeBot: model quota exhausted (429), trying next in fallback chain",
+            { model: modelName, err: describeErrorForLog(err), cooldownMs: COOLDOWN_MS },
+            "TreeBot: model quota exhausted (429), on cooldown, trying next in fallback chain",
           );
         }
         continue;
@@ -730,4 +856,42 @@ export function isGeminiConfigured(): boolean {
  */
 export function getWorkingModel(): string | null {
   return _workingModel;
+}
+
+/**
+ * v3.0.1: Returns debug info about the model selection state. Used by the
+ * /api/ai/admin/models endpoint so admins can see:
+ *   - which models were discovered as available for their API key
+ *   - which model is currently cached as "working"
+ *   - which models are on cooldown (recently 429'd) and when they'll retry
+ *   - the full static fallback chain
+ */
+export function getModelDebugInfo(): {
+  workingModel: string | null;
+  discoveredModels: string[] | null;
+  discoveryAttempted: boolean;
+  staticChain: string[];
+  cooldowns: Array<{ model: string; retryInMs: number; retryAt: string }>;
+  aiModelEnv: string | null;
+} {
+  const now = Date.now();
+  const cooldowns: Array<{ model: string; retryInMs: number; retryAt: string }> = [];
+  for (const [model, until] of _modelCooldowns) {
+    const retryInMs = Math.max(0, until - now);
+    if (retryInMs > 0) {
+      cooldowns.push({
+        model,
+        retryInMs,
+        retryAt: new Date(until).toISOString(),
+      });
+    }
+  }
+  return {
+    workingModel: _workingModel,
+    discoveredModels: _discoveredModels,
+    discoveryAttempted: _discoveryAttempted,
+    staticChain: MODEL_FALLBACK_CHAIN,
+    cooldowns,
+    aiModelEnv: process.env.AI_MODEL ?? null,
+  };
 }
