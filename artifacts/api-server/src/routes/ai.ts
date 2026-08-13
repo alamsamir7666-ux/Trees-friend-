@@ -60,6 +60,10 @@ import { describeError } from "../lib/describeError";
 import { redactPii } from "../lib/piiRedaction";
 import { calculateCost } from "../lib/costTracker";
 import { getCachedResponse, setCachedResponse } from "../lib/semanticCache";
+import {
+  getSemanticCachedResponse,
+  setSemanticCachedResponse,
+} from "../lib/embeddingCache";
 import { getActivePrompt } from "../lib/promptVersioning";
 import {
   generateFollowupsStructured,
@@ -303,7 +307,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // Bangladesh-style addresses). Replace with [PHONE], [EMAIL], etc.
   // The REDACTED version is what we persist + send to Gemini. The original
   // is never stored in the AI tables.
-  const piiResult = redactPii(message);
+  const piiResult = await redactPii(message);
   const safeMessage = piiResult.redacted;
   if (piiResult.hadPii) {
     await logAiEvent(0, "pii_redacted", {
@@ -427,19 +431,21 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // resume from on reconnect.
   res.write(`data: ${JSON.stringify({ type: "session", sessionToken: token })}\n\n`);
 
-  // ─── v3.2: Semantic cache check ────────────────────────────────────────
-  // Before calling the AI provider, check if we have a cached response for
-  // this (systemPrompt + history + userMessage) combination. If yes,
-  // stream the cached response instead — zero API cost, instant response.
+  // ─── v3.2/v3.4: Cache check (exact-match + semantic) ─────────────────
+  // Before calling the AI provider, check TWO caches:
+  //   1. Exact-match (Redis): systemPrompt + history hash + message hash
+  //   2. Semantic (pgvector): embedding similarity > 0.92
+  // If either hits, stream the cached response — zero API cost, instant.
   //
   // Skip cache for private queries (user asking about their orders, etc.)
   const isPrivateQuery = /my order|where is my order|what did i buy|my orders/i.test(safeMessage);
+
+  // 1. Exact-match cache (fastest — Redis GET)
   const cached = await getCachedResponse(systemPrompt, geminiHistory, safeMessage, isPrivateQuery);
 
   if (cached) {
-    // Cache hit — stream the cached response + persist it
     logger.info(
-      { model: cached.model, provider: cached.provider, hitCount: cached.hitCount },
+      { cache: "exact", model: cached.model, provider: cached.provider, hitCount: cached.hitCount },
       "AI: cache HIT, streaming cached response",
     );
     res.write(`data: ${JSON.stringify({ type: "delta", text: cached.response })}\n\n`);
@@ -447,8 +453,36 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       model: cached.model,
       provider: cached.provider,
       responseMs: Date.now() - requestStartTime,
-      costUsd: 0, // cached = free
+      costUsd: 0,
       promptVersion: "cached",
+    });
+    if (assistantMsgId != null) {
+      res.write(`data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`);
+    }
+    res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+    res.end();
+    return;
+  }
+
+  // 2. Semantic cache (pgvector — catches "how often to water mango?" ≈ "how often should I water a mango tree?")
+  const semanticCached = await getSemanticCachedResponse(safeMessage, isPrivateQuery);
+  if (semanticCached) {
+    logger.info(
+      {
+        cache: "semantic",
+        model: semanticCached.model,
+        provider: semanticCached.provider,
+        similarity: Math.round(semanticCached.similarity * 100) / 100,
+      },
+      "AI: semantic cache HIT, streaming cached response",
+    );
+    res.write(`data: ${JSON.stringify({ type: "delta", text: semanticCached.response })}\n\n`);
+    const assistantMsgId = await persistMessage(session.id, "assistant", semanticCached.response, {
+      model: semanticCached.model,
+      provider: semanticCached.provider,
+      responseMs: Date.now() - requestStartTime,
+      costUsd: 0,
+      promptVersion: "cached-semantic",
     });
     if (assistantMsgId != null) {
       res.write(`data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`);
@@ -567,19 +601,35 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       promptVersion: promptVersionInfo.version,
     });
 
-    // v3.2: store the response in the semantic cache for future hits.
+    // v3.2/v3.4: store the response in BOTH caches for future hits.
+    // - Exact-match (Redis): fast, deterministic key
+    // - Semantic (pgvector): catches similar phrasings via embedding similarity
     // Skip if the response was too long, had tool calls, or was a private query.
     if (fullResponse && !isPrivateQuery) {
+      const model = metaHolder.value?.model ?? "unknown";
+      const provider = metaHolder.value?.provider ?? "unknown";
+
+      // Exact-match cache (fire-and-forget)
       setCachedResponse(
         systemPrompt,
         geminiHistory,
         safeMessage,
         fullResponse,
-        metaHolder.value?.model ?? "unknown",
-        metaHolder.value?.provider ?? "unknown",
-        false, // hadToolCalls — TODO: track this from the stream
+        model,
+        provider,
+        false,
         isPrivateQuery,
-      ).catch(() => {}); // fire-and-forget
+      ).catch(() => {});
+
+      // Semantic cache (fire-and-forget — embedding generation takes ~100ms)
+      setSemanticCachedResponse(
+        safeMessage,
+        fullResponse,
+        model,
+        provider,
+        false,
+        isPrivateQuery,
+      ).catch(() => {});
     }
 
     if (assistantMsgId != null) {

@@ -277,6 +277,83 @@ export function evaluateResponse(
 }
 
 /**
+ * v3.4: LLM-as-judge evaluation.
+ *
+ * Uses a strong LLM to rate the response on 5 criteria (accuracy,
+ * completeness, clarity, safety, tone) each on a 1-5 scale. This is
+ * the industry-standard approach used by LangSmith, Helicone, and OpenAI Evals.
+ *
+ * Falls back to keyword matching if the judge is unavailable.
+ *
+ * @returns Enhanced eval result with judge scores + explanation
+ */
+export async function evaluateResponseWithJudge(
+  question: string,
+  response: string,
+  evalCase: EvalCase,
+): Promise<{
+  keywordOverlap: number;
+  refused: boolean;
+  passed: boolean;
+  judgeScore: number | null; // 1-5 overall, null if judge unavailable
+  judgeExplanation: string | null;
+  judgeCriteria: {
+    accuracy: number;
+    completeness: number;
+    clarity: number;
+    safety: number;
+    tone: number;
+  } | null;
+}> {
+  // First, do the basic keyword + refusal check (fast, free)
+  const basic = evaluateResponse(response, evalCase);
+
+  // If this is an expected-refusal case, skip the judge (refusals don't
+  // need quality scoring — they just need to refuse correctly)
+  if (evalCase.expectedRefusal) {
+    return {
+      ...basic,
+      judgeScore: null,
+      judgeExplanation: "Skipped (expected refusal case)",
+      judgeCriteria: null,
+    };
+  }
+
+  // Run LLM-as-judge
+  const { judgeResponse } = await import("./llmAsJudge");
+  const judgeResult = await judgeResponse(question, response);
+
+  if (!judgeResult) {
+    // Judge failed — fall back to keyword-based pass/fail
+    return {
+      ...basic,
+      judgeScore: null,
+      judgeExplanation: "Judge unavailable (fell back to keyword matching)",
+      judgeCriteria: null,
+    };
+  }
+
+  // LLM-as-judge pass criteria: overall >= 3.5 (out of 5)
+  const judgePassed = judgeResult.overall >= 3.5;
+
+  return {
+    keywordOverlap: basic.keywordOverlap,
+    refused: basic.refused,
+    // Use judge score for pass/fail if available, otherwise keyword overlap
+    passed: judgePassed,
+    judgeScore: judgeResult.overall,
+    judgeExplanation: judgeResult.explanation,
+    judgeCriteria: {
+      accuracy: judgeResult.accuracy,
+      completeness: judgeResult.completeness,
+      clarity: judgeResult.clarity,
+      safety: judgeResult.safety,
+      tone: judgeResult.tone,
+    },
+  };
+}
+
+/**
  * Saves an eval result to the DB (for historical tracking).
  */
 export async function saveEvalResult(

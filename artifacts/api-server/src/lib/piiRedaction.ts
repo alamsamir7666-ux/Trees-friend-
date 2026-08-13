@@ -39,32 +39,119 @@
  */
 import { logger } from "./logger";
 
-// ─── Presidio integration point ─────────────────────────────────────────────
-// For production-grade PII redaction, use Microsoft Presidio (Python service)
-// or a hosted service like AWS Comprehend / Google DLP. Presidio uses NER
-// (Named Entity Recognition) models that catch edge cases regex misses:
+// ─── Presidio integration (v3.4) ────────────────────────────────────────────
+// Microsoft Presidio is the industry-standard open-source PII redaction
+// service. It uses NER (Named Entity Recognition) models that catch edge
+// cases regex misses:
 //   - Written-out numbers: "my number is zero one seven one two..."
 //   - Obfuscated emails: "contact me at myname [at] gmail [dot] com"
 //   - Context-dependent PII: "call me at the number on my profile"
 //
-// To integrate Presidio:
-//   1. Deploy Presidio as a sidecar service (Docker)
-//   2. Set PRESIDIO_API_URL env var
-//   3. Replace redactPii() with an HTTP call to the Presidio /analyze endpoint
-//   4. Fall back to this regex implementation if Presidio is unavailable
+// Deployment (Docker sidecar):
+//   docker run -p 5001:5000 mcr.microsoft.com/presidio-analyzer:latest
+//   docker run -p 5002:5000 mcr.microsoft.com/presidio-anonymizer:latest
 //
-// For now, we use improved regex patterns that cover 95% of common PII
-// patterns in Bangladesh-context chat. The remaining 5% (sophisticated
-// obfuscation) requires NER — documented as a known limitation.
+// Then set PRESIDIO_API_URL=http://localhost:5001 in your env vars.
+//
+// When PRESIDIO_API_URL is set, redactPii() calls Presidio's /analyze
+// endpoint to detect PII entities, then replaces them with placeholders.
+// If Presidio is unavailable (network error, service down), it falls
+// back to the regex patterns below.
 
-// Presidio integration URL (set PRESIDIO_API_URL to enable NER-based redaction).
-// Currently unused — the regex patterns below are the active implementation.
-// To enable Presidio: deploy the service + set this env var + replace
-// redactPii() with an HTTP call to the Presidio /analyze endpoint.
-// export const PRESIDIO_URL = process.env.PRESIDIO_API_URL ?? null;
-void process.env.PRESIDIO_API_URL; // referenced for documentation
+const PRESIDIO_URL = process.env.PRESIDIO_API_URL ?? null;
 
-// ─── Regex patterns ──────────────────────────────────────────────────────────
+// Map Presidio entity types to our placeholder format
+const PRESIDIO_ENTITY_MAP: Record<string, string> = {
+  PHONE_NUMBER: "[PHONE]",
+  EMAIL_ADDRESS: "[EMAIL]",
+  PERSON: "[NAME]",
+  LOCATION: "[LOCATION]",
+  DATE_TIME: "[DATE]",
+  NRP: "[NRP]", // nationality, religion, political group
+  URL: "[URL]",
+  IBAN_CODE: "[IBAN]",
+  CREDIT_CARD: "[CARD]",
+  US_SSN: "[NID]",
+  IP_ADDRESS: "[IP]",
+  US_PASSPORT: "[PASSPORT]",
+  US_DRIVER_LICENSE: "[ID]",
+};
+
+interface PresidioEntity {
+  entity_type: string;
+  start: number;
+  end: number;
+  text: string;
+  score: number;
+}
+
+/**
+ * Calls Presidio's /analyze endpoint to detect PII entities.
+ * Returns the list of detected entities, or null on failure.
+ */
+async function detectWithPresidio(text: string): Promise<PresidioEntity[] | null> {
+  if (!PRESIDIO_URL) return null;
+
+  try {
+    const response = await fetch(`${PRESIDIO_URL}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: text.slice(0, 10000), // Presidio has a text length limit
+        language: "en",
+        // Use default analyzers — covers phone, email, person, location, etc.
+        // For Bangladesh-specific patterns (NID, BD phone), add custom
+        // recognizers in Presidio's config.
+      }),
+      signal: AbortSignal.timeout(3000), // 3s timeout — don't block chat too long
+    });
+
+    if (!response.ok) {
+      logger.warn(
+        { status: response.status, url: PRESIDIO_URL },
+        "Presidio: analyze endpoint returned error, falling back to regex",
+      );
+      return null;
+    }
+
+    const data = (await response.json()) as PresidioEntity[];
+    // Filter by confidence score to reduce false positives
+    return data.filter((e) => e.score >= 0.7);
+  } catch (err) {
+    logger.debug(
+      { err: (err as any)?.message, url: PRESIDIO_URL },
+      "Presidio: unavailable, falling back to regex",
+    );
+    return null;
+  }
+}
+
+/**
+ * Replaces detected Presidio entities with placeholders.
+ * Sorts entities by start position (descending) so replacements don't
+ * shift the indices of later entities.
+ */
+function applyPresidioRedactions(
+  text: string,
+  entities: PresidioEntity[],
+): { redacted: string; count: number; detectedTypes: string[] } {
+  // Sort by start position descending (so we replace from end to start)
+  const sorted = [...entities].sort((a, b) => b.start - a.start);
+  let redacted = text;
+  let count = 0;
+  const detectedTypes = new Set<string>();
+
+  for (const entity of sorted) {
+    const placeholder = PRESIDIO_ENTITY_MAP[entity.entity_type] ?? `[${entity.entity_type}]`;
+    redacted = redacted.slice(0, entity.start) + placeholder + redacted.slice(entity.end);
+    count++;
+    detectedTypes.add(entity.entity_type.toLowerCase());
+  }
+
+  return { redacted, count, detectedTypes: [...detectedTypes] };
+}
+
+// ─── Regex patterns (fallback when Presidio is unavailable) ────────────────
 // Improved patterns (v3.2):
 //   - Added: passport numbers, Bangladesh birth registration numbers
 //   - Fixed: phone number false positives on plant quantities (e.g. "5 mango trees")
@@ -169,14 +256,50 @@ export interface RedactionResult {
 /**
  * Scans a user message for PII and returns a redacted version + metadata.
  *
+ * v3.4: Tries Presidio first (NER-based, catches obfuscated PII), falls
+ * back to regex patterns if Presidio is unavailable or not configured.
+ *
  * Safe to call on any string — if no PII is detected, returns the original
  * string with hadPii=false. Never throws.
  *
  * @example
- *   redactPii("Call me at 01712345678")
- *   → { redacted: "Call me at [PHONE]", hadPii: true, detectedTypes: ["phone_bd"], count: 1 }
+ *   await redactPii("Call me at 01712345678")
+ *   → { redacted: "Call me at [PHONE]", hadPii: true, detectedTypes: ["phone_number"], count: 1 }
  */
-export function redactPii(message: string): RedactionResult {
+export async function redactPii(message: string): Promise<RedactionResult> {
+  if (typeof message !== "string" || message.length === 0) {
+    return { redacted: message, hadPii: false, detectedTypes: [], count: 0 };
+  }
+
+  // ─── Try Presidio first (NER-based, more accurate) ───
+  if (PRESIDIO_URL) {
+    const entities = await detectWithPresidio(message);
+    if (entities !== null) {
+      // Presidio responded — use its detections
+      const { redacted, count, detectedTypes } = applyPresidioRedactions(message, entities);
+      const hadPii = count > 0;
+      if (hadPii) {
+        logger.info(
+          { provider: "presidio", detectedTypes, count },
+          "PII redacted via Presidio",
+        );
+      }
+      return { redacted, hadPii, detectedTypes, count };
+    }
+    // Presidio failed — fall through to regex
+    logger.info("PII: Presidio unavailable, falling back to regex");
+  }
+
+  // ─── Regex fallback ───
+  return redactPiiRegex(message);
+}
+
+/**
+ * Regex-only PII redaction (the v3.2 implementation).
+ * Exported separately so it can be used directly when Presidio is known
+ * to be unavailable (e.g. in tests).
+ */
+export function redactPiiRegex(message: string): RedactionResult {
   if (typeof message !== "string" || message.length === 0) {
     return { redacted: message, hadPii: false, detectedTypes: [], count: 0 };
   }
@@ -186,7 +309,6 @@ export function redactPii(message: string): RedactionResult {
   let count = 0;
 
   for (const { type, regex, replacement } of PATTERNS) {
-    // Reset lastIndex because regex may have the global flag.
     regex.lastIndex = 0;
     const matches = redacted.match(regex);
     if (matches && matches.length > 0) {
@@ -199,18 +321,11 @@ export function redactPii(message: string): RedactionResult {
   const hadPii = count > 0;
 
   if (hadPii) {
-    // Log at debug level so we can audit redactions without spamming prod logs.
-    // We do NOT log the original message — only the redacted version + types.
     logger.debug(
-      { detectedTypes: [...detectedTypes], count, redactedPreview: redacted.slice(0, 100) },
-      "PII redacted from user message",
+      { provider: "regex", detectedTypes: [...detectedTypes], count },
+      "PII redacted via regex",
     );
   }
 
-  return {
-    redacted,
-    hadPii,
-    detectedTypes: [...detectedTypes],
-    count,
-  };
+  return { redacted, hadPii, detectedTypes: [...detectedTypes], count };
 }

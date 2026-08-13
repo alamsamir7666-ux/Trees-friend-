@@ -210,6 +210,33 @@ CREATE INDEX IF NOT EXISTS ai_eval_results_run_idx
   ON ai_eval_results (run_id);
 CREATE INDEX IF NOT EXISTS ai_eval_results_case_idx
   ON ai_eval_results (case_id, created_at DESC);
+
+-- ─── v3.4: Embeddings-based semantic cache (pgvector) ──────────────────────
+-- Stores user queries + their embeddings + the AI response, so future
+-- similar queries can hit the cache (cosine similarity > threshold).
+-- Requires the pgvector extension (CREATE EXTENSION vector).
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS ai_response_cache (
+  id SERIAL PRIMARY KEY,
+  query_text TEXT NOT NULL,
+  response TEXT NOT NULL,
+  embedding vector(768),  -- Gemini text-embedding-004 = 768 dimensions
+  model TEXT,
+  provider TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- HNSW index for fast approximate nearest neighbor search.
+-- This is the index type recommended by pgvector for production use
+-- (faster than IVFFlat for similarity search at scale).
+CREATE INDEX IF NOT EXISTS ai_response_cache_embedding_idx
+  ON ai_response_cache USING hnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+
+-- Index for TTL-based cleanup (DELETE WHERE created_at < ...)
+CREATE INDEX IF NOT EXISTS ai_response_cache_created_at_idx
+  ON ai_response_cache (created_at);
 `;
 
 export async function ensureAiTables(): Promise<void> {
