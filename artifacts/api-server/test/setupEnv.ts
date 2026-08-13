@@ -25,6 +25,9 @@
 
 process.env.MOBILE_JWT_SECRET ??= "test-mobile-jwt-secret-do-not-use-in-prod";
 process.env.COURIER_WEBHOOK_SECRET ??= "test-courier-webhook-secret-do-not-use-in-prod";
+// AI session token signing secret — required by lib/sessionToken.ts.
+// 48 bytes of base64 (~64 chars), satisfies the 32-byte minimum strength check.
+process.env.AI_SESSION_SECRET ??= "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
 // Must decode to exactly 32 bytes (see lib/credentialEncryption.ts's loadKey).
 process.env.CREDENTIAL_ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString("base64");
 process.env.CLERK_PUBLISHABLE_KEY ??= "pk_test_Y2xlcmsudGVzdC5leGFtcGxlLmNvbSQ";

@@ -37,6 +37,24 @@ import {
   getProvidersDebugInfo,
   forceAllProvidersRediscover,
 } from "../lib/aiRouter";
+// Bug #3 fix: prompt versioning + eval harness admin endpoints.
+import {
+  listPromptVersions,
+  getActivePromptVersion,
+  getPromptVersion,
+  createPromptVersion,
+  activatePromptVersion,
+  deletePromptVersion,
+} from "../lib/promptVersioning";
+import {
+  getEvalCases,
+  getEvalResults,
+  evaluateResponse,
+  saveEvalResult,
+  type EvalCase,
+} from "../lib/evalHarness";
+import { streamChat, isAnyProviderConfigured } from "../lib/aiRouter";
+import { hasBotanicalKeyword } from "../lib/aiContext";
 
 const router = Router();
 
@@ -797,6 +815,434 @@ router.get("/ai/admin/providers", async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "AI admin: providers debug failed");
     res.status(500).json({ error: "Failed to load providers debug info." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Bug #3 fix: Prompt Versioning Admin Endpoints ─────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// These endpoints were documented in promptVersioning.ts but never
+// implemented. The route now USES the DB prompt text (Bug #3 fix above),
+// so admins need a way to:
+//   - List all versions (with active flag).
+//   - Preview a specific version before activating.
+//   - Create a new version (does NOT activate — explicit activation
+//     prevents accidental prompt changes).
+//   - Activate a version (deactivates all others, clears cache).
+//   - Delete a version (with safeguards: can't delete active, can't
+//     delete the last one).
+//
+// All endpoints require admin auth (router.use(requireAdmin) at the
+// top of this file). Rate limiting is handled by the global apiLimiter
+// (200 req / 15 min / IP) — sufficient for admin use.
+//
+// The prompt text supports two placeholders (rendered at runtime by
+// renderPromptTemplate in aiContext.ts):
+//   {{summary}}  — replaced with the conversation summary block (memory)
+//   {{catalog}}  — replaced with the catalog search results (context)
+// If a placeholder is missing from the text, the dynamic value is
+// appended at the end (backward compat).
+
+// ─── GET /api/ai/admin/prompts ───────────────────────────────────────────────
+// Lists all prompt versions, active first, then by semver descending.
+router.get("/ai/admin/prompts", async (_req: Request, res: Response) => {
+  try {
+    const versions = await listPromptVersions();
+    res.json({
+      versions: versions.map((v) => ({
+        id: v.id,
+        version: v.version,
+        promptText: v.promptText,
+        // Truncate in the list view for readability — the full text is
+        // available via GET /api/ai/admin/prompts/:id. This keeps the
+        // list response small (a 5KB prompt × 20 versions = 100KB
+        // otherwise).
+        promptTextPreview: v.promptText.slice(0, 200),
+        promptTextLength: v.promptText.length,
+        changeLog: v.changeLog,
+        isActive: v.isActive,
+        createdBy: v.createdBy,
+        createdAt: v.createdAt,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: list prompts failed");
+    res.status(500).json({ error: "Failed to list prompt versions." });
+  }
+});
+
+// ─── GET /api/ai/admin/prompts/active ───────────────────────────────────────
+// Returns the currently active prompt version (full text).
+router.get("/ai/admin/prompts/active", async (_req: Request, res: Response) => {
+  try {
+    const version = await getActivePromptVersion();
+    if (!version) {
+      res.status(404).json({ error: "No active prompt version found." });
+      return;
+    }
+    res.json({ version });
+  } catch (err) {
+    logger.error({ err }, "AI admin: get active prompt failed");
+    res.status(500).json({ error: "Failed to load active prompt version." });
+  }
+});
+
+// ─── GET /api/ai/admin/prompts/:id ──────────────────────────────────────────
+// Returns a specific prompt version (full text) — for preview before
+// activating.
+router.get("/ai/admin/prompts/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid version id." });
+    return;
+  }
+  try {
+    const version = await getPromptVersion(id);
+    if (!version) {
+      res.status(404).json({ error: "Prompt version not found." });
+      return;
+    }
+    res.json({ version });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: get prompt version failed");
+    res.status(500).json({ error: "Failed to load prompt version." });
+  }
+});
+
+// ─── POST /api/ai/admin/prompts ─────────────────────────────────────────────
+// Creates a new prompt version. Does NOT activate it — the admin must
+// explicitly activate via POST /api/ai/admin/prompts/:id/activate.
+//
+// Body: { version: "1.1.0", promptText: "...", changeLog: "..." }
+router.post("/ai/admin/prompts", async (req: Request, res: Response) => {
+  const { version, promptText, changeLog } = (req.body ?? {}) as {
+    version?: string;
+    promptText?: string;
+    changeLog?: string;
+  };
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
+    res.status(400).json({ error: 'version must be a semver string like "1.1.0".' });
+    return;
+  }
+  if (typeof promptText !== "string" || promptText.trim().length === 0) {
+    res.status(400).json({ error: "promptText is required (non-empty string)." });
+    return;
+  }
+  if (promptText.length > 50_000) {
+    res.status(400).json({ error: "promptText is too long (max 50,000 characters)." });
+    return;
+  }
+  // createdBy: the admin's email from req.dbUser (set by requireAuth).
+  const createdBy = req.dbUser?.email ?? "admin";
+  try {
+    const created = await createPromptVersion(
+      version,
+      promptText,
+      changeLog ?? "",
+      createdBy,
+    );
+    if (!created) {
+      // createPromptVersion returns null on validation failure or
+      // duplicate version (UNIQUE constraint). Check if it's a duplicate.
+      res.status(409).json({
+        error: `Version "${version}" already exists. Use a different version number.`,
+      });
+      return;
+    }
+    logger.info({ version, createdBy }, "AI admin: created prompt version");
+    res.status(201).json({ ok: true, version: created });
+  } catch (err) {
+    logger.error({ err, version }, "AI admin: create prompt failed");
+    res.status(500).json({ error: "Failed to create prompt version." });
+  }
+});
+
+// ─── POST /api/ai/admin/prompts/:id/activate ────────────────────────────────
+// Activates a specific prompt version (deactivates all others).
+// Clears the in-memory cache so the next request uses the new version.
+router.post("/ai/admin/prompts/:id/activate", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid version id." });
+    return;
+  }
+  try {
+    const ok = await activatePromptVersion(id);
+    if (!ok) {
+      res.status(404).json({ error: "Prompt version not found." });
+      return;
+    }
+    logger.info({ id, activatedBy: req.dbUser?.email }, "AI admin: activated prompt version");
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: activate prompt failed");
+    res.status(500).json({ error: "Failed to activate prompt version." });
+  }
+});
+
+// ─── DELETE /api/ai/admin/prompts/:id ────────────────────────────────────────
+// Deletes a prompt version. Safeguards:
+//   - Cannot delete the active version (must activate another first).
+//   - Cannot delete the last version (at least one must exist).
+router.delete("/ai/admin/prompts/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid version id." });
+    return;
+  }
+  try {
+    const result = await deletePromptVersion(id);
+    if (!result.ok) {
+      // 409 for safeguard violations (can't delete active / last version),
+      // 404 for not found, 500 for DB error.
+      const status = result.reason?.includes("not found") ? 404 : 409;
+      res.status(status).json({ error: result.reason });
+      return;
+    }
+    logger.info({ id, deletedBy: req.dbUser?.email }, "AI admin: deleted prompt version");
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: delete prompt failed");
+    res.status(500).json({ error: "Failed to delete prompt version." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Bug #3 fix: Eval Harness Admin Endpoints ───────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// These endpoints were documented in evalHarness.ts but never implemented.
+// The eval harness lets admins:
+//   - Run the golden dataset against the CURRENT active prompt + provider.
+//   - View historical eval results (for tracking prompt quality over time).
+//   - List the golden cases (to add/remove cases, admins edit the DB
+//     directly for now — a CRUD API is a future enhancement).
+//
+// The eval run sends each question through streamChat (same path as the
+// real chat route, minus SSE streaming — we collect the full response
+// synchronously). This tests the END-TO-END pipeline: prompt → model →
+// response → evaluation.
+//
+// Rate limiting: the global apiLimiter (200/15min) applies. An eval run
+// hits the AI provider 10 times (one per golden case), which is fine for
+// admin use but shouldn't be spammed. The route logs each run for
+// observability.
+
+// ─── GET /api/ai/admin/eval/cases ────────────────────────────────────────────
+// Lists all golden eval cases (the test dataset).
+router.get("/ai/admin/eval/cases", async (_req: Request, res: Response) => {
+  try {
+    const cases = await getEvalCases();
+    res.json({ cases, count: cases.length });
+  } catch (err) {
+    logger.error({ err }, "AI admin: list eval cases failed");
+    res.status(500).json({ error: "Failed to list eval cases." });
+  }
+});
+
+// ─── POST /api/ai/admin/eval/run ────────────────────────────────────────────
+// Runs the golden dataset against the current active prompt + provider.
+// Returns a summary + per-case results. Results are also persisted to
+// ai_eval_results for historical tracking.
+//
+// Body (all optional): { useJudge?: boolean, category?: string }
+//   - useJudge: if true, also runs the LLM-as-judge evaluation (slower,
+//     costs more tokens, but gives a 1-5 quality score). Default false.
+//   - category: if set, only run cases in that category (e.g.
+//     "plant_care"). Default: run all cases.
+//
+// This is a LONG-running endpoint (10 cases × 2-5s each = 20-50s).
+// The admin UI should show a loading spinner + not retry on timeout.
+router.post("/ai/admin/eval/run", async (req: Request, res: Response) => {
+  try {
+    // Guard: don't run if no provider is configured (would just error
+    // 10 times and waste time).
+    if (!isAnyProviderConfigured()) {
+      res.status(503).json({
+        error: "No AI provider configured. Set GEMINI_API_KEY and/or GROQ_API_KEY.",
+      });
+      return;
+    }
+
+    const useJudge = req.body?.useJudge === true;
+    const categoryFilter = typeof req.body?.category === "string" ? req.body.category : null;
+
+    // Load golden cases.
+    let cases = await getEvalCases();
+    if (categoryFilter) {
+      cases = cases.filter((c) => c.category === categoryFilter);
+    }
+    if (cases.length === 0) {
+      res.status(404).json({ error: "No eval cases found (seed may have failed)." });
+      return;
+    }
+
+    // Generate a run ID for grouping results.
+    const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    logger.info({ runId, caseCount: cases.length, useJudge, categoryFilter }, "AI admin: starting eval run");
+
+    // Run each case sequentially (parallel would blow the rate limit).
+    const results: Array<{
+      caseId: number;
+      question: string;
+      response: string;
+      keywordOverlap: number;
+      refused: boolean;
+      passed: boolean;
+      latencyMs: number;
+      model: string | null;
+      provider: string | null;
+      error: string | null;
+    }> = [];
+
+    for (const evalCase of cases) {
+      const caseStart = Date.now();
+      try {
+        // Build a minimal system prompt for the eval (no catalog context,
+        // no summary — we want to test the prompt itself, not the
+        // dynamic context). This matches what a user would get on their
+        // first message with no history.
+        const { getActivePrompt } = await import("../lib/promptVersioning");
+        const { renderPromptTemplate, buildSystemPrompt } = await import("../lib/aiContext");
+        const promptInfo = await getActivePrompt();
+        const systemPrompt =
+          promptInfo.text && promptInfo.text.trim().length > 0
+            ? renderPromptTemplate(promptInfo.text, "", "")
+            : buildSystemPrompt("", "");
+
+        // Collect the full response (no streaming — we want the
+        // complete text for evaluation).
+        let fullResponse = "";
+        const stream = streamChat(
+          systemPrompt,
+          [], // no history
+          evalCase.question,
+          { declarations: [], execute: async () => ({ error: "Tools disabled in eval" }) },
+          undefined, // no userId (eval is anonymous)
+          (meta) => {
+            // We could capture model/provider here for tracking.
+          },
+        );
+        for await (const chunk of stream) {
+          fullResponse += chunk;
+        }
+
+        const latencyMs = Date.now() - caseStart;
+
+        // Evaluate the response.
+        const metrics = evaluateResponse(fullResponse, evalCase);
+
+        // Optional: LLM-as-judge (slower, costs tokens).
+        if (useJudge && !evalCase.expectedRefusal) {
+          try {
+            const { evaluateResponseWithJudge } = await import("../lib/evalHarness");
+            await evaluateResponseWithJudge(evalCase.question, fullResponse, evalCase);
+            // The judge-enhanced result is saved separately if needed.
+            // For now, we just use the basic metrics for the pass/fail.
+          } catch (judgeErr) {
+            logger.warn({ err: judgeErr, caseId: evalCase.id }, "AI admin: eval judge failed (non-fatal)");
+          }
+        }
+
+        // Persist the result.
+        await saveEvalResult(
+          runId,
+          evalCase,
+          fullResponse,
+          metrics,
+          latencyMs,
+          null, // model — we'd capture this from the metadata callback
+          null, // provider
+          null,
+        );
+
+        results.push({
+          caseId: evalCase.id,
+          question: evalCase.question,
+          response: fullResponse,
+          keywordOverlap: metrics.keywordOverlap,
+          refused: metrics.refused,
+          passed: metrics.passed,
+          latencyMs,
+          model: null,
+          provider: null,
+          error: null,
+        });
+      } catch (err) {
+        const latencyMs = Date.now() - caseStart;
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.error({ err, caseId: evalCase.id }, "AI admin: eval case failed");
+
+        // Persist the error result.
+        await saveEvalResult(
+          runId,
+          evalCase,
+          "(error)",
+          { keywordOverlap: 0, refused: false, passed: false },
+          latencyMs,
+          null,
+          null,
+          errorMsg,
+        );
+
+        results.push({
+          caseId: evalCase.id,
+          question: evalCase.question,
+          response: "(error)",
+          keywordOverlap: 0,
+          refused: false,
+          passed: false,
+          latencyMs,
+          model: null,
+          provider: null,
+          error: errorMsg,
+        });
+      }
+    }
+
+    // Compute summary.
+    const passed = results.filter((r) => r.passed).length;
+    const totalLatency = results.reduce((sum, r) => sum + r.latencyMs, 0);
+    const avgLatencyMs = results.length > 0 ? Math.round(totalLatency / results.length) : 0;
+    const avgKeywordOverlap =
+      results.length > 0
+        ? Math.round(
+            (results.reduce((sum, r) => sum + r.keywordOverlap, 0) / results.length) * 100,
+          ) / 100
+        : 0;
+
+    const summary = {
+      runId,
+      totalCases: results.length,
+      passed,
+      failed: results.length - passed,
+      passRate: results.length > 0 ? Math.round((passed / results.length) * 1000) / 10 : 0,
+      avgLatencyMs,
+      avgKeywordOverlap,
+      useJudge,
+      categoryFilter,
+    };
+
+    logger.info({ ...summary }, "AI admin: eval run complete");
+
+    res.json({ ...summary, results });
+  } catch (err) {
+    logger.error({ err }, "AI admin: eval run failed");
+    res.status(500).json({ error: "Failed to run eval suite." });
+  }
+});
+
+// ─── GET /api/ai/admin/eval/results?limit=50 ────────────────────────────────
+// Returns historical eval results (most recent first).
+router.get("/ai/admin/eval/results", async (req: Request, res: Response) => {
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+  try {
+    const results = await getEvalResults(limit);
+    res.json({ results, count: results.length });
+  } catch (err) {
+    logger.error({ err }, "AI admin: list eval results failed");
+    res.status(500).json({ error: "Failed to list eval results." });
   }
 });
 

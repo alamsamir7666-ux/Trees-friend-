@@ -423,12 +423,40 @@ export async function buildCatalogContext(userMessage: string): Promise<string> 
  *   9. v3.0: If a summary block is provided, treat it as prior conversation
  *      context — don't re-ask questions the summary already answers.
  */
-export function buildSystemPrompt(catalogContext: string, summaryBlock: string = ""): string {
-  const contextBlock = catalogContext
-    ? `\n\nCATALOG CONTEXT (use when relevant; cite exact product names):\n${catalogContext}\n`
-    : `\n\nCATALOG CONTEXT: (no matching products or articles found for this query)\n`;
-
-  return `You are TreeBot, the plant assistant for TreeFriend — a Bangladesh plant marketplace where buyers can purchase trees, saplings, and gardening supplies from multiple sellers.
+/**
+ * The hardcoded system prompt template (v1.0.0).
+ *
+ * ─── Bug #3 fix: this is now the FALLBACK ───────────────────────────────────
+ *
+ * Previously, `buildSystemPrompt()` was the ONLY source of the system prompt.
+ * The DB-backed prompt versioning system existed (lib/promptVersioning.ts)
+ * but its `text` was fetched and thrown away — the route only used `.version`
+ * for tracking. This made A/B testing, rollback, and iteration-without-deploy
+ * (the entire documented value proposition) impossible.
+ *
+ * The fix:
+ *   - This template is now the FALLBACK, used when the DB is unavailable
+ *     or has no active prompt row.
+ *   - When the DB has an active prompt, its `prompt_text` is used INSTEAD.
+ *   - Both paths support two placeholders:
+ *       {{summary}}  — replaced with the conversation summary block (memory)
+ *       {{catalog}}  — replaced with the catalog search results (context)
+ *     If a placeholder is missing from the template, the dynamic value is
+ *     appended at the end (backward compat with prompts that don't know
+ *     about the placeholders).
+ *
+ * The seed row in ensureAiTables.ts mirrors this exact text (with the
+ * placeholders), so out-of-the-box behavior is unchanged. Admins can then
+ * create new versions (e.g. v1.1.0 with refined scope rules) and activate
+ * them via the admin endpoints — takes effect immediately (after
+ * `forcePromptRefresh()` clears the in-memory cache).
+ *
+ * The placeholder syntax `{{...}}` is the industry standard (used by
+ * LangChain PromptTemplates, Mustache, Handlebars, Jinja2). We use a
+ * simple string replace (not a full template engine) because the prompt
+ * has no conditionals or loops — just two variable substitutions.
+ */
+export const SYSTEM_PROMPT_TEMPLATE_V1 = `You are TreeBot, the plant assistant for TreeFriend — a Bangladesh plant marketplace where buyers can purchase trees, saplings, and gardening supplies from multiple sellers.
 
 YOUR SCOPE — STRICTLY ENFORCED:
 You answer ONLY questions about:
@@ -478,9 +506,81 @@ After your main answer, ALWAYS append a follow-up suggestions block in this EXAC
 - Third short question
 [/followups]
 
-The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.${summaryBlock}${contextBlock}
+The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.{{summary}}{{catalog}}
 
 REMEMBER: Stay strictly on-topic. If you're unsure whether a question is botanical, refuse politely. Always include the [followups]...[/followups] block at the end.`;
+
+/**
+ * Renders a prompt template by replacing `{{summary}}` and `{{catalog}}`
+ * placeholders with the dynamic values.
+ *
+ * If a placeholder is missing from the template, the dynamic value is
+ * appended at the end (backward compat with prompts that don't include
+ * the placeholders — they still get the context, just at the end).
+ *
+ * This is the single source of truth for placeholder substitution.
+ * Both the DB-driven path (route uses active prompt text from DB) and
+ * the fallback path (route uses SYSTEM_PROMPT_TEMPLATE_V1) go through
+ * this function, ensuring consistent behavior.
+ *
+ * @param template The prompt text with optional `{{summary}}`/`{{catalog}}` placeholders.
+ * @param summaryBlock The conversation summary block (or "" if no summary).
+ * @param catalogContext The catalog search results (or "" if no matches).
+ */
+export function renderPromptTemplate(
+  template: string,
+  summaryBlock: string,
+  catalogContext: string,
+): string {
+  const contextBlock = catalogContext
+    ? `\n\nCATALOG CONTEXT (use when relevant; cite exact product names):\n${catalogContext}\n`
+    : `\n\nCATALOG CONTEXT: (no matching products or articles found for this query)\n`;
+
+  const summary = summaryBlock || "";
+
+  let rendered = template;
+
+  // Replace {{summary}} placeholder if present.
+  if (rendered.includes("{{summary}}")) {
+    rendered = rendered.replaceAll("{{summary}}", summary);
+  } else if (summary) {
+    // No placeholder but summary exists — append at the end (backward compat).
+    rendered = rendered + "\n" + summary;
+  }
+
+  // Replace {{catalog}} placeholder if present.
+  if (rendered.includes("{{catalog}}")) {
+    rendered = rendered.replaceAll("{{catalog}}", contextBlock);
+  } else {
+    // No placeholder — append at the end (backward compat).
+    rendered = rendered + contextBlock;
+  }
+
+  return rendered;
+}
+
+/**
+ * Builds the system prompt using the HARDCODED fallback template
+ * (SYSTEM_PROMPT_TEMPLATE_V1).
+ *
+ * ─── Bug #3 fix: this is now the FALLBACK only ─────────────────────────────
+ *
+ * The PRIMARY path is the DB-driven prompt (via `getActivePrompt()` in
+ * `lib/promptVersioning.ts`). When the DB has an active prompt, the route
+ * uses its `prompt_text` (rendered via `renderPromptTemplate`). When the
+ * DB is unavailable or has no active row, the route falls back to this
+ * function — which calls `renderPromptTemplate` with the hardcoded
+ * template, producing identical output.
+ *
+ * This function is kept public for:
+ *   - Tests that need a deterministic prompt without DB access.
+ *   - The seed migration in ensureAiTables.ts (which stores this text in
+ *     the DB so the DB-driven path produces the same output).
+ *   - Future code that needs to build a prompt without the versioning
+ *     system (e.g. a one-off script).
+ */
+export function buildSystemPrompt(catalogContext: string, summaryBlock: string = ""): string {
+  return renderPromptTemplate(SYSTEM_PROMPT_TEMPLATE_V1, summaryBlock, catalogContext);
 }
 
 // ─── Internals ───────────────────────────────────────────────────────────────

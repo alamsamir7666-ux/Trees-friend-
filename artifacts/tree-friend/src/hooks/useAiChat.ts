@@ -2,11 +2,34 @@
  * useAiChat — React hook that talks to the TreeBot backend.
  *
  * Responsibilities:
- *   - Persist a session token in localStorage (so the same anonymous
- *     visitor can resume their conversation across page refreshes).
  *   - On mount, fetch prior chat history from GET /api/ai/sessions/:token.
  *   - Send a new message via POST /api/ai/chat (Server-Sent Events stream).
  *   - Expose { messages, send, clear, loading, error } to the UI.
+ *
+ * ─── Session token model (post-IDOR fix) ───────────────────────────────────
+ *
+ * Previously, this hook generated a `crypto.randomUUID()` and stored it in
+ * `localStorage["treebot.sessionToken"]`, sending it as a JSON body field on
+ * every request. That had three problems:
+ *   1. XSS-exfiltrable (any injected script could read localStorage and
+ *      steal the session).
+ *   2. Referer-leakable (URLs with the token in the path leaked it on
+ *      cross-origin image loads).
+ *   3. Forgeable (anyone could mint a syntactically valid UUID).
+ *
+ * The new model uses an **HttpOnly cookie** set by the server. The cookie
+ * is automatically sent on every same-origin (and configured cross-origin)
+ * request via `credentials: "include"`. JavaScript CANNOT read it, which
+ * eliminates the XSS exfiltration vector entirely.
+ *
+ * For the legacy migration window (existing users have a bare UUID in
+ * localStorage, not a cookie), we still send the localStorage value as a
+ * body field on POST /ai/chat. The server detects this, looks it up in
+ * the DB, and migrates it to a signed cookie. The frontend then clears
+ * the localStorage entry — the cookie takes over.
+ *
+ * Once the migration window closes (~30 days), the localStorage fallback
+ * can be removed entirely.
  *
  * SSE parsing:
  *   The backend streams `data: {...}\n\n` lines. Each payload is one of:
@@ -44,13 +67,35 @@ interface UseAiChatResult {
   clear: () => Promise<void>;
 }
 
-function getSessionToken(): string {
-  let token = localStorage.getItem(SESSION_TOKEN_KEY);
-  if (!token) {
-    token = crypto.randomUUID();
-    localStorage.setItem(SESSION_TOKEN_KEY, token);
+/**
+ * Reads the legacy localStorage session token, if present.
+ *
+ * Used ONLY for the migration path: the first POST /ai/chat after the
+ * cookie-based auth is deployed will send this value in the body, the
+ * server will migrate it to a signed cookie, and then we delete it
+ * from localStorage (the cookie takes over).
+ *
+ * Returns null if no legacy token exists (new visitors, or visitors who
+ * have already migrated).
+ */
+function getLegacySessionToken(): string | null {
+  try {
+    const token = localStorage.getItem(SESSION_TOKEN_KEY);
+    if (token && token.length >= 8) return token;
+  } catch {
+    // localStorage may be unavailable (private browsing, disabled cookies
+    // in some browsers also disable localStorage). Fall through to null.
   }
-  return token;
+  return null;
+}
+
+/** Clears the legacy localStorage token (after successful migration to cookie). */
+function clearLegacySessionToken(): void {
+  try {
+    localStorage.removeItem(SESSION_TOKEN_KEY);
+  } catch {
+    // Best-effort — if localStorage is unavailable, there's nothing to clear.
+  }
 }
 
 export function useAiChat(): UseAiChatResult {
@@ -62,20 +107,42 @@ export function useAiChat(): UseAiChatResult {
   const abortRef = useRef<AbortController | null>(null);
 
   // ─── Load history on mount ──────────────────────────────────────────────
+  // The session token now lives in an HttpOnly cookie set by the server,
+  // so we don't need to read it from localStorage here. We just send the
+  // request with `credentials: "include"` and the browser attaches the
+  // cookie automatically. For legacy users (localStorage still has a bare
+  // UUID), we fall back to putting it in the URL — the server's
+  // `verifySessionAccess` will migrate it to a cookie on the next POST /ai/chat.
   useEffect(() => {
     let cancelled = false;
-    const token = getSessionToken();
+    const legacyToken = getLegacySessionToken();
+    // Build the URL: if we have a legacy token, include it in the path
+    // (for migration). Otherwise, use a placeholder — the server reads
+    // from the cookie. The path token is required by the route signature
+    // (`/ai/sessions/:token`) so we send the legacy UUID if we have one,
+    // or a fresh anonymous one if not (the server will verify + reject if
+    // it's not signed, then fall back to the cookie).
+    const urlToken = legacyToken ?? "anonymous";
 
     (async () => {
       try {
         const authHeader = await buildAuthHeader();
         const res = await fetch(
-          `${BASE_URL}/api/ai/sessions/${encodeURIComponent(token)}`,
-          { headers: { ...authHeader } },
+          `${BASE_URL}/api/ai/sessions/${encodeURIComponent(urlToken)}`,
+          {
+            credentials: "include", // ← send + receive cookies
+            headers: { ...authHeader },
+          },
         );
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
+        // If the server returned a new signed token (via migration), the
+        // Set-Cookie header on the response already set it — no JS action
+        // needed. We just clear the legacy localStorage value if present.
+        if (legacyToken && data.sessionToken && data.sessionToken !== legacyToken) {
+          clearLegacySessionToken();
+        }
         if (Array.isArray(data.messages) && data.messages.length > 0) {
           setMessages(
             data.messages.map((m: any) => ({
@@ -124,15 +191,24 @@ export function useAiChat(): UseAiChatResult {
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
 
     try {
-      const token = getSessionToken();
+      // For the legacy migration: if localStorage has a bare UUID, send it
+      // in the body so the server can migrate it. Otherwise, the cookie
+      // (sent via `credentials: "include"`) handles everything.
+      const legacyToken = getLegacySessionToken();
       const authHeader = await buildAuthHeader();
       const res = await fetch(`${BASE_URL}/api/ai/chat`, {
         method: "POST",
+        credentials: "include", // ← send + receive cookies
         headers: {
           "Content-Type": "application/json",
           ...authHeader,
         },
-        body: JSON.stringify({ message: trimmed, sessionToken: token }),
+        body: JSON.stringify({
+          message: trimmed,
+          // Only include sessionToken if we have a legacy one to migrate.
+          // Once migrated, the cookie takes over and we stop sending this.
+          ...(legacyToken ? { sessionToken: legacyToken } : {}),
+        }),
         signal: controller.signal,
       });
 
@@ -146,8 +222,12 @@ export function useAiChat(): UseAiChatResult {
       const contentType = res.headers.get("content-type") ?? "";
       if (!contentType.includes("text/event-stream")) {
         const data = await res.json();
-        if (data.sessionToken) {
-          localStorage.setItem(SESSION_TOKEN_KEY, data.sessionToken);
+        // If the server returned a new signed token (migration or
+        // rotation), the Set-Cookie header already set it. If we sent a
+        // legacy token in the body and got a different one back, clear
+        // localStorage — the cookie has taken over.
+        if (legacyToken && data.sessionToken && data.sessionToken !== legacyToken) {
+          clearLegacySessionToken();
         }
         setMessages((prev) =>
           prev.map((m) =>
@@ -170,6 +250,7 @@ export function useAiChat(): UseAiChatResult {
       const decoder = new TextDecoder();
       let buffer = "";
       let received = "";
+      let serverSessionToken: string | null = null;
 
       // eslint-disable-next-line no-constant-condition
       while (true) {
@@ -199,7 +280,15 @@ export function useAiChat(): UseAiChatResult {
           }
 
           if (payload.type === "session" && payload.sessionToken) {
-            localStorage.setItem(SESSION_TOKEN_KEY, payload.sessionToken);
+            // The server sent us a (possibly rotated) signed token. The
+            // Set-Cookie header on the response already set it as an
+            // HttpOnly cookie — we can't read it from JS, and we don't
+            // need to. We DO need to clear the legacy localStorage value
+            // if we were migrating from one.
+            serverSessionToken = payload.sessionToken;
+            if (legacyToken && serverSessionToken !== legacyToken) {
+              clearLegacySessionToken();
+            }
           } else if (payload.type === "delta" && payload.text) {
             received += payload.text;
             // Update the assistant message in place.
@@ -275,29 +364,33 @@ export function useAiChat(): UseAiChatResult {
   }, [loading]);
 
   // ─── Clear conversation ─────────────────────────────────────────────────
+  // The session token now lives in an HttpOnly cookie. We don't generate
+  // a new one client-side — the server does that via `Set-Cookie` on the
+  // DELETE response (clearing the old cookie + the next POST /ai/chat
+  // will mint a fresh anonymous one). We just send the DELETE with the
+  // cookie attached.
   const clear = useCallback(async () => {
     // Cancel any in-flight request first.
     abortRef.current?.abort();
     abortRef.current = null;
 
-    const oldToken = getSessionToken();
-    // Generate a fresh token so the next message starts a new session.
-    const newToken = crypto.randomUUID();
-    localStorage.setItem(SESSION_TOKEN_KEY, newToken);
-
-    // Best-effort: tell the server to delete the old session + messages.
+    // Best-effort: tell the server to delete the session + messages.
+    // The cookie is sent automatically via `credentials: "include"`.
+    // We use the URL token "current" as a placeholder — the server reads
+    // the actual sid from the cookie.
     try {
       const authHeader = await buildAuthHeader();
-      await fetch(
-        `${BASE_URL}/api/ai/sessions/${encodeURIComponent(oldToken)}`,
-        {
-          method: "DELETE",
-          headers: { ...authHeader },
-        },
-      );
+      await fetch(`${BASE_URL}/api/ai/sessions/current`, {
+        method: "DELETE",
+        credentials: "include", // ← send + receive cookies
+        headers: { ...authHeader },
+      });
     } catch {
       // Non-fatal — local state is already cleared.
     }
+
+    // Clear any legacy localStorage token too (migration cleanup).
+    clearLegacySessionToken();
 
     setMessages([]);
     setError(null);

@@ -186,11 +186,44 @@ export type AiChatEvent = typeof aiChatEventsTable.$inferSelect;
 
 /**
  * Per-message feedback (v1.5). One row per assistant message that the user
- * rated with 👍 or 👎. The UNIQUE constraint on `messageId` enforces
- * "one rating per message" — toggling to the opposite rating updates the
- * existing row in place (no duplicate rows).
+ * rated with 👍 or 👎.
+ *
+ * ─── v3.6 Bug #2 fix: ownership tracking ───────────────────────────────────
+ *
+ * The original schema had a UNIQUE constraint on `messageId` alone — meaning
+ * only ONE user could rate each message, and the (unauthenticated) endpoint
+ * let anyone toggle/delete that rating by re-POSTing. The fix:
+ *
+ *   1. Adds `raterUserId` (TEXT, nullable) — Clerk user id of the rater, if
+ *      the requester was authenticated.
+ *   2. Adds `raterSessionSid` (TEXT, nullable) — the `sid` from the rater's
+ *      signed session token, if the requester was anonymous. Matches
+ *      `aiChatSessionsTable.sessionToken`.
+ *
+ * The UNIQUE constraint is now split into TWO partial unique indexes (see
+ * the index list below), enforcing "one rating per (message, rater)":
+ *   - Authenticated ratings: UNIQUE (messageId, raterUserId) WHERE raterUserId IS NOT NULL
+ *   - Anonymous ratings:     UNIQUE (messageId, raterSessionSid) WHERE raterSessionSid IS NOT NULL
+ *
+ * This lets multiple users independently rate the same message (every user
+ * who receives the same AI response can rate it) while preventing a single
+ * rater from spamming the same message.
+ *
+ * The route additionally verifies that the rater OWNS the message being
+ * rated (anonymous = signed token's sid matches the message's session_token;
+ * authenticated = user_id matches the session's user_id). This stops
+ * messageId-enumeration attacks.
  *
  * Cascade rules: deleting the message OR the session removes the feedback.
+ *
+ * ─── Legacy rows ──────────────────────────────────────────────────────────────
+ *
+ * Existing feedback rows (created before this migration) have both
+ * `raterUserId` and `raterSessionSid` as NULL. They're kept for analytics
+ * but cannot be modified by the new route (the route requires at least one
+ * of the two to be set). The SQL migration backfills `raterSessionSid`
+ * from the session the message belongs to (only for anonymous sessions,
+ * since we can't reliably attribute authenticated-session legacy rows).
  */
 export const aiChatFeedbackTable = pgTable(
   "ai_chat_feedback",
@@ -205,12 +238,35 @@ export const aiChatFeedbackTable = pgTable(
     rating: text("rating").notNull(), // "up" | "down"
     comment: text("comment"), // optional free-text feedback
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    // ─── v3.6: who left this rating? At least one is required by the route. ──
+    // The Clerk user id (if authenticated). NULL for anonymous ratings.
+    raterUserId: text("rater_user_id"),
+    // The sid from the rater's signed session token (if anonymous). NULL
+    // for authenticated ratings. Matches ai_chat_sessions.session_token.
+    raterSessionSid: text("rater_session_sid"),
   },
   (table) => [
-    // One rating per message — UPSERT pattern in the route relies on this.
-    uniqueIndex("ai_chat_feedback_message_unique").on(table.messageId),
-    // "Show me all 👎 ratings from last week" — for the future admin panel.
-    uniqueIndex("ai_chat_feedback_rating_idx").on(table.rating, table.createdAt),
+    // ─── v3.6 Bug #2 fix: scoped unique indexes ─────────────────────────────
+    // Authenticated ratings: one per (message, user). Partial — only applies
+    // when raterUserId IS NOT NULL, so multiple users can rate the same
+    // message independently. Legacy rows (raterUserId NULL) are excluded.
+    // Drizzle's .where() builds the partial-index predicate.
+    uniqueIndex("ai_chat_feedback_msg_user_unique")
+      .on(table.messageId, table.raterUserId)
+      .where(sql`rater_user_id IS NOT NULL`),
+    // Anonymous ratings: one per (message, anonymous session). Partial —
+    // only applies when raterSessionSid IS NOT NULL.
+    uniqueIndex("ai_chat_feedback_msg_session_unique")
+      .on(table.messageId, table.raterSessionSid)
+      .where(sql`rater_session_sid IS NOT NULL`),
+    // Lookup index for the route's toggle/update/insert logic. Composite
+    // covers "does rater X already have a rating on message Y?".
+    index("ai_chat_feedback_rater_lookup_idx")
+      .on(table.messageId, table.raterUserId, table.raterSessionSid),
+    // "Show me all 👎 ratings from last week" — for the admin panel.
+    // (Downgraded from uniqueIndex to index — the v1.5 schema declared it
+    // unique but the SQL never was; this matches the actual runtime.)
+    index("ai_chat_feedback_rating_idx").on(table.rating, table.createdAt),
   ],
 );
 

@@ -159,6 +159,18 @@ CREATE INDEX IF NOT EXISTS products_description_trgm_idx
 -- Stores versioned system prompts so admins can A/B test + roll back
 -- without a code deploy. The "active" version is controlled by the
 -- is_active flag (only one row should have is_active = TRUE at a time).
+--
+-- ─── Bug #3 fix: the route now USES the prompt_text ─────────────────────────
+--
+-- Previously the seed row had a placeholder string ('Use aiContext.ts
+-- buildSystemPrompt() fallback') and the route ignored prompt_text
+-- entirely, always using the hardcoded buildSystemPrompt(). Now the
+-- route uses prompt_text as the PRIMARY source, with the hardcoded
+-- template as fallback. The seed is now injected via a separate
+-- parameterized query (see ensureAiTables() below) using the
+-- SYSTEM_PROMPT_TEMPLATE_V1 constant from aiContext.ts — so the DB
+-- and the fallback always stay in sync. The {{summary}} and {{catalog}}
+-- placeholders are replaced at runtime by renderPromptTemplate().
 CREATE TABLE IF NOT EXISTS ai_prompt_versions (
   id SERIAL PRIMARY KEY,
   version TEXT NOT NULL UNIQUE,  -- semver: "1.0.0"
@@ -168,13 +180,6 @@ CREATE TABLE IF NOT EXISTS ai_prompt_versions (
   created_by TEXT,               -- admin email or "system"
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-
--- Seed v1.0.0 if the table is empty (the actual prompt text is loaded
--- by promptVersioning.ts from aiContext.ts's buildSystemPrompt fallback).
--- We insert a minimal row so getActivePrompt() has something to find.
-INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
-SELECT '1.0.0', 'Use aiContext.ts buildSystemPrompt() fallback', 'Initial version (hardcoded in aiContext.ts)', TRUE, 'system'
-WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = '1.0.0');
 
 -- ─── v3.2: Evaluation harness tables ────────────────────────────────────────
 -- Golden Q&A dataset + historical eval results. Used by the eval harness
@@ -237,6 +242,95 @@ CREATE INDEX IF NOT EXISTS ai_response_cache_embedding_idx
 -- Index for TTL-based cleanup (DELETE WHERE created_at < ...)
 CREATE INDEX IF NOT EXISTS ai_response_cache_created_at_idx
   ON ai_response_cache (created_at);
+
+-- ─── v3.6: Feedback ownership (Bug #2 fix) ─────────────────────────────────
+-- The original ai_chat_feedback schema had ONLY (message_id) as a unique
+-- constraint, which meant:
+--   1. Only ONE user could rate each message (anyone clicking rating
+--      toggled/deleted the existing row regardless of who left it).
+--   2. The endpoint was unauthenticated + had no ownership check, so
+--      an attacker iterating messageIds (sequential SERIAL ints: 1, 2, 3,
+--      ...) could:
+--        - Erase legitimate user feedback (toggle-off via re-POST).
+--        - Flood the table with arbitrary ratings, corrupting admin
+--          insights (refusal-rate, satisfaction metrics).
+--        - Spam 200 feedback entries per 15 min per IP (only the global
+--          apiLimiter applied).
+--
+-- The fix adds TWO columns to track WHO left each rating, and replaces
+-- the unique index with TWO partial unique indexes (one per rater type):
+--   - rater_user_id      TEXT NULL — Clerk user id (if authenticated)
+--   - rater_session_sid   TEXT NULL — sid of the signed session token
+--                                     (if anonymous; matches
+--                                     ai_chat_sessions.session_token)
+--
+-- At least one of the two is required (enforced by the route, not by a
+-- CHECK constraint — legacy rows with both NULL are kept for analytics
+-- but cannot be modified by the new route). The partial unique indexes
+-- only apply when the relevant column is non-NULL, so:
+--   - Multiple authenticated users can independently rate the same message.
+--   - Multiple anonymous sessions can independently rate the same message.
+--   - Legacy rows (both NULL) don't conflict with new ones.
+--
+-- The route enforces that the rater actually OWNS the message being rated
+-- (anonymous = signed token's sid matches the message's session_token;
+-- authenticated = user_id matches the session's user_id). This means an
+-- attacker can only rate messages FROM THEIR OWN SESSIONS — they cannot
+-- iterate messageIds and rate messages from other users' conversations.
+ALTER TABLE ai_chat_feedback
+  ADD COLUMN IF NOT EXISTS rater_user_id TEXT,
+  ADD COLUMN IF NOT EXISTS rater_session_sid TEXT;
+
+-- Drop the old "one rating per message" unique index. The new model is
+-- "one rating per (message, rater)" — enforced by the two partial
+-- unique indexes below. IF EXISTS so this is idempotent on re-runs.
+DROP INDEX IF EXISTS ai_chat_feedback_message_unique;
+
+-- Authenticated ratings: one per (message, user).
+-- Partial index — only applies when rater_user_id IS NOT NULL. Multiple
+-- users can rate the same message independently (the use case: every
+-- user who receives the same AI response can rate it).
+CREATE UNIQUE INDEX IF NOT EXISTS ai_chat_feedback_msg_user_unique
+  ON ai_chat_feedback (message_id, rater_user_id)
+  WHERE rater_user_id IS NOT NULL;
+
+-- Anonymous ratings: one per (message, anonymous session).
+-- Partial index — only applies when rater_session_sid IS NOT NULL.
+-- This stops a single anonymous session from rating the same message
+-- multiple times (the toggle behavior is scoped to the session).
+CREATE UNIQUE INDEX IF NOT EXISTS ai_chat_feedback_msg_session_unique
+  ON ai_chat_feedback (message_id, rater_session_sid)
+  WHERE rater_session_sid IS NOT NULL;
+
+-- Index for fast lookup of a single rater's existing feedback on a
+-- message (used by the route's toggle/update/insert logic). Composite
+-- index covers the most common query: "does user X already have a
+-- rating on message Y?"
+CREATE INDEX IF NOT EXISTS ai_chat_feedback_rater_lookup_idx
+  ON ai_chat_feedback (message_id, rater_user_id, rater_session_sid);
+
+-- Backfill the existing (legacy) feedback rows' rater_session_sid from
+-- the session they belong to. This is a best-effort migration: legacy
+-- rows had no rater tracking, so we attribute them to the session that
+-- contains the rated message. This is imperfect (the rater might have
+-- been a different anonymous session, or an authenticated user) but
+-- it's better than leaving both columns NULL — at least the data is
+-- attributed to SOMETHING, and the partial unique indexes will start
+-- applying to them.
+--
+-- We only backfill rows where BOTH rater columns are NULL (truly legacy)
+-- AND the message's session is anonymous (user_id IS NULL). For legacy
+-- rows on authenticated sessions, we can't know which user left the
+-- feedback, so we leave them NULL (they'll show in analytics but won't
+-- be toggleable by anyone).
+UPDATE ai_chat_feedback f
+  SET rater_session_sid = s.session_token
+  FROM ai_chat_sessions s, ai_chat_messages m
+  WHERE f.message_id = m.id
+    AND m.session_id = s.id
+    AND s.user_id IS NULL
+    AND f.rater_user_id IS NULL
+    AND f.rater_session_sid IS NULL;
 `;
 
 export async function ensureAiTables(): Promise<void> {
@@ -245,6 +339,36 @@ export async function ensureAiTables(): Promise<void> {
     logger.info(
       "AI chat tables ensured (ai_chat_sessions, ai_chat_messages, ai_chat_events, v3.0 columns)",
     );
+
+    // ─── Bug #3 fix: seed the v1.0.0 prompt with the ACTUAL prompt text ───
+    // Previously the seed had a placeholder string and the route ignored
+    // prompt_text. Now the route uses prompt_text as the PRIMARY source,
+    // so the seed must contain the real template. We inject it via a
+    // parameterized query (the MIGRATION_SQL template literal can't
+    // safely contain the prompt text due to apostrophes + JS template
+    // literal escaping). Using the SYSTEM_PROMPT_TEMPLATE_V1 constant
+    // ensures the DB seed and the fallback always stay in sync — if
+    // someone updates the constant in aiContext.ts, they should also
+    // create a new DB version (v1.1.0) rather than mutating v1.0.0.
+    try {
+      const { SYSTEM_PROMPT_TEMPLATE_V1 } = await import("./aiContext");
+      await pool.query(
+        `INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
+         SELECT $1, $2, $3, TRUE, $4
+         WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = $1)`,
+        [
+          "1.0.0",
+          SYSTEM_PROMPT_TEMPLATE_V1,
+          "Initial version (mirrors SYSTEM_PROMPT_TEMPLATE_V1 from aiContext.ts). " +
+            "Supports {{summary}} and {{catalog}} placeholders rendered by renderPromptTemplate().",
+          "system",
+        ],
+      );
+    } catch (seedErr) {
+      // Non-fatal: the route will fall back to the hardcoded template
+      // if the seed fails. Log for investigation.
+      logger.warn({ err: seedErr }, "AI: failed to seed prompt v1.0.0 text (route will use fallback)");
+    }
   } catch (err) {
     logger.error({ err }, "Failed to ensure AI chat tables");
     // Do NOT throw — same rationale as ensureConversationsTables: it's
