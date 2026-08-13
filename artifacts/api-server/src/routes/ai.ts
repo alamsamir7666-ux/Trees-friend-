@@ -58,6 +58,9 @@ import { AI_TOOL_DECLARATIONS, executeTool } from "../lib/aiTools";
 import { streamChat, isAnyProviderConfigured } from "../lib/aiRouter";
 import { describeError } from "../lib/describeError";
 import { redactPii } from "../lib/piiRedaction";
+import { calculateCost } from "../lib/costTracker";
+import { getCachedResponse, setCachedResponse } from "../lib/semanticCache";
+import { getActivePrompt } from "../lib/promptVersioning";
 import {
   loadSessionMemory,
   maybeSummarize,
@@ -209,13 +212,17 @@ async function persistMessage(
     model?: string;
     responseMs?: number;
     tokenCount?: number;
+    costUsd?: number;
+    provider?: string;
+    promptVersion?: string;
   } = {},
 ): Promise<number | undefined> {
   try {
     const result = await pool.query<{ id: number }>(
       `INSERT INTO ai_chat_messages (session_id, role, content, off_topic, greeting,
-                                      pii_redacted, model, response_ms, token_count)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                                      pii_redacted, model, response_ms, token_count,
+                                      cost_usd, provider, prompt_version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id`,
       [
         sessionId,
@@ -227,6 +234,9 @@ async function persistMessage(
         options.model ?? null,
         options.responseMs ?? null,
         options.tokenCount ?? null,
+        options.costUsd ?? null,
+        options.provider ?? null,
+        options.promptVersion ?? null,
       ],
     );
     // Bump updated_at on the session so we can sort by "most recently active"
@@ -412,7 +422,38 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // resume from on reconnect.
   res.write(`data: ${JSON.stringify({ type: "session", sessionToken: token })}\n\n`);
 
-  // ─── 11. Stream Gemini response ───
+  // ─── v3.2: Semantic cache check ────────────────────────────────────────
+  // Before calling the AI provider, check if we have a cached response for
+  // this (systemPrompt + history + userMessage) combination. If yes,
+  // stream the cached response instead — zero API cost, instant response.
+  //
+  // Skip cache for private queries (user asking about their orders, etc.)
+  const isPrivateQuery = /my order|where is my order|what did i buy|my orders/i.test(safeMessage);
+  const cached = await getCachedResponse(systemPrompt, geminiHistory, safeMessage, isPrivateQuery);
+
+  if (cached) {
+    // Cache hit — stream the cached response + persist it
+    logger.info(
+      { model: cached.model, provider: cached.provider, hitCount: cached.hitCount },
+      "AI: cache HIT, streaming cached response",
+    );
+    res.write(`data: ${JSON.stringify({ type: "delta", text: cached.response })}\n\n`);
+    const assistantMsgId = await persistMessage(session.id, "assistant", cached.response, {
+      model: cached.model,
+      provider: cached.provider,
+      responseMs: Date.now() - requestStartTime,
+      costUsd: 0, // cached = free
+      promptVersion: "cached",
+    });
+    if (assistantMsgId != null) {
+      res.write(`data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`);
+    }
+    res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+    res.end();
+    return;
+  }
+
+  // ─── 11. Stream AI response ───
   let fullResponse = "";
   let assistantMsgId: number | undefined;
   let firstChunkTime: number | null = null;
@@ -421,7 +462,10 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // `let` directly with a closure assignment breaks CFA because TS
   // assumes closures may not run; an object property access bypasses
   // the narrowing.
-  const metaHolder: { value: { model: string; usage?: unknown } | null } = { value: null };
+  const metaHolder: { value: { model: string; usage?: unknown; provider?: string } | null } = { value: null };
+
+  // v3.2: get the active prompt version for tracking
+  const promptVersionInfo = await getActivePrompt();
 
   try {
     const stream = streamChat(
@@ -454,22 +498,56 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     // v3.0: extract token count from usage metadata (if Gemini provided it).
     // The shape is: { promptTokenCount, candidatesTokenCount, totalTokenCount }
     let tokenCount: number | undefined;
+    let promptTokens: number | undefined;
+    let completionTokens: number | undefined;
     if (metaHolder.value?.usage && typeof metaHolder.value.usage === "object") {
       const usage = metaHolder.value.usage as {
         totalTokenCount?: number;
         candidatesTokenCount?: number;
+        promptTokenCount?: number;
       };
       tokenCount = usage.totalTokenCount ?? usage.candidatesTokenCount;
+      promptTokens = usage.promptTokenCount;
+      completionTokens = usage.candidatesTokenCount;
     }
+
+    // v3.2: calculate USD cost from token usage
+    const costBreakdown = metaHolder.value?.model
+      ? calculateCost(metaHolder.value.model, {
+          promptTokens,
+          completionTokens,
+          totalTokens: tokenCount,
+        })
+      : null;
 
     // ─── Persist the assistant message BEFORE sending done ───
     // We need its DB id so the frontend can wire up feedback buttons.
     // v3.0: also persist model, response_ms, and token_count.
+    // v3.2: also persist cost_usd, provider, prompt_version.
     assistantMsgId = await persistMessage(session.id, "assistant", fullResponse, {
       model: metaHolder.value?.model,
       responseMs: Date.now() - requestStartTime,
       tokenCount,
+      costUsd: costBreakdown?.costUsd,
+      provider: metaHolder.value?.provider,
+      promptVersion: promptVersionInfo.version,
     });
+
+    // v3.2: store the response in the semantic cache for future hits.
+    // Skip if the response was too long, had tool calls, or was a private query.
+    if (fullResponse && !isPrivateQuery) {
+      setCachedResponse(
+        systemPrompt,
+        geminiHistory,
+        safeMessage,
+        fullResponse,
+        metaHolder.value?.model ?? "unknown",
+        metaHolder.value?.provider ?? "unknown",
+        false, // hadToolCalls — TODO: track this from the stream
+        isPrivateQuery,
+      ).catch(() => {}); // fire-and-forget
+    }
+
     if (assistantMsgId != null) {
       res.write(`data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`);
     }

@@ -31,6 +31,8 @@
  */
 import { logger } from "./logger";
 import type { FunctionDeclaration } from "@google/genai";
+import { checkCircuit, recordSuccess, recordFailure } from "./circuitBreaker";
+import { truncateHistory } from "./tokenCounter";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
 // Groq models are stable (unlike Gemini's frequent deprecations), so we
@@ -277,6 +279,166 @@ async function callGroq(
   return (await response.json()) as GroqChatResponse;
 }
 
+// ─── Core: stream Groq response (real SSE, not word-by-word hack) ───────────
+
+/**
+ * Streams a chat completion from Groq using real Server-Sent Events.
+ *
+ * Yields text deltas as they arrive from the API. Also accumulates
+ * tool_calls from the stream (if any) so the caller can execute them
+ * and do another round.
+ *
+ * This replaces the v3.0 "word-by-word with 8ms delay" hack with
+ * proper streaming — the industry standard approach.
+ *
+ * @returns An async generator that yields text chunks. After the generator
+ *   completes, check `getAccumulatedToolCalls()` to see if the model
+ *   requested any function calls.
+ */
+interface StreamResult {
+  toolCalls: GroqMessage["tool_calls"] | null;
+  finishReason: string | null;
+}
+
+async function* streamGroqCompletion(
+  model: string,
+  messages: GroqMessage[],
+  tools?: GroqTool[],
+): AsyncGenerator<string, StreamResult, unknown> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    throw new Error("GROQ_API_KEY is not set.");
+  }
+
+  const body: GroqChatRequest = {
+    model,
+    messages,
+    temperature: getTemperature(),
+    max_tokens: getMaxOutputTokens(),
+    stream: true,
+  };
+  if (tools && tools.length > 0) {
+    body.tools = tools;
+    body.tool_choice = "auto";
+  }
+
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    const err = new Error(
+      `Groq API error ${response.status}: ${errText.slice(0, 500)}`,
+    ) as any;
+    err.status = response.status;
+    err.errorDetails = errText;
+    throw err;
+  }
+
+  if (!response.body) {
+    throw new Error("Groq API returned no response body for streaming.");
+  }
+
+  // Accumulate tool_calls from stream deltas.
+  // Tool calls come in pieces: first chunk has {id, type, function: {name, arguments: ""}},
+  // subsequent chunks append to function.arguments by index.
+  const toolCallAccumulator = new Map<number, {
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>();
+  let finishReason: string | null = null;
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE events are separated by \n\n
+    let sepIdx: number;
+    while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, sepIdx);
+      buffer = buffer.slice(sepIdx + 2);
+
+      const dataLines = rawEvent
+        .split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).trim());
+      if (dataLines.length === 0) continue;
+      const payloadStr = dataLines.join("");
+
+      if (payloadStr === "[DONE]") {
+        // Stream complete — return accumulated tool calls
+        const toolCalls = toolCallAccumulator.size > 0
+          ? Array.from(toolCallAccumulator.entries())
+              .sort(([a], [b]) => a - b)
+              .map(([_, tc]) => tc)
+          : null;
+        return { toolCalls, finishReason };
+      }
+
+      try {
+        const payload = JSON.parse(payloadStr);
+        const choice = payload.choices?.[0];
+        const delta = choice?.delta;
+
+        // Yield text content as it arrives (real streaming)
+        if (delta?.content && typeof delta.content === "string") {
+          yield delta.content;
+        }
+
+        // Accumulate tool_calls (for function-calling rounds)
+        if (delta?.tool_calls && Array.isArray(delta.tool_calls)) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            const existing = toolCallAccumulator.get(idx);
+            if (existing) {
+              // Append to existing tool call
+              if (tc.function?.name) existing.function.name = tc.function.name;
+              if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
+              if (tc.id) existing.id = tc.id;
+            } else {
+              // New tool call
+              toolCallAccumulator.set(idx, {
+                id: tc.id ?? `call_${idx}`,
+                type: "function",
+                function: {
+                  name: tc.function?.name ?? "",
+                  arguments: tc.function?.arguments ?? "",
+                },
+              });
+            }
+          }
+        }
+
+        if (choice?.finish_reason) {
+          finishReason = choice.finish_reason;
+        }
+      } catch {
+        // skip malformed chunks
+      }
+    }
+  }
+
+  // If we get here without seeing [DONE], return what we have
+  const toolCalls = toolCallAccumulator.size > 0
+    ? Array.from(toolCallAccumulator.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([_, tc]) => tc)
+    : null;
+  return { toolCalls, finishReason };
+}
+
 // ─── Error classification ───────────────────────────────────────────────────
 
 function isQuotaExhaustedError(err: unknown): boolean {
@@ -348,26 +510,77 @@ export async function* streamGroqChat(
   let lastErr: unknown = null;
 
   for (const modelName of tryModels) {
+    // v3.2: Check circuit breaker before making any API call.
+    // If the circuit is open, skip this model entirely (don't waste a
+    // round-trip that will likely fail).
+    const circuitCheck = await checkCircuit("groq", modelName);
+    if (!circuitCheck.allowed) {
+      logger.info(
+        { model: modelName, state: circuitCheck.state, retryInMs: circuitCheck.retryInMs },
+        "Groq: circuit breaker OPEN, skipping model",
+      );
+      continue;
+    }
+
     try {
-      // ─── Multi-round function-calling loop ─────────────────────────────
-      // Same pattern as gemini.ts: non-streaming call first to check for
-      // tool_calls, then stream the final text response.
+      // ─── Multi-round function-calling loop with REAL streaming ───────
+      // v3.2: uses streamGroqCompletion() for real SSE streaming instead
+      // of the word-by-word hack. Tool calls are accumulated from stream
+      // deltas and executed between rounds.
       const MAX_TOOL_ROUNDS = 4;
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        // Non-streaming call (to detect tool_calls)
-        const response = await callGroq(modelName, messages, round === 0 ? groqTools : undefined);
-
-        // Emit metadata (model + usage) to the caller.
-        if (onMetadata) {
-          onMetadata({
-            model: response.model ?? modelName,
-            usage: response.usage,
-          });
+        // v3.2: truncate history to fit the model's context window.
+        // This prevents 400 errors when the conversation is very long.
+        const { history: truncatedHistory, truncated } = truncateHistory(
+          systemPrompt,
+          history,
+          userMessage,
+          modelName,
+          !!groqTools,
+        );
+        if (truncated) {
+          logger.debug({ model: modelName, droppedMessages: truncated }, "Groq: truncated history to fit context window");
         }
 
-        const choice = response.choices?.[0];
-        const toolCalls = choice?.message?.tool_calls;
+        // Build messages from the (possibly truncated) history
+        const roundMessages: GroqMessage[] = [
+          { role: "system", content: systemPrompt },
+          ...truncatedHistory.map((h) => ({
+            role: (h.role === "model" ? "assistant" : "user") as "assistant" | "user",
+            content: h.text,
+          })),
+          { role: "user", content: userMessage },
+        ];
+        // For rounds > 0, use the full messages array (includes tool results)
+        const messagesForRound = round === 0 ? roundMessages : messages;
+
+        // Streaming call — yields text as it arrives, accumulates tool_calls
+        const stream = streamGroqCompletion(
+          modelName,
+          messagesForRound,
+          round === 0 ? groqTools : undefined,
+        );
+
+        let result: StreamResult | undefined;
+        while (true) {
+          const { value, done } = await stream.next();
+          if (done) {
+            result = value as StreamResult;
+            break;
+          }
+          if (typeof value === "string") {
+            yield value;
+          }
+        }
+
+        // Emit metadata (model name; Groq streaming doesn't return usage
+        // in the stream — we'd need a separate call for exact token counts).
+        if (onMetadata) {
+          onMetadata({ model: modelName, usage: undefined });
+        }
+
+        const toolCalls = result?.toolCalls;
 
         if (toolCalls && toolCalls.length > 0 && tools) {
           // Execute each tool call + append results to messages
@@ -379,7 +592,7 @@ export async function* streamGroqChat(
           // Append the assistant message with tool_calls to the conversation
           messages.push({
             role: "assistant",
-            content: choice.message.content,
+            content: null,
             tool_calls: toolCalls,
           });
 
@@ -391,10 +604,10 @@ export async function* streamGroqChat(
             } catch {
               // malformed arguments — proceed with empty
             }
-            const result = await tools.execute(tc.function.name, args, userId ?? null);
+            const toolResult = await tools.execute(tc.function.name, args, userId ?? null);
             messages.push({
               role: "tool",
-              content: JSON.stringify(result),
+              content: JSON.stringify(toolResult),
               tool_call_id: tc.id,
             });
           }
@@ -403,28 +616,9 @@ export async function* streamGroqChat(
           continue;
         }
 
-        // ─── No tool calls — this is the final text response ────────────
-        const text = choice?.message?.content;
-        if (text) {
-          // We have the full text (non-streaming call). Stream it in
-          // chunks to simulate streaming for the frontend.
-          // This is simpler than re-calling with stream:true, and for
-          // Groq's fast LPU hardware the latency is negligible.
-          //
-          // Split into word-level chunks for a natural typing effect.
-          const words = text.split(/(\s+)/);
-          for (const word of words) {
-            yield word;
-            // Tiny delay to make streaming visible (Groq is very fast,
-            // otherwise the whole response appears in <100ms).
-            // Skip delay if the word is just whitespace.
-            if (word.trim()) {
-              await new Promise((r) => setTimeout(r, 8));
-            }
-          }
-        }
-
-        // Success — cache this model.
+        // ─── No tool calls — response is complete (already streamed) ────
+        // Success — record with circuit breaker + cache this model.
+        await recordSuccess("groq", modelName);
         if (_workingModel !== modelName) {
           logger.info(
             { model: modelName, previousModel: _workingModel },
@@ -436,9 +630,14 @@ export async function* streamGroqChat(
       }
 
       // Hit MAX_TOOL_ROUNDS
+      await recordFailure("groq", modelName, "other");
       throw new Error("Groq: hit max tool rounds — model kept calling functions without producing a final answer");
     } catch (err) {
       lastErr = err;
+
+      // Record failure with circuit breaker (for all error types)
+      const errorType = isQuotaExhaustedError(err) ? "429" : "other";
+      await recordFailure("groq", modelName, errorType);
 
       if (isQuotaExhaustedError(err)) {
         setCooldown(modelName);

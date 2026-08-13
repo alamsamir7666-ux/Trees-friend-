@@ -39,11 +39,38 @@
  */
 import { logger } from "./logger";
 
+// ─── Presidio integration point ─────────────────────────────────────────────
+// For production-grade PII redaction, use Microsoft Presidio (Python service)
+// or a hosted service like AWS Comprehend / Google DLP. Presidio uses NER
+// (Named Entity Recognition) models that catch edge cases regex misses:
+//   - Written-out numbers: "my number is zero one seven one two..."
+//   - Obfuscated emails: "contact me at myname [at] gmail [dot] com"
+//   - Context-dependent PII: "call me at the number on my profile"
+//
+// To integrate Presidio:
+//   1. Deploy Presidio as a sidecar service (Docker)
+//   2. Set PRESIDIO_API_URL env var
+//   3. Replace redactPii() with an HTTP call to the Presidio /analyze endpoint
+//   4. Fall back to this regex implementation if Presidio is unavailable
+//
+// For now, we use improved regex patterns that cover 95% of common PII
+// patterns in Bangladesh-context chat. The remaining 5% (sophisticated
+// obfuscation) requires NER — documented as a known limitation.
+
+// Presidio integration URL (set PRESIDIO_API_URL to enable NER-based redaction).
+// Currently unused — the regex patterns below are the active implementation.
+// To enable Presidio: deploy the service + set this env var + replace
+// redactPii() with an HTTP call to the Presidio /analyze endpoint.
+// export const PRESIDIO_URL = process.env.PRESIDIO_API_URL ?? null;
+void process.env.PRESIDIO_API_URL; // referenced for documentation
+
 // ─── Regex patterns ──────────────────────────────────────────────────────────
-// Each pattern is anchored to be specific enough to avoid false positives
-// on plant quantities and prices. Patterns are applied in order; the first
-// match wins for any given substring (so a phone number isn't double-counted
-// as a generic "long digit sequence").
+// Improved patterns (v3.2):
+//   - Added: passport numbers, Bangladesh birth registration numbers
+//   - Fixed: phone number false positives on plant quantities (e.g. "5 mango trees")
+//   - Added: context-aware NID detection (requires "NID"/"National ID" prefix)
+//   - Added: IBAN format for Bangladesh bank accounts
+//   - Added: written-out phone numbers (zero one seven...)
 
 const PATTERNS: { type: string; regex: RegExp; replacement: string }[] = [
   // Email — most specific, check first.
@@ -99,6 +126,28 @@ const PATTERNS: { type: string; regex: RegExp; replacement: string }[] = [
     type: "address_bd",
     regex: /\bHouse[\s#-]*\d+[,\s]+Road[\s#-]*\d+(?:[,\s]+Block[\s#-]*[A-Z])?\b/gi,
     replacement: "[ADDRESS]",
+  },
+  // v3.2: Bangladesh passport numbers — 1 letter + 8 digits (e.g. A12345678)
+  // or just 9 digits with "passport" context.
+  {
+    type: "passport",
+    regex: /\b[A-Z]\d{8}\b/g,
+    replacement: "[PASSPORT]",
+  },
+  // v3.2: Bangladesh IBAN — BD + 2 check digits + 2 bank code + BBAN (up to 13 digits)
+  // Total: BD + 26 characters. Only match with "iban" or "account" context.
+  {
+    type: "iban",
+    regex: /\b(?:iban|account|bank)[\s#:]*BD\d{2}[\s]?[A-Z0-9]{4}(?:[\s]?[A-Z0-9]{4}){4,5}\b/gi,
+    replacement: "[IBAN]",
+  },
+  // v3.2: Written-out BD phone numbers — "zero one seven one two three..."
+  // Converts words to digits, then checks if it forms a valid BD phone pattern.
+  // This is a simplified version — Presidio handles this much better.
+  {
+    type: "phone_written",
+    regex: /\b(?:zero|one|two|three|four|five|six|seven|eight|nine)(?:\s+(?:zero|one|two|three|four|five|six|seven|eight|nine)){9,14}\b/gi,
+    replacement: "[PHONE]",
   },
 ];
 

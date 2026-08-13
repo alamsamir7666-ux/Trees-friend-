@@ -113,6 +113,12 @@ ALTER TABLE ai_chat_messages
   ADD COLUMN IF NOT EXISTS pii_redacted BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS summarized BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- v3.2: cost tracking (USD per request) + provider + prompt version
+ALTER TABLE ai_chat_messages
+  ADD COLUMN IF NOT EXISTS cost_usd REAL,
+  ADD COLUMN IF NOT EXISTS provider TEXT,
+  ADD COLUMN IF NOT EXISTS prompt_version TEXT;
+
 -- Index for model-usage analytics (GROUP BY model, COUNT, AVG(response_ms)).
 CREATE INDEX IF NOT EXISTS ai_chat_messages_model_idx
   ON ai_chat_messages (model);
@@ -148,6 +154,62 @@ CREATE INDEX IF NOT EXISTS products_name_trgm_idx
   ON products USING gin (name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS products_description_trgm_idx
   ON products USING gin (description gin_trgm_ops);
+
+-- ─── v3.2: Prompt versioning ────────────────────────────────────────────────
+-- Stores versioned system prompts so admins can A/B test + roll back
+-- without a code deploy. The "active" version is controlled by the
+-- is_active flag (only one row should have is_active = TRUE at a time).
+CREATE TABLE IF NOT EXISTS ai_prompt_versions (
+  id SERIAL PRIMARY KEY,
+  version TEXT NOT NULL UNIQUE,  -- semver: "1.0.0"
+  prompt_text TEXT NOT NULL,
+  change_log TEXT,               -- what changed in this version
+  is_active BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by TEXT,               -- admin email or "system"
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Seed v1.0.0 if the table is empty (the actual prompt text is loaded
+-- by promptVersioning.ts from aiContext.ts's buildSystemPrompt fallback).
+-- We insert a minimal row so getActivePrompt() has something to find.
+INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
+SELECT '1.0.0', 'Use aiContext.ts buildSystemPrompt() fallback', 'Initial version (hardcoded in aiContext.ts)', TRUE, 'system'
+WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = '1.0.0');
+
+-- ─── v3.2: Evaluation harness tables ────────────────────────────────────────
+-- Golden Q&A dataset + historical eval results. Used by the eval harness
+-- to test prompt/model changes before deploying.
+CREATE TABLE IF NOT EXISTS ai_eval_cases (
+  id SERIAL PRIMARY KEY,
+  question TEXT NOT NULL,
+  expected_keywords TEXT[] NOT NULL DEFAULT '{}',
+  expected_refusal BOOLEAN NOT NULL DEFAULT FALSE,
+  category TEXT NOT NULL DEFAULT 'general',
+  notes TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS ai_eval_results (
+  id SERIAL PRIMARY KEY,
+  case_id INTEGER NOT NULL REFERENCES ai_eval_cases(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  question TEXT NOT NULL,
+  response TEXT NOT NULL,
+  keyword_overlap REAL NOT NULL,
+  refused BOOLEAN NOT NULL,
+  response_length INTEGER NOT NULL,
+  latency_ms INTEGER NOT NULL,
+  passed BOOLEAN NOT NULL,
+  model TEXT,
+  provider TEXT,
+  error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ai_eval_results_run_idx
+  ON ai_eval_results (run_id);
+CREATE INDEX IF NOT EXISTS ai_eval_results_case_idx
+  ON ai_eval_results (case_id, created_at DESC);
 `;
 
 export async function ensureAiTables(): Promise<void> {
