@@ -33,6 +33,7 @@ import { logger } from "./logger";
 import type { FunctionDeclaration } from "@google/genai";
 import { checkCircuit, recordSuccess, recordFailure } from "./circuitBreaker";
 import { truncateHistory } from "./tokenCounter";
+import { isOnCooldown, setCooldown, clearAllCooldowns } from "./modelCooldown";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
 // Groq models are stable (unlike Gemini's frequent deprecations), so we
@@ -58,22 +59,9 @@ function getMaxOutputTokens(): number {
 
 const COOLDOWN_MS = Number(process.env.AI_QUOTA_COOLDOWN_MS ?? 60_000);
 
-// ─── Per-model cooldown (same pattern as gemini.ts) ─────────────────────────
-const _modelCooldowns = new Map<string, number>();
-
-function isOnCooldown(modelName: string): boolean {
-  const until = _modelCooldowns.get(modelName);
-  if (!until) return false;
-  if (Date.now() >= until) {
-    _modelCooldowns.delete(modelName);
-    return false;
-  }
-  return true;
-}
-
-function setCooldown(modelName: string): void {
-  _modelCooldowns.set(modelName, Date.now() + COOLDOWN_MS);
-}
+// v3.3: Per-model cooldown is now Redis-backed (see lib/modelCooldown.ts).
+// The isOnCooldown() and setCooldown() functions are imported from there.
+// This enables distributed coordination across server instances.
 
 // ─── Cached working model ────────────────────────────────────────────────────
 let _workingModel: string | null = null;
@@ -88,19 +76,25 @@ export function getGroqWorkingModel(): string | null {
   return _workingModel;
 }
 
-export function getGroqDebugInfo(): {
+export async function getGroqDebugInfo(): Promise<{
   configured: boolean;
   workingModel: string | null;
   modelChain: string[];
   cooldowns: { model: string; retryInMs: number; retryAt: string }[];
   groqModelEnv: string | null;
-} {
-  const now = Date.now();
+}> {
+  // v3.3: cooldowns are now Redis-backed, so we need to fetch them async.
+  // We use getCooldownRemaining for each model in the chain.
+  const { getCooldownRemaining } = await import("./modelCooldown");
   const cooldowns: { model: string; retryInMs: number; retryAt: string }[] = [];
-  for (const [model, until] of _modelCooldowns) {
-    const retryInMs = Math.max(0, until - now);
-    if (retryInMs > 0) {
-      cooldowns.push({ model, retryInMs, retryAt: new Date(until).toISOString() });
+  for (const model of GROQ_MODEL_CHAIN) {
+    const remaining = await getCooldownRemaining("groq", model);
+    if (remaining > 0) {
+      cooldowns.push({
+        model,
+        retryInMs: remaining,
+        retryAt: new Date(Date.now() + remaining).toISOString(),
+      });
     }
   }
   return {
@@ -116,9 +110,9 @@ export function getGroqDebugInfo(): {
  * Clears the working model cache + cooldowns. Used by the admin
  * /api/ai/admin/providers?refresh=1 endpoint after swapping API keys.
  */
-export function forceGroqRediscover(): void {
+export async function forceGroqRediscover(): Promise<void> {
   _workingModel = null;
-  _modelCooldowns.clear();
+  await clearAllCooldowns();
 }
 
 // ─── Groq API types ──────────────────────────────────────────────────────────
@@ -502,7 +496,9 @@ export async function* streamGroqChat(
   } else {
     if (_workingModel) tryModels.push(_workingModel);
     for (const m of GROQ_MODEL_CHAIN) {
-      if (!tryModels.includes(m) && !isOnCooldown(m)) tryModels.push(m);
+      // v3.3: isOnCooldown is now async (Redis-backed)
+      const onCooldown = await isOnCooldown("groq", m);
+      if (!tryModels.includes(m) && !onCooldown) tryModels.push(m);
     }
     if (tryModels.length === 0) tryModels.push(...GROQ_MODEL_CHAIN);
   }
@@ -640,7 +636,7 @@ export async function* streamGroqChat(
       await recordFailure("groq", modelName, errorType);
 
       if (isQuotaExhaustedError(err)) {
-        setCooldown(modelName);
+        await setCooldown("groq", modelName);
         const wasCached = _workingModel === modelName;
         if (wasCached) {
           _workingModel = null;

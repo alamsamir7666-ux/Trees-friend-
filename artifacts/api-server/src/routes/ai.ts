@@ -62,6 +62,11 @@ import { calculateCost } from "../lib/costTracker";
 import { getCachedResponse, setCachedResponse } from "../lib/semanticCache";
 import { getActivePrompt } from "../lib/promptVersioning";
 import {
+  generateFollowupsStructured,
+  formatFollowupsBlock,
+} from "../lib/structuredOutput";
+import { extractFollowups } from "../lib/followupParser";
+import {
   loadSessionMemory,
   maybeSummarize,
   fetchHistoryForGemini,
@@ -519,6 +524,35 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
           totalTokens: tokenCount,
         })
       : null;
+
+    // v3.3: Structured output fallback for [followups] block.
+    // Check if the AI's response contains a valid [followups]...[/followups] block.
+    // If not (the AI forgot or malformed it), call generateFollowupsStructured()
+    // which uses the provider's response_format/responseSchema API to generate
+    // guaranteed-valid followups as JSON. This eliminates the 5% failure rate
+    // where the frontend parser finds no followups.
+    //
+    // Done BEFORE persisting so the stored response always has a valid block.
+    // The extra API call only happens when the prompt fails (~5% of the time).
+    if (fullResponse && !piiResult.hadPii) {
+      const { found } = extractFollowups(fullResponse);
+      if (!found) {
+        logger.info("AI: [followups] block missing, generating via structured output");
+        try {
+          const structuredFollowups = await generateFollowupsStructured(
+            safeMessage,
+            fullResponse,
+          );
+          if (structuredFollowups.length > 0) {
+            const followupsBlock = formatFollowupsBlock(structuredFollowups);
+            fullResponse += followupsBlock;
+            res.write(`data: ${JSON.stringify({ type: "delta", text: followupsBlock })}\n\n`);
+          }
+        } catch (err) {
+          logger.warn({ err }, "AI: structured followup generation failed (non-fatal)");
+        }
+      }
+    }
 
     // ─── Persist the assistant message BEFORE sending done ───
     // We need its DB id so the frontend can wire up feedback buttons.

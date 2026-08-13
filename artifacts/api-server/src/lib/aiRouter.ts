@@ -72,7 +72,7 @@ export interface ChatTools {
  * set). If NO providers are configured, returns [] — the caller will
  * throw a clear "no providers configured" error.
  */
-function getProviderChain(): ProviderName[] {
+export function getProviderChain(): ProviderName[] {
   const raw = process.env.AI_PROVIDERS ?? "gemini,groq";
   const requested = raw
     .split(",")
@@ -325,23 +325,29 @@ export function isAnyProviderConfigured(): boolean {
 /**
  * Returns debug info for all providers. Used by the
  * /api/ai/admin/providers endpoint.
+ *
+ * v3.3: now async because cooldown checks are Redis-backed.
  */
-export function getProvidersDebugInfo(): {
+export async function getProvidersDebugInfo(): Promise<{
   providerChain: ProviderName[];
   configuredProviders: ProviderName[];
-  gemini: ReturnType<typeof getGeminiDebugInfo> & { configured: boolean };
-  groq: ReturnType<typeof getGroqDebugInfo>;
+  gemini: Awaited<ReturnType<typeof getGeminiDebugInfo>> & { configured: boolean };
+  groq: Awaited<ReturnType<typeof getGroqDebugInfo>>;
   aiProvidersEnv: string | null;
-} {
+}> {
   const configured = getProviderChain();
+  const [geminiInfo, groqInfo] = await Promise.all([
+    getGeminiDebugInfo(),
+    getGroqDebugInfo(),
+  ]);
   return {
     providerChain: configured,
     configuredProviders: configured,
     gemini: {
       configured: isGeminiConfigured(),
-      ...getGeminiDebugInfo(),
+      ...geminiInfo,
     },
-    groq: getGroqDebugInfo(),
+    groq: groqInfo,
     aiProvidersEnv: process.env.AI_PROVIDERS ?? null,
   };
 }
@@ -349,9 +355,10 @@ export function getProvidersDebugInfo(): {
 /**
  * Clears all provider caches + cooldowns. Used by the admin
  * /api/ai/admin/providers?refresh=1 endpoint after swapping API keys.
+ *
+ * v3.3: now async because cooldown clearing is Redis-backed.
  */
-export function forceAllProvidersRediscover(): void {
-  forceGeminiRediscover();
-  forceGroqRediscover();
+export async function forceAllProvidersRediscover(): Promise<void> {
+  await Promise.all([forceGeminiRediscover(), forceGroqRediscover()]);
   logger.info("AI router: cleared all provider caches (Gemini + Groq)");
 }

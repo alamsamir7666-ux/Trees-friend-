@@ -45,6 +45,7 @@
  */
 import { GoogleGenAI, type FunctionDeclaration } from "@google/genai";
 import { logger } from "./logger";
+import { isOnCooldown, setCooldown, clearAllCooldowns, getCooldownRemaining } from "./modelCooldown";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
 // Google frequently deprecates Gemini models and rotates which ones are
@@ -96,25 +97,10 @@ let _discoveryAttempted = false;
 // Until the cooldown expires, we skip that model entirely (don't even try it).
 // This prevents wasting the 20 RPD quota of gemini-3.6-flash on rapid retries.
 //
-// Default cooldown: 60 seconds. Configurable via AI_QUOTA_COOLDOWN_MS.
-// Rationale: per-MINUTE quotas reset in 60s. Per-DAY quotas won't reset
-// during the cooldown, but at least we don't waste requests trying.
-const _modelCooldowns = new Map<string, number>(); // model -> cooldown-until-ms
-const COOLDOWN_MS = Number(process.env.AI_QUOTA_COOLDOWN_MS ?? 60_000);
-
-function isOnCooldown(modelName: string): boolean {
-  const until = _modelCooldowns.get(modelName);
-  if (!until) return false;
-  if (Date.now() >= until) {
-    _modelCooldowns.delete(modelName);
-    return false;
-  }
-  return true;
-}
-
-function setCooldown(modelName: string): void {
-  _modelCooldowns.set(modelName, Date.now() + COOLDOWN_MS);
-}
+// v3.3: Per-model cooldown is now Redis-backed (see lib/modelCooldown.ts).
+// The isOnCooldown(), setCooldown(), and related functions are imported from there.
+// This enables distributed coordination across server instances — when instance A
+// gets a 429 from a model, instance B knows to skip it too.
 
 // ─── v3.0 configurable generation params ────────────────────────────────────
 // Read once at module load (not per-request) — these are deployment-wide
@@ -331,24 +317,27 @@ export async function discoverAvailableModels(): Promise<string[] | null> {
  * models (due to unrecognized response shape), causing getModelChain()
  * to return [] and the for-loop to try 0 models.
  */
-function getModelChain(): string[] {
+async function getModelChain(): Promise<string[]> {
   const explicit = process.env.AI_MODEL;
   if (explicit && explicit.trim().length > 0) {
     return [explicit.trim()];
   }
 
   // Use discovered models if available AND non-empty, otherwise static chain.
-  // The `&& _discoveredModels.length > 0` check is the v3.0.2 fix —
-  // previously an empty array would be used, causing 0 models to be tried.
   const baseChain =
     _discoveredModels && _discoveredModels.length > 0
       ? _discoveredModels
       : MODEL_FALLBACK_CHAIN;
 
-  // Filter out models on cooldown (recently 429'd).
+  // v3.3: Filter out models on cooldown (Redis-backed, async).
+  // Check all models in parallel for speed.
+  const cooldownChecks = await Promise.all(
+    baseChain.map((m) => isOnCooldown("gemini", m).then((onCd) => ({ m, onCd }))),
+  );
+  const filtered = cooldownChecks.filter(({ onCd }) => !onCd).map(({ m }) => m);
+
   // If ALL models are on cooldown, return the full chain anyway (better
   // to try and get a 429 than to return an empty chain and crash).
-  const filtered = baseChain.filter((m) => !isOnCooldown(m));
   return filtered.length > 0 ? filtered : baseChain;
 }
 
@@ -539,7 +528,8 @@ async function callWithFallback<T>(fn: (modelName: string) => Promise<T>): Promi
 
   const tryModels: string[] = [];
   if (_workingModel) tryModels.push(_workingModel);
-  for (const m of getModelChain()) {
+  const chain = await getModelChain(); // v3.3: now async (Redis cooldown check)
+  for (const m of chain) {
     if (!tryModels.includes(m)) tryModels.push(m);
   }
 
@@ -590,18 +580,18 @@ async function callWithFallback<T>(fn: (modelName: string) => Promise<T>): Promi
         // the same minute. After the cooldown, we'll try it again (per-minute
         // quotas may have reset; per-day quotas won't have, but the 429
         // will tell us that quickly).
-        setCooldown(modelName);
+        await setCooldown("gemini", modelName);
 
         const wasCached = _workingModel === modelName;
         if (wasCached) {
           logger.warn(
-            { model: modelName, err: describeErrorForLog(err), cooldownMs: COOLDOWN_MS },
+            { model: modelName, err: describeErrorForLog(err) },
             "TreeBot: cached model quota exhausted (429), clearing cache + on cooldown, trying next in fallback chain",
           );
           _workingModel = null;
         } else {
           logger.warn(
-            { model: modelName, err: describeErrorForLog(err), cooldownMs: COOLDOWN_MS },
+            { model: modelName, err: describeErrorForLog(err) },
             "TreeBot: model quota exhausted (429), on cooldown, trying next in fallback chain",
           );
         }
@@ -946,14 +936,14 @@ export function getWorkingModel(): string | null {
  * re-check availability after swapping API keys (without restarting
  * the server).
  */
-export function forceRediscover(): void {
+export async function forceRediscover(): Promise<void> {
   _discoveryAttempted = false;
   _discoveredModels = null;
   // Also clear the working model cache — if the API key changed, the
   // previously-cached model may no longer be available.
   _workingModel = null;
-  // Clear cooldowns too — new key = fresh quotas.
-  _modelCooldowns.clear();
+  // v3.3: Clear cooldowns via Redis-backed function (distributed clear).
+  await clearAllCooldowns();
 }
 
 /**
@@ -963,24 +953,27 @@ export function forceRediscover(): void {
  *   - which model is currently cached as "working"
  *   - which models are on cooldown (recently 429'd) and when they'll retry
  *   - the full static fallback chain
+ *
+ * v3.3: now async because cooldowns are Redis-backed.
  */
-export function getModelDebugInfo(): {
+export async function getModelDebugInfo(): Promise<{
   workingModel: string | null;
   discoveredModels: string[] | null;
   discoveryAttempted: boolean;
   staticChain: string[];
-  cooldowns: Array<{ model: string; retryInMs: number; retryAt: string }>;
+  cooldowns: { model: string; retryInMs: number; retryAt: string }[];
   aiModelEnv: string | null;
-} {
-  const now = Date.now();
-  const cooldowns: Array<{ model: string; retryInMs: number; retryAt: string }> = [];
-  for (const [model, until] of _modelCooldowns) {
-    const retryInMs = Math.max(0, until - now);
-    if (retryInMs > 0) {
+}> {
+  const cooldowns: { model: string; retryInMs: number; retryAt: string }[] = [];
+  // v3.3: check Redis for each model's cooldown status
+  const modelsToCheck = _discoveredModels ?? MODEL_FALLBACK_CHAIN;
+  for (const model of modelsToCheck) {
+    const remaining = await getCooldownRemaining("gemini", model);
+    if (remaining > 0) {
       cooldowns.push({
         model,
-        retryInMs,
-        retryAt: new Date(until).toISOString(),
+        retryInMs: remaining,
+        retryAt: new Date(Date.now() + remaining).toISOString(),
       });
     }
   }

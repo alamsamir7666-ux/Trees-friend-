@@ -724,14 +724,12 @@ router.get("/api/ai/admin/top-questions-v2", async (req: Request, res: Response)
 router.get("/ai/admin/models", async (req: Request, res: Response) => {
   try {
     // v3.0.2: ?refresh=1 forces a re-discovery by clearing the cache.
-    // Use this after swapping API keys to see the new key's available models
-    // without restarting the server.
     if (req.query.refresh === "1") {
-      forceRediscover();
+      await forceRediscover(); // v3.3: now async
       logger.info("AI admin: forced model re-discovery (cache cleared)");
     }
 
-    const debugInfo = getModelDebugInfo();
+    const debugInfo = await getModelDebugInfo(); // v3.3: now async
     const geminiConfigured = isGeminiConfigured();
 
     // If discovery hasn't run yet (or was just cleared by refresh=1),
@@ -781,11 +779,11 @@ router.get("/ai/admin/providers", async (req: Request, res: Response) => {
   try {
     // ?refresh=1 clears all provider caches + cooldowns.
     if (req.query.refresh === "1") {
-      forceAllProvidersRediscover();
+      await forceAllProvidersRediscover(); // v3.3: now async
       logger.info("AI admin: forced all-provider re-discovery (caches cleared)");
     }
 
-    const debugInfo = getProvidersDebugInfo();
+    const debugInfo = await getProvidersDebugInfo(); // v3.3: now async
 
     res.json({
       ...debugInfo,
