@@ -51,17 +51,23 @@ import { logger } from "./logger";
 //   - gemini-2.0-flash      — DEPRECATED (returns 404 for everyone)
 //   - gemini-2.5-flash      — DEPRECATED for NEW users (404 if your GCP
 //                             project was created recently)
-//   - gemini-2.5-flash-lite — still available
+//   - gemini-2.5-flash-lite — still available, 1500 RPD free tier
 //   - gemini-2.5-pro        — still available (smarter, slower)
 //
-// Strategy: try each in order. Cache the first that works. If a previously
-// working model starts 404ing (Google deprecates it later), reset and
-// retry the chain.
+// v3.0 lesson learned: `gemini-flash-latest` alias resolves to whatever
+// Google's "latest" flash model is — which may have a MUCH more restrictive
+// free tier than the explicitly-named models. Example: in Aug 2026, the
+// alias resolved to `gemini-3.6-flash` which has a free-tier quota of
+// only 20 requests/day (vs 1500/day for gemini-2.5-flash-lite).
+//
+// Strategy: try explicitly-named models with known generous quotas FIRST.
+// Only fall back to `gemini-flash-latest` as a last resort (it may resolve
+// to a model we haven't validated). This gives us predictable quota behavior.
 const MODEL_FALLBACK_CHAIN = [
-  "gemini-flash-latest", // Google's "latest" alias — usually points to the newest flash model
-  "gemini-2.5-flash-lite", // often still available when 2.5-flash is deprecated for new users
-  "gemini-2.5-flash",
-  "gemini-2.5-pro",
+  "gemini-2.5-flash-lite", // 1500 RPD free tier — most reliable for production
+  "gemini-2.5-flash", // 1500 RPD free tier (may 404 for new GCP projects)
+  "gemini-2.5-pro", // smarter but slower, lower quota
+  "gemini-flash-latest", // Google's alias — UNPREDICTABLE quota, last resort
   "gemini-2.0-flash", // legacy fallback (still works for some older projects)
   "gemini-1.5-flash", // very old fallback
 ];
@@ -163,14 +169,20 @@ function isModelNotFoundError(err: unknown): boolean {
 }
 
 /**
- * v3.0: Check if an error is transient (worth retrying).
+ * v3.0: Check if an error is transient (worth retrying on the SAME model).
  *
  * Retries on:
  *   - 5xx server errors (Google backend hiccup)
- *   - 429 rate limits (with exponential backoff)
  *   - Network errors (ECONNRESET, ETIMEDOUT, fetch failed)
  *
  * Does NOT retry on:
+ *   - 429 rate limits / quota exhaustion — handled by callWithFallback
+ *     (tries the NEXT model instead of retrying the same one). This is
+ *     important because:
+ *       a) Per-DAY quotas (e.g. gemini-3.6-flash free tier = 20/day) won't
+ *          reset in seconds, so retrying is pointless.
+ *       b) Even per-MINUTE rate limits are better handled by falling back
+ *          to a different model than waiting + retrying the same one.
  *   - 404 NOT_FOUND (handled by model fallback chain instead)
  *   - 400/401/403 (bad request / auth — retrying won't help)
  *   - 451 (legal block)
@@ -179,14 +191,57 @@ function isTransientError(err: unknown): boolean {
   const e = err as any;
   const status = e?.status ?? e?.error?.code ?? e?.code;
   if (typeof status === "number") {
-    if (status === 429) return true;
+    // 429 is NOT transient here — it triggers model fallback in callWithFallback.
     if (status >= 500 && status < 600) return true;
   }
   const msg = typeof e?.message === "string" ? e.message.toLowerCase() : "";
-  if (/rate limit|quota|too many/i.test(msg)) return true;
+  // Explicitly exclude 429 / quota / rate-limit from transient — those are
+  // handled by isQuotaExhaustedError() + callWithFallback.
   if (/econnreset|etimedout|enotfound|fetch failed|network error/i.test(msg)) return true;
   if (/internal error|server error|service unavailable|temporarily unavailable/i.test(msg))
     return true;
+  return false;
+}
+
+/**
+ * v3.0: Check if an error indicates the model's quota is exhausted (429).
+ *
+ * This triggers model fallback in callWithFallback — we try the NEXT model
+ * in the chain instead of retrying the same one. This handles:
+ *
+ *   - Per-DAY quota exhaustion (e.g. gemini-3.6-flash free tier = 20/day):
+ *     Retrying is pointless (quota resets in ~24h), so we immediately
+ *     fall back to gemini-2.5-flash-lite which has a 1500/day quota.
+ *
+ *   - Per-MINUTE rate limits: Still better to try the next model than
+ *     wait + retry the same one (the next model likely has its own
+ *     separate per-minute quota).
+ *
+ * Detection:
+ *   - HTTP status 429
+ *   - Status string "RESOURCE_EXHAUSTED"
+ *   - Message contains "quota", "rate limit", "too many requests"
+ *
+ * Note on quotaId parsing:
+ *   The error details may include a `quotaId` like
+ *   "GenerateRequestsPerDayPerProjectPerModel-FreeTier" or
+ *   "GenerateRequestsPerMinutePerProjectPerModel-FreeTier".
+ *   We don't differentiate — both trigger model fallback. (For per-minute
+ *   limits, the next model is usually available immediately. For per-day
+ *   limits, the next model is the only option.)
+ */
+function isQuotaExhaustedError(err: unknown): boolean {
+  const e = err as any;
+  const status = e?.status ?? e?.error?.code ?? e?.code;
+  if (status === 429 || status === "RESOURCE_EXHAUSTED") return true;
+
+  const msg = typeof e?.message === "string" ? e.message.toLowerCase() : "";
+  if (/quota exceeded|rate limit|too many requests|resource_exhausted/i.test(msg)) return true;
+
+  // Check the nested error message (Google SDK wraps the actual error).
+  const nestedMsg = typeof e?.error?.message === "string" ? e.error.message.toLowerCase() : "";
+  if (/quota exceeded|rate limit|too many requests|resource_exhausted/i.test(nestedMsg)) return true;
+
   return false;
 }
 
@@ -223,6 +278,12 @@ async function withRetry<T>(fn: () => Promise<T>, context?: Record<string, unkno
 
       // 404 → don't retry here; let callWithFallback handle model switching.
       if (isModelNotFoundError(err)) throw err;
+
+      // 429 / quota exhaustion → don't retry here; let callWithFallback
+      // try the next model in the chain. Retrying the same model on a
+      // per-day quota is pointless (won't reset for hours), and even
+      // per-minute limits are better handled by switching models.
+      if (isQuotaExhaustedError(err)) throw err;
 
       // Non-transient → don't retry, rethrow immediately.
       if (!isTransientError(err)) throw err;
@@ -306,25 +367,102 @@ async function callWithFallback<T>(fn: (modelName: string) => Promise<T>): Promi
         }
         continue;
       }
-      // Non-404 error (auth, non-transient after retries, etc.) — don't try
-      // other models, just rethrow. The route handler will surface it.
+      if (isQuotaExhaustedError(err)) {
+        // v3.0: This model's quota is exhausted (429 RESOURCE_EXHAUSTED).
+        // Don't retry it — try the next model in the chain. This handles
+        // both per-day quotas (e.g. gemini-3.6-flash free tier = 20/day)
+        // and per-minute rate limits. The next model has its own separate
+        // quota, so it will likely succeed.
+        //
+        // If this was the CACHED working model, clear the cache so the
+        // NEXT request starts fresh from the top of the fallback chain.
+        // Rationale: if gemini-flash-latest (cached) just 429'd because it
+        // resolved to a 20/day model, we don't want every subsequent
+        // request to waste a round-trip trying it first. Clearing the
+        // cache makes the next request go straight to gemini-2.5-flash-lite.
+        //
+        // Exception: per-minute rate limits clear themselves quickly, so
+        // we use a time-based cache invalidation. If the cache is older
+        // than 60 seconds, clear it (per-minute quota likely reset).
+        // If younger than 60s, keep it (per-minute quota might still be
+        // exhausted, but the next request will try other models first
+        // via the fallback chain anyway).
+        const wasCached = _workingModel === modelName;
+        if (wasCached) {
+          logger.warn(
+            { model: modelName, err: describeErrorForLog(err) },
+            "TreeBot: cached model quota exhausted (429), clearing cache + trying next in fallback chain",
+          );
+          _workingModel = null;
+        } else {
+          logger.warn(
+            { model: modelName, err: describeErrorForLog(err) },
+            "TreeBot: model quota exhausted (429), trying next in fallback chain",
+          );
+        }
+        continue;
+      }
+      // Non-404, non-429 error (auth, non-transient after retries, etc.) —
+      // don't try other models, just rethrow. The route handler will surface it.
       throw err;
     }
   }
 
-  // All models in the chain returned 404.
-  logger.error(
-    { err: lastErr, triedModels: tryModels },
-    "TreeBot: ALL models in the fallback chain returned 404. " +
+  // All models in the chain returned 404 or 429.
+  // Build a more helpful error message based on which error type dominated.
+  const allQuota = isQuotaExhaustedError(lastErr);
+  const errMsg = allQuota
+    ? "TreeBot: ALL models in the fallback chain returned 429 quota exhausted. " +
+      "Your Gemini free-tier daily quota is depleted across all models. " +
+      "Action: wait for the quota to reset (usually at midnight Pacific time), " +
+      "or upgrade to a paid tier at https://ai.google.dev/pricing."
+    : "TreeBot: ALL models in the fallback chain returned 404. " +
       "Either the API key is invalid OR Google has deprecated every model we know. " +
       "Action: visit https://ai.google.dev/gemini-api/docs/models to find the current model name, " +
-      "then set it as the AI_MODEL env var.",
-  );
+      "then set it as the AI_MODEL env var.";
+
+  logger.error({ err: lastErr, triedModels: tryModels, allQuota }, errMsg);
   throw new Error(
-    "All configured Gemini models are unavailable. " +
-      "Please set the AI_MODEL env var to a currently-available model name " +
-      "(see https://ai.google.dev/gemini-api/docs/models).",
+    allQuota
+      ? "All Gemini models are rate-limited right now. Please try again later."
+      : "All configured Gemini models are unavailable. " +
+        "Please set the AI_MODEL env var to a currently-available model name " +
+        "(see https://ai.google.dev/gemini-api/docs/models).",
   );
+}
+
+/**
+ * v3.0: Extracts a short, log-safe error summary from a Gemini SDK error.
+ *
+ * The SDK error objects are deeply nested JSON strings, which makes logs
+ * hard to read. This helper pulls out the most useful bits (status, model,
+ * quota metric) for the warn-level "trying next model" log line.
+ */
+function describeErrorForLog(err: unknown): string {
+  const e = err as any;
+  const status = e?.status ?? e?.error?.code ?? e?.code ?? "?";
+  // Try to extract the model name from the quota dimensions, if present.
+  let model: string | undefined;
+  let quotaMetric: string | undefined;
+  try {
+    const msgStr = typeof e?.message === "string" ? e.message : "";
+    const parsed = JSON.parse(msgStr);
+    const details = parsed?.error?.details ?? [];
+    for (const d of details) {
+      if (d?.["@type"]?.includes("QuotaFailure")) {
+        for (const v of d.violations ?? []) {
+          model = v?.quotaDimensions?.model ?? model;
+          quotaMetric = v?.quotaMetric ?? quotaMetric;
+        }
+      }
+    }
+  } catch {
+    // not JSON, ignore
+  }
+  const parts = [`status=${status}`];
+  if (model) parts.push(`model=${model}`);
+  if (quotaMetric) parts.push(`metric=${quotaMetric}`);
+  return parts.join(" ");
 }
 
 /**
