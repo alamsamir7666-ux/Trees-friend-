@@ -49,7 +49,17 @@ const SESSION_TOKEN_KEY = "treebot.sessionToken";
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export interface ChatMessage {
-  id?: number;
+  /**
+   * The message's ID. Numeric for persisted messages (from the DB's
+   * SERIAL primary key). String (`"pending-${Date.now()}"`) for
+   * ephemeral optimistic placeholders that haven't been persisted yet.
+   *
+   * Bug #19 fix: widened from `number` to `number | string` so we don't
+   * need the `as any` cast when creating the optimistic placeholder.
+   * The string form always starts with `"pending-"` so consumers can
+   * distinguish ephemeral from persisted messages.
+   */
+  id?: number | string;
   role: "user" | "assistant";
   content: string;
   createdAt?: string;
@@ -106,6 +116,15 @@ export function useAiChat(): UseAiChatResult {
   // user sends another message before the previous stream finishes.
   const abortRef = useRef<AbortController | null>(null);
 
+  // Bug #16 fix: loadingRef mirrors `loading` for use inside `send`'s guard.
+  // The old code checked `loading` from the closure, but two rapid clicks
+  // within the same React tick both saw `loading=false` (the state hadn't
+  // flipped yet) and both proceeded — causing duplicate optimistic messages
+  // + the second abort() killed the first stream prematurely. The ref is
+  // updated synchronously inside `send` (before the first await), so the
+  // second click sees `true` and bails out.
+  const loadingRef = useRef(false);
+
   // ─── Load history on mount ──────────────────────────────────────────────
   // The session token now lives in an HttpOnly cookie set by the server,
   // so we don't need to read it from localStorage here. We just send the
@@ -113,6 +132,13 @@ export function useAiChat(): UseAiChatResult {
   // cookie automatically. For legacy users (localStorage still has a bare
   // UUID), we fall back to putting it in the URL — the server's
   // `verifySessionAccess` will migrate it to a cookie on the next POST /ai/chat.
+  //
+  // Bug #8 fix: the old code called `setMessages(data.messages.map(...))`
+  // which REPLACED the entire state. If the user had already typed + sent
+  // a message before the GET resolved (slow network), their optimistic
+  // user message + streaming assistant placeholder were wiped. The new code
+  // MERGES: history is prepended, but any ephemeral `pending-*` messages
+  // (the optimistic user msg + assistant placeholder) are preserved.
   useEffect(() => {
     let cancelled = false;
     const legacyToken = getLegacySessionToken();
@@ -144,16 +170,26 @@ export function useAiChat(): UseAiChatResult {
           clearLegacySessionToken();
         }
         if (Array.isArray(data.messages) && data.messages.length > 0) {
-          setMessages(
-            data.messages.map((m: any) => ({
-              id: m.id,
-              role: m.role,
-              content: m.content,
-              createdAt: m.createdAt,
-              offTopic: m.offTopic,
-              greeting: m.greeting,
-            })),
-          );
+          const historyMessages: ChatMessage[] = data.messages.map((m: any) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            createdAt: m.createdAt,
+            offTopic: m.offTopic,
+            greeting: m.greeting,
+          }));
+          // Bug #8 fix: MERGE instead of REPLACE. Preserve any ephemeral
+          // `pending-*` messages (optimistic user msg + assistant
+          // placeholder) that the user added before this GET resolved.
+          // Numeric ids from the server are also preserved (they're real
+          // persisted messages). This way the user's in-flight
+          // conversation isn't wiped by a late-arriving history fetch.
+          setMessages((prev) => {
+            const ephemeral = prev.filter(
+              (m) => typeof m.id === "string" && m.id.startsWith("pending-"),
+            );
+            return [...historyMessages, ...ephemeral];
+          });
         }
       } catch {
         // Silent fail — user just sees an empty chat, which is fine.
@@ -168,7 +204,13 @@ export function useAiChat(): UseAiChatResult {
   // ─── Send a message ─────────────────────────────────────────────────────
   const send = useCallback(async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || loading) return;
+    // Bug #16 fix: check loadingRef (synchronous) instead of `loading`
+    // (state, which may not have flipped yet within the same React tick).
+    // This prevents the double-click race where two sends both pass the
+    // guard, both append optimistic messages, and the second abort() kills
+    // the first stream.
+    if (!trimmed || loadingRef.current) return;
+    loadingRef.current = true; // ← synchronous, before any await
 
     // Cancel any in-flight stream before starting a new one.
     abortRef.current?.abort();
@@ -182,9 +224,11 @@ export function useAiChat(): UseAiChatResult {
     const userMsg: ChatMessage = { role: "user", content: trimmed };
     // Reserve a slot for the assistant response — we'll mutate its content
     // as deltas arrive. Using a stable id so React doesn't remount.
+    // Bug #19 fix: removed the `as any` cast — ChatMessage.id is now
+    // `number | string` so the string id is valid.
     const assistantId = `pending-${Date.now()}`;
     const assistantMsg: ChatMessage = {
-      id: assistantId as any,
+      id: assistantId,
       role: "assistant",
       content: "",
     };
@@ -359,9 +403,15 @@ export function useAiChat(): UseAiChatResult {
       );
     } finally {
       setLoading(false);
+      // Bug #16 fix: reset the ref synchronously so the next `send` can
+      // proceed immediately (not waiting for the next render cycle).
+      loadingRef.current = false;
       abortRef.current = null;
     }
-  }, [loading]);
+  }, []); // Bug #16 fix: removed `[loading]` dep — we now use loadingRef
+  // (a ref, stable identity) so `send` has a stable reference and doesn't
+  // recreate on every loading flip. This prevents unnecessary re-renders
+  // of children that depend on `send`.
 
   // ─── Clear conversation ─────────────────────────────────────────────────
   // The session token now lives in an HttpOnly cookie. We don't generate
@@ -373,6 +423,8 @@ export function useAiChat(): UseAiChatResult {
     // Cancel any in-flight request first.
     abortRef.current?.abort();
     abortRef.current = null;
+    // Bug #16 fix: reset the ref so the next `send` can proceed.
+    loadingRef.current = false;
 
     // Best-effort: tell the server to delete the session + messages.
     // The cookie is sent automatically via `credentials: "include"`.
