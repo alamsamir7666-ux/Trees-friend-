@@ -55,7 +55,7 @@ import {
   GREETING_INTRO_MESSAGE,
 } from "../lib/aiContext";
 import { AI_TOOL_DECLARATIONS, executeTool } from "../lib/aiTools";
-import { isGeminiConfigured, streamGeminiChat } from "../lib/gemini";
+import { streamChat, isAnyProviderConfigured } from "../lib/aiRouter";
 import { describeError } from "../lib/describeError";
 import { redactPii } from "../lib/piiRedaction";
 import {
@@ -273,11 +273,12 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   const clerkUserId = req.userId ?? getAuth(req)?.userId ?? null;
 
   // ─── 2. Service availability check ───
-  if (!isGeminiConfigured()) {
+  // v3.1: check if ANY provider is configured (Gemini OR Groq).
+  if (!isAnyProviderConfigured()) {
     res.status(503).json({
       error:
-        "TreeBot is not configured. Set GEMINI_API_KEY on the API server " +
-        "(get a free key at https://aistudio.google.com/apikey).",
+        "TreeBot is not configured. Set GEMINI_API_KEY (https://aistudio.google.com/apikey) " +
+        "and/or GROQ_API_KEY (https://console.groq.com) on the API server.",
     });
     return;
   }
@@ -423,18 +424,20 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   const metaHolder: { value: { model: string; usage?: unknown } | null } = { value: null };
 
   try {
-    const stream = streamGeminiChat(
+    const stream = streamChat(
       systemPrompt,
       geminiHistory,
       safeMessage,
-      // v2.5: expose function-calling tools to Gemini
+      // v2.5: expose function-calling tools to the AI provider
       {
         declarations: AI_TOOL_DECLARATIONS,
         execute: executeTool,
       },
       clerkUserId,
-      // v3.0: metadata callback -- Gemini calls this with model + usage
+      // v3.0: metadata callback -- the provider calls this with model + usage
       // info so we can persist it on the assistant message row.
+      // v3.1: the router adds `provider` to the metadata so we know which
+      // provider actually generated the response.
       (meta) => {
         metaHolder.value = meta;
       },

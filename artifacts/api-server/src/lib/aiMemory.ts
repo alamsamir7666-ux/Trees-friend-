@@ -37,7 +37,7 @@
  */
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
-import { summarizeConversation } from "./gemini";
+import { summarizeConversationRouted } from "./aiRouter";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -93,7 +93,7 @@ export async function loadSessionMemory(sessionId: number): Promise<SessionMemor
 
 /**
  * Decides whether to summarize (or re-summarize) the conversation, and
- * if so, calls Gemini's summarizeConversation + persists the result.
+ * if so, calls the AI provider's summarize function + persists the result.
  *
  * Called AFTER the user's message is persisted but BEFORE building the
  * Gemini history array.
@@ -304,8 +304,8 @@ async function generateAndStoreSummary(
       ]
     : messagesForSummary;
 
-  // Call Gemini to summarize.
-  const summary = await summarizeConversation(summaryInput);
+  // Call the AI provider to summarize (tries Gemini first, falls back to Groq).
+  const summary = await summarizeConversationRouted(summaryInput);
 
   // Persist the new summary + cutoff.
   await pool.query(

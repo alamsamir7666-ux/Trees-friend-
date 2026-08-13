@@ -33,6 +33,10 @@ import {
   forceRediscover,
   isGeminiConfigured,
 } from "../lib/gemini";
+import {
+  getProvidersDebugInfo,
+  forceAllProvidersRediscover,
+} from "../lib/aiRouter";
 
 const router = Router();
 
@@ -757,6 +761,44 @@ router.get("/ai/admin/models", async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "AI admin: models debug failed");
     res.status(500).json({ error: "Failed to load model debug info." });
+  }
+});
+
+// ─── GET /api/ai/admin/providers ────────────────────────────────────────────
+// v3.1: Multi-provider debug endpoint. Shows the status of ALL configured
+// AI providers (Gemini + Groq), including:
+//   - Which providers are configured (have API keys set)
+//   - The provider fallback chain (order providers are tried)
+//   - Per-provider: working model, model chain, cooldowns
+//   - The AI_PROVIDERS env var value
+//
+// Pass ?refresh=1 to clear ALL provider caches + cooldowns (use after
+// swapping API keys without restarting the server).
+//
+// This is the FIRST endpoint to check when TreeBot is failing. It tells
+// you which providers are available and which is currently being used.
+router.get("/ai/admin/providers", async (req: Request, res: Response) => {
+  try {
+    // ?refresh=1 clears all provider caches + cooldowns.
+    if (req.query.refresh === "1") {
+      forceAllProvidersRediscover();
+      logger.info("AI admin: forced all-provider re-discovery (caches cleared)");
+    }
+
+    const debugInfo = getProvidersDebugInfo();
+
+    res.json({
+      ...debugInfo,
+      hint:
+        debugInfo.configuredProviders.length === 0
+          ? "No providers configured. Set GEMINI_API_KEY and/or GROQ_API_KEY env vars."
+          : `Provider chain: ${debugInfo.providerChain.join(" → ")}. ` +
+            `Primary: ${debugInfo.providerChain[0]}. ` +
+            `Fallbacks: ${debugInfo.providerChain.slice(1).join(", ") || "(none)"}.`,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: providers debug failed");
+    res.status(500).json({ error: "Failed to load providers debug info." });
   }
 });
 
