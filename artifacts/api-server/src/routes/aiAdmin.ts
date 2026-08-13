@@ -114,7 +114,7 @@ router.get("/ai/admin/overview", async (_req: Request, res: Response) => {
 // ─── GET /api/ai/admin/timeseries?days=30 ────────────────────────────────────
 // Daily message volume for the last N days. Returns:
 //   [{ date: "2026-08-01", user: 12, assistant: 11, refusals: 1 }, ...]
-router.get("/api/ai/admin/timeseries", async (req: Request, res: Response) => {
+router.get("/ai/admin/timeseries", async (req: Request, res: Response) => {
   const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 90);
   try {
     const result = await pool.query(
@@ -148,7 +148,7 @@ router.get("/api/ai/admin/timeseries", async (req: Request, res: Response) => {
 // Top keywords from user messages. We extract word tokens (>=4 chars,
 // alpha-only) from user messages, exclude stop words, count frequency.
 // Returns: [{ word: "mango", count: 15 }, ...]
-router.get("/api/ai/admin/top-questions", async (req: Request, res: Response) => {
+router.get("/ai/admin/top-questions", async (req: Request, res: Response) => {
   const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 100);
   try {
     // Use Postgres regex to extract words, then aggregate in SQL.
@@ -186,7 +186,7 @@ router.get("/api/ai/admin/top-questions", async (req: Request, res: Response) =>
 // ─── GET /api/ai/admin/top-products?limit=20 ────────────────────────────────
 // Most-mentioned [[product name]] tokens in assistant messages.
 // Returns: [{ name: "Alphonso Mango", count: 8 }, ...]
-router.get("/api/ai/admin/top-products", async (req: Request, res: Response) => {
+router.get("/ai/admin/top-products", async (req: Request, res: Response) => {
   const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 100);
   try {
     // Extract [[...]] tokens via regex, strip brackets, aggregate.
@@ -215,7 +215,7 @@ router.get("/api/ai/admin/top-products", async (req: Request, res: Response) => 
 // ─── GET /api/ai/admin/feedback?rating=down&limit=50&offset=0 ───────────────
 // Paginated list of feedback-rated messages. Default: 👎 only (so the admin
 // can see what's broken). Pass rating=all to get everything.
-router.get("/api/ai/admin/feedback", async (req: Request, res: Response) => {
+router.get("/ai/admin/feedback", async (req: Request, res: Response) => {
   const rating = (req.query.rating as string | undefined) ?? "down";
   const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
   const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
@@ -506,7 +506,7 @@ router.get("/ai/admin/model-usage", async (_req: Request, res: Response) => {
 // v3.0: helps admins understand how often users accidentally expose PII
 // in chat (e.g. "call me at 017XXXXXXXX") and tune the regex patterns
 // if needed.
-router.get("/api/ai/admin/pii-stats", async (_req: Request, res: Response) => {
+router.get("/ai/admin/pii-stats", async (_req: Request, res: Response) => {
   try {
     const totalsResult = await pool.query<{
       total: number;
@@ -674,7 +674,7 @@ function safeJsonParse(s: string): unknown {
 // (plural 's' removal + common 'ing'/'ed' suffixes). This isn't as
 // sophisticated as the Porter stemmer, but it's good enough for
 // analytics and runs entirely in Postgres (no Node.js post-processing).
-router.get("/api/ai/admin/top-questions-v2", async (req: Request, res: Response) => {
+router.get("/ai/admin/top-questions-v2", async (req: Request, res: Response) => {
   const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 100);
   try {
     const result = await pool.query(
