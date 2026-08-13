@@ -200,6 +200,25 @@ const BOTANICAL_KEYWORDS = [
 // Bug #4 fix: exported so the route can use it for a more comprehensive
 // isPrivateQuery check (the old regex only matched 4 English phrases,
 // missing Bangla/Banglish like "amar order" / "আমার অর্ডার").
+//
+// Bug #5 fix: expanded to cover ALL the private-query phrasings the
+// original analysis called out:
+//   - "track my package" ✓ (package)
+//   - "when will my delivery arrive" ✓ (delivery)
+//   - "what's my tracking number" ✓ (tracking)
+//   - "show me my cart" ✓ (cart)
+//   - "my recent purchase" ✓ (purchase — NEW)
+//   - "Did my payment go through?" ✓ (payment)
+//   - "where is my shipment" ✓ (shipment — NEW)
+//   - "what did I buy" ✓ (buy/bought — NEW)
+//   - "my subscription" ✓ (subscription — NEW)
+//   - "my gift card balance" ✓ (gift card — NEW)
+//   - "my coupon code" ✓ (coupon — NEW)
+//   - "my loyalty points" ✓ (loyalty/points — NEW)
+//
+// Also deduplicated the Banglish section (Bug #29) — the English section
+// already covers "order", "delivery", "payment", "account" via substring
+// match, so the Banglish duplicates were noise.
 export const ACCOUNT_KEYWORDS = [
   // English — order/checkout/account
   "order",
@@ -213,12 +232,20 @@ export const ACCOUNT_KEYWORDS = [
   "what did i buy",
   "delivery",
   "shipping",
+  "shipment",
+  "shipped",
   "tracking",
+  "track my",
   "package",
+  "parcel",
   "cart",
   "checkout",
   "payment",
   "paid",
+  "purchase",
+  "purchased",
+  "bought",
+  "buy",
   "invoice",
   "receipt",
   "refund",
@@ -230,18 +257,28 @@ export const ACCOUNT_KEYWORDS = [
   "profile",
   "address",
   "wishlist",
+  "subscription",
+  "subscribe",
+  "unsubscribe",
+  "gift card",
+  "giftcard",
+  "coupon",
+  "promo",
+  "loyalty",
+  "points",
+  "reward",
   // Bangla (Unicode) — order/account
   "অর্ডার",
   "আমার অর্ডার",
   "ডেলিভারি",
   "পেমেন্ট",
   "অ্যাকাউন্ট",
-  // Banglish — order/account
-  "order",
+  "কার্ট",
+  "সাবস্ক্রিপশন",
+  // Banglish — order/account (only terms NOT already in the English section)
   "amar order",
-  "delivery",
-  "payment",
-  "account",
+  "amar cart",
+  "amar subscription",
 ] as const;
 
 // ─── Public functions ────────────────────────────────────────────────────────
