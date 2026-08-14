@@ -278,15 +278,16 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
   const maxPrice = typeof args.max_price === "number" ? args.max_price : null;
   const sunlight = typeof args.sunlight === "string" ? args.sunlight : null;
 
-  // v3.6: Hybrid ILIKE + pg_trgm similarity search in a SINGLE query.
+  // v3.7: Hybrid ILIKE + per-token pg_trgm similarity search.
   //
   // Same pattern as aiContext.ts:searchProducts() — combine exact-substring
-  // matching (ILIKE) with fuzzy trigram similarity (similarity() > threshold)
-  // in one pass, sorted by a relevance score that boosts exact name hits.
+  // matching (ILIKE) with fuzzy trigram similarity in one pass, sorted by a
+  // relevance score that boosts exact name hits.
   //
-  // This replaces the v3.0 ILIKE-only path here (the tool previously had
-  // NO trigram support at all — only the auto-injected context did).
-  // Now both code paths share the same hybrid behavior.
+  // v3.7 bugfix: per-token GREATEST(similarity(col, $t1), ...) instead of
+  // similarity(col, tokens.join(' ')). The joined-string form diluted the
+  // similarity score below threshold when the query had multiple words.
+  // See aiContext.ts:searchProducts() for the full rationale.
   const tokens = query
     .toLowerCase()
     .split(/\s+/)
@@ -304,22 +305,26 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
     tokenPlaceholders.push(`$${params.length}`);
   }
   let where = tokenPlaceholders
-    .map(
-      (p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`,
-    )
+    .map((p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`)
     .join(" OR ");
 
-  // Trigram WHERE clause.
-  const queryString = tokens.join(" ");
+  // v3.7: Per-token trigram similarity via GREATEST(). Push each token as
+  // a separate param (raw token, NOT %wrapped%).
   const trigramThreshold = Number(process.env.AI_TRIGRAM_THRESHOLD ?? 0.3);
-  params.push(queryString);
-  const trigramQueryParam = `$${params.length}`;
+  const trigramParamPlaceholders: string[] = [];
+  for (const t of tokens) {
+    params.push(t);
+    trigramParamPlaceholders.push(`$${params.length}`);
+  }
   params.push(trigramThreshold);
   const trigramThresholdParam = `$${params.length}`;
 
-  const trigramWhere = `(similarity(p.name, ${trigramQueryParam}) > ${trigramThresholdParam}
-     OR similarity(COALESCE(p.scientific_name, ''), ${trigramQueryParam}) > ${trigramThresholdParam}
-     OR similarity(COALESCE(p.description, ''), ${trigramQueryParam}) > ${trigramThresholdParam})`;
+  const greatestSim = (col: string): string =>
+    `GREATEST(${trigramParamPlaceholders.map((p) => `similarity(${col}, ${p})`).join(", ")})`;
+
+  const trigramWhere = `(${greatestSim("p.name")} > ${trigramThresholdParam}
+     OR ${greatestSim("COALESCE(p.scientific_name, '')")} > ${trigramThresholdParam}
+     OR ${greatestSim("COALESCE(p.description, '')")} > ${trigramThresholdParam})`;
 
   // Combine ILIKE + trigram into the final WHERE.
   where = `(${where} OR ${trigramWhere})`;
@@ -342,16 +347,16 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
   }
 
   // Relevance score (DESC): exact name ILIKE first token → 100, sci_name → 80,
-  // description → 60, plus trigram boosts (max ~30+15+5=50).
+  // description → 60, plus per-token trigram boosts (max ~30+15+5=50).
   const firstTokenParam = tokenPlaceholders[0];
   const scoreExpr = `(
     CASE WHEN p.name ILIKE ${firstTokenParam} THEN 100
          WHEN p.scientific_name ILIKE ${firstTokenParam} THEN 80
          WHEN p.description ILIKE ${firstTokenParam} THEN 60
          ELSE 0 END
-    + similarity(p.name, ${trigramQueryParam}) * 30
-    + similarity(COALESCE(p.scientific_name, ''), ${trigramQueryParam}) * 15
-    + similarity(COALESCE(p.description, ''), ${trigramQueryParam}) * 5
+    + ${greatestSim("p.name")} * 30
+    + ${greatestSim("COALESCE(p.scientific_name, '')")} * 15
+    + ${greatestSim("COALESCE(p.description, '')")} * 5
   )`;
 
   try {
@@ -399,9 +404,7 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
       ilikeParams.push(maxPrice as number);
     }
     let ilikeOnlyWhere = tokenPlaceholders
-      .map(
-        (p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`,
-      )
+      .map((p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`)
       .join(" OR ");
     if (sunlight) {
       ilikeOnlyWhere += ` AND p.sunlight = $${tokenPlaceholders.length + 1}`;
@@ -617,7 +620,7 @@ async function getOrderDetails(
  * @internal — called by executeTool, not exported.
  */
 async function searchKb(args: Record<string, unknown>): Promise<{
-  results: Array<{
+  results: {
     title: string;
     content: string;
     keywords: string[];
@@ -626,7 +629,7 @@ async function searchKb(args: Record<string, unknown>): Promise<{
     creator: string | null;
     source: { type: string; title: string; url: string | null } | null;
     relevance_score: number;
-  }>;
+  }[];
   count: number;
   message?: string;
 }> {

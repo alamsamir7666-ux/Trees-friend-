@@ -4,12 +4,12 @@
  * The job of this module is to make the AI "aware" of what's in the
  * TreeFriend database WITHOUT exposing the database directly to the model.
  *
- * Pattern (v3.6: Hybrid ILIKE + pg_trgm similarity in a single query):
+ * Pattern (v3.7: Hybrid ILIKE + per-token pg_trgm similarity in a single query):
  *   1. Take the user's message.
  *   2. Pull keywords from it.
  *   3. Query `products` with a hybrid WHERE clause:
- *        (name/sci_name/description ILIKE '%t%')        -- exact substring
- *        OR (similarity(name, query) > threshold)        -- fuzzy trigram
+ *        (name/sci_name/description ILIKE '%t%')              -- exact substring
+ *        OR (GREATEST(similarity(col, $t1), ...) > threshold) -- fuzzy trigram
  *      sorted by a relevance score that boosts exact name ILIKE hits
  *      over fuzzy description hits. See `searchProducts()` for details.
  *   4. ILIKE-search `blog_posts` (title, body) for those keywords.
@@ -620,10 +620,7 @@ export function renderPromptTemplate(
     // No placeholder but knowledge exists — insert before the catalog
     // block (so KB context appears first = higher priority). We find the
     // catalog block + prepend the knowledge block to it.
-    rendered = rendered.replace(
-      /(\n\nCATALOG CONTEXT)/,
-      `\n\n${knowledge}$1`,
-    );
+    rendered = rendered.replace(/(\n\nCATALOG CONTEXT)/, `\n\n${knowledge}$1`);
   }
 
   // Replace {{catalog}} placeholder if present.
@@ -672,7 +669,13 @@ export function buildSystemPrompt(
   knowledgeBlock: string = "",
   toneBlock: string = "",
 ): string {
-  return renderPromptTemplate(SYSTEM_PROMPT_TEMPLATE_V1, summaryBlock, catalogContext, knowledgeBlock, toneBlock);
+  return renderPromptTemplate(
+    SYSTEM_PROMPT_TEMPLATE_V1,
+    summaryBlock,
+    catalogContext,
+    knowledgeBlock,
+    toneBlock,
+  );
 }
 
 // ─── Internals ───────────────────────────────────────────────────────────────
@@ -774,13 +777,13 @@ function extractSearchTokens(message: string): string[] {
 async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
   if (tokens.length === 0) return [];
 
-  // v3.6: Hybrid ILIKE + pg_trgm similarity search in a SINGLE query.
+  // v3.7: Hybrid ILIKE + per-token pg_trgm similarity search.
   //
-  // Industry-standard pattern (Supabase docs, Postgres full-text-search +
-  // trigram, Elasticsearch multi_match with fuzziness, Algolia
-  // typo-tolerance): combine exact-substring matching (ILIKE) with fuzzy
-  // trigram similarity in one pass, sorted by a relevance score that
-  // boosts exact name hits over fuzzy description hits.
+  // Industry-standard pattern (Supabase docs, Elasticsearch multi_match
+  // with fuzziness, Algolia typo-tolerance): combine exact-substring
+  // matching (ILIKE) with fuzzy trigram similarity in one pass, sorted
+  // by a relevance score that boosts exact name hits over fuzzy
+  // description hits.
   //
   // Why hybrid (not pure-trigram, not ILIKE-then-trigram-fallback)?
   //   - ILIKE '%mango%' catches "mango_tree_seedling" (underscored) where
@@ -792,13 +795,27 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
   //     results" pattern, which hid trigram results whenever ANY ILIKE
   //     result existed (even unrelated ones).
   //
+  // ─── v3.7 bugfix: PER-TOKEN similarity, not joined-string ───────────────
+  // Previously, trigram similarity was computed against
+  // `tokens.join(" ")` (e.g. "mangoo tree name listed website"). That
+  // DILUTED the score: `similarity('Keitt Mango', 'mangoo')` = 0.357
+  // (above 0.3 threshold) but `similarity('Keitt Mango', 'mangoo tree
+  // name listed website')` = 0.13 (below threshold), so the typo
+  // "mangoo" returned zero mangoes despite being a perfect fuzzy match.
+  //
+  // Fix: for each column, compute GREATEST(similarity(col, $t1),
+  // similarity(col, $t2), …) — the best per-token similarity. This is
+  // how Elasticsearch multi_match + fuzziness works internally (best
+  // per-term match wins) and matches user intent: "find me products that
+  // fuzzy-match ANY of my search terms."
+  //
   // Relevance score (DESC, higher = better match):
   //   100  if name ILIKE the first token (highest priority — name match)
   //   80   if scientific_name ILIKE the first token
   //   60   if description ILIKE the first token
-  //   + similarity(name, query) * 30  (trigram boost, max ~30)
-  //   + similarity(scientific_name, query) * 15
-  //   + similarity(description, query) * 5
+  //   + greatest_sim(name) * 30  (trigram boost, max ~30)
+  //   + greatest_sim(scientific_name) * 15
+  //   + greatest_sim(description) * 5
   // The score is computed via CASE + similarity(); NULL scientific_name
   // is handled by COALESCE so it doesn't poison the row.
   //
@@ -814,22 +831,30 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
   // description (same substring, three columns). Cheaper than emitting
   // 3× params for the same string.
   const ilikeWhere = tokenPlaceholders
-    .map(
-      (p) => `(name ILIKE ${p} OR scientific_name ILIKE ${p} OR description ILIKE ${p})`,
-    )
+    .map((p) => `(name ILIKE ${p} OR scientific_name ILIKE ${p} OR description ILIKE ${p})`)
     .join(" OR ");
 
-  // Trigram params: combined query string + threshold.
-  const queryString = tokens.join(" ");
+  // v3.7: Per-token trigram similarity. Push each token as a separate
+  // param (raw token, NOT %wrapped%) and build a GREATEST() expression
+  // that picks the highest similarity across all tokens.
   const trigramThreshold = Number(process.env.AI_TRIGRAM_THRESHOLD ?? 0.3);
-  params.push(queryString);
-  const trigramQueryParam = `$${params.length}`;
+  const trigramParamPlaceholders: string[] = [];
+  for (const t of tokens) {
+    params.push(t);
+    trigramParamPlaceholders.push(`$${params.length}`);
+  }
   params.push(trigramThreshold);
   const trigramThresholdParam = `$${params.length}`;
 
-  const trigramWhere = `(similarity(name, ${trigramQueryParam}) > ${trigramThresholdParam}
-     OR similarity(COALESCE(scientific_name, ''), ${trigramQueryParam}) > ${trigramThresholdParam}
-     OR similarity(COALESCE(description, ''), ${trigramQueryParam}) > ${trigramThresholdParam})`;
+  // GREATEST(similarity(col, $t1), similarity(col, $t2), …) — max
+  // per-token similarity. Returns 0 for tokens with no overlap, so the
+  // threshold check still works correctly.
+  const greatestSim = (col: string): string =>
+    `GREATEST(${trigramParamPlaceholders.map((p) => `similarity(${col}, ${p})`).join(", ")})`;
+
+  const trigramWhere = `(${greatestSim("name")} > ${trigramThresholdParam}
+     OR ${greatestSim("COALESCE(scientific_name, '')")} > ${trigramThresholdParam}
+     OR ${greatestSim("COALESCE(description, '')")} > ${trigramThresholdParam})`;
 
   const firstTokenParam = tokenPlaceholders[0];
   const scoreExpr = `(
@@ -837,9 +862,9 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
          WHEN scientific_name ILIKE ${firstTokenParam} THEN 80
          WHEN description ILIKE ${firstTokenParam} THEN 60
          ELSE 0 END
-    + similarity(name, ${trigramQueryParam}) * 30
-    + similarity(COALESCE(scientific_name, ''), ${trigramQueryParam}) * 15
-    + similarity(COALESCE(description, ''), ${trigramQueryParam}) * 5
+    + ${greatestSim("name")} * 30
+    + ${greatestSim("COALESCE(scientific_name, '')")} * 15
+    + ${greatestSim("COALESCE(description, '')")} * 5
   )`;
 
   try {
