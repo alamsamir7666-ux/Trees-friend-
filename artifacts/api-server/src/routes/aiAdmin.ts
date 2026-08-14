@@ -114,6 +114,15 @@ import {
 } from "../lib/kbEntries";
 import { chunkTextWithAI } from "../lib/kbChunking";
 import { searchKnowledgeBase, getKbStats } from "../lib/kbSearch";
+import {
+  generateToneProfile,
+  getToneProfile,
+  getEffectiveToneMatchPercentage,
+  needsToneProfileRegeneration,
+  TONE_MATCH_THRESHOLD,
+  DEFAULT_TONE_MATCH_PERCENTAGE,
+  REGENERATION_DELTA,
+} from "../lib/kbToneProfiles";
 
 const router = Router();
 
@@ -2643,6 +2652,168 @@ router.post("/ai/admin/kb/search", async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "AI admin: KB search failed");
     res.status(500).json({ error: "Failed to search KB." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 4: Tone Profile Management ───────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Admin endpoints for managing creator tone profiles:
+//   GET  /ai/admin/kb/creators/:id/tone-profile          — get profile + status
+//   POST /ai/admin/kb/creators/:id/tone-profile/generate  — manually trigger generation
+//   PUT  /ai/admin/kb/creators/:id/tone-percentage        — set per-creator match %
+//   GET  /ai/admin/kb/tone-profiles/status                — list all creators with status
+
+// ─── GET /ai/admin/kb/creators/:id/tone-profile ──────────────────────────────
+// Returns the creator's tone profile (parsed JSON) + status (generated/pending/
+// needs-regeneration) + the effective match percentage (per-creator or global
+// default).
+router.get("/ai/admin/kb/creators/:id/tone-profile", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid creator id." });
+    return;
+  }
+  try {
+    const creator = await getKbCreator(id);
+    if (!creator) {
+      res.status(404).json({ error: "Creator not found." });
+      return;
+    }
+    const [profile, regenCheck, matchPct] = await Promise.all([
+      getToneProfile(id),
+      needsToneProfileRegeneration(id),
+      getEffectiveToneMatchPercentage(id),
+    ]);
+    res.json({
+      creatorId: id,
+      creatorName: creator.name,
+      entryCount: creator.entryCount,
+      hasProfile: profile !== null,
+      profile,
+      toneMatchPercentage: matchPct,
+      threshold: TONE_MATCH_THRESHOLD,
+      needsRegeneration: regenCheck.needed,
+      regenerationReason: regenCheck.reason,
+      lastGeneratedAt: creator.toneProfileUpdatedAt,
+      lastGeneratedEntryCount: creator.toneProfileEntryCount,
+      lastGeneratedModel: creator.toneProfileModel,
+    });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: get tone profile failed");
+    res.status(500).json({ error: "Failed to load tone profile." });
+  }
+});
+
+// ─── POST /ai/admin/kb/creators/:id/tone-profile/generate ────────────────────
+// Manually triggers tone profile generation (calls Gemini immediately). Returns
+// 422 on failure (below threshold, Gemini not configured, rate limit, parse error).
+router.post("/ai/admin/kb/creators/:id/tone-profile/generate", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid creator id." });
+    return;
+  }
+  try {
+    const result = await generateToneProfile(id);
+    if (!result.success) {
+      res.status(422).json({ error: result.reason ?? "Failed to generate tone profile." });
+      return;
+    }
+    logger.info({ id, triggeredBy: req.dbUser?.email }, "AI admin: tone profile generated");
+    res.json({ ok: true, message: "Tone profile generated successfully." });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: generate tone profile failed");
+    res.status(500).json({ error: "Failed to generate tone profile." });
+  }
+});
+
+// ─── PUT /ai/admin/kb/creators/:id/tone-percentage ───────────────────────────
+// Sets the per-creator tone match percentage (0-100). Pass null to reset to
+// the global default (DEFAULT_TONE_MATCH_PERCENTAGE, default 60).
+router.put("/ai/admin/kb/creators/:id/tone-percentage", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const { percentage } = (req.body ?? {}) as { percentage?: number | null };
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid creator id." });
+    return;
+  }
+  // percentage: 0-100, or null (reset to global default).
+  if (percentage !== null && (typeof percentage !== "number" || percentage < 0 || percentage > 100 || !Number.isFinite(percentage))) {
+    res.status(400).json({ error: "percentage must be a number 0-100 or null." });
+    return;
+  }
+  try {
+    await pool.query(
+      "UPDATE ai_kb_creators SET tone_match_percentage = $1, updated_at = NOW() WHERE id = $2",
+      [percentage, id],
+    );
+    logger.info({ id, percentage, setBy: req.dbUser?.email }, "AI admin: tone percentage set");
+    res.json({
+      ok: true,
+      toneMatchPercentage: percentage,
+      effectivePercentage: percentage ?? DEFAULT_TONE_MATCH_PERCENTAGE,
+    });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: set tone percentage failed");
+    res.status(500).json({ error: "Failed to set tone percentage." });
+  }
+});
+
+// ─── GET /ai/admin/kb/tone-profiles/status ──────────────────────────────────
+// Lists all creators with their tone profile status. Used by the admin "Tone"
+// sub-tab to show the table of creators + their eligibility + profile state.
+router.get("/ai/admin/kb/tone-profiles/status", async (_req: Request, res: Response) => {
+  try {
+    const result = await pool.query<{
+      id: number;
+      name: string;
+      slug: string;
+      entry_count: number;
+      has_profile: boolean;
+      tone_profile_updated_at: Date | null;
+      tone_profile_entry_count: number | null;
+      tone_profile_model: string | null;
+      tone_match_percentage: number | null;
+      is_active: boolean;
+    }>(`
+      SELECT id, name, slug, entry_count,
+             tone_profile IS NOT NULL AS has_profile,
+             tone_profile_updated_at,
+             tone_profile_entry_count,
+             tone_profile_model,
+             tone_match_percentage,
+             is_active
+      FROM ai_kb_creators
+      WHERE entry_count > 0
+      ORDER BY entry_count DESC
+    `);
+    res.json({
+      threshold: TONE_MATCH_THRESHOLD,
+      defaultPercentage: DEFAULT_TONE_MATCH_PERCENTAGE,
+      regenerationDelta: REGENERATION_DELTA,
+      creators: result.rows.map((c) => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+        entryCount: c.entry_count,
+        isActive: c.is_active,
+        hasProfile: c.has_profile,
+        toneMatchEligible: c.entry_count >= TONE_MATCH_THRESHOLD,
+        toneMatchPercentage: c.tone_match_percentage,
+        effectivePercentage: c.tone_match_percentage ?? DEFAULT_TONE_MATCH_PERCENTAGE,
+        lastGeneratedAt: c.tone_profile_updated_at,
+        lastGeneratedEntryCount: c.tone_profile_entry_count,
+        lastGeneratedModel: c.tone_profile_model,
+        needsRegeneration:
+          c.has_profile &&
+          c.entry_count - (c.tone_profile_entry_count ?? 0) >= REGENERATION_DELTA,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: tone profile status failed");
+    res.status(500).json({ error: "Failed to load tone profile status." });
   }
 });
 

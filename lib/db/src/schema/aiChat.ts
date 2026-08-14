@@ -344,6 +344,13 @@ export const aiKbCreatorsTable = pgTable(
     toneProfile: text("tone_profile"),
     toneProfileUpdatedAt: timestamp("tone_profile_updated_at"),
     toneMatchPercentage: integer("tone_match_percentage"),
+    // ─── Phase 4: tone matching tracking ────────────────────────────────
+    // Tracks when the profile was last generated + how many entries it was
+    // based on. The background job uses these to decide when to regenerate
+    // (auto-regenerate when the creator adds 5+ new entries since the last
+    // profile generation).
+    toneProfileEntryCount: integer("tone_profile_entry_count"),
+    toneProfileModel: text("tone_profile_model"),
     isFeatured: boolean("is_featured").default(false).notNull(),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),

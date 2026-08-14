@@ -40,9 +40,13 @@ export interface KbCreator {
   sourceType: string; // youtube | blog | facebook | manual
   profileUrl: string | null;
   entryCount: number; // denormalized count
-  toneProfile: string | null; // Phase 4 — NULL for now
+  toneProfile: string | null; // Phase 4 — NULL until generated
   toneProfileUpdatedAt: Date | null; // Phase 4
-  toneMatchPercentage: number | null; // Phase 4
+  toneMatchPercentage: number | null; // Phase 4 — per-creator override (NULL = global default)
+  // ─── Phase 4: tone profile tracking ───────────────────────────────────
+  // Used by the background job to decide when to regenerate.
+  toneProfileEntryCount: number | null; // how many entries the profile was based on
+  toneProfileModel: string | null; // which Gemini model was used
   isFeatured: boolean;
   isActive: boolean;
   createdAt: Date;
@@ -70,6 +74,9 @@ interface KbCreatorRow {
   tone_profile: string | null;
   tone_profile_updated_at: Date | null;
   tone_match_percentage: number | null;
+  // Phase 4: tone profile tracking columns.
+  tone_profile_entry_count: number | null;
+  tone_profile_model: string | null;
   is_featured: boolean;
   is_active: boolean;
   created_at: Date;
@@ -87,6 +94,9 @@ function mapRow(row: KbCreatorRow): KbCreator {
     toneProfile: row.tone_profile,
     toneProfileUpdatedAt: row.tone_profile_updated_at,
     toneMatchPercentage: row.tone_match_percentage,
+    // Phase 4: tone profile tracking.
+    toneProfileEntryCount: row.tone_profile_entry_count,
+    toneProfileModel: row.tone_profile_model,
     isFeatured: row.is_featured,
     isActive: row.is_active,
     createdAt: row.created_at,
@@ -105,6 +115,7 @@ export async function listKbCreators(): Promise<KbCreator[]> {
     const result = await pool.query<KbCreatorRow>(
       `SELECT id, name, slug, source_type, profile_url, entry_count,
               tone_profile, tone_profile_updated_at, tone_match_percentage,
+              tone_profile_entry_count, tone_profile_model,
               is_featured, is_active, created_at, updated_at
        FROM ai_kb_creators
        ORDER BY entry_count DESC, name ASC`,
@@ -123,6 +134,7 @@ export async function getKbCreator(id: number): Promise<KbCreator | null> {
     const result = await pool.query<KbCreatorRow>(
       `SELECT id, name, slug, source_type, profile_url, entry_count,
               tone_profile, tone_profile_updated_at, tone_match_percentage,
+              tone_profile_entry_count, tone_profile_model,
               is_featured, is_active, created_at, updated_at
        FROM ai_kb_creators
        WHERE id = $1
@@ -143,6 +155,7 @@ export async function getKbCreatorBySlug(slug: string): Promise<KbCreator | null
     const result = await pool.query<KbCreatorRow>(
       `SELECT id, name, slug, source_type, profile_url, entry_count,
               tone_profile, tone_profile_updated_at, tone_match_percentage,
+              tone_profile_entry_count, tone_profile_model,
               is_featured, is_active, created_at, updated_at
        FROM ai_kb_creators
        WHERE slug = $1

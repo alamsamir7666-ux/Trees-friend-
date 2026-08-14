@@ -46,6 +46,9 @@ import {
   fetchKbEntry,
   fetchKbInsights,
   testKbSearch,
+  fetchToneProfileStatus,
+  generateToneProfile,
+  setToneMatchPercentage,
   updateKbCategory,
   moveKbCategory,
   deleteKbCategory,
@@ -67,11 +70,14 @@ import {
   type KbChunkResult,
   type KbInsights,
   type KbSearchTestResponse,
+  type KbToneProfilesStatusResponse,
+  type KbToneProfileStatus,
 } from "@/lib/kbApi";
 import { KbCategoryModal } from "@/components/admin/modals/KbCategoryModal";
 import { KbSourceUploadModal } from "@/components/admin/modals/KbSourceUploadModal";
 import { KbChunkReviewModal } from "@/components/admin/modals/KbChunkReviewModal";
 import { KbEntryEditorModal } from "@/components/admin/modals/KbEntryEditorModal";
+import { KbToneProfileModal } from "@/components/admin/modals/KbToneProfileModal";
 
 /**
  * Knowledge Base admin tab — Phase 2 wrapper.
@@ -85,7 +91,7 @@ import { KbEntryEditorModal } from "@/components/admin/modals/KbEntryEditorModal
  */
 export function KbTab() {
   const apiFetch = useApiFetch();
-  const [activeSubTab, setActiveSubTab] = useState<"categories" | "sources" | "entries" | "insights">(
+  const [activeSubTab, setActiveSubTab] = useState<"categories" | "sources" | "entries" | "insights" | "tone">(
     "categories",
   );
   // Shared category tree (used by Categories view + as dropdown options in
@@ -124,7 +130,7 @@ export function KbTab() {
     <div className="space-y-4">
       {/* Sub-tab navigation */}
       <div className="flex gap-1 border-b">
-        {(["categories", "sources", "entries", "insights"] as const).map((id) => (
+        {(["categories", "sources", "entries", "insights", "tone"] as const).map((id) => (
           <button
             key={id}
             onClick={() => setActiveSubTab(id)}
@@ -138,6 +144,7 @@ export function KbTab() {
             {id === "sources" && "Sources"}
             {id === "entries" && "Entries"}
             {id === "insights" && "Insights"}
+            {id === "tone" && "Tone"}
           </button>
         ))}
       </div>
@@ -158,6 +165,7 @@ export function KbTab() {
       )}
       {activeSubTab === "entries" && <KbEntriesView tree={tree} />}
       {activeSubTab === "insights" && <KbInsightsView />}
+      {activeSubTab === "tone" && <KbToneView />}
     </div>
   );
 }
@@ -2012,6 +2020,330 @@ function ScoreBar({ label, value, weight }: { label: string; value: number; weig
         />
       </div>
       <p className="text-[9px] text-muted-foreground/60 text-center">w: {weight}</p>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 4: KbToneView ────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Tone profile management view — shows a table of all creators with their
+ * tone profile status (eligible / generated / needs-regeneration / match %).
+ *
+ * Features:
+ *   - "Generate All Pending" button (triggers generation for all eligible
+ *     creators without profiles — the background job handles this, but the
+ *     admin can force it).
+ *   - Per-creator "View" button → opens KbToneProfileModal.
+ *   - Per-creator "Regenerate" button → calls generateToneProfile.
+ *   - Per-creator "Edit %" inline input → set tone_match_percentage.
+ */
+function KbToneView() {
+  const apiFetch = useApiFetch();
+  const [status, setStatus] = useState<KbToneProfilesStatusResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [profileModalCreator, setProfileModalCreator] = useState<{ id: number; name: string } | null>(null);
+  const [regeneratingIds, setRegeneratingIds] = useState<Set<number>>(new Set());
+  const [editingPct, setEditingPct] = useState<number | null>(null);
+  const [pctInput, setPctInput] = useState("");
+
+  const refetch = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const data = await fetchToneProfileStatus(apiFetch);
+      setStatus(data);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load tone profile status");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [apiFetch]);
+
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
+
+  async function handleRegenerate(creator: KbToneProfileStatus) {
+    setRegeneratingIds((prev) => new Set(prev).add(creator.id));
+    try {
+      await generateToneProfile(apiFetch, creator.id);
+      toast.success(`Tone profile generated for ${creator.name}`);
+      refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to generate");
+    } finally {
+      setRegeneratingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(creator.id);
+        return next;
+      });
+    }
+  }
+
+  async function handleGenerateAllPending() {
+    if (!status) return;
+    const pending = status.creators.filter(
+      (c) => c.toneMatchEligible && !c.hasProfile,
+    );
+    if (pending.length === 0) {
+      toast.info("No eligible creators without profiles.");
+      return;
+    }
+    toast.info(`Generating ${pending.length} tone profiles…`);
+    let succeeded = 0;
+    let failed = 0;
+    for (const c of pending) {
+      try {
+        await generateToneProfile(apiFetch, c.id);
+        succeeded++;
+      } catch {
+        failed++;
+      }
+    }
+    toast.success(`Generated ${succeeded} profiles${failed > 0 ? `, ${failed} failed` : ""}`);
+    refetch();
+  }
+
+  async function handleSavePct(creatorId: number) {
+    const trimmed = pctInput.trim();
+    let pct: number | null = null;
+    if (trimmed === "" || trimmed.toLowerCase() === "default") {
+      pct = null; // reset to global default
+    } else {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n < 0 || n > 100) {
+        toast.error("Percentage must be 0-100 or 'default'");
+        return;
+      }
+      pct = Math.round(n);
+    }
+    try {
+      await setToneMatchPercentage(apiFetch, creatorId, pct);
+      toast.success(`Match % set to ${pct === null ? "default" : pct + "%"}`);
+      setEditingPct(null);
+      setPctInput("");
+      refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set percentage");
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        {[1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-12 rounded-xl" />
+        ))}
+      </div>
+    );
+  }
+
+  if (!status) {
+    return (
+      <div className="bg-card rounded-2xl border p-8 text-center text-sm text-muted-foreground">
+        Failed to load tone profile status.{" "}
+        <button onClick={refetch} className="text-primary hover:underline">
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  const eligibleCount = status.creators.filter((c) => c.toneMatchEligible).length;
+  const generatedCount = status.creators.filter((c) => c.hasProfile).length;
+  const needsRegenCount = status.creators.filter((c) => c.needsRegeneration).length;
+
+  return (
+    <div className="space-y-4">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-lg font-semibold">Tone Profiles</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Threshold: {status.threshold} entries · Default match: {status.defaultPercentage}% · Regen delta: {status.regenerationDelta} entries
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={refetch}
+            disabled={refreshing}
+            className="rounded-xl"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleGenerateAllPending}
+            className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground"
+          >
+            <Sparkles className="h-4 w-4" />
+            Generate All Pending
+          </Button>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-card rounded-2xl border p-4">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total Creators</p>
+          <p className="text-2xl font-bold mt-1">{status.creators.length}</p>
+        </div>
+        <div className="bg-card rounded-2xl border p-4">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Eligible ({status.threshold}+)</p>
+          <p className="text-2xl font-bold mt-1">{eligibleCount}</p>
+        </div>
+        <div className="bg-card rounded-2xl border p-4">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Profiles Generated</p>
+          <p className="text-2xl font-bold mt-1">{generatedCount}</p>
+        </div>
+        <div className="bg-card rounded-2xl border p-4">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Needs Regen</p>
+          <p className="text-2xl font-bold mt-1 text-amber-600 dark:text-amber-400">{needsRegenCount}</p>
+        </div>
+      </div>
+
+      {/* Creators table */}
+      {status.creators.length === 0 ? (
+        <div className="bg-card rounded-2xl border p-12 text-center">
+          <BookOpen className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
+          <p className="font-semibold text-muted-foreground mb-1">No creators with entries yet</p>
+          <p className="text-sm text-muted-foreground/70">
+            Upload sources + create entries (Phase 2) to populate the KB. Creators with {status.threshold}+ entries become eligible for tone matching.
+          </p>
+        </div>
+      ) : (
+        <div className="bg-card rounded-2xl border overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 border-b">
+                <tr>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Creator</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">Entries</th>
+                  <th className="px-4 py-2.5 text-center text-xs font-semibold text-muted-foreground uppercase">Eligible</th>
+                  <th className="px-4 py-2.5 text-center text-xs font-semibold text-muted-foreground uppercase">Profile</th>
+                  <th className="px-4 py-2.5 text-center text-xs font-semibold text-muted-foreground uppercase">Match %</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Last Generated</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {status.creators.map((c) => (
+                  <tr key={c.id} className="hover:bg-primary/5">
+                    <td className="px-4 py-2.5 font-medium">{c.name}</td>
+                    <td className="px-4 py-2.5 text-right">{c.entryCount}</td>
+                    <td className="px-4 py-2.5 text-center">
+                      {c.toneMatchEligible ? (
+                        <span className="text-green-600 dark:text-green-400">✓</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      {c.hasProfile ? (
+                        c.needsRegeneration ? (
+                          <Badge variant="destructive" className="text-[10px]">⚠ Regen</Badge>
+                        ) : (
+                          <Badge variant="default" className="text-[10px]">✓ Ready</Badge>
+                        )
+                      ) : (
+                        <Badge variant="secondary" className="text-[10px]">
+                          {c.toneMatchEligible ? "Pending" : "N/A"}
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      {editingPct === c.id ? (
+                        <div className="flex items-center gap-1 justify-center">
+                          <Input
+                            type="text"
+                            value={pctInput}
+                            onChange={(e) => setPctInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleSavePct(c.id);
+                              if (e.key === "Escape") {
+                                setEditingPct(null);
+                                setPctInput("");
+                              }
+                            }}
+                            placeholder={`${c.effectivePercentage}`}
+                            className="h-7 w-16 rounded-lg text-xs text-center"
+                            autoFocus
+                          />
+                          <button
+                            onClick={() => handleSavePct(c.id)}
+                            className="text-xs text-primary hover:underline"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setEditingPct(c.id);
+                            setPctInput(
+                              c.toneMatchPercentage !== null
+                                ? String(c.toneMatchPercentage)
+                                : "",
+                            );
+                          }}
+                          className="text-sm hover:text-primary hover:underline"
+                          title="Click to edit"
+                        >
+                          {c.toneMatchPercentage !== null
+                            ? `${c.toneMatchPercentage}%`
+                            : `${c.effectivePercentage}% (default)`}
+                        </button>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-muted-foreground text-xs">
+                      {c.lastGeneratedAt
+                        ? new Date(c.lastGeneratedAt).toLocaleDateString()
+                        : "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => setProfileModalCreator({ id: c.id, name: c.name })}
+                          className="text-xs text-primary hover:underline px-1.5"
+                          title="View profile"
+                        >
+                          View
+                        </button>
+                        {c.toneMatchEligible && (
+                          <button
+                            onClick={() => handleRegenerate(c)}
+                            disabled={regeneratingIds.has(c.id)}
+                            className="text-xs text-muted-foreground hover:text-foreground px-1.5 disabled:opacity-50"
+                            title="Regenerate profile"
+                          >
+                            {regeneratingIds.has(c.id) ? "…" : "Regen"}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Profile viewer modal */}
+      <KbToneProfileModal
+        open={profileModalCreator !== null}
+        onOpenChange={(o) => !o && setProfileModalCreator(null)}
+        creatorId={profileModalCreator?.id ?? null}
+        creatorName={profileModalCreator?.name ?? ""}
+        onRegenerated={refetch}
+      />
     </div>
   );
 }

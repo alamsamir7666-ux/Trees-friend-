@@ -8,6 +8,7 @@ import {
 import { runPaymentExpirationJob } from "./jobs/paymentExpirationJob";
 import { runAiSessionCleanup } from "./jobs/aiSessionCleanup";
 import { runKbEmbeddingJob } from "./jobs/kbEmbeddingJob";
+import { runKbToneProfileJob } from "./jobs/kbToneProfileJob";
 
 // Note: ensureConversationsTables() is invoked from app.ts at module load,
 // so it runs on every cold start (including Vercel serverless). We do NOT
@@ -55,6 +56,12 @@ app.listen(port, (err) => {
   // 'pending'. Phase 2 background job. On Vercel (serverless), this
   // runs via POST /api/cron/kb-embeddings instead.
   scheduleKbEmbeddingJob();
+
+  // KB tone profile generation — runs every 5 minutes, generates +
+  // regenerates creator tone profiles for creators with 10+ entries.
+  // Phase 4 background job. On Vercel (serverless), this runs via
+  // POST /api/cron/kb-tone-profiles instead.
+  scheduleKbToneProfileJob();
 });
 
 // ─── Keep-alive: ping self every 14 min so Render free tier never sleeps ─────
@@ -187,4 +194,36 @@ function scheduleKbEmbeddingJob() {
   }, CHECK_INTERVAL_MS);
 
   logger.info("KB embedding scheduler started (runs every 30s)");
+}
+
+/**
+ * KB tone profile generation scheduler (Render long-lived process).
+ * Runs every 5 minutes — generates + regenerates creator tone profiles
+ * for creators with 10+ entries who need new/regenerated profiles.
+ *
+ * On Vercel (serverless), this runs via POST /api/cron/kb-tone-profiles
+ * instead (see routes/cron.ts).
+ *
+ * The first run is delayed by 2 minutes so it doesn't compete with the
+ * cold-start migration (ensureAiTables) + the embedding job's first run
+ * (30s delay). Tone profiles are the lowest-priority background job —
+ * they affect response tone, not correctness, so a 2 min startup delay
+ * is fine.
+ */
+function scheduleKbToneProfileJob() {
+  const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+  const STARTUP_DELAY_MS = 2 * 60 * 1000; // 2 minutes
+
+  setTimeout(() => {
+    runKbToneProfileJob().catch((err) => {
+      logger.warn({ err }, "KB tone profile job failed at startup");
+    });
+    setInterval(() => {
+      runKbToneProfileJob().catch((err) => {
+        logger.warn({ err }, "KB tone profile job failed");
+      });
+    }, CHECK_INTERVAL_MS);
+  }, STARTUP_DELAY_MS);
+
+  logger.info("KB tone profile scheduler started (runs every 5 min, first run in 2 min)");
 }

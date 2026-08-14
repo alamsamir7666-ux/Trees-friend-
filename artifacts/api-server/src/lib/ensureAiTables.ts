@@ -535,6 +535,21 @@ ALTER TABLE ai_chat_messages
 CREATE INDEX IF NOT EXISTS ai_chat_messages_kb_hit_idx
   ON ai_chat_messages (created_at DESC)
   WHERE kb_hit = TRUE;
+
+-- ─── Phase 4: Creator tone matching ─────────────────────────────────────────
+-- Tracks when a creator's tone profile was last generated + how many entries
+-- it was based on. Used by the background job to decide when to regenerate
+-- (auto-regenerate when the creator adds 5+ new entries since the last
+-- profile generation).
+--
+-- NOTE: The tone_profile (TEXT), tone_profile_updated_at (TIMESTAMP),
+-- and tone_match_percentage (INTEGER) columns already exist from Phase 1.
+-- Phase 4 only adds these two:
+--   tone_profile_entry_count — how many entries the profile was based on.
+--   tone_profile_model       — which Gemini model was used (reproducibility).
+ALTER TABLE ai_kb_creators
+  ADD COLUMN IF NOT EXISTS tone_profile_entry_count INTEGER,
+  ADD COLUMN IF NOT EXISTS tone_profile_model TEXT;
 `;
 
 export async function ensureAiTables(): Promise<void> {

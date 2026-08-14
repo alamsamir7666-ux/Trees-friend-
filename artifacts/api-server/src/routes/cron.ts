@@ -9,6 +9,7 @@ import { runPaymentExpirationJob } from "../jobs/paymentExpirationJob";
 import { runAiFeedbackDigest } from "../jobs/aiFeedbackDigest";
 import { runAiSessionCleanup } from "../jobs/aiSessionCleanup";
 import { runKbEmbeddingJob } from "../jobs/kbEmbeddingJob";
+import { runKbToneProfileJob } from "../jobs/kbToneProfileJob";
 import { archiveLastMonth } from "./monthlyRecords";
 import { runAbandonedCartJob } from "./abandonedCart";
 import type { ApiRequest } from "../types/apiRequest";
@@ -261,6 +262,33 @@ router.post("/cron/kb-embeddings", async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err }, "Cron: KB embedding job failed");
+    res.status(500).json({ error: "Cron job failed" });
+  }
+});
+
+/**
+ * POST /api/cron/kb-tone-profiles
+ * Every 10 minutes. Generates + regenerates creator tone profiles for
+ * creators who have 10+ entries + either have no profile yet OR have
+ * added 5+ new entries since their last profile generation. Processes up
+ * to 3 creators per run (avoids Gemini rate limits).
+ *
+ * On long-lived Render processes, this also runs via setInterval in
+ * src/index.ts (every 5 minutes). The cron endpoint is for Vercel
+ * serverless.
+ *
+ * Idempotent: if a profile is generated twice (e.g., interval + cron
+ * fire at the same time), the second UPDATE overwrites the first with
+ * the same value. Acceptable.
+ */
+router.post("/cron/kb-tone-profiles", async (req, res) => {
+  if (!requireCronAuth(req, res)) return;
+  try {
+    logger.info("Cron: running KB tone profile job");
+    const result = await runKbToneProfileJob();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "Cron: KB tone profile job failed");
     res.status(500).json({ error: "Cron job failed" });
   }
 });

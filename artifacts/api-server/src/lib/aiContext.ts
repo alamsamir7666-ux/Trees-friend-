@@ -559,39 +559,41 @@ After your main answer, ALWAYS append a follow-up suggestions block in this EXAC
 - Third short question
 [/followups]
 
-The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.{{summary}}{{knowledge}}{{catalog}}
+The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.{{summary}}{{knowledge}}{{catalog}}{{tone}}
 
 REMEMBER: Stay strictly on-topic. If you're unsure whether a question is botanical, refuse politely. Always include the [followups]...[/followups] block at the end.`;
 
 /**
  * Renders a prompt template by replacing `{{summary}}`, `{{knowledge}}`,
- * and `{{catalog}}` placeholders with the dynamic values.
+ * `{{catalog}}`, and `{{tone}}` placeholders with the dynamic values.
  *
- * Placeholder order in the template: `{{summary}}{{knowledge}}{{catalog}}`
- * (knowledge is BEFORE catalog so the AI sees KB context first — higher
- * priority than product listings).
+ * Placeholder order in the template: `{{summary}}{{knowledge}}{{catalog}}{{tone}}`
+ * (tone is LAST — the AI sees content first, then tone guidance as the
+ * final instruction before generating).
  *
  * If a placeholder is missing from the template, the dynamic value is
  * appended in the right position (backward compat with prompts that
  * don't include the placeholders — they still get the context, just at
- * the end). The knowledge block (if non-empty) is inserted BEFORE the
- * catalog block in the fallback path.
+ * the end). The tone block (if non-empty) is appended after the catalog
+ * block in the fallback path.
  *
  * This is the single source of truth for placeholder substitution.
  * Both the DB-driven path (route uses active prompt text from DB) and
  * the fallback path (route uses SYSTEM_PROMPT_TEMPLATE_V1) go through
  * this function, ensuring consistent behavior.
  *
- * @param template The prompt text with optional `{{summary}}`/`{{knowledge}}`/`{{catalog}}` placeholders.
+ * @param template The prompt text with optional `{{summary}}`/`{{knowledge}}`/`{{catalog}}`/`{{tone}}` placeholders.
  * @param summaryBlock The conversation summary block (or "" if no summary).
  * @param catalogContext The catalog search results (or "" if no matches).
  * @param knowledgeBlock The KB context block (or "" if no high-confidence KB matches).
+ * @param toneBlock The tone matching block (or "" if no tone matching).
  */
 export function renderPromptTemplate(
   template: string,
   summaryBlock: string,
   catalogContext: string,
   knowledgeBlock: string = "",
+  toneBlock: string = "",
 ): string {
   const contextBlock = catalogContext
     ? `\n\nCATALOG CONTEXT (use when relevant; cite exact product names):\n${catalogContext}\n`
@@ -599,6 +601,7 @@ export function renderPromptTemplate(
 
   const summary = summaryBlock || "";
   const knowledge = knowledgeBlock || "";
+  const tone = toneBlock || "";
 
   let rendered = template;
 
@@ -631,6 +634,15 @@ export function renderPromptTemplate(
     rendered = rendered + contextBlock;
   }
 
+  // Replace {{tone}} placeholder if present.
+  // Phase 4: tone is the last instruction — appended after catalog.
+  if (rendered.includes("{{tone}}")) {
+    rendered = rendered.replaceAll("{{tone}}", tone);
+  } else if (tone) {
+    // No placeholder but tone exists — append at the end.
+    rendered = rendered + "\n" + tone;
+  }
+
   return rendered;
 }
 
@@ -658,8 +670,9 @@ export function buildSystemPrompt(
   catalogContext: string,
   summaryBlock: string = "",
   knowledgeBlock: string = "",
+  toneBlock: string = "",
 ): string {
-  return renderPromptTemplate(SYSTEM_PROMPT_TEMPLATE_V1, summaryBlock, catalogContext, knowledgeBlock);
+  return renderPromptTemplate(SYSTEM_PROMPT_TEMPLATE_V1, summaryBlock, catalogContext, knowledgeBlock, toneBlock);
 }
 
 // ─── Internals ───────────────────────────────────────────────────────────────

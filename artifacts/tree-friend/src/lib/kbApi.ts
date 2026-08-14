@@ -657,3 +657,108 @@ export async function testKbSearch(
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as KbSearchTestResponse;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 4: Tone Profile Management ──────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Tone profile types ───────────────────────────────────────────────────────
+
+export interface ToneProfile {
+  adjectives: string[];
+  sentenceStyle: string;
+  vocabularyLevel: string;
+  greetingStyle: string;
+  examplePhrases: string[];
+  toneSummary: string;
+}
+
+export interface KbToneProfileResponse {
+  creatorId: number;
+  creatorName: string;
+  entryCount: number;
+  hasProfile: boolean;
+  profile: ToneProfile | null;
+  toneMatchPercentage: number;
+  threshold: number;
+  needsRegeneration: boolean;
+  regenerationReason: string;
+  lastGeneratedAt: string | null;
+  lastGeneratedEntryCount: number | null;
+  lastGeneratedModel: string | null;
+}
+
+export interface KbToneProfileStatus {
+  id: number;
+  name: string;
+  slug: string;
+  entryCount: number;
+  isActive: boolean;
+  hasProfile: boolean;
+  toneMatchEligible: boolean;
+  toneMatchPercentage: number | null;
+  effectivePercentage: number;
+  lastGeneratedAt: string | null;
+  lastGeneratedEntryCount: number | null;
+  lastGeneratedModel: string | null;
+  needsRegeneration: boolean;
+}
+
+export interface KbToneProfilesStatusResponse {
+  threshold: number;
+  defaultPercentage: number;
+  regenerationDelta: number;
+  creators: KbToneProfileStatus[];
+}
+
+// ─── Tone API functions ───────────────────────────────────────────────────────
+
+export async function fetchToneProfile(
+  apiFetch: ApiFetch,
+  creatorId: number,
+): Promise<KbToneProfileResponse> {
+  const res = await apiFetch(`/api/ai/admin/kb/creators/${creatorId}/tone-profile`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as KbToneProfileResponse;
+}
+
+export async function generateToneProfile(
+  apiFetch: ApiFetch,
+  creatorId: number,
+): Promise<{ ok: boolean; message?: string }> {
+  const res = await apiFetch(
+    `/api/ai/admin/kb/creators/${creatorId}/tone-profile/generate`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as { ok: boolean; message?: string };
+}
+
+export async function setToneMatchPercentage(
+  apiFetch: ApiFetch,
+  creatorId: number,
+  percentage: number | null,
+): Promise<{ ok: boolean; toneMatchPercentage: number | null; effectivePercentage: number }> {
+  const res = await apiFetch(
+    `/api/ai/admin/kb/creators/${creatorId}/tone-percentage`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ percentage }),
+    },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as {
+    ok: boolean;
+    toneMatchPercentage: number | null;
+    effectivePercentage: number;
+  };
+}
+
+export async function fetchToneProfileStatus(
+  apiFetch: ApiFetch,
+): Promise<KbToneProfilesStatusResponse> {
+  const res = await apiFetch("/api/ai/admin/kb/tone-profiles/status");
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as KbToneProfilesStatusResponse;
+}

@@ -104,6 +104,10 @@ export interface KbSearchResult {
   creator: {
     name: string;
     slug: string;
+    // ─── Phase 4: tone matching info ───────────────────────────────
+    hasToneProfile: boolean; // true if creator has a generated tone profile
+    toneMatchPercentage: number | null; // per-creator override (null = global default)
+    entryCount: number; // creator's total entries (denormalized)
   } | null;
 }
 
@@ -225,6 +229,10 @@ interface KbSearchRow {
   source_url: string | null;
   creator_name: string | null;
   creator_slug: string | null;
+  // Phase 4: tone matching columns from ai_kb_creators.
+  has_tone_profile: boolean | null;
+  creator_tone_match_percentage: number | null;
+  creator_entry_count: number | null;
   category_name: string | null;
   category_path: string | null;
 }
@@ -378,6 +386,9 @@ export async function searchKnowledgeBase(params: {
          ${recencySelect} AS recency_raw,
          s.source_type, s.source_title, s.source_url,
          c.name AS creator_name, c.slug AS creator_slug,
+         c.tone_profile IS NOT NULL AS has_tone_profile,
+         c.tone_match_percentage AS creator_tone_match_percentage,
+         c.entry_count AS creator_entry_count,
          cat.name AS category_name, cat.path AS category_path
        FROM ai_kb_entries e
        LEFT JOIN ai_kb_sources s ON s.id = e.source_id
@@ -434,7 +445,14 @@ export async function searchKnowledgeBase(params: {
           ? { name: row.category_name, path: row.category_path ?? "" }
           : null,
         creator: row.creator_name
-          ? { name: row.creator_name, slug: row.creator_slug ?? "" }
+          ? {
+              name: row.creator_name,
+              slug: row.creator_slug ?? "",
+              // Phase 4: tone matching info.
+              hasToneProfile: Boolean(row.has_tone_profile),
+              toneMatchPercentage: row.creator_tone_match_percentage ?? null,
+              entryCount: Number(row.creator_entry_count) || 0,
+            }
           : null,
       });
     }
@@ -469,9 +487,22 @@ function clamp01(n: number): number {
 export async function getTopKbEntriesForPrompt(
   userMessage: string,
   maxEntries: number = MAX_AUTO_INJECT_ENTRIES,
-): Promise<{ entries: KbSearchResult[]; injected: boolean }> {
+): Promise<{
+  entries: KbSearchResult[];
+  injected: boolean;
+  // Phase 4: the primary creator whose tone the AI should adopt.
+  // null if no entries were injected, or the top creator doesn't meet
+  // the tone-match threshold (10+ entries) + have a tone profile.
+  toneCreator: {
+    creatorId: number;
+    creatorName: string;
+    hasToneProfile: boolean;
+    toneMatchPercentage: number;
+    entryCount: number;
+  } | null;
+}> {
   if (!userMessage || !userMessage.trim()) {
-    return { entries: [], injected: false };
+    return { entries: [], injected: false, toneCreator: null };
   }
   try {
     const entries = await searchKnowledgeBase({
@@ -479,11 +510,108 @@ export async function getTopKbEntriesForPrompt(
       maxResults: maxEntries,
       minScore: MIN_SCORE_AUTO_INJECT,
     });
-    return { entries, injected: entries.length > 0 };
+    if (entries.length === 0) {
+      return { entries: [], injected: false, toneCreator: null };
+    }
+
+    // ─── Phase 4: select the primary creator for tone matching ──────────────
+    //
+    // Selection logic:
+    //   1. Start with the top entry's creator (highest score).
+    //   2. If that creator doesn't meet the threshold (entryCount >= 10)
+    //      OR doesn't have a tone profile, check the #2 entry's creator.
+    //   3. Multi-creator tie-breaker: if the top 3 entries have scores
+    //      within 0.05 of each other AND are from different creators,
+    //      pick the creator with a tone profile + the highest entry_count.
+    //      This handles "a less-relevant entry from a prolific creator
+    //      should trigger tone matching over a more-relevant entry from a
+    //      new creator."
+    //
+    // If no creator meets the criteria, toneCreator = null (neutral tone).
+    const toneCreator = selectToneCreator(entries);
+
+    return { entries, injected: true, toneCreator };
   } catch (err) {
     logger.error({ err }, "KB search: getTopKbEntriesForPrompt failed (non-fatal — AI falls back to training data)");
-    return { entries: [], injected: false };
+    return { entries: [], injected: false, toneCreator: null };
   }
+}
+
+/**
+ * Phase 4: selects the primary creator for tone matching from the search
+ * results. See `getTopKbEntriesForPrompt` for the full selection logic.
+ *
+ * Returns null if no creator meets the threshold + has a tone profile.
+ */
+function selectToneCreator(entries: KbSearchResult[]): {
+  creatorId: number;
+  creatorName: string;
+  hasToneProfile: boolean;
+  toneMatchPercentage: number;
+  entryCount: number;
+} | null {
+  if (entries.length === 0) return null;
+
+  const TONE_THRESHOLD = Number(process.env.AI_TONE_MATCH_THRESHOLD ?? 10);
+
+  // Helper: check if a creator is eligible for tone matching.
+  const isEligible = (e: KbSearchResult): boolean => {
+    if (!e.creator) return false;
+    return (
+      e.creator.hasToneProfile &&
+      e.creator.entryCount >= TONE_THRESHOLD
+    );
+  };
+
+  // 1. Check if the top entry's creator is eligible.
+  const top = entries[0];
+  if (isEligible(top) && top.creator) {
+    return {
+      creatorId: top.entry.creatorId ?? 0,
+      creatorName: top.creator.name,
+      hasToneProfile: true,
+      toneMatchPercentage: top.creator.toneMatchPercentage ?? Number(process.env.AI_TONE_MATCH_PERCENTAGE ?? 60),
+      entryCount: top.creator.entryCount,
+    };
+  }
+
+  // 2. Multi-creator tie-breaker: if the top 3 entries have scores within
+  //    0.05 of each other AND are from different creators, pick the one
+  //    with a tone profile + the highest entry_count.
+  if (entries.length >= 2) {
+    const topScore = top.score;
+    const candidates = entries.filter(
+      (e) => e.score >= topScore - 0.05 && e.creator && isEligible(e),
+    );
+    if (candidates.length > 0) {
+      // Pick the candidate with the highest entry_count (most authority).
+      const best = candidates.reduce((a, b) =>
+        (b.creator?.entryCount ?? 0) > (a.creator?.entryCount ?? 0) ? b : a,
+      );
+      if (best.creator) {
+        logger.info(
+          {
+            topCreator: top.creator?.name ?? "Unknown",
+            selectedCreator: best.creator.name,
+            topScore: top.score,
+            selectedScore: best.score,
+            entryCount: best.creator.entryCount,
+          },
+          "KB tone: multi-creator selection — using prolific creator over top-scored entry",
+        );
+        return {
+          creatorId: best.entry.creatorId ?? 0,
+          creatorName: best.creator.name,
+          hasToneProfile: true,
+          toneMatchPercentage: best.creator.toneMatchPercentage ?? Number(process.env.AI_TONE_MATCH_PERCENTAGE ?? 60),
+          entryCount: best.creator.entryCount,
+        };
+      }
+    }
+  }
+
+  // 3. No eligible creator — neutral tone.
+  return null;
 }
 
 // ─── formatKbContextForPrompt ────────────────────────────────────────────────

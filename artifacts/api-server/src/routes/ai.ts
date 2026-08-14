@@ -69,6 +69,11 @@ import {
 import { getActivePrompt } from "../lib/promptVersioning";
 import { getTopKbEntriesForPrompt, formatKbContextForPrompt } from "../lib/kbSearch";
 import {
+  getToneProfile,
+  getEffectiveToneMatchPercentage,
+  formatToneBlockForPrompt,
+} from "../lib/kbToneProfiles";
+import {
   generateFollowupsStructured,
   formatFollowupsBlock,
 } from "../lib/structuredOutput";
@@ -867,10 +872,40 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     );
   }
 
+  // ─── Phase 4: Creator tone matching ──────────────────────────────────────
+  // If the primary KB entry's creator has a tone profile (10+ entries),
+  // adopt ~60% of their tone in the response. This makes answers feel more
+  // humanoid and realistic — like the creator is answering directly.
+  //
+  // `kbContext.toneCreator` is set by `getTopKbEntriesForPrompt` based on
+  // the primary creator selection logic (top entry's creator, with a
+  // multi-creator tie-breaker for scores within 0.05).
+  let toneBlock = "";
+  if (kbContext.injected && kbContext.toneCreator?.hasToneProfile) {
+    const profile = await getToneProfile(kbContext.toneCreator.creatorId);
+    if (profile) {
+      const matchPct = await getEffectiveToneMatchPercentage(kbContext.toneCreator.creatorId);
+      toneBlock = formatToneBlockForPrompt(
+        profile,
+        kbContext.toneCreator.creatorName,
+        matchPct,
+      );
+      logger.info(
+        {
+          creator: kbContext.toneCreator.creatorName,
+          creatorId: kbContext.toneCreator.creatorId,
+          matchPct,
+          entryCount: kbContext.toneCreator.entryCount,
+        },
+        "AI: tone matching activated",
+      );
+    }
+  }
+
   const systemPrompt =
     promptVersionInfo.text && promptVersionInfo.text.trim().length > 0
-      ? renderPromptTemplate(promptVersionInfo.text, summaryBlock, catalogContext, knowledgeBlock)
-      : buildSystemPrompt(catalogContext, summaryBlock, knowledgeBlock);
+      ? renderPromptTemplate(promptVersionInfo.text, summaryBlock, catalogContext, knowledgeBlock, toneBlock)
+      : buildSystemPrompt(catalogContext, summaryBlock, knowledgeBlock, toneBlock);
 
   // ─── 10. Set up SSE response ───
   res.setHeader("Content-Type", "text/event-stream");
@@ -1147,6 +1182,20 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       kbSearchPerformed,
       kbContextInjected: kbContext.injected,
     });
+
+    // ─── Phase 4: log tone matching event (if activated) ──────────────────────
+    // Uses the existing ai_chat_events table + logAiEvent (no schema change).
+    // The event is visible in the admin "Events" tab + used by the Insights
+    // view to count tone-match activations.
+    if (toneBlock && kbContext.toneCreator) {
+      await logAiEvent(session.id, "tone_match", {
+        creatorId: kbContext.toneCreator.creatorId,
+        creatorName: kbContext.toneCreator.creatorName,
+        matchPct: kbContext.toneCreator.toneMatchPercentage,
+        entryCount: kbContext.toneCreator.entryCount,
+        entryIds: kbContext.entries.map((e) => e.entry.id),
+      }).catch(() => {}); // non-fatal — event logging is best-effort
+    }
 
     // v3.2/v3.4: store the response in BOTH caches for future hits.
     // - Exact-match (Redis): fast, deterministic key
