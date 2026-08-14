@@ -460,6 +460,51 @@ CREATE INDEX IF NOT EXISTS ai_kb_entries_active_idx ON ai_kb_entries (is_active)
 -- GIN index for keyword array search
 CREATE INDEX IF NOT EXISTS ai_kb_entries_keywords_idx ON ai_kb_entries USING gin (keywords);
 -- Note: the embedding column + HNSW index is added in Phase 2, not Phase 1
+
+-- ─── Phase 2: KB entries embedding + source chunking metadata ──────────────
+-- Phase 2 builds the content ingestion pipeline:
+--   1. Admins upload raw text (YouTube transcripts, blog posts, manual).
+--   2. The system chunks it (AI-assisted for English, manual for others).
+--   3. Each chunk becomes an ai_kb_entries row with is_active=false (admin
+--      reviews before activation).
+--   4. A background job generates embeddings (Gemini text-embedding-004,
+--      768 dims) for each entry, storing them in the new embedding column.
+--   5. Phase 3 will use these embeddings for semantic search in the
+--      AI chat route.
+--
+-- All statements are idempotent (ADD COLUMN IF NOT EXISTS, CREATE INDEX
+-- IF NOT EXISTS) so this block is safe to re-run on every cold start.
+
+-- Phase 2: add embedding column for semantic search.
+-- Gemini text-embedding-004 = 768 dimensions (same as ai_response_cache).
+ALTER TABLE ai_kb_entries
+  ADD COLUMN IF NOT EXISTS embedding vector(768);
+
+-- HNSW index for fast approximate nearest neighbor search.
+-- Same index type as ai_response_cache (already proven to work on Supabase).
+CREATE INDEX IF NOT EXISTS ai_kb_entries_embedding_idx
+  ON ai_kb_entries USING hnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+
+-- Track embedding generation status per entry:
+--   pending   — not yet embedded (waiting for the background job)
+--   generated — embedding successfully stored
+--   failed    — embedding generation failed (see embedding_error)
+ALTER TABLE ai_kb_entries
+  ADD COLUMN IF NOT EXISTS embedding_status TEXT NOT NULL DEFAULT 'pending',
+  ADD COLUMN IF NOT EXISTS embedding_error TEXT,
+  ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMP;
+
+-- Phase 2: track the chunking process per source.
+--   chunking_method  — 'ai' (Gemini chunked it) | 'manual' (admin chunked it)
+--   chunking_model   — which Gemini model was used (for reproducibility)
+--   chunked_at       — when chunking completed
+--   chunking_error   — if chunking failed, the error message
+ALTER TABLE ai_kb_sources
+  ADD COLUMN IF NOT EXISTS chunking_method TEXT,
+  ADD COLUMN IF NOT EXISTS chunking_model TEXT,
+  ADD COLUMN IF NOT EXISTS chunked_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS chunking_error TEXT;
 `;
 
 export async function ensureAiTables(): Promise<void> {

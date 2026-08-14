@@ -69,6 +69,50 @@ import {
   NAME_MAX_LENGTH,
   DESCRIPTION_MAX_LENGTH,
 } from "../lib/kbCategories";
+// Phase 2: Knowledge Base source + entry + creator management.
+import {
+  listKbCreators,
+  getKbCreator,
+  createKbCreator,
+  updateKbCreator,
+  deleteKbCreator,
+  CREATOR_SLUG_REGEX,
+  CREATOR_SLUG_MAX_LENGTH,
+  CREATOR_NAME_MAX_LENGTH,
+  CREATOR_PROFILE_URL_MAX_LENGTH,
+  VALID_SOURCE_TYPES,
+} from "../lib/kbCreators";
+import {
+  listKbSources,
+  getKbSource,
+  createKbSource,
+  updateKbSource,
+  deleteKbSource,
+  updateProcessingStatus,
+  updateChunkingMetadata,
+  SOURCE_TITLE_MAX_LENGTH,
+  SOURCE_URL_MAX_LENGTH,
+  RAW_TEXT_MAX_LENGTH,
+  VALID_LANGUAGES,
+  type KbSource,
+} from "../lib/kbSources";
+import {
+  listKbEntries,
+  getKbEntry,
+  createEntry,
+  createEntriesBatch,
+  updateEntry,
+  activateEntry,
+  deactivateEntry,
+  deleteEntry,
+  ENTRY_TITLE_MAX_LENGTH,
+  ENTRY_CONTENT_MAX_LENGTH,
+  ENTRY_KEYWORD_MAX_COUNT,
+  ENTRY_KEYWORD_MAX_LENGTH,
+  ENTRY_PRIORITY_MIN,
+  ENTRY_PRIORITY_MAX,
+} from "../lib/kbEntries";
+import { chunkTextWithAI } from "../lib/kbChunking";
 
 const router = Router();
 
@@ -1631,6 +1675,857 @@ router.delete("/ai/admin/kb/categories/:id", async (req: Request, res: Response)
   } catch (err) {
     logger.error({ err, id }, "AI admin: delete KB category failed");
     res.status(500).json({ error: "Failed to delete KB category." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 2: KB Source + Entry + Creator Management ────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Admin CRUD for KB creators, sources, and entries. All endpoints inherit
+// requireAdmin (mounted at the top of this file).
+//
+// Creator endpoints:
+//   GET    /ai/admin/kb/creators
+//   POST   /ai/admin/kb/creators
+//   PUT    /ai/admin/kb/creators/:id
+//   DELETE /ai/admin/kb/creators/:id
+//
+// Source endpoints:
+//   GET    /ai/admin/kb/sources
+//   GET    /ai/admin/kb/sources/:id
+//   POST   /ai/admin/kb/sources
+//   PUT    /ai/admin/kb/sources/:id
+//   DELETE /ai/admin/kb/sources/:id
+//   POST   /ai/admin/kb/sources/:id/chunk           (AI chunking, English only)
+//   POST   /ai/admin/kb/sources/:id/entries/batch   (create entries from chunks)
+//
+// Entry endpoints:
+//   GET    /ai/admin/kb/entries
+//   GET    /ai/admin/kb/entries/:id
+//   POST   /ai/admin/kb/entries
+//   PUT    /ai/admin/kb/entries/:id
+//   POST   /ai/admin/kb/entries/:id/activate
+//   POST   /ai/admin/kb/entries/:id/deactivate
+//   DELETE /ai/admin/kb/entries/:id
+
+// ─── GET /ai/admin/kb/creators ───────────────────────────────────────────────
+router.get("/ai/admin/kb/creators", async (_req: Request, res: Response) => {
+  try {
+    const creators = await listKbCreators();
+    res.json({ creators, count: creators.length });
+  } catch (err) {
+    logger.error({ err }, "AI admin: list KB creators failed");
+    res.status(500).json({ error: "Failed to list KB creators." });
+  }
+});
+
+// ─── POST /ai/admin/kb/creators ──────────────────────────────────────────────
+router.post("/ai/admin/kb/creators", async (req: Request, res: Response) => {
+  const { name, slug, sourceType, profileUrl } = (req.body ?? {}) as {
+    name?: string;
+    slug?: string;
+    sourceType?: string;
+    profileUrl?: string | null;
+  };
+  if (typeof name !== "string" || name.trim().length === 0) {
+    res.status(400).json({ error: "name is required (non-empty string)." });
+    return;
+  }
+  if (name.trim().length > CREATOR_NAME_MAX_LENGTH) {
+    res.status(400).json({ error: `name is too long (max ${CREATOR_NAME_MAX_LENGTH} characters).` });
+    return;
+  }
+  if (typeof slug !== "string" || slug.trim().length === 0) {
+    res.status(400).json({ error: "slug is required (non-empty string)." });
+    return;
+  }
+  if (!CREATOR_SLUG_REGEX.test(slug.trim()) || slug.trim().length > CREATOR_SLUG_MAX_LENGTH) {
+    res.status(400).json({
+      error: `slug must match ${CREATOR_SLUG_REGEX} and be at most ${CREATOR_SLUG_MAX_LENGTH} characters.`,
+    });
+    return;
+  }
+  if (typeof sourceType !== "string" || !VALID_SOURCE_TYPES.includes(sourceType as never)) {
+    res.status(400).json({ error: `sourceType must be one of: ${VALID_SOURCE_TYPES.join(", ")}.` });
+    return;
+  }
+  if (profileUrl !== undefined && profileUrl !== null) {
+    if (typeof profileUrl !== "string" || profileUrl.length > CREATOR_PROFILE_URL_MAX_LENGTH) {
+      res.status(400).json({ error: `profileUrl is too long (max ${CREATOR_PROFILE_URL_MAX_LENGTH} characters).` });
+      return;
+    }
+    try {
+      new URL(profileUrl);
+    } catch {
+      res.status(400).json({ error: "profileUrl must be a valid URL." });
+      return;
+    }
+  }
+  try {
+    const created = await createKbCreator({
+      name: name.trim(),
+      slug: slug.trim(),
+      sourceType,
+      profileUrl: profileUrl ?? null,
+    });
+    if (!created) {
+      res.status(409).json({ error: "Slug conflict or validation error." });
+      return;
+    }
+    logger.info({ id: created.id, slug: created.slug, createdBy: req.dbUser?.email }, "AI admin: created KB creator");
+    res.status(201).json({ creator: created });
+  } catch (err) {
+    logger.error({ err, name, slug }, "AI admin: create KB creator failed");
+    res.status(500).json({ error: "Failed to create KB creator." });
+  }
+});
+
+// ─── PUT /ai/admin/kb/creators/:id ───────────────────────────────────────────
+router.put("/ai/admin/kb/creators/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid creator id." });
+    return;
+  }
+  const { name, profileUrl, isActive, isFeatured } = (req.body ?? {}) as {
+    name?: string;
+    profileUrl?: string | null;
+    isActive?: boolean;
+    isFeatured?: boolean;
+  };
+  const updates: { name?: string; profileUrl?: string | null; isActive?: boolean; isFeatured?: boolean } = {};
+  if (name !== undefined) {
+    if (typeof name !== "string" || name.trim().length === 0) {
+      res.status(400).json({ error: "name must be a non-empty string." });
+      return;
+    }
+    if (name.trim().length > CREATOR_NAME_MAX_LENGTH) {
+      res.status(400).json({ error: `name is too long (max ${CREATOR_NAME_MAX_LENGTH} characters).` });
+      return;
+    }
+    updates.name = name.trim();
+  }
+  if (profileUrl !== undefined) {
+    if (profileUrl !== null) {
+      if (typeof profileUrl !== "string" || profileUrl.length > CREATOR_PROFILE_URL_MAX_LENGTH) {
+        res.status(400).json({ error: `profileUrl is too long (max ${CREATOR_PROFILE_URL_MAX_LENGTH} characters).` });
+        return;
+      }
+      try {
+        new URL(profileUrl);
+      } catch {
+        res.status(400).json({ error: "profileUrl must be a valid URL." });
+        return;
+      }
+    }
+    updates.profileUrl = profileUrl;
+  }
+  if (isActive !== undefined) {
+    if (typeof isActive !== "boolean") {
+      res.status(400).json({ error: "isActive must be a boolean." });
+      return;
+    }
+    updates.isActive = isActive;
+  }
+  if (isFeatured !== undefined) {
+    if (typeof isFeatured !== "boolean") {
+      res.status(400).json({ error: "isFeatured must be a boolean." });
+      return;
+    }
+    updates.isFeatured = isFeatured;
+  }
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No fields to update. Provide name, profileUrl, isActive, or isFeatured." });
+    return;
+  }
+  try {
+    const updated = await updateKbCreator(id, updates);
+    if (!updated) {
+      const existing = await getKbCreator(id);
+      if (!existing) {
+        res.status(404).json({ error: "KB creator not found." });
+      } else {
+        res.status(409).json({ error: "Validation error." });
+      }
+      return;
+    }
+    logger.info({ id, updates, updatedBy: req.dbUser?.email }, "AI admin: updated KB creator");
+    res.json({ creator: updated });
+  } catch (err) {
+    logger.error({ err, id, updates }, "AI admin: update KB creator failed");
+    res.status(500).json({ error: "Failed to update KB creator." });
+  }
+});
+
+// ─── DELETE /ai/admin/kb/creators/:id ────────────────────────────────────────
+router.delete("/ai/admin/kb/creators/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid creator id." });
+    return;
+  }
+  try {
+    const result = await deleteKbCreator(id);
+    if (!result.ok) {
+      if (result.reason === "not found") {
+        res.status(404).json({ error: "KB creator not found." });
+      } else if (result.reason === "protected") {
+        res.status(409).json({ error: "Cannot delete the 'Manual' creator (it's the default for admin-typed content)." });
+      } else if (result.reason === "has entries") {
+        res.status(409).json({ error: "Cannot delete a creator that has entries. Move or delete the entries first." });
+      } else {
+        res.status(500).json({ error: "Failed to delete KB creator." });
+      }
+      return;
+    }
+    logger.info({ id, deletedBy: req.dbUser?.email }, "AI admin: deleted KB creator");
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: delete KB creator failed");
+    res.status(500).json({ error: "Failed to delete KB creator." });
+  }
+});
+
+// ─── GET /ai/admin/kb/sources ────────────────────────────────────────────────
+router.get("/ai/admin/kb/sources", async (req: Request, res: Response) => {
+  const creatorId = req.query.creatorId !== undefined ? Number(req.query.creatorId) : undefined;
+  const limit = req.query.limit !== undefined ? Number(req.query.limit) : 20;
+  const offset = req.query.offset !== undefined ? Number(req.query.offset) : 0;
+  try {
+    const result = await listKbSources({
+      creatorId: Number.isInteger(creatorId) ? creatorId : undefined,
+      language: typeof req.query.language === "string" ? req.query.language : undefined,
+      processingStatus: typeof req.query.processingStatus === "string" ? req.query.processingStatus : undefined,
+      limit: Number.isInteger(limit) ? limit : undefined,
+      offset: Number.isInteger(offset) ? offset : undefined,
+    });
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "AI admin: list KB sources failed");
+    res.status(500).json({ error: "Failed to list KB sources." });
+  }
+});
+
+// ─── GET /ai/admin/kb/sources/:id ────────────────────────────────────────────
+router.get("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid source id." });
+    return;
+  }
+  try {
+    const source = await getKbSource(id);
+    if (!source) {
+      res.status(404).json({ error: "KB source not found." });
+      return;
+    }
+    res.json({ source });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: get KB source failed");
+    res.status(500).json({ error: "Failed to load KB source." });
+  }
+});
+
+// ─── POST /ai/admin/kb/sources ───────────────────────────────────────────────
+router.post("/ai/admin/kb/sources", async (req: Request, res: Response) => {
+  const { creatorId, sourceType, sourceUrl, sourceTitle, sourceLanguage, sourcePublishedAt, rawText } =
+    (req.body ?? {}) as {
+      creatorId?: number | null;
+      sourceType?: string;
+      sourceUrl?: string | null;
+      sourceTitle?: string;
+      sourceLanguage?: string;
+      sourcePublishedAt?: string | null;
+      rawText?: string;
+    };
+  if (typeof sourceTitle !== "string" || sourceTitle.trim().length === 0) {
+    res.status(400).json({ error: "sourceTitle is required (non-empty string)." });
+    return;
+  }
+  if (sourceTitle.trim().length > SOURCE_TITLE_MAX_LENGTH) {
+    res.status(400).json({ error: `sourceTitle is too long (max ${SOURCE_TITLE_MAX_LENGTH} characters).` });
+    return;
+  }
+  if (typeof sourceType !== "string" || !VALID_SOURCE_TYPES.includes(sourceType as never)) {
+    res.status(400).json({ error: `sourceType must be one of: ${VALID_SOURCE_TYPES.join(", ")}.` });
+    return;
+  }
+  if (typeof sourceLanguage !== "string" || !VALID_LANGUAGES.includes(sourceLanguage as never)) {
+    res.status(400).json({ error: `sourceLanguage must be one of: ${VALID_LANGUAGES.join(", ")}.` });
+    return;
+  }
+  if (typeof rawText !== "string" || rawText.trim().length === 0) {
+    res.status(400).json({ error: "rawText is required (non-empty string)." });
+    return;
+  }
+  if (rawText.length > RAW_TEXT_MAX_LENGTH) {
+    res.status(400).json({ error: `rawText is too long (max ${RAW_TEXT_MAX_LENGTH} characters).` });
+    return;
+  }
+  if (sourceUrl !== undefined && sourceUrl !== null && sourceUrl !== "") {
+    if (typeof sourceUrl !== "string" || sourceUrl.length > SOURCE_URL_MAX_LENGTH) {
+      res.status(400).json({ error: `sourceUrl is too long (max ${SOURCE_URL_MAX_LENGTH} characters).` });
+      return;
+    }
+    try {
+      new URL(sourceUrl);
+    } catch {
+      res.status(400).json({ error: "sourceUrl must be a valid URL." });
+      return;
+    }
+  }
+  let normalizedCreatorId: number | null = null;
+  if (creatorId !== undefined && creatorId !== null) {
+    normalizedCreatorId = Number(creatorId);
+    if (!Number.isInteger(normalizedCreatorId) || normalizedCreatorId <= 0) {
+      res.status(400).json({ error: "creatorId must be a positive integer or null." });
+      return;
+    }
+  }
+  let normalizedPublishedAt: Date | null = null;
+  if (sourcePublishedAt !== undefined && sourcePublishedAt !== null && sourcePublishedAt !== "") {
+    const parsed = new Date(sourcePublishedAt);
+    if (Number.isNaN(parsed.getTime())) {
+      res.status(400).json({ error: "sourcePublishedAt must be a valid ISO date string." });
+      return;
+    }
+    normalizedPublishedAt = parsed;
+  }
+  try {
+    const created = await createKbSource({
+      creatorId: normalizedCreatorId,
+      sourceType,
+      sourceUrl: sourceUrl || null,
+      sourceTitle: sourceTitle.trim(),
+      sourceLanguage,
+      sourcePublishedAt: normalizedPublishedAt,
+      rawText,
+    });
+    if (!created) {
+      // Most common cause: duplicate source_url.
+      res.status(409).json({
+        error: sourceUrl
+          ? `A source with this URL already exists.`
+          : "Failed to create source (validation error or creator not found).",
+      });
+      return;
+    }
+    logger.info({ id: created.id, title: created.sourceTitle, createdBy: req.dbUser?.email }, "AI admin: created KB source");
+    res.status(201).json({ source: created });
+  } catch (err) {
+    logger.error({ err, sourceTitle }, "AI admin: create KB source failed");
+    res.status(500).json({ error: "Failed to create KB source." });
+  }
+});
+
+// ─── PUT /ai/admin/kb/sources/:id ────────────────────────────────────────────
+router.put("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid source id." });
+    return;
+  }
+  const { sourceTitle, sourceUrl, creatorId, sourcePublishedAt } = (req.body ?? {}) as {
+    sourceTitle?: string;
+    sourceUrl?: string | null;
+    creatorId?: number | null;
+    sourcePublishedAt?: string | null;
+  };
+  const updates: {
+    sourceTitle?: string;
+    sourceUrl?: string | null;
+    creatorId?: number | null;
+    sourcePublishedAt?: Date | null;
+  } = {};
+  if (sourceTitle !== undefined) {
+    if (typeof sourceTitle !== "string" || sourceTitle.trim().length === 0) {
+      res.status(400).json({ error: "sourceTitle must be a non-empty string." });
+      return;
+    }
+    if (sourceTitle.trim().length > SOURCE_TITLE_MAX_LENGTH) {
+      res.status(400).json({ error: `sourceTitle is too long (max ${SOURCE_TITLE_MAX_LENGTH} characters).` });
+      return;
+    }
+    updates.sourceTitle = sourceTitle.trim();
+  }
+  if (sourceUrl !== undefined) {
+    if (sourceUrl !== null && sourceUrl !== "") {
+      if (typeof sourceUrl !== "string" || sourceUrl.length > SOURCE_URL_MAX_LENGTH) {
+        res.status(400).json({ error: `sourceUrl is too long (max ${SOURCE_URL_MAX_LENGTH} characters).` });
+        return;
+      }
+      try {
+        new URL(sourceUrl);
+      } catch {
+        res.status(400).json({ error: "sourceUrl must be a valid URL." });
+        return;
+      }
+      updates.sourceUrl = sourceUrl;
+    } else {
+      updates.sourceUrl = null;
+    }
+  }
+  if (creatorId !== undefined) {
+    if (creatorId === null) {
+      updates.creatorId = null;
+    } else {
+      const n = Number(creatorId);
+      if (!Number.isInteger(n) || n <= 0) {
+        res.status(400).json({ error: "creatorId must be a positive integer or null." });
+        return;
+      }
+      updates.creatorId = n;
+    }
+  }
+  if (sourcePublishedAt !== undefined) {
+    if (sourcePublishedAt === null || sourcePublishedAt === "") {
+      updates.sourcePublishedAt = null;
+    } else {
+      const parsed = new Date(sourcePublishedAt);
+      if (Number.isNaN(parsed.getTime())) {
+        res.status(400).json({ error: "sourcePublishedAt must be a valid ISO date string." });
+        return;
+      }
+      updates.sourcePublishedAt = parsed;
+    }
+  }
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No fields to update." });
+    return;
+  }
+  try {
+    const updated = await updateKbSource(id, updates);
+    if (!updated) {
+      const existing = await getKbSource(id);
+      if (!existing) {
+        res.status(404).json({ error: "KB source not found." });
+      } else {
+        res.status(409).json({ error: "Validation error or URL conflict." });
+      }
+      return;
+    }
+    logger.info({ id, updatedBy: req.dbUser?.email }, "AI admin: updated KB source");
+    res.json({ source: updated });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: update KB source failed");
+    res.status(500).json({ error: "Failed to update KB source." });
+  }
+});
+
+// ─── DELETE /ai/admin/kb/sources/:id ─────────────────────────────────────────
+router.delete("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid source id." });
+    return;
+  }
+  try {
+    const ok = await deleteKbSource(id);
+    if (!ok) {
+      res.status(404).json({ error: "KB source not found." });
+      return;
+    }
+    logger.info({ id, deletedBy: req.dbUser?.email }, "AI admin: deleted KB source");
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: delete KB source failed");
+    res.status(500).json({ error: "Failed to delete KB source." });
+  }
+});
+
+// ─── POST /ai/admin/kb/sources/:id/chunk ─────────────────────────────────────
+// AI-assisted chunking (English only). Returns suggested chunks for the
+// admin to review — does NOT create entries.
+router.post("/ai/admin/kb/sources/:id/chunk", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid source id." });
+    return;
+  }
+  try {
+    const source = await getKbSource(id);
+    if (!source) {
+      res.status(404).json({ error: "KB source not found." });
+      return;
+    }
+    // Language gate: AI chunking is English only.
+    if (source.sourceLanguage !== "en") {
+      res.status(422).json({
+        error: "AI chunking is only available for English content. Use manual chunking.",
+      });
+      return;
+    }
+    // Mark as chunking in-progress (so the admin UI can show a spinner).
+    await updateProcessingStatus(id, "chunking");
+    const result = await chunkTextWithAI(source.rawText);
+    if ("error" in result) {
+      // Chunking failed — reset status to 'pending' (or 'failed' with error).
+      await updateProcessingStatus(id, "failed", result.error);
+      res.status(422).json({ error: result.error });
+      return;
+    }
+    // Record the chunking metadata (method=ai, model=usedModel).
+    await updateChunkingMetadata(id, "ai", result.model);
+    // Reset status to 'pending' (the source is still pending until entries
+    // are created from the chunks).
+    await updateProcessingStatus(id, "pending");
+    logger.info(
+      { id, chunkCount: result.chunks.length, model: result.model, chunkedBy: req.dbUser?.email },
+      "AI admin: AI-chunked KB source",
+    );
+    res.json({ chunks: result.chunks, model: result.model, count: result.chunks.length });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: chunk KB source failed");
+    res.status(500).json({ error: "Failed to chunk KB source." });
+  }
+});
+
+// ─── POST /ai/admin/kb/sources/:id/entries/batch ─────────────────────────────
+// Creates entries from reviewed chunks. All entries are created with
+// is_active = false (admin reviews + activates them in the Entries tab).
+router.post("/ai/admin/kb/sources/:id/entries/batch", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid source id." });
+    return;
+  }
+  const { entries, method } = (req.body ?? {}) as {
+    entries?: Array<{
+      title: string;
+      content: string;
+      keywords?: string[];
+      categoryId?: number | null;
+      productId?: number | null;
+      priority?: number;
+      chunkIndex?: number;
+    }>;
+    method?: string; // 'ai' | 'manual' — defaults to 'manual' if not set
+  };
+  if (!Array.isArray(entries) || entries.length === 0) {
+    res.status(400).json({ error: "entries must be a non-empty array." });
+    return;
+  }
+  if (entries.length > 50) {
+    res.status(400).json({ error: "Too many entries in one batch (max 50). Split into smaller batches." });
+    return;
+  }
+  try {
+    const source = await getKbSource(id);
+    if (!source) {
+      res.status(404).json({ error: "KB source not found." });
+      return;
+    }
+    const createdBy = req.dbUser?.email ?? null;
+    const createdIds = await createEntriesBatch(id, entries, createdBy);
+    if (createdIds.length === 0) {
+      res.status(422).json({ error: "Failed to create entries (validation error or source not found)." });
+      return;
+    }
+    // Record the chunking metadata (method = 'ai' if the admin used AI
+    // chunking, 'manual' otherwise).
+    await updateChunkingMetadata(id, method === "ai" ? "ai" : "manual", null);
+    logger.info(
+      { id, count: createdIds.length, createdBy },
+      "AI admin: batch-created KB entries",
+    );
+    res.status(201).json({ createdIds, count: createdIds.length });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: batch-create KB entries failed");
+    res.status(500).json({ error: "Failed to create KB entries." });
+  }
+});
+
+// ─── GET /ai/admin/kb/entries ────────────────────────────────────────────────
+router.get("/ai/admin/kb/entries", async (req: Request, res: Response) => {
+  const sourceId = req.query.sourceId !== undefined ? Number(req.query.sourceId) : undefined;
+  const categoryId = req.query.categoryId !== undefined ? Number(req.query.categoryId) : undefined;
+  const creatorId = req.query.creatorId !== undefined ? Number(req.query.creatorId) : undefined;
+  const productId = req.query.productId !== undefined ? Number(req.query.productId) : undefined;
+  const limit = req.query.limit !== undefined ? Number(req.query.limit) : 20;
+  const offset = req.query.offset !== undefined ? Number(req.query.offset) : 0;
+  const isActive = req.query.isActive !== undefined
+    ? req.query.isActive === "true"
+    : undefined;
+  try {
+    const result = await listKbEntries({
+      sourceId: Number.isInteger(sourceId) ? sourceId : undefined,
+      categoryId: Number.isInteger(categoryId) ? categoryId : undefined,
+      creatorId: Number.isInteger(creatorId) ? creatorId : undefined,
+      productId: Number.isInteger(productId) ? productId : undefined,
+      isActive,
+      embeddingStatus: typeof req.query.embeddingStatus === "string" ? req.query.embeddingStatus : undefined,
+      limit: Number.isInteger(limit) ? limit : undefined,
+      offset: Number.isInteger(offset) ? offset : undefined,
+    });
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "AI admin: list KB entries failed");
+    res.status(500).json({ error: "Failed to list KB entries." });
+  }
+});
+
+// ─── GET /ai/admin/kb/entries/:id ────────────────────────────────────────────
+router.get("/ai/admin/kb/entries/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid entry id." });
+    return;
+  }
+  try {
+    const entry = await getKbEntry(id);
+    if (!entry) {
+      res.status(404).json({ error: "KB entry not found." });
+      return;
+    }
+    res.json({ entry });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: get KB entry failed");
+    res.status(500).json({ error: "Failed to load KB entry." });
+  }
+});
+
+// ─── POST /ai/admin/kb/entries ───────────────────────────────────────────────
+// Manual entry creation (single entry, is_active defaults to true for
+// manually-created content — the admin typed it intentionally).
+router.post("/ai/admin/kb/entries", async (req: Request, res: Response) => {
+  const { sourceId, title, content, keywords, categoryId, productId, priority, isActive } =
+    (req.body ?? {}) as {
+      sourceId?: number;
+      title?: string;
+      content?: string;
+      keywords?: string[];
+      categoryId?: number | null;
+      productId?: number | null;
+      priority?: number;
+      isActive?: boolean;
+    };
+  if (typeof sourceId !== "number" || !Number.isInteger(sourceId) || sourceId <= 0) {
+    res.status(400).json({ error: "sourceId is required (positive integer)." });
+    return;
+  }
+  if (typeof title !== "string" || title.trim().length === 0) {
+    res.status(400).json({ error: "title is required (non-empty string)." });
+    return;
+  }
+  if (title.trim().length > ENTRY_TITLE_MAX_LENGTH) {
+    res.status(400).json({ error: `title is too long (max ${ENTRY_TITLE_MAX_LENGTH} characters).` });
+    return;
+  }
+  if (typeof content !== "string" || content.trim().length === 0) {
+    res.status(400).json({ error: "content is required (non-empty string)." });
+    return;
+  }
+  if (content.length > ENTRY_CONTENT_MAX_LENGTH) {
+    res.status(400).json({ error: `content is too long (max ${ENTRY_CONTENT_MAX_LENGTH} characters).` });
+    return;
+  }
+  if (keywords !== undefined) {
+    if (!Array.isArray(keywords) || keywords.length > ENTRY_KEYWORD_MAX_COUNT) {
+      res.status(400).json({ error: `keywords must be an array of at most ${ENTRY_KEYWORD_MAX_COUNT} strings.` });
+      return;
+    }
+    for (const k of keywords) {
+      if (typeof k !== "string" || k.length > ENTRY_KEYWORD_MAX_LENGTH) {
+        res.status(400).json({ error: `Each keyword must be a string of at most ${ENTRY_KEYWORD_MAX_LENGTH} characters.` });
+        return;
+      }
+    }
+  }
+  if (priority !== undefined) {
+    if (!Number.isInteger(priority) || priority < ENTRY_PRIORITY_MIN || priority > ENTRY_PRIORITY_MAX) {
+      res.status(400).json({ error: `priority must be an integer between ${ENTRY_PRIORITY_MIN} and ${ENTRY_PRIORITY_MAX}.` });
+      return;
+    }
+  }
+  try {
+    const created = await createEntry({
+      sourceId,
+      title: title.trim(),
+      content,
+      keywords,
+      categoryId: categoryId ?? null,
+      productId: productId ?? null,
+      priority,
+      isActive: isActive ?? true, // default true for manual entries
+      createdBy: req.dbUser?.email ?? null,
+    });
+    if (!created) {
+      res.status(422).json({ error: "Failed to create entry (validation error or source not found)." });
+      return;
+    }
+    logger.info({ id: created.id, sourceId, createdBy: req.dbUser?.email }, "AI admin: created KB entry");
+    res.status(201).json({ entry: created });
+  } catch (err) {
+    logger.error({ err, sourceId, title }, "AI admin: create KB entry failed");
+    res.status(500).json({ error: "Failed to create KB entry." });
+  }
+});
+
+// ─── PUT /ai/admin/kb/entries/:id ────────────────────────────────────────────
+// Updates an entry. If `content` changes, the embedding is cleared
+// (status → 'pending') so the background job regenerates it.
+router.put("/ai/admin/kb/entries/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid entry id." });
+    return;
+  }
+  const { title, content, keywords, categoryId, productId, priority } = (req.body ?? {}) as {
+    title?: string;
+    content?: string;
+    keywords?: string[];
+    categoryId?: number | null;
+    productId?: number | null;
+    priority?: number;
+  };
+  const updates: {
+    title?: string;
+    content?: string;
+    keywords?: string[];
+    categoryId?: number | null;
+    productId?: number | null;
+    priority?: number;
+  } = {};
+  if (title !== undefined) {
+    if (typeof title !== "string" || title.trim().length === 0) {
+      res.status(400).json({ error: "title must be a non-empty string." });
+      return;
+    }
+    if (title.trim().length > ENTRY_TITLE_MAX_LENGTH) {
+      res.status(400).json({ error: `title is too long (max ${ENTRY_TITLE_MAX_LENGTH} characters).` });
+      return;
+    }
+    updates.title = title.trim();
+  }
+  if (content !== undefined) {
+    if (typeof content !== "string" || content.trim().length === 0) {
+      res.status(400).json({ error: "content must be a non-empty string." });
+      return;
+    }
+    if (content.length > ENTRY_CONTENT_MAX_LENGTH) {
+      res.status(400).json({ error: `content is too long (max ${ENTRY_CONTENT_MAX_LENGTH} characters).` });
+      return;
+    }
+    updates.content = content;
+  }
+  if (keywords !== undefined) {
+    if (!Array.isArray(keywords) || keywords.length > ENTRY_KEYWORD_MAX_COUNT) {
+      res.status(400).json({ error: `keywords must be an array of at most ${ENTRY_KEYWORD_MAX_COUNT} strings.` });
+      return;
+    }
+    for (const k of keywords) {
+      if (typeof k !== "string" || k.length > ENTRY_KEYWORD_MAX_LENGTH) {
+        res.status(400).json({ error: `Each keyword must be a string of at most ${ENTRY_KEYWORD_MAX_LENGTH} characters.` });
+        return;
+      }
+    }
+    updates.keywords = keywords;
+  }
+  if (categoryId !== undefined) {
+    if (categoryId !== null && (!Number.isInteger(categoryId) || categoryId <= 0)) {
+      res.status(400).json({ error: "categoryId must be a positive integer or null." });
+      return;
+    }
+    updates.categoryId = categoryId;
+  }
+  if (productId !== undefined) {
+    if (productId !== null && (!Number.isInteger(productId) || productId <= 0)) {
+      res.status(400).json({ error: "productId must be a positive integer or null." });
+      return;
+    }
+    updates.productId = productId;
+  }
+  if (priority !== undefined) {
+    if (!Number.isInteger(priority) || priority < ENTRY_PRIORITY_MIN || priority > ENTRY_PRIORITY_MAX) {
+      res.status(400).json({ error: `priority must be an integer between ${ENTRY_PRIORITY_MIN} and ${ENTRY_PRIORITY_MAX}.` });
+      return;
+    }
+    updates.priority = priority;
+  }
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No fields to update." });
+    return;
+  }
+  try {
+    const updated = await updateEntry(id, updates);
+    if (!updated) {
+      const existing = await getKbEntry(id);
+      if (!existing) {
+        res.status(404).json({ error: "KB entry not found." });
+      } else {
+        res.status(422).json({ error: "Validation error." });
+      }
+      return;
+    }
+    logger.info({ id, updatedBy: req.dbUser?.email }, "AI admin: updated KB entry");
+    res.json({ entry: updated });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: update KB entry failed");
+    res.status(500).json({ error: "Failed to update KB entry." });
+  }
+});
+
+// ─── POST /ai/admin/kb/entries/:id/activate ──────────────────────────────────
+router.post("/ai/admin/kb/entries/:id/activate", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid entry id." });
+    return;
+  }
+  try {
+    const ok = await activateEntry(id);
+    if (!ok) {
+      res.status(404).json({ error: "KB entry not found." });
+      return;
+    }
+    logger.info({ id, activatedBy: req.dbUser?.email }, "AI admin: activated KB entry");
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: activate KB entry failed");
+    res.status(500).json({ error: "Failed to activate KB entry." });
+  }
+});
+
+// ─── POST /ai/admin/kb/entries/:id/deactivate ────────────────────────────────
+router.post("/ai/admin/kb/entries/:id/deactivate", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid entry id." });
+    return;
+  }
+  try {
+    const ok = await deactivateEntry(id);
+    if (!ok) {
+      res.status(404).json({ error: "KB entry not found." });
+      return;
+    }
+    logger.info({ id, deactivatedBy: req.dbUser?.email }, "AI admin: deactivated KB entry");
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: deactivate KB entry failed");
+    res.status(500).json({ error: "Failed to deactivate KB entry." });
+  }
+});
+
+// ─── DELETE /ai/admin/kb/entries/:id ─────────────────────────────────────────
+router.delete("/ai/admin/kb/entries/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid entry id." });
+    return;
+  }
+  try {
+    const ok = await deleteEntry(id);
+    if (!ok) {
+      res.status(404).json({ error: "KB entry not found." });
+      return;
+    }
+    logger.info({ id, deletedBy: req.dbUser?.email }, "AI admin: deleted KB entry");
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: delete KB entry failed");
+    res.status(500).json({ error: "Failed to delete KB entry." });
   }
 });
 

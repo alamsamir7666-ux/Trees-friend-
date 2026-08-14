@@ -131,7 +131,19 @@ let _clientInitAttempted = false;
 // reused for all subsequent calls. Reset to null on 404 to retry the chain.
 let _workingModel: string | null = null;
 
-function getClient(): GoogleGenAI {
+/**
+ * Exports for Phase 2 KB chunking + embeddings.
+ *
+ * `getClient` is used by kbChunking.ts (for generateContent) and
+ * kbEmbeddings.ts (for embedContent). `callWithFallback` wraps SDK calls
+ * with the model fallback chain + retry logic — both KB modules use it
+ * so they inherit the same 404/429/cooldown handling as the chat route.
+ *
+ * Phase 2 is the first caller outside of gemini.ts itself; we export
+ * these as `@internal` API surface — they're not part of the public
+ * chat-route API and may be refactored in Phase 5.
+ */
+export function getClient(): GoogleGenAI {
   if (_clientInitAttempted) {
     if (!_client) {
       throw new Error(
@@ -517,7 +529,7 @@ async function withRetry<T>(fn: () => Promise<T>, context?: Record<string, unkno
  * @returns The result of the first successful call.
  * @throws If ALL models in the chain return 404, or if a non-404 error occurs.
  */
-async function callWithFallback<T>(fn: (modelName: string) => Promise<T>): Promise<T> {
+export async function callWithFallback<T>(fn: (modelName: string) => Promise<T>): Promise<T> {
   // v3.0.1: trigger model discovery on the first call. This populates
   // _discoveredModels so getModelChain() returns only models that actually
   // exist for this API key (avoids wasting time on 404s).

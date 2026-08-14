@@ -411,6 +411,14 @@ export const aiKbSourcesTable = pgTable(
     rawMetadata: text("raw_metadata"),
     processingStatus: text("processing_status").default("pending").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+
+    // ─── Phase 2: chunking metadata ──────────────────────────────────────
+    // Tracks the chunking process so the admin can see how a source was
+    // chunked (AI vs manual, which model, when, any error).
+    chunkingMethod: text("chunking_method"), // 'ai' | 'manual'
+    chunkingModel: text("chunking_model"), // which Gemini model was used
+    chunkedAt: timestamp("chunked_at"),
+    chunkingError: text("chunking_error"),
   },
   (table) => [
     // Partial unique index — only applies when sourceUrl IS NOT NULL.
@@ -469,6 +477,18 @@ export const aiKbEntriesTable = pgTable(
     createdBy: text("created_by"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
+
+    // ─── Phase 2: embedding columns ─────────────────────────────────────
+    // The embedding column stores a 768-dim float vector (Gemini
+    // text-embedding-004). Drizzle doesn't have a native vector type, so
+    // we declare it as text — the actual SQL column is vector(768)
+    // (created by the Phase 2 migration in ensureAiTables.ts). The
+    // route code constructs the embedding string `[0.1, 0.2, ...]` and
+    // casts it with `$1::vector` on INSERT/UPDATE.
+    embedding: text("embedding"),
+    embeddingStatus: text("embedding_status").default("pending").notNull(),
+    embeddingError: text("embedding_error"),
+    embeddingGeneratedAt: timestamp("embedding_generated_at"),
   },
   (table) => [
     index("ai_kb_entries_category_idx").on(table.categoryId, table.isActive, table.priority),
@@ -480,6 +500,9 @@ export const aiKbEntriesTable = pgTable(
       .where(sql`is_active = true`),
     // GIN index for keyword array overlap queries.
     index("ai_kb_entries_keywords_idx").using("gin", table.keywords),
+    // Note: HNSW index on embedding — declared in the SQL migration only
+    // (Drizzle doesn't support vector indexes natively). The migration
+    // creates it idempotently with CREATE INDEX IF NOT EXISTS.
   ],
 );
 

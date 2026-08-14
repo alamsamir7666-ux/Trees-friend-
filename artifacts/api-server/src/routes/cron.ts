@@ -8,6 +8,7 @@ import { runLowStockAlert } from "../jobs/lowStockJob";
 import { runPaymentExpirationJob } from "../jobs/paymentExpirationJob";
 import { runAiFeedbackDigest } from "../jobs/aiFeedbackDigest";
 import { runAiSessionCleanup } from "../jobs/aiSessionCleanup";
+import { runKbEmbeddingJob } from "../jobs/kbEmbeddingJob";
 import { archiveLastMonth } from "./monthlyRecords";
 import { runAbandonedCartJob } from "./abandonedCart";
 import type { ApiRequest } from "../types/apiRequest";
@@ -232,6 +233,34 @@ router.post("/cron/ai-session-cleanup", async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     logger.error({ err }, "Cron: AI session cleanup failed");
+    res.status(500).json({ error: "Cron job failed" });
+  }
+});
+
+/**
+ * POST /api/cron/kb-embeddings
+ * Every 5 minutes. Generates Gemini text-embedding-004 vectors for KB
+ * entries with `embedding_status = 'pending'`. Processes up to 10 entries
+ * per run (configurable via the `limit` query param, max 50). Stops
+ * early if Gemini returns 429 (rate limit) — the next run will retry.
+ *
+ * On long-lived Render processes, this also runs via setInterval in
+ * src/index.ts (every 30 seconds). The cron endpoint is for Vercel
+ * serverless, where setInterval doesn't work.
+ *
+ * Idempotent: pending entries are processed at most once per run. If
+ * two runs overlap (interval + cron fire at the same time), the second
+ * run's UPDATE is a no-op (it overwrites the same embedding with the
+ * same value).
+ */
+router.post("/cron/kb-embeddings", async (req, res) => {
+  if (!requireCronAuth(req, res)) return;
+  try {
+    logger.info("Cron: running KB embedding job");
+    await runKbEmbeddingJob();
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Cron: KB embedding job failed");
     res.status(500).json({ error: "Cron job failed" });
   }
 });

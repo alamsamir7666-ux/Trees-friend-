@@ -224,11 +224,24 @@ describe("Phase 1: ensureAiTables.ts migration block", () => {
     expect(source).toContain("USING gin (keywords)");
   });
 
-  it("does NOT add the embedding column in Phase 1 (deferred to Phase 2)", () => {
-    // The migration should mention that the embedding column is a Phase 2
-    // addition, and should NOT actually add a vector column.
-    expect(source).toContain("Phase 2");
-    expect(source).not.toMatch(/ADD COLUMN.*embedding.*vector/i);
+  it("Phase 1 block does NOT add the embedding column (Phase 2 does, in a separate block)", () => {
+    // The Phase 1 block creates the ai_kb_entries table WITHOUT an embedding
+    // column. Phase 2 adds it via a separate ALTER TABLE block (tested in
+    // kbSources.test.ts). The Phase 1 block's CREATE TABLE should NOT
+    // mention `embedding vector`.
+    //
+    // We extract just the Phase 1 block (between the Phase 1 header and
+    // the Phase 2 header) to verify it doesn't add the embedding column.
+    const phase1Start = source.indexOf("Phase 1: Knowledge Base schema");
+    const phase2Start = source.indexOf("Phase 2: KB entries embedding");
+    expect(phase1Start).toBeGreaterThan(-1);
+    expect(phase2Start).toBeGreaterThan(-1);
+    const phase1Block = source.slice(phase1Start, phase2Start);
+    // The Phase 1 block's CREATE TABLE should NOT include `embedding vector`.
+    // (The Phase 1 block DOES mention "Phase 2" in a comment saying the
+    // embedding column is deferred — that's fine, it's not actually adding it.)
+    expect(phase1Block).not.toMatch(/CREATE TABLE[\s\S]*?embedding\s+vector/i);
+    expect(phase1Block).not.toMatch(/ADD COLUMN[\s\S]*?embedding\s+vector/i);
   });
 
   it("seeds the 'Manual' creator idempotently (WHERE NOT EXISTS)", () => {
@@ -295,11 +308,12 @@ describe("Phase 1: aiChat.ts Drizzle schema additions", () => {
     expect(source).toContain("export type AiKbEntry");
   });
 
-  it("does NOT define an embedding column on aiKbEntriesTable (Phase 2)", () => {
-    // No `embedding: vector("embedding")` column definition. The word
-    // "embedding" appears in comments (explaining Phase 2 will add it),
-    // but no actual column is defined.
-    expect(source).not.toMatch(/embedding:\s*vector\(/i);
+  it("defines the embedding column on aiKbEntriesTable as text (Phase 2 added it)", () => {
+    // Phase 2 added the embedding column. Drizzle doesn't have a native
+    // vector type, so it's declared as text (the actual SQL column is
+    // vector(768), created by the Phase 2 migration in ensureAiTables.ts).
+    // The route code casts with `$1::vector` on INSERT/UPDATE.
+    expect(source).toMatch(/embedding:\s*text\("embedding"\)/);
   });
 });
 

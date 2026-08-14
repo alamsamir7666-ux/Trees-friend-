@@ -7,6 +7,7 @@ import {
 } from "./jobs/sellerSubscriptionJob";
 import { runPaymentExpirationJob } from "./jobs/paymentExpirationJob";
 import { runAiSessionCleanup } from "./jobs/aiSessionCleanup";
+import { runKbEmbeddingJob } from "./jobs/kbEmbeddingJob";
 
 // Note: ensureConversationsTables() is invoked from app.ts at module load,
 // so it runs on every cold start (including Vercel serverless). We do NOT
@@ -48,6 +49,12 @@ app.listen(port, (err) => {
   // inactive for AI_SESSION_TTL_DAYS (default 30). Keeps the ai_chat_*
   // tables from growing unbounded.
   scheduleAiSessionCleanup();
+
+  // KB embedding generation — runs every 30 seconds, generates Gemini
+  // text-embedding-004 vectors for KB entries with embedding_status =
+  // 'pending'. Phase 2 background job. On Vercel (serverless), this
+  // runs via POST /api/cron/kb-embeddings instead.
+  scheduleKbEmbeddingJob();
 });
 
 // ─── Keep-alive: ping self every 14 min so Render free tier never sleeps ─────
@@ -150,4 +157,34 @@ function scheduleAiSessionCleanup() {
   }, CHECK_INTERVAL_MS);
 
   logger.info("AI session cleanup scheduler started (runs every 24h)");
+}
+
+/**
+ * KB embedding generation scheduler (Render long-lived process).
+ * Runs every 30 seconds — generates Gemini text-embedding-004 vectors
+ * for KB entries with `embedding_status = 'pending'` (up to 10 per run).
+ *
+ * On Vercel (serverless), this runs via POST /api/cron/kb-embeddings
+ * instead (see routes/cron.ts + vercel.json).
+ *
+ * The first run is scheduled 30s after server start (not immediately)
+ * to avoid competing with the cold-start DB migration (ensureAiTables).
+ */
+function scheduleKbEmbeddingJob() {
+  const CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
+
+  // Delay the first run by 30s so it doesn't compete with the cold-start
+  // migration (ensureAiTables runs at app.ts load time + takes ~1-2s).
+  setTimeout(() => {
+    runKbEmbeddingJob().catch((err) => {
+      logger.warn({ err }, "KB embedding job failed at startup");
+    });
+    setInterval(() => {
+      runKbEmbeddingJob().catch((err) => {
+        logger.warn({ err }, "KB embedding job failed");
+      });
+    }, CHECK_INTERVAL_MS);
+  }, CHECK_INTERVAL_MS);
+
+  logger.info("KB embedding scheduler started (runs every 30s)");
 }

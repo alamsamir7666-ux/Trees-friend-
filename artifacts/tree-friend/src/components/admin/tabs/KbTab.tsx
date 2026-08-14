@@ -37,43 +37,140 @@ import {
 import { toast } from "sonner";
 import {
   fetchKbCategoryTree,
+  fetchKbCreators,
+  fetchKbSources,
+  fetchKbSource,
+  fetchKbEntries,
+  fetchKbEntry,
   updateKbCategory,
   moveKbCategory,
   deleteKbCategory,
+  chunkSourceWithAI,
+  createKbEntriesBatch,
+  updateKbEntry,
+  activateKbEntry,
+  deactivateKbEntry,
+  deleteKbEntry,
+  deleteKbSource,
   autoSlug,
   type KbCategory,
   type KbCategoryNode,
+  type KbCreator,
+  type KbSource,
+  type KbSourceWithEntries,
+  type KbEntry,
+  type KbChunkSuggestion,
+  type KbChunkResult,
 } from "@/lib/kbApi";
 import { KbCategoryModal } from "@/components/admin/modals/KbCategoryModal";
+import { KbSourceUploadModal } from "@/components/admin/modals/KbSourceUploadModal";
+import { KbChunkReviewModal } from "@/components/admin/modals/KbChunkReviewModal";
+import { KbEntryEditorModal } from "@/components/admin/modals/KbEntryEditorModal";
 
 /**
- * Knowledge Base admin tab.
+ * Knowledge Base admin tab — Phase 2 wrapper.
  *
- * Layout:
- *   - Top toolbar: title, "Add Root Category" button, refresh button.
- *   - Left panel:  collapsible category tree (with expand/collapse arrows
- *                  + per-node actions: Add Child, Edit, Move, Delete).
- *   - Right panel: details + inline edit form for the selected category
- *                  (name, slug, description, active toggle, depth, path,
- *                  entryCount, dates).
- *   - Empty state: friendly prompt to create the first category.
+ * Renders sub-tab navigation (Categories / Sources / Entries) + delegates
+ * to the appropriate view. The Categories view is the Phase 1 tree UI
+ * (now `KbCategoriesView`). The Sources + Entries views are new in Phase 2.
  *
- * Phase 1 scope: category CRUD + tree management only. No entries, no
- * sources, no AI integration — those land in Phases 2-4.
- *
- * Data flow:
- *   - On mount + on refresh: GET /api/ai/admin/kb/categories/tree
- *   - Create / Edit: opens KbCategoryModal → on save, refetch the tree.
- *   - Move: opens a small modal with a parent dropdown → on save, refetch.
- *   - Delete: confirmation dialog → on confirm, DELETE → refetch.
- *
- * The tree is fetched as a nested structure (server-side build) and
- * rendered recursively. Expand/collapse state is local (a Set of ids).
+ * All three views share the same category tree (fetched once, passed down)
+ * + the same apiFetch instance. Each view manages its own state.
  */
 export function KbTab() {
   const apiFetch = useApiFetch();
+  const [activeSubTab, setActiveSubTab] = useState<"categories" | "sources" | "entries">(
+    "categories",
+  );
+  // Shared category tree (used by Categories view + as dropdown options in
+  // Sources/Entries modals). Fetched once on mount + refetched when any
+  // view calls `refetchTree`.
   const [tree, setTree] = useState<KbCategoryNode[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [treeLoading, setTreeLoading] = useState(true);
+  const [creators, setCreators] = useState<KbCreator[]>([]);
+
+  const refetchTree = useCallback(async () => {
+    try {
+      const t = await fetchKbCategoryTree(apiFetch);
+      setTree(t);
+    } catch {
+      // silent — the view will show an empty state
+    } finally {
+      setTreeLoading(false);
+    }
+  }, [apiFetch]);
+
+  const refetchCreators = useCallback(async () => {
+    try {
+      const c = await fetchKbCreators(apiFetch);
+      setCreators(c);
+    } catch {
+      // silent
+    }
+  }, [apiFetch]);
+
+  useEffect(() => {
+    refetchTree();
+    refetchCreators();
+  }, [refetchTree, refetchCreators]);
+
+  return (
+    <div className="space-y-4">
+      {/* Sub-tab navigation */}
+      <div className="flex gap-1 border-b">
+        {(["categories", "sources", "entries"] as const).map((id) => (
+          <button
+            key={id}
+            onClick={() => setActiveSubTab(id)}
+            className={`px-4 py-2 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
+              activeSubTab === id
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {id === "categories" && "Categories"}
+            {id === "sources" && "Sources"}
+            {id === "entries" && "Entries"}
+          </button>
+        ))}
+      </div>
+
+      {activeSubTab === "categories" && (
+        <KbCategoriesView
+          tree={tree}
+          treeLoading={treeLoading}
+          refetchTree={refetchTree}
+        />
+      )}
+      {activeSubTab === "sources" && (
+        <KbSourcesView
+          tree={tree}
+          creators={creators}
+          refetchCreators={refetchCreators}
+        />
+      )}
+      {activeSubTab === "entries" && <KbEntriesView tree={tree} />}
+    </div>
+  );
+}
+
+/**
+ * Categories view — Phase 1's category tree UI.
+ *
+ * Extracted from the original `KbTab` so the new wrapper can add the
+ * Sources + Entries sub-tabs. The category tree is now passed in as a
+ * prop (fetched by the wrapper) so all three views share the same data.
+ */
+function KbCategoriesView({
+  tree,
+  treeLoading,
+  refetchTree,
+}: {
+  tree: KbCategoryNode[];
+  treeLoading: boolean;
+  refetchTree: () => Promise<void>;
+}) {
+  const apiFetch = useApiFetch();
   const [refreshing, setRefreshing] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
@@ -89,28 +186,34 @@ export function KbTab() {
   const [error, setError] = useState("");
 
   // ─── Data fetching ──────────────────────────────────────────────────────
+  // The tree is fetched by the parent (KbTab) + passed as a prop. We
+  // just wrap refetchTree with a refreshing flag for the spinner.
   const refetch = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
     try {
-      const next = await fetchKbCategoryTree(apiFetch);
-      setTree(next);
-      // Auto-expand all root nodes on first load so the tree is browsable.
+      await refetchTree();
+      // Auto-expand all root nodes so the tree is browsable.
       setExpanded((prev) => {
         const nextSet = new Set(prev);
-        for (const root of next) nextSet.add(root.id);
+        for (const root of tree) nextSet.add(root.id);
         return nextSet;
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load KB categories");
     } finally {
-      setLoading(false);
       setRefreshing(false);
     }
-  }, [apiFetch]);
+  }, [refetchTree, tree]);
 
+  // Auto-expand root nodes when the tree first loads.
   useEffect(() => {
-    refetch();
-  }, [refetch]);
+    if (tree.length === 0) return;
+    setExpanded((prev) => {
+      const nextSet = new Set(prev);
+      for (const root of tree) nextSet.add(root.id);
+      return nextSet;
+    });
+  }, [tree]);
 
   // ─── Derived: flat list (for the search dropdown + parent picker) ────────
   const flat = useMemo(() => {
@@ -307,7 +410,7 @@ export function KbTab() {
   }
 
   // ─── Loading state ──────────────────────────────────────────────────────
-  if (loading) {
+  if (treeLoading) {
     return (
       <div className="space-y-3">
         {[1, 2, 3].map((i) => (
@@ -829,6 +932,741 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
         <Plus className="h-4 w-4" />
         Create First Category
       </Button>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 2: KbSourcesView ─────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Sources view — list + upload + detail.
+ *
+ * List mode: paginated table of sources with filters (creator, language,
+ * status). Click a row to open detail mode.
+ *
+ * Detail mode: shows source metadata + raw text (collapsible) + chunking
+ * section (AI Chunk button for English, Add Manual Entry for all) + the
+ * source's entries (with edit/activate/deactivate/delete).
+ */
+function KbSourcesView({
+  tree,
+  creators,
+  refetchCreators,
+}: {
+  tree: KbCategoryNode[];
+  creators: KbCreator[];
+  refetchCreators: () => Promise<void>;
+}) {
+  const apiFetch = useApiFetch();
+  const [sources, setSources] = useState<KbSource[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0); // 0-indexed
+  const [selectedSource, setSelectedSource] = useState<KbSourceWithEntries | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [chunkReviewOpen, setChunkReviewOpen] = useState(false);
+  const [chunkResult, setChunkResult] = useState<KbChunkResult | null>(null);
+  const [chunking, setChunking] = useState(false);
+  const [entryEditorOpen, setEntryEditorOpen] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<KbEntry | null>(null);
+
+  const PAGE_SIZE = 20;
+
+  const refetchList = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await fetchKbSources(apiFetch, {
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      });
+      setSources(result.sources);
+      setTotal(result.total);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load sources");
+    } finally {
+      setLoading(false);
+    }
+  }, [apiFetch, page]);
+
+  useEffect(() => {
+    refetchList();
+  }, [refetchList]);
+
+  const refetchDetail = useCallback(async (id: number) => {
+    try {
+      const s = await fetchKbSource(apiFetch, id);
+      setSelectedSource(s);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load source");
+    }
+  }, [apiFetch]);
+
+  async function handleChunk(source: KbSource) {
+    setChunking(true);
+    try {
+      const result = await chunkSourceWithAI(apiFetch, source.id);
+      setChunkResult(result);
+      setChunkReviewOpen(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "AI chunking failed");
+    } finally {
+      setChunking(false);
+    }
+  }
+
+  async function handleDeleteSource(id: number) {
+    if (!confirm("Delete this source + all its entries? This cannot be undone.")) return;
+    try {
+      await deleteKbSource(apiFetch, id);
+      toast.success("Source deleted");
+      setSelectedSource(null);
+      refetchList();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete source");
+    }
+  }
+
+  async function handleToggleActive(entry: KbEntry) {
+    try {
+      if (entry.isActive) {
+        await deactivateKbEntry(apiFetch, entry.id);
+      } else {
+        await activateKbEntry(apiFetch, entry.id);
+      }
+      if (selectedSource) await refetchDetail(selectedSource.id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to toggle entry");
+    }
+  }
+
+  async function handleDeleteEntry(id: number) {
+    if (!confirm("Delete this entry? This cannot be undone.")) return;
+    try {
+      await deleteKbEntry(apiFetch, id);
+      toast.success("Entry deleted");
+      if (selectedSource) await refetchDetail(selectedSource.id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete entry");
+    }
+  }
+
+  // ─── Detail mode ─────────────────────────────────────────────────────────
+  if (selectedSource) {
+    const s = selectedSource;
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setSelectedSource(null);
+              refetchList();
+            }}
+            className="rounded-xl"
+          >
+            ← Back to Sources
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleDeleteSource(s.id)}
+            className="rounded-xl text-destructive hover:text-destructive"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete Source
+          </Button>
+        </div>
+
+        {/* Metadata */}
+        <div className="bg-card rounded-2xl border p-5 space-y-2">
+          <h3 className="font-semibold text-lg">{s.sourceTitle}</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            <div>
+              <span className="text-xs text-muted-foreground uppercase">Type</span>
+              <p>{s.sourceType}</p>
+            </div>
+            <div>
+              <span className="text-xs text-muted-foreground uppercase">Language</span>
+              <p>{s.sourceLanguage}</p>
+            </div>
+            <div>
+              <span className="text-xs text-muted-foreground uppercase">Status</span>
+              <p>
+                <Badge
+                  variant={
+                    s.processingStatus === "ready"
+                      ? "default"
+                      : s.processingStatus === "failed"
+                        ? "destructive"
+                        : "secondary"
+                  }
+                >
+                  {s.processingStatus}
+                </Badge>
+              </p>
+            </div>
+            <div>
+              <span className="text-xs text-muted-foreground uppercase">Entries</span>
+              <p>{s.entryCount}</p>
+            </div>
+            {s.sourceUrl && (
+              <div className="col-span-2 md:col-span-4">
+                <span className="text-xs text-muted-foreground uppercase">URL</span>
+                <a
+                  href={s.sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block text-sm text-primary hover:underline truncate"
+                >
+                  {s.sourceUrl}
+                </a>
+              </div>
+            )}
+            {s.creator && (
+              <div className="col-span-2 md:col-span-4">
+                <span className="text-xs text-muted-foreground uppercase">Creator</span>
+                <p>{s.creator.name} ({s.creator.sourceType})</p>
+              </div>
+            )}
+            {s.chunkingMethod && (
+              <div className="col-span-2 md:col-span-4">
+                <span className="text-xs text-muted-foreground uppercase">Chunking</span>
+                <p className="text-sm">
+                  {s.chunkingMethod} ({s.chunkingModel ?? "n/a"}) —{" "}
+                  {s.chunkedAt ? new Date(s.chunkedAt).toLocaleString() : "—"}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Chunking section */}
+        <div className="bg-card rounded-2xl border p-5 space-y-3">
+          <h4 className="font-medium">Chunking</h4>
+          {s.sourceLanguage === "en" ? (
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => handleChunk(s)}
+                disabled={chunking}
+                className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground"
+              >
+                {chunking ? "Chunking…" : s.chunkingMethod === "ai" ? "Re-chunk with AI" : "AI Chunk"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setEditingEntry(null);
+                  setEntryEditorOpen(true);
+                }}
+                className="rounded-xl"
+              >
+                <Plus className="h-4 w-4" />
+                Add Manual Entry
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <p className="text-sm text-muted-foreground">
+                AI chunking is English-only. Create entries manually:
+              </p>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setEditingEntry(null);
+                  setEntryEditorOpen(true);
+                }}
+                className="rounded-xl"
+              >
+                <Plus className="h-4 w-4" />
+                Add Manual Entry
+              </Button>
+            </div>
+          )}
+          {s.chunkingError && (
+            <p className="text-sm text-destructive">Chunking error: {s.chunkingError}</p>
+          )}
+        </div>
+
+        {/* Entries for this source */}
+        <div className="bg-card rounded-2xl border overflow-hidden">
+          <div className="px-5 py-3 border-b">
+            <h4 className="font-medium">Entries ({s.entries.length})</h4>
+          </div>
+          {s.entries.length === 0 ? (
+            <p className="px-5 py-8 text-sm text-muted-foreground text-center">
+              No entries yet. {s.sourceLanguage === "en" ? "Use AI Chunk or Add Manual Entry above." : "Use Add Manual Entry above."}
+            </p>
+          ) : (
+            <div className="divide-y">
+              {s.entries.map((entry) => (
+                <div key={entry.id} className="px-5 py-3 flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm truncate">{entry.title}</span>
+                      <Badge variant={entry.isActive ? "default" : "secondary"} className="text-[10px]">
+                        {entry.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                      <Badge
+                        variant={
+                          entry.embeddingStatus === "generated"
+                            ? "default"
+                            : entry.embeddingStatus === "pending"
+                              ? "secondary"
+                              : "destructive"
+                        }
+                        className="text-[10px]"
+                      >
+                        emb: {entry.embeddingStatus}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
+                      {entry.content}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleToggleActive(entry)}
+                      className="h-8 px-2"
+                      title={entry.isActive ? "Deactivate" : "Activate"}
+                    >
+                      <Switch checked={entry.isActive} />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setEditingEntry(entry);
+                        setEntryEditorOpen(true);
+                      }}
+                      className="h-8 px-2"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDeleteEntry(entry.id)}
+                      className="h-8 px-2 text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Raw text (collapsible) */}
+        <details className="bg-card rounded-2xl border p-5">
+          <summary className="cursor-pointer font-medium">Raw Text ({s.rawText.length.toLocaleString()} chars)</summary>
+          <pre className="mt-3 text-xs whitespace-pre-wrap font-mono max-h-96 overflow-y-auto bg-muted/30 p-3 rounded-lg">
+            {s.rawText}
+          </pre>
+        </details>
+
+        {/* Modals */}
+        <KbChunkReviewModal
+          open={chunkReviewOpen}
+          onOpenChange={setChunkReviewOpen}
+          source={s}
+          chunks={chunkResult?.chunks ?? []}
+          model={chunkResult?.model ?? ""}
+          categoryTree={tree}
+          onCreated={() => refetchDetail(s.id)}
+        />
+        <KbEntryEditorModal
+          open={entryEditorOpen}
+          onOpenChange={setEntryEditorOpen}
+          entry={editingEntry}
+          sourceId={s.id}
+          categoryTree={tree}
+          onSaved={() => refetchDetail(s.id)}
+        />
+      </div>
+    );
+  }
+
+  // ─── List mode ───────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Sources</h2>
+        <Button
+          onClick={() => setUploadOpen(true)}
+          className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground"
+        >
+          <Plus className="h-4 w-4" />
+          Upload Source
+        </Button>
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-12 rounded-xl" />
+          ))}
+        </div>
+      ) : sources.length === 0 ? (
+        <div className="bg-card rounded-2xl border p-12 text-center">
+          <BookOpen className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
+          <p className="font-semibold text-muted-foreground mb-1">No sources yet</p>
+          <p className="text-sm text-muted-foreground/70 mb-4">
+            Upload your first source (YouTube transcript, blog post, manual content) to start building the KB.
+          </p>
+          <Button
+            onClick={() => setUploadOpen(true)}
+            className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground"
+          >
+            <Plus className="h-4 w-4" />
+            Upload First Source
+          </Button>
+        </div>
+      ) : (
+        <>
+          <div className="bg-card rounded-2xl border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 border-b">
+                <tr>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Title</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Type</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Lang</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Status</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">Entries</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Created</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {sources.map((s) => (
+                  <tr
+                    key={s.id}
+                    onClick={() => refetchDetail(s.id)}
+                    className="hover:bg-primary/5 cursor-pointer transition-colors"
+                  >
+                    <td className="px-4 py-2.5 font-medium truncate max-w-xs">{s.sourceTitle}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{s.sourceType}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{s.sourceLanguage}</td>
+                    <td className="px-4 py-2.5">
+                      <Badge
+                        variant={
+                          s.processingStatus === "ready"
+                            ? "default"
+                            : s.processingStatus === "failed"
+                              ? "destructive"
+                              : "secondary"
+                        }
+                      >
+                        {s.processingStatus}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2.5 text-right">{s.entryCount}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground text-xs">
+                      {new Date(s.createdAt).toLocaleDateString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between text-sm text-muted-foreground">
+            <span>
+              Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                className="rounded-xl"
+              >
+                ← Prev
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={(page + 1) * PAGE_SIZE >= total}
+                onClick={() => setPage((p) => p + 1)}
+                className="rounded-xl"
+              >
+                Next →
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Upload modal */}
+      <KbSourceUploadModal
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+        creators={creators}
+        onCreated={refetchCreators}
+        onSourceCreated={(s) => {
+          refetchList();
+          refetchDetail(s.id); // open detail view for the new source
+        }}
+      />
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 2: KbEntriesView ─────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Entries view — paginated list of all KB entries across all sources.
+ *
+ * Filters: active status, embedding status. Click a row to open the
+ * editor modal. "Add Entry" button requires a source — since this view
+ * is cross-source, we don't show an "Add" button here (entries are
+ * created from the Sources view's detail panel).
+ */
+function KbEntriesView({ tree }: { tree: KbCategoryNode[] }) {
+  const apiFetch = useApiFetch();
+  const [entries, setEntries] = useState<KbEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [filterActive, setFilterActive] = useState<"all" | "active" | "inactive">("all");
+  const [filterEmbedding, setFilterEmbedding] = useState<"all" | "pending" | "generated" | "failed">("all");
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<KbEntry | null>(null);
+
+  const PAGE_SIZE = 20;
+
+  const refetch = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await fetchKbEntries(apiFetch, {
+        isActive: filterActive === "all" ? undefined : filterActive === "active",
+        embeddingStatus: filterEmbedding === "all" ? undefined : filterEmbedding,
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      });
+      setEntries(result.entries);
+      setTotal(result.total);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load entries");
+    } finally {
+      setLoading(false);
+    }
+  }, [apiFetch, page, filterActive, filterEmbedding]);
+
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
+
+  async function handleToggleActive(entry: KbEntry) {
+    try {
+      if (entry.isActive) {
+        await deactivateKbEntry(apiFetch, entry.id);
+      } else {
+        await activateKbEntry(apiFetch, entry.id);
+      }
+      refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to toggle entry");
+    }
+  }
+
+  async function handleDelete(id: number) {
+    if (!confirm("Delete this entry? This cannot be undone.")) return;
+    try {
+      await deleteKbEntry(apiFetch, id);
+      toast.success("Entry deleted");
+      refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete entry");
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Entries</h2>
+        <p className="text-xs text-muted-foreground">
+          Entries are created from the Sources tab. Activate entries here to make them available to the AI.
+        </p>
+      </div>
+
+      {/* Filters */}
+      <div className="flex gap-3 flex-wrap">
+        <Select
+          value={filterActive}
+          onValueChange={(v) => setFilterActive(v as typeof filterActive)}
+        >
+          <SelectTrigger className="rounded-xl w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All (active+inactive)</SelectItem>
+            <SelectItem value="active">Active only</SelectItem>
+            <SelectItem value="inactive">Inactive only</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={filterEmbedding}
+          onValueChange={(v) => setFilterEmbedding(v as typeof filterEmbedding)}
+        >
+          <SelectTrigger className="rounded-xl w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All embeddings</SelectItem>
+            <SelectItem value="pending">Embedding: pending</SelectItem>
+            <SelectItem value="generated">Embedding: generated</SelectItem>
+            <SelectItem value="failed">Embedding: failed</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-12 rounded-xl" />
+          ))}
+        </div>
+      ) : entries.length === 0 ? (
+        <div className="bg-card rounded-2xl border p-12 text-center">
+          <BookOpen className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
+          <p className="font-semibold text-muted-foreground mb-1">No entries found</p>
+          <p className="text-sm text-muted-foreground/70">
+            {filterActive !== "all" || filterEmbedding !== "all"
+              ? "Try changing the filters above."
+              : "Create entries from the Sources tab (AI chunk or manual entry)."}
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="bg-card rounded-2xl border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 border-b">
+                <tr>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Title</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Active</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Embedding</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">Priority</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Updated</th>
+                  <th className="px-4 py-2.5"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {entries.map((entry) => (
+                  <tr key={entry.id} className="hover:bg-primary/5">
+                    <td className="px-4 py-2.5">
+                      <button
+                        onClick={() => {
+                          setEditingEntry(entry);
+                          setEditorOpen(true);
+                        }}
+                        className="font-medium text-left truncate max-w-md block hover:text-primary"
+                      >
+                        {entry.title}
+                      </button>
+                      {entry.keywords.length > 0 && (
+                        <div className="flex gap-1 mt-0.5 flex-wrap">
+                          {entry.keywords.slice(0, 3).map((k) => (
+                            <Badge key={k} variant="outline" className="text-[10px] px-1 py-0">
+                              {k}
+                            </Badge>
+                          ))}
+                          {entry.keywords.length > 3 && (
+                            <span className="text-[10px] text-muted-foreground">
+                              +{entry.keywords.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Switch
+                        checked={entry.isActive}
+                        onCheckedChange={() => handleToggleActive(entry)}
+                      />
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Badge
+                        variant={
+                          entry.embeddingStatus === "generated"
+                            ? "default"
+                            : entry.embeddingStatus === "pending"
+                              ? "secondary"
+                              : "destructive"
+                        }
+                      >
+                        {entry.embeddingStatus}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2.5 text-right">{entry.priority}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground text-xs">
+                      {new Date(entry.updatedAt).toLocaleDateString()}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDelete(entry.id)}
+                        className="h-8 px-2 text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between text-sm text-muted-foreground">
+            <span>
+              Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                className="rounded-xl"
+              >
+                ← Prev
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={(page + 1) * PAGE_SIZE >= total}
+                onClick={() => setPage((p) => p + 1)}
+                className="rounded-xl"
+              >
+                Next →
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Editor modal (edit mode only — creation is from Sources view) */}
+      <KbEntryEditorModal
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        entry={editingEntry}
+        sourceId={editingEntry?.sourceId ?? null}
+        categoryTree={tree}
+        onSaved={() => {
+          setEditorOpen(false);
+          refetch();
+        }}
+      />
     </div>
   );
 }

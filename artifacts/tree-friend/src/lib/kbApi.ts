@@ -197,3 +197,384 @@ export function autoSlug(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 2: Creators, Sources, Entries ────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Creator types ───────────────────────────────────────────────────────────
+
+export interface KbCreator {
+  id: number;
+  name: string;
+  slug: string;
+  sourceType: "youtube" | "blog" | "facebook" | "manual";
+  profileUrl: string | null;
+  entryCount: number;
+  toneProfile: string | null;
+  toneProfileUpdatedAt: string | null;
+  toneMatchPercentage: number | null;
+  isFeatured: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KbCreatorCreateInput {
+  name: string;
+  slug: string;
+  sourceType: string;
+  profileUrl?: string | null;
+}
+
+export interface KbCreatorUpdateInput {
+  name?: string;
+  profileUrl?: string | null;
+  isActive?: boolean;
+  isFeatured?: boolean;
+}
+
+// ─── Source types ────────────────────────────────────────────────────────────
+
+export interface KbSource {
+  id: number;
+  creatorId: number | null;
+  sourceType: string;
+  sourceUrl: string | null;
+  sourceTitle: string;
+  sourceLanguage: "en" | "bn" | "banglish";
+  sourcePublishedAt: string | null;
+  rawText: string;
+  rawMetadata: string | null;
+  processingStatus: "pending" | "chunking" | "embedding" | "ready" | "failed";
+  chunkingMethod: "ai" | "manual" | null;
+  chunkingModel: string | null;
+  chunkedAt: string | null;
+  chunkingError: string | null;
+  entryCount: number;
+  createdAt: string;
+}
+
+export interface KbEntry {
+  id: number;
+  sourceId: number;
+  creatorId: number | null;
+  categoryId: number | null;
+  productId: number | null;
+  title: string;
+  content: string;
+  contentSummary: string | null;
+  keywords: string[];
+  chunkIndex: number;
+  chunkStartOffset: number | null;
+  chunkEndOffset: number | null;
+  priority: number;
+  isActive: boolean;
+  versionNumber: number;
+  embeddingStatus: "pending" | "generated" | "failed";
+  embeddingError: string | null;
+  embeddingGeneratedAt: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KbSourceWithEntries extends KbSource {
+  entries: KbEntry[];
+  creator: KbCreator | null;
+}
+
+export interface KbSourceCreateInput {
+  creatorId?: number | null;
+  sourceType: string;
+  sourceUrl?: string | null;
+  sourceTitle: string;
+  sourceLanguage: string;
+  sourcePublishedAt?: string | null;
+  rawText: string;
+}
+
+export interface KbSourceUpdateInput {
+  sourceTitle?: string;
+  sourceUrl?: string | null;
+  creatorId?: number | null;
+  sourcePublishedAt?: string | null;
+}
+
+export interface KbSourceFilters {
+  creatorId?: number;
+  language?: string;
+  processingStatus?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface KbSourceListResult {
+  sources: KbSource[];
+  total: number;
+}
+
+// ─── Entry types ─────────────────────────────────────────────────────────────
+
+export interface KbEntryCreateInput {
+  sourceId: number;
+  title: string;
+  content: string;
+  keywords?: string[];
+  categoryId?: number | null;
+  productId?: number | null;
+  priority?: number;
+  isActive?: boolean;
+}
+
+export interface KbEntryUpdateInput {
+  title?: string;
+  content?: string;
+  keywords?: string[];
+  categoryId?: number | null;
+  productId?: number | null;
+  priority?: number;
+}
+
+export interface KbEntryFilters {
+  sourceId?: number;
+  categoryId?: number;
+  creatorId?: number;
+  productId?: number;
+  isActive?: boolean;
+  embeddingStatus?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface KbEntryListResult {
+  entries: KbEntry[];
+  total: number;
+}
+
+export interface KbChunkSuggestion {
+  title: string;
+  content: string;
+  keywords: string[];
+}
+
+export interface KbChunkResult {
+  chunks: KbChunkSuggestion[];
+  model: string;
+  count: number;
+}
+
+export interface KbBatchEntryInput {
+  title: string;
+  content: string;
+  keywords?: string[];
+  categoryId?: number | null;
+  productId?: number | null;
+  priority?: number;
+  chunkIndex?: number;
+}
+
+// ─── Creator API functions ───────────────────────────────────────────────────
+
+export async function fetchKbCreators(apiFetch: ApiFetch): Promise<KbCreator[]> {
+  const res = await apiFetch("/api/ai/admin/kb/creators");
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { creators: KbCreator[]; count: number };
+  return data.creators;
+}
+
+export async function createKbCreator(
+  apiFetch: ApiFetch,
+  input: KbCreatorCreateInput,
+): Promise<KbCreator> {
+  const res = await apiFetch("/api/ai/admin/kb/creators", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { creator: KbCreator };
+  return data.creator;
+}
+
+export async function updateKbCreator(
+  apiFetch: ApiFetch,
+  id: number,
+  input: KbCreatorUpdateInput,
+): Promise<KbCreator> {
+  const res = await apiFetch(`/api/ai/admin/kb/creators/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { creator: KbCreator };
+  return data.creator;
+}
+
+export async function deleteKbCreator(apiFetch: ApiFetch, id: number): Promise<void> {
+  const res = await apiFetch(`/api/ai/admin/kb/creators/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await parseError(res));
+}
+
+// ─── Source API functions ────────────────────────────────────────────────────
+
+export async function fetchKbSources(
+  apiFetch: ApiFetch,
+  filters?: KbSourceFilters,
+): Promise<KbSourceListResult> {
+  const params = new URLSearchParams();
+  if (filters?.creatorId !== undefined) params.set("creatorId", String(filters.creatorId));
+  if (filters?.language) params.set("language", filters.language);
+  if (filters?.processingStatus) params.set("processingStatus", filters.processingStatus);
+  if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
+  if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  const res = await apiFetch(`/api/ai/admin/kb/sources${qs}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as KbSourceListResult;
+}
+
+export async function fetchKbSource(
+  apiFetch: ApiFetch,
+  id: number,
+): Promise<KbSourceWithEntries> {
+  const res = await apiFetch(`/api/ai/admin/kb/sources/${id}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { source: KbSourceWithEntries };
+  return data.source;
+}
+
+export async function createKbSource(
+  apiFetch: ApiFetch,
+  input: KbSourceCreateInput,
+): Promise<KbSource> {
+  const res = await apiFetch("/api/ai/admin/kb/sources", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { source: KbSource };
+  return data.source;
+}
+
+export async function updateKbSource(
+  apiFetch: ApiFetch,
+  id: number,
+  input: KbSourceUpdateInput,
+): Promise<KbSource> {
+  const res = await apiFetch(`/api/ai/admin/kb/sources/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { source: KbSource };
+  return data.source;
+}
+
+export async function deleteKbSource(apiFetch: ApiFetch, id: number): Promise<void> {
+  const res = await apiFetch(`/api/ai/admin/kb/sources/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await parseError(res));
+}
+
+export async function chunkSourceWithAI(
+  apiFetch: ApiFetch,
+  id: number,
+): Promise<KbChunkResult> {
+  const res = await apiFetch(`/api/ai/admin/kb/sources/${id}/chunk`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as KbChunkResult;
+}
+
+export async function createKbEntriesBatch(
+  apiFetch: ApiFetch,
+  sourceId: number,
+  entries: KbBatchEntryInput[],
+  method: "ai" | "manual" = "manual",
+): Promise<{ createdIds: number[]; count: number }> {
+  const res = await apiFetch(`/api/ai/admin/kb/sources/${sourceId}/entries/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ entries, method }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as { createdIds: number[]; count: number };
+}
+
+// ─── Entry API functions ─────────────────────────────────────────────────────
+
+export async function fetchKbEntries(
+  apiFetch: ApiFetch,
+  filters?: KbEntryFilters,
+): Promise<KbEntryListResult> {
+  const params = new URLSearchParams();
+  if (filters?.sourceId !== undefined) params.set("sourceId", String(filters.sourceId));
+  if (filters?.categoryId !== undefined) params.set("categoryId", String(filters.categoryId));
+  if (filters?.creatorId !== undefined) params.set("creatorId", String(filters.creatorId));
+  if (filters?.productId !== undefined) params.set("productId", String(filters.productId));
+  if (filters?.isActive !== undefined) params.set("isActive", String(filters.isActive));
+  if (filters?.embeddingStatus) params.set("embeddingStatus", filters.embeddingStatus);
+  if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
+  if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  const res = await apiFetch(`/api/ai/admin/kb/entries${qs}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as KbEntryListResult;
+}
+
+export async function fetchKbEntry(apiFetch: ApiFetch, id: number): Promise<KbEntry> {
+  const res = await apiFetch(`/api/ai/admin/kb/entries/${id}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { entry: KbEntry };
+  return data.entry;
+}
+
+export async function createKbEntry(
+  apiFetch: ApiFetch,
+  input: KbEntryCreateInput,
+): Promise<KbEntry> {
+  const res = await apiFetch("/api/ai/admin/kb/entries", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { entry: KbEntry };
+  return data.entry;
+}
+
+export async function updateKbEntry(
+  apiFetch: ApiFetch,
+  id: number,
+  input: KbEntryUpdateInput,
+): Promise<KbEntry> {
+  const res = await apiFetch(`/api/ai/admin/kb/entries/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { entry: KbEntry };
+  return data.entry;
+}
+
+export async function activateKbEntry(apiFetch: ApiFetch, id: number): Promise<void> {
+  const res = await apiFetch(`/api/ai/admin/kb/entries/${id}/activate`, { method: "POST" });
+  if (!res.ok) throw new Error(await parseError(res));
+}
+
+export async function deactivateKbEntry(apiFetch: ApiFetch, id: number): Promise<void> {
+  const res = await apiFetch(`/api/ai/admin/kb/entries/${id}/deactivate`, { method: "POST" });
+  if (!res.ok) throw new Error(await parseError(res));
+}
+
+export async function deleteKbEntry(apiFetch: ApiFetch, id: number): Promise<void> {
+  const res = await apiFetch(`/api/ai/admin/kb/entries/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await parseError(res));
+}
