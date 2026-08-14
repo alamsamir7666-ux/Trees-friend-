@@ -101,8 +101,32 @@ const MODEL_FALLBACK_CHAIN = [
 //
 // _discoveredModels is null before discovery, an array after. If discovery
 // fails (network error, auth error), we fall back to MODEL_FALLBACK_CHAIN.
+//
+// ─── v3.9: concurrency-safe discovery ──────────────────────────────────
+//
+// Previously: `let _discoveryAttempted = false` + `let _discoveredModels`
+// were bare module-level flags. If two requests arrived simultaneously
+// on a cold start, BOTH would see `_discoveryAttempted === false`, BOTH
+// would call `discoverAvailableModels()`, and whichever finished LAST
+// would overwrite the other's result — a classic check-then-act race.
+//
+// Worse: `_discoveryAttempted = true` was set BEFORE the `await` (in the
+// old `discoverAvailableModels` body), so concurrent callers saw
+// `_discoveryAttempted === true` but `_discoveredModels === null` and
+// skipped discovery entirely, falling back to the static chain.
+//
+// Fix: use in-flight promise memoization. The first caller stores its
+// in-flight Promise in `_discoveryPromise`; concurrent callers await the
+// SAME promise (single API call, single result). The promise is cleared
+// on completion (success OR failure) so `forceRediscover()` can re-trigger.
+//
+// This is the standard memoization pattern for async singletons — same
+// approach used by Vercel's `getModule` cache and Next.js's module
+// initialization. JS event-loop single-threading guarantees the
+// check-then-set on `_discoveryPromise` is atomic (no preemption between
+// the `if` check and the assignment).
 let _discoveredModels: string[] | null = null;
-let _discoveryAttempted = false;
+let _discoveryPromise: Promise<string[] | null> | null = null;
 
 // ─── v3.0.1: Per-model cooldown for 429 quota exhaustion ────────────────────
 // When a model returns 429, we add it to this map with a cooldown timestamp.
@@ -135,12 +159,43 @@ function getMaxRetries(): number {
   return 3;
 }
 
+/**
+ * v3.9: Max number of auto-continue calls when the model hits maxOutputTokens.
+ *
+ * When finishReason === "MAX_TOKENS" (Gemini) or "length" (Groq), the
+ * response was truncated. We make up to N additional calls, appending the
+ * partial text + a "continue from where you left off" instruction, until
+ * the model finishes naturally (STOP) or we hit the limit.
+ *
+ * Default: 2 (so up to 3 × AI_MAX_TOKENS = 6144 tokens with default 2048).
+ * Set to 0 to disable auto-continue (restores v3.8 behavior — truncated
+ * responses stay truncated).
+ */
+function getMaxAutoContinues(): number {
+  const raw = Number(process.env.AI_MAX_AUTO_CONTINUES);
+  if (Number.isFinite(raw) && raw >= 0 && raw <= 5) return raw;
+  return 2;
+}
+
 // ─── Lazy-initialized client ─────────────────────────────────────────────────
+//
+// v3.9: the client itself is safe to construct concurrently (GoogleGenAI
+// is just config + an HTTP fetcher — no shared mutable state inside).
+// The old `_clientInitAttempted` flag was a guard against repeated
+// construction, but JS event-loop single-threading already guarantees
+// `_client` is assigned atomically. We keep the lazy pattern but drop
+// the now-vestigial flag (it was dead code after the v3.8 cache fix).
 let _client: GoogleGenAI | null = null;
-let _clientInitAttempted = false;
 
 // The model that's currently known to work. Set on first successful call,
 // reused for all subsequent calls. Reset to null on 404 to retry the chain.
+//
+// v3.9: this is a CACHE, not a correctness invariant. If two concurrent
+// requests race to set it (both succeed on different models — rare but
+// possible during the fallback chain), the last writer wins. That's
+// fine: both models work, and the next request will reuse whichever
+// was last cached. No correctness issue — just a potential extra
+// fallback-chain walk on the next request if the cached model 404s.
 let _workingModel: string | null = null;
 
 /**
@@ -156,16 +211,13 @@ let _workingModel: string | null = null;
  * chat-route API and may be refactored in Phase 5.
  */
 export function getClient(): GoogleGenAI {
-  if (_clientInitAttempted) {
-    if (!_client) {
-      throw new Error(
-        "GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/apikey " +
-          "and add it as the GEMINI_API_KEY env var.",
-      );
-    }
-    return _client;
-  }
-  _clientInitAttempted = true;
+  // v3.9: simplified — drop the vestigial `_clientInitAttempted` flag.
+  // JS event-loop single-threading guarantees `_client` is checked + set
+  // atomically (no preemption between the `if` and the assignment), so
+  // concurrent callers either both see null (rare on a warm process) or
+  // both see the initialized client. Even if both see null, the worst
+  // case is two `new GoogleGenAI()` constructions — cheap + idempotent.
+  if (_client) return _client;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -173,7 +225,10 @@ export function getClient(): GoogleGenAI {
       "GEMINI_API_KEY env var is not set — AI assistant routes will return 503. " +
         "Get a free key at https://aistudio.google.com/apikey",
     );
-    return _client!;
+    throw new Error(
+      "GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/apikey " +
+        "and add it as the GEMINI_API_KEY env var.",
+    );
   }
   _client = new GoogleGenAI({ apiKey });
   logger.info(
@@ -203,126 +258,146 @@ export function getClient(): GoogleGenAI {
  * If discovery fails (network, auth, etc.), returns null — the caller
  * falls back to the static MODEL_FALLBACK_CHAIN.
  *
+ * v3.9: concurrency-safe via in-flight promise memoization. If two
+ * requests arrive on a cold start, the first stores its Promise in
+ * `_discoveryPromise`; the second awaits the SAME promise (single API
+ * call). Previously, `_discoveryAttempted` was set before the await,
+ * so concurrent callers saw `true` + `null` and skipped discovery.
+ *
  * @internal — exported only for the /api/ai/admin/models debug endpoint.
  */
 export async function discoverAvailableModels(): Promise<string[] | null> {
-  if (_discoveryAttempted) return _discoveredModels;
-  _discoveryAttempted = true;
+  // v3.9: if discovery already completed, return cached result.
+  if (_discoveredModels !== null) return _discoveredModels;
 
-  const client = getClient();
-  if (!client) return null;
+  // v3.9: if discovery is in-flight, await the same promise (coalesce).
+  // JS event-loop single-threading guarantees this check-then-set is
+  // atomic — no preemption between the `if` and the assignment.
+  if (_discoveryPromise) return _discoveryPromise;
 
-  try {
-    const available: string[] = [];
-    const response = await client.models.list();
+  // We're the first caller — kick off discovery + cache the promise.
+  _discoveryPromise = (async () => {
+    const client = getClient();
 
-    // The @google/genai SDK's models.list() can return different shapes
-    // depending on the SDK version:
-    //   v1.52+: an async-iterable Pager yielding model objects directly
-    //   older:  an object { models: [...] } or { page: [...] }
-    // We handle ALL cases so discovery works regardless of SDK version.
+    try {
+      const available: string[] = [];
+      const response = await client.models.list();
 
-    const extractModel = (model: any): { name: string; methods: string[] } | null => {
-      if (!model || typeof model !== "object") return null;
-      const name: string = model.name ?? model.model ?? "";
-      // Field name varies: supportedGenerationMethods (REST) vs supported_methods (SDK)
-      const methods: string[] =
-        model.supportedGenerationMethods ?? model.supported_methods ?? model.methods ?? [];
-      const bareName = name.replace(/^models\//, "");
-      if (!bareName) return null;
-      return { name: bareName, methods };
-    };
+      // The @google/genai SDK's models.list() can return different shapes
+      // depending on the SDK version:
+      //   v1.52+: an async-iterable Pager yielding model objects directly
+      //   older:  an object { models: [...] } or { page: [...] }
+      // We handle ALL cases so discovery works regardless of SDK version.
 
-    // Case 1: response is directly async-iterable (Pager) — yields model objects
-    if (response && typeof (response as any)[Symbol.asyncIterator] === "function") {
-      for await (const model of response as any) {
-        const extracted = extractModel(model);
-        if (extracted && extracted.methods.includes("generateContent")) {
-          available.push(extracted.name);
+      const extractModel = (model: any): { name: string; methods: string[] } | null => {
+        if (!model || typeof model !== "object") return null;
+        const name: string = model.name ?? model.model ?? "";
+        // Field name varies: supportedGenerationMethods (REST) vs supported_methods (SDK)
+        const methods: string[] =
+          model.supportedGenerationMethods ?? model.supported_methods ?? model.methods ?? [];
+        const bareName = name.replace(/^models\//, "");
+        if (!bareName) return null;
+        return { name: bareName, methods };
+      };
+
+      // Case 1: response is directly async-iterable (Pager) — yields model objects
+      if (response && typeof (response as any)[Symbol.asyncIterator] === "function") {
+        for await (const model of response as any) {
+          const extracted = extractModel(model);
+          if (extracted && extracted.methods.includes("generateContent")) {
+            available.push(extracted.name);
+          }
         }
       }
-    }
-    // Case 2: response is an object with a .models array (REST-style)
-    else if (response && Array.isArray((response as any).models)) {
-      for (const model of (response as any).models) {
-        const extracted = extractModel(model);
-        if (extracted && extracted.methods.includes("generateContent")) {
-          available.push(extracted.name);
+      // Case 2: response is an object with a .models array (REST-style)
+      else if (response && Array.isArray((response as any).models)) {
+        for (const model of (response as any).models) {
+          const extracted = extractModel(model);
+          if (extracted && extracted.methods.includes("generateContent")) {
+            available.push(extracted.name);
+          }
         }
       }
-    }
-    // Case 3: response is an object with a .page array
-    else if (response && Array.isArray((response as any).page)) {
-      for (const model of (response as any).page) {
-        const extracted = extractModel(model);
-        if (extracted && extracted.methods.includes("generateContent")) {
-          available.push(extracted.name);
+      // Case 3: response is an object with a .page array
+      else if (response && Array.isArray((response as any).page)) {
+        for (const model of (response as any).page) {
+          const extracted = extractModel(model);
+          if (extracted && extracted.methods.includes("generateContent")) {
+            available.push(extracted.name);
+          }
         }
       }
-    }
-    // Case 4: response is directly an array
-    else if (Array.isArray(response)) {
-      for (const model of response) {
-        const extracted = extractModel(model);
-        if (extracted && extracted.methods.includes("generateContent")) {
-          available.push(extracted.name);
+      // Case 4: response is directly an array
+      else if (Array.isArray(response)) {
+        for (const model of response) {
+          const extracted = extractModel(model);
+          if (extracted && extracted.methods.includes("generateContent")) {
+            available.push(extracted.name);
+          }
         }
       }
-    }
-    // Case 5: unexpected shape — log it so we can debug
-    else {
-      logger.warn(
-        {
-          responseType: typeof response,
-          responseKeys: response && typeof response === "object" ? Object.keys(response) : null,
-          responsePreview: JSON.stringify(response).slice(0, 500),
-        },
-        "TreeBot: ListModels returned an unexpected response shape. " +
-          "Discovery will be skipped (falling back to static chain). " +
-          "Please report this shape so the extraction logic can be updated.",
+      // Case 5: unexpected shape — log it so we can debug
+      else {
+        logger.warn(
+          {
+            responseType: typeof response,
+            responseKeys: response && typeof response === "object" ? Object.keys(response) : null,
+            responsePreview: JSON.stringify(response).slice(0, 500),
+          },
+          "TreeBot: ListModels returned an unexpected response shape. " +
+            "Discovery will be skipped (falling back to static chain). " +
+            "Please report this shape so the extraction logic can be updated.",
+        );
+      }
+
+      // If we got 0 models despite a successful call, that's suspicious —
+      // probably the response shape wasn't recognized. Fall back to null
+      // so getModelChain() uses the static chain instead of an empty array.
+      if (available.length === 0) {
+        logger.warn(
+          { responseType: typeof response, responsePreview: JSON.stringify(response).slice(0, 500) },
+          "TreeBot: ListModels returned 0 models that support generateContent. " +
+            "This is likely a response-shape mismatch — falling back to static chain. " +
+            "The static chain will be used, but may waste time on 404s.",
+        );
+        _discoveredModels = null;
+        return null;
+      }
+
+      // Sort: prefer "flash" models first (faster + cheaper), then "pro".
+      // Within each tier, prefer newer versions (higher numbers).
+      available.sort((a, b) => {
+        const aFlash = a.includes("flash");
+        const bFlash = b.includes("flash");
+        if (aFlash && !bFlash) return -1;
+        if (!aFlash && bFlash) return 1;
+        return b.localeCompare(a, undefined, { numeric: true });
+      });
+
+      _discoveredModels = available;
+      logger.info(
+        { count: available.length, models: available },
+        "TreeBot: discovered available Gemini models via ListModels API",
       );
-    }
-
-    // If we got 0 models despite a successful call, that's suspicious —
-    // probably the response shape wasn't recognized. Fall back to null
-    // so getModelChain() uses the static chain instead of an empty array.
-    if (available.length === 0) {
+      return available;
+    } catch (err) {
       logger.warn(
-        { responseType: typeof response, responsePreview: JSON.stringify(response).slice(0, 500) },
-        "TreeBot: ListModels returned 0 models that support generateContent. " +
-          "This is likely a response-shape mismatch — falling back to static chain. " +
-          "The static chain will be used, but may waste time on 404s.",
+        { err: (err as any)?.message ?? String(err) },
+        "TreeBot: model discovery failed, falling back to static chain. " +
+          "This is non-fatal — the static chain will be used, but may waste " +
+          "time on 404s for models not available to your API key.",
       );
       _discoveredModels = null;
       return null;
+    } finally {
+      // v3.9: clear the in-flight promise so forceRediscover() can
+      // re-trigger discovery. Subsequent callers will hit the cached
+      // `_discoveredModels` (set above) on the fast path.
+      _discoveryPromise = null;
     }
+  })();
 
-    // Sort: prefer "flash" models first (faster + cheaper), then "pro".
-    // Within each tier, prefer newer versions (higher numbers).
-    available.sort((a, b) => {
-      const aFlash = a.includes("flash");
-      const bFlash = b.includes("flash");
-      if (aFlash && !bFlash) return -1;
-      if (!aFlash && bFlash) return 1;
-      return b.localeCompare(a, undefined, { numeric: true });
-    });
-
-    _discoveredModels = available;
-    logger.info(
-      { count: available.length, models: available },
-      "TreeBot: discovered available Gemini models via ListModels API",
-    );
-    return available;
-  } catch (err) {
-    logger.warn(
-      { err: (err as any)?.message ?? String(err) },
-      "TreeBot: model discovery failed, falling back to static chain. " +
-        "This is non-fatal — the static chain will be used, but may waste " +
-        "time on 404s for models not available to your API key.",
-    );
-    _discoveredModels = null;
-    return null;
-  }
+  return _discoveryPromise;
 }
 
 /**
@@ -542,7 +617,12 @@ export async function callWithFallback<T>(fn: (modelName: string) => Promise<T>)
   // _discoveredModels so getModelChain() returns only models that actually
   // exist for this API key (avoids wasting time on 404s).
   // If discovery already ran (or fails), this is a fast no-op.
-  if (!_discoveryAttempted) {
+  //
+  // v3.9: `discoverAvailableModels()` is now concurrency-safe via in-flight
+  // promise memoization. Calling it here is always safe — it returns the
+  // cached result immediately if discovery already completed, or awaits
+  // the in-flight promise if another request triggered it.
+  if (_discoveredModels === null) {
     await discoverAvailableModels();
   }
 
@@ -1006,19 +1086,91 @@ export async function* streamGeminiChat(
     lastModel = _workingModel ?? "unknown";
 
     // v3.0: detect truncation. If the response hit maxOutputTokens,
-    // finishReason will be "MAX_TOKENS" and we should log it (the
-    // route's auto-continue logic can be added later if needed).
-    if (result.finishReason === "MAX_TOKENS") {
-      logger.warn(
-        { finishReason: result.finishReason, maxOutputTokens: getMaxOutputTokens() },
-        "TreeBot: response was truncated (hit maxOutputTokens). Consider raising AI_MAX_TOKENS.",
-      );
-    }
-
+    // finishReason will be "MAX_TOKENS".
+    //
+    // v3.9: auto-continue. When the model hits MAX_TOKENS with NO function
+    // calls (pure text response), we make up to AI_MAX_AUTO_CONTINUES
+    // additional calls, appending the partial text + a "continue" prompt,
+    // until the model finishes naturally (STOP) or we hit the limit.
+    //
+    // This fixes the v3.8 bug where long plant-care guides (with markdown
+    // formatting) got truncated at 2048 tokens, often cutting off the
+    // [followups] block — which then triggered the structuredOutput
+    // fallback LLM call (double cost). Now the response continues + the
+    // [followups] block lands in the natural stop.
+    //
+    // We do NOT auto-continue when there are function calls — those loop
+    // normally (the model will produce text in the next round after
+    // seeing the tool results).
     const functionCalls = result.functionCalls;
 
     if (functionCalls.length === 0 || !tools) {
       // ─── No function calls — this was the final text response ────────
+      // v3.9: auto-continue if truncated.
+      if (result.finishReason === "MAX_TOKENS") {
+        let continueCount = 0;
+        const maxAutoContinues = getMaxAutoContinues();
+
+        while (result.finishReason === "MAX_TOKENS" && continueCount < maxAutoContinues && !budget.hadStuckLoop) {
+          continueCount++;
+          logger.info(
+            { continueCount, maxAutoContinues, maxOutputTokens: getMaxOutputTokens() },
+            "TreeBot: auto-continuing truncated response (MAX_TOKENS)",
+          );
+
+          // Append the partial model text + a "continue" user prompt.
+          // The model sees its own partial output + knows to pick up
+          // mid-sentence. This is the standard "continue generation"
+          // pattern used by OpenAI, Anthropic, and LangChain.
+          //
+          // We use `result.modelParts` (the FULL parts array from the
+          // stream, including thought signatures for Gemini 2.5 thinking
+          // models) rather than reconstructing text — the SDK requires
+          // the original parts to be echoed back unchanged.
+          contents = [
+            ...contents,
+            {
+              role: "model" as const,
+              parts: result.modelParts,
+            },
+            {
+              role: "user" as const,
+              parts: [{ text: "Continue your previous response exactly from where it was cut off. Do not repeat what you already said — just complete the remaining content." }],
+            },
+          ];
+
+          // Run one more streaming round (no tools — we're continuing
+          // a text response, not calling more tools). The text deltas
+          // are yielded to the SSE stream as they arrive.
+          const continueGen = runOneStreamingRound(contents, config, true);
+          let continueResult: { functionCalls: any[]; modelParts: any[]; finishReason: string | null };
+          while (true) {
+            const { done, value } = await continueGen.next();
+            if (done) {
+              continueResult = value as { functionCalls: any[]; modelParts: any[]; finishReason: string | null };
+              break;
+            }
+            if (typeof value === "string") {
+              yield value;
+            }
+          }
+
+          // If the continue call finished naturally (not MAX_TOKENS),
+          // stop the loop. Otherwise, update result + loop again.
+          if (continueResult.finishReason !== "MAX_TOKENS") {
+            break;
+          }
+          result = continueResult;
+        }
+
+        if (result.finishReason === "MAX_TOKENS") {
+          logger.warn(
+            { finishReason: result.finishReason, maxOutputTokens: getMaxOutputTokens(), continueCount },
+            "TreeBot: response still truncated after auto-continue limit. Consider raising AI_MAX_TOKENS or AI_MAX_AUTO_CONTINUES.",
+          );
+        }
+      }
+
       // The text was already streamed above. Emit metadata + return.
       if (onMetadata) {
         onMetadata({
@@ -1229,17 +1381,31 @@ export function getWorkingModel(): string | null {
 }
 
 /**
- * v3.0.2: Force a re-discovery of available models. Resets the
- * _discoveryAttempted flag and clears the cache so the next
- * discoverAvailableModels() call actually hits the ListModels API again.
+ * v3.0.2: Force a re-discovery of available models. Clears the cache
+ * so the next discoverAvailableModels() call actually hits the
+ * ListModels API again.
  *
  * Used by the /api/ai/admin/models?refresh=1 endpoint so admins can
  * re-check availability after swapping API keys (without restarting
  * the server).
+ *
+ * v3.9: if discovery is currently in-flight, we await it first so we
+ * don't race with a concurrent cold-start discovery (the in-flight
+ * promise would overwrite our cleared cache).
  */
 export async function forceRediscover(): Promise<void> {
-  _discoveryAttempted = false;
+  // v3.9: if discovery is in-flight, wait for it to finish before clearing.
+  // Otherwise our clear would be overwritten when the in-flight promise
+  // resolves + sets `_discoveredModels`.
+  if (_discoveryPromise) {
+    try {
+      await _discoveryPromise;
+    } catch {
+      // ignore — we're about to clear anyway
+    }
+  }
   _discoveredModels = null;
+  _discoveryPromise = null;
   // Also clear the working model cache — if the API key changed, the
   // previously-cached model may no longer be available.
   _workingModel = null;
@@ -1256,11 +1422,17 @@ export async function forceRediscover(): Promise<void> {
  *   - the full static fallback chain
  *
  * v3.3: now async because cooldowns are Redis-backed.
+ *
+ * v3.9: `discoveryAttempted` is now derived from the actual state —
+ * true if discovery completed (`_discoveredModels !== null`) OR is
+ * in-flight (`_discoveryPromise !== null`). Previously this was a
+ * separate flag that could drift from the actual cache state.
  */
 export async function getModelDebugInfo(): Promise<{
   workingModel: string | null;
   discoveredModels: string[] | null;
   discoveryAttempted: boolean;
+  discoveryInFlight: boolean;
   staticChain: string[];
   cooldowns: { model: string; retryInMs: number; retryAt: string }[];
   aiModelEnv: string | null;
@@ -1281,7 +1453,9 @@ export async function getModelDebugInfo(): Promise<{
   return {
     workingModel: _workingModel,
     discoveredModels: _discoveredModels,
-    discoveryAttempted: _discoveryAttempted,
+    // v3.9: derived from actual state, not a separate flag.
+    discoveryAttempted: _discoveredModels !== null || _discoveryPromise !== null,
+    discoveryInFlight: _discoveryPromise !== null,
     staticChain: MODEL_FALLBACK_CHAIN,
     cooldowns,
     aiModelEnv: process.env.AI_MODEL ?? null,

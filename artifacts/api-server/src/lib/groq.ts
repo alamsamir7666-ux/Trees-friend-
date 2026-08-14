@@ -64,6 +64,25 @@ function getMaxOutputTokens(): number {
   return 2048;
 }
 
+/**
+ * v3.9: Max number of auto-continue calls when the model hits max_tokens.
+ *
+ * When finish_reason === "length" (Groq's OpenAI-compatible name for
+ * MAX_TOKENS), the response was truncated. We make up to N additional
+ * calls, appending the partial text + a "continue" instruction, until
+ * the model finishes naturally (stop) or we hit the limit.
+ *
+ * Default: 2 (so up to 3 × AI_MAX_TOKENS = 6144 tokens with default 2048).
+ * Set to 0 to disable auto-continue.
+ *
+ * Kept in sync with gemini.ts's getMaxAutoContinues() (same env var).
+ */
+function getMaxAutoContinues(): number {
+  const raw = Number(process.env.AI_MAX_AUTO_CONTINUES);
+  if (Number.isFinite(raw) && raw >= 0 && raw <= 5) return raw;
+  return 2;
+}
+
 const COOLDOWN_MS = Number(process.env.AI_QUOTA_COOLDOWN_MS ?? 60_000);
 
 // v3.3: Per-model cooldown is now Redis-backed (see lib/modelCooldown.ts).
@@ -538,10 +557,16 @@ export async function* streamGroqChat(
     tryModels.push(explicit.trim());
   } else {
     if (_workingModel) tryModels.push(_workingModel);
-    for (const m of GROQ_MODEL_CHAIN) {
-      // v3.3: isOnCooldown is now async (Redis-backed)
-      const onCooldown = await isOnCooldown("groq", m);
-      if (!tryModels.includes(m) && !onCooldown) tryModels.push(m);
+    // v3.9: check cooldowns in PARALLEL via Promise.all (matching
+    // gemini.ts's getModelChain pattern). Previously this was a sequential
+    // `for (const m of GROQ_MODEL_CHAIN) { await isOnCooldown(...) }` loop
+    // — with 2 models the cost was ~2ms, but the pattern was wrong and
+    // would scale linearly with chain length.
+    const cooldownChecks = await Promise.all(
+      GROQ_MODEL_CHAIN.map((m) => isOnCooldown("groq", m).then((onCd) => ({ m, onCd }))),
+    );
+    for (const { m, onCd } of cooldownChecks) {
+      if (!tryModels.includes(m) && !onCd) tryModels.push(m);
     }
     if (tryModels.length === 0) tryModels.push(...GROQ_MODEL_CHAIN);
   }
@@ -723,57 +748,81 @@ export async function* streamGroqChat(
           }
           budget.recordRound(currentSignatures);
 
-          // v3.7: Execute each tool + append the result as a "tool" role message.
+          // v3.7: Execute tools + append results as "tool" role messages.
           // Fire onToolEvent before+after each so the UI can show progress.
-          for (const tc of toolCalls) {
-            let args: Record<string, unknown> = {};
-            try {
-              args = JSON.parse(tc.function.arguments || "{}");
-            } catch {
-              // malformed arguments — proceed with empty
-            }
-            const toolName = tc.function.name;
-            if (onToolEvent) {
-              onToolEvent({ type: "tool_call", name: toolName, args });
-            }
-            const t0 = Date.now();
-            try {
-              const toolResult = await tools.execute(toolName, args, userId ?? null);
-              if (onToolEvent) {
-                onToolEvent({
-                  type: "tool_result",
-                  name: toolName,
-                  ok: true,
-                  durationMs: Date.now() - t0,
-                });
+          //
+          // v3.9: execute tools in PARALLEL via Promise.all (matching
+          // gemini.ts's pattern). Previously this was a sequential
+          // `for (const tc of toolCalls)` loop, which meant:
+          //   - If the model emitted 3 tool calls, they ran one-after-another
+          //     (3 × avg-tool-latency = ~3 × 50-200ms = 150-600ms).
+          //   - The same logical request behaved DIFFERENTLY depending on
+          //     which provider handled it (Gemini parallel, Groq sequential).
+          //
+          // Parallel execution cuts multi-tool latency to ~max(individual)
+          // instead of sum(individual). The tool-result messages are pushed
+          // in the ORIGINAL order (Promise.all preserves array order), so
+          // Groq sees the same message sequence regardless of execution order.
+          //
+          // Safety: the 5 tools (search_catalog, get_product_care,
+          // get_user_orders, get_order_details, search_knowledge_base) are
+          // all read-only SELECTs against independent tables — no write
+          // contention, no shared-row race. If write tools are added later,
+          // they should be sequenced explicitly (not via this Promise.all).
+          const toolMessages: GroqMessage[] = await Promise.all(
+            toolCalls.map(async (tc) => {
+              let args: Record<string, unknown> = {};
+              try {
+                args = JSON.parse(tc.function.arguments || "{}");
+              } catch {
+                // malformed arguments — proceed with empty
               }
-              messages.push({
-                role: "tool",
-                content: JSON.stringify(toolResult),
-                tool_call_id: tc.id,
-              });
-            } catch (err) {
-              // String(err) always returns a string, so `?? "tool execution failed"`
-              // would be dead code. Use a fallback only for empty strings.
-              const rawMsg = (err as any)?.message ?? String(err);
-              const errMsg = rawMsg || "tool execution failed";
+              const toolName = tc.function.name;
               if (onToolEvent) {
-                onToolEvent({
-                  type: "tool_result",
-                  name: toolName,
-                  ok: false,
-                  error: errMsg,
-                  durationMs: Date.now() - t0,
-                });
+                onToolEvent({ type: "tool_call", name: toolName, args });
               }
-              // Push the error as the tool result so the model can react.
-              messages.push({
-                role: "tool",
-                content: JSON.stringify({ error: errMsg }),
-                tool_call_id: tc.id,
-              });
-            }
-          }
+              const t0 = Date.now();
+              try {
+                const toolResult = await tools.execute(toolName, args, userId ?? null);
+                if (onToolEvent) {
+                  onToolEvent({
+                    type: "tool_result",
+                    name: toolName,
+                    ok: true,
+                    durationMs: Date.now() - t0,
+                  });
+                }
+                return {
+                  role: "tool" as const,
+                  content: JSON.stringify(toolResult),
+                  tool_call_id: tc.id,
+                };
+              } catch (err) {
+                // String(err) always returns a string, so `?? "tool execution failed"`
+                // would be dead code. Use a fallback only for empty strings.
+                const rawMsg = (err as any)?.message ?? String(err);
+                const errMsg = rawMsg || "tool execution failed";
+                if (onToolEvent) {
+                  onToolEvent({
+                    type: "tool_result",
+                    name: toolName,
+                    ok: false,
+                    error: errMsg,
+                    durationMs: Date.now() - t0,
+                  });
+                }
+                // Return the error as the tool result so the model can react.
+                return {
+                  role: "tool" as const,
+                  content: JSON.stringify({ error: errMsg }),
+                  tool_call_id: tc.id,
+                };
+              }
+            }),
+          );
+          // Push all tool-result messages in original order (Promise.all
+          // preserves array order regardless of resolution order).
+          messages.push(...toolMessages);
 
           // Loop continues — Groq processes the tool results
           budget.advance();
@@ -798,6 +847,83 @@ export async function* streamGroqChat(
             "Groq: model selected and cached for subsequent requests",
           );
           _workingModel = modelName;
+        }
+
+        // v3.9: auto-continue if truncated (finish_reason === "length").
+        // Groq uses OpenAI-compatible "length" instead of Gemini's "MAX_TOKENS".
+        //
+        // When the response hits max_tokens, we make up to
+        // AI_MAX_AUTO_CONTINUES additional calls, appending the partial
+        // assistant text + a "continue" user message, until the model
+        // finishes naturally (stop) or we hit the limit.
+        //
+        // This fixes the v3.8 bug where long plant-care guides got
+        // truncated at 2048 tokens, often cutting off the [followups]
+        // block — which then triggered the structuredOutput fallback
+        // LLM call (double cost). Now the response continues + the
+        // [followups] block lands in the natural stop.
+        //
+        // We only auto-continue when there were NO tool calls (pure text
+        // response). Tool-call rounds loop normally.
+        if (result?.finishReason === "length") {
+          const maxAutoContinues = getMaxAutoContinues();
+          let continueCount = 0;
+          // Track the finish reason across continue calls.
+          let currentFinishReason: string | null = result.finishReason;
+
+          while (currentFinishReason === "length" && continueCount < maxAutoContinues && !budget.hadStuckLoop) {
+            continueCount++;
+            logger.info(
+              { continueCount, maxAutoContinues, model: modelName, maxOutputTokens: getMaxOutputTokens() },
+              "Groq: auto-continuing truncated response (finish_reason=length)",
+            );
+
+            // Append the partial assistant message + a "continue" user
+            // message. The model sees its own partial output + knows to
+            // pick up mid-sentence. This is the standard "continue
+            // generation" pattern (OpenAI, Anthropic, LangChain all do
+            // this for max_tokens truncation).
+            //
+            // We use content: null for the assistant message (matching
+            // the tool-call assistant message pattern) + a fresh user
+            // message with the continue instruction.
+            messages.push({
+              role: "assistant",
+              content: null,
+            });
+            messages.push({
+              role: "user",
+              content: "Continue your previous response exactly from where it was cut off. Do not repeat what you already said — just complete the remaining content.",
+            });
+
+            // Run one more streaming call (no tools — we're continuing
+            // a text response). The text deltas are yielded to the SSE
+            // stream as they arrive.
+            const continueStream = streamGroqCompletion(modelName, messages, undefined);
+            let continueResult: StreamResult | undefined;
+            while (true) {
+              const { value, done } = await continueStream.next();
+              if (done) {
+                continueResult = value as StreamResult;
+                break;
+              }
+              if (typeof value === "string") {
+                yield value;
+              }
+            }
+
+            if (continueResult?.usage) {
+              lastUsage = continueResult.usage;
+            }
+            currentFinishReason = continueResult?.finishReason ?? null;
+          }
+
+          if (currentFinishReason === "length") {
+            logger.warn(
+              { finishReason: currentFinishReason, model: modelName, maxOutputTokens: getMaxOutputTokens(), continueCount },
+              "Groq: response still truncated after auto-continue limit. Consider raising AI_MAX_TOKENS or AI_MAX_AUTO_CONTINUES.",
+            );
+          }
         }
 
         // Bug #4 fix: emit the FINAL metadata with the accumulated toolCalls

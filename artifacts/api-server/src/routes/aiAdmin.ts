@@ -830,6 +830,7 @@ router.get("/ai/admin/models", async (req: Request, res: Response) => {
       workingModel: debugInfo.workingModel,
       discoveredModels: discovered,
       discoveryAttempted: debugInfo.discoveryAttempted,
+      discoveryInFlight: debugInfo.discoveryInFlight,
       staticChain: debugInfo.staticChain,
       effectiveChain: discovered && discovered.length > 0 ? discovered : debugInfo.staticChain,
       cooldowns: debugInfo.cooldowns,
