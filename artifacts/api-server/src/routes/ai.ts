@@ -615,34 +615,112 @@ async function persistMessage(
 }
 
 /**
- * v3.5: Streams a complete text response word-by-word via SSE.
+ * v3.6: Streams a cached/fallback text response via SSE in chunked deltas.
  *
- * Used for cached responses (exact-match + semantic cache) that arrive as
- * a single string. Instead of sending the whole text in one delta (which
- * appears instantly — jarring UX), we split into words and send each as
- * a separate delta with a small delay.
+ * ─── Why this replaces the v3.5 word-by-word hack ───────────────────────────
  *
- * This gives the "ChatGPT typing" effect even for cache hits — the user
- * sees text appearing progressively, not all at once.
+ * The v3.5 implementation split the text on `\S+\s*` and emitted one SSE
+ * `delta` event per word with a 15ms `setTimeout` between writes. That gave
+ * a "ChatGPT typing" effect but introduced real latency: a 200-word cached
+ * response took ~3 seconds to deliver (200 × 15ms), which is WORSE than
+ * the original "instant" behavior. Users perceived cache hits as SLOWER
+ * than cache misses (where the model streams tokens as they arrive,
+ * typically 50-100ms total).
+ *
+ * Industry standard (Vercel AI SDK, OpenAI cached completions, Anthropic
+ * prompt cache hits): cached responses are delivered as a SINGLE chunk or
+ * a few large chunks with NO artificial delay. The user gets the response
+ * instantly; the frontend's React rendering + markdown parsing provides
+ * the visual "appearance" effect naturally.
+ *
+ * This implementation:
+ *   - Splits the text into chunks of approximately `targetChunkChars`
+ *     characters (default 220), preferring sentence/paragraph boundaries
+ *     so chunks don't break mid-word.
+ *   - Writes each chunk as a single SSE `delta` event.
+ *   - NO artificial delay between writes. The browser's natural SSE/TCP
+ *     buffering provides a brief (~5-20ms total) visual "trickle" effect
+ *     for long responses without adding latency.
+ *
+ * For a 200-word response (~1200 chars), this delivers 5-6 chunks in
+ * under 50ms total — vs 3 seconds with the old approach. The user sees
+ * the response appear almost instantly with a barely-noticeable render
+ * progression.
  *
  * @param res - The SSE response to write to
  * @param text - The full text to stream
- * @param delayMs - Delay between words (default 15ms — fast enough to not
- *   feel slow, slow enough to see the typing animation)
+ * @param targetChunkChars - Target chunk size in characters (default 220,
+ *   approximately one paragraph). Larger = fewer SSE events + faster
+ *   delivery; smaller = more "typing-like" effect but more event overhead.
  */
-async function streamTextWordByWord(
+async function streamCachedResponse(
   res: Response,
   text: string,
-  delayMs: number = 15,
+  targetChunkChars: number = 220,
 ): Promise<void> {
-  // Split into tokens: words + whitespace (preserves spacing)
-  const tokens = text.match(/\S+\s*/g) ?? [text];
-  for (const token of tokens) {
-    res.write(`data: ${JSON.stringify({ type: "delta", text: token })}\n\n`);
-    // Small delay to create the typing effect
-    if (delayMs > 0) {
-      await new Promise((r) => setTimeout(r, delayMs));
+  if (!text) return;
+
+  // Fast path: short responses fit in a single chunk.
+  if (text.length <= targetChunkChars) {
+    res.write(`data: ${JSON.stringify({ type: "delta", text })}\n\n`);
+    return;
+  }
+
+  // Split on paragraph boundaries first, then sentence boundaries, then
+  // word boundaries — whichever keeps chunks closest to targetChunkChars
+  // without breaking mid-word.
+  const chunks: string[] = [];
+  let current = "";
+
+  // Split on paragraph breaks (preserve the newline pair).
+  const paragraphs = text.split(/(?<=\n\n)/);
+  for (const para of paragraphs) {
+    if ((current + para).length <= targetChunkChars) {
+      current += para;
+    } else {
+      if (current) {
+        chunks.push(current);
+        current = "";
+      }
+      // If the paragraph itself is longer than the target, split by sentence.
+      if (para.length > targetChunkChars) {
+        const sentences = para.split(/(?<=[.!?。！？]\s)/);
+        for (const sentence of sentences) {
+          if ((current + sentence).length <= targetChunkChars) {
+            current += sentence;
+          } else {
+            if (current) {
+              chunks.push(current);
+              current = "";
+            }
+            // If a single sentence is still longer than the target
+            // (rare — a very long run-on), split by word.
+            if (sentence.length > targetChunkChars) {
+              const words = sentence.match(/\S+\s*/g) ?? [sentence];
+              for (const word of words) {
+                if ((current + word).length <= targetChunkChars) {
+                  current += word;
+                } else {
+                  if (current) chunks.push(current);
+                  current = word;
+                }
+              }
+            } else {
+              current = sentence;
+            }
+          }
+        }
+      } else {
+        current = para;
+      }
     }
+  }
+  if (current) chunks.push(current);
+
+  // Write each chunk as a single SSE delta. NO artificial delay — the
+  // browser's network buffering provides natural pacing.
+  for (const chunk of chunks) {
+    res.write(`data: ${JSON.stringify({ type: "delta", text: chunk })}\n\n`);
   }
 }
 
@@ -951,10 +1029,11 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   if (cached) {
     logger.info(
       { cache: "exact", model: cached.model, provider: cached.provider, hitCount: cached.hitCount },
-      "AI: cache HIT, streaming cached response word-by-word",
+      "AI: cache HIT, streaming cached response (chunked, no artificial delay)",
     );
-    // v3.5: Stream word-by-word for the typing animation effect
-    await streamTextWordByWord(res, cached.response);
+    // v3.6: Stream as chunked SSE deltas (no artificial delay) — replaces
+    // the v3.5 word-by-word hack that added 15ms × N words of latency.
+    await streamCachedResponse(res, cached.response);
     const assistantMsgId = await persistMessage(session.id, "assistant", cached.response, {
       model: cached.model,
       provider: cached.provider,
@@ -980,10 +1059,10 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
         provider: semanticCached.provider,
         similarity: Math.round(semanticCached.similarity * 100) / 100,
       },
-      "AI: semantic cache HIT, streaming cached response word-by-word",
+      "AI: semantic cache HIT, streaming cached response (chunked, no artificial delay)",
     );
-    // v3.5: Stream word-by-word for the typing animation effect
-    await streamTextWordByWord(res, semanticCached.response);
+    // v3.6: Stream as chunked SSE deltas (no artificial delay).
+    await streamCachedResponse(res, semanticCached.response);
     const assistantMsgId = await persistMessage(session.id, "assistant", semanticCached.response, {
       model: semanticCached.model,
       provider: semanticCached.provider,
@@ -1110,8 +1189,8 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       const fallback =
         "I'm sorry, I couldn't generate a response for that. Could you try rephrasing your question?";
       fullResponse = fallback;
-      // v3.5: Stream the fallback word-by-word too (consistent UX)
-      await streamTextWordByWord(res, fallback);
+      // v3.6: Stream the fallback as chunked SSE deltas too (consistent UX).
+      await streamCachedResponse(res, fallback);
       logger.warn("AI: stream completed but produced no text, using fallback");
     }
 

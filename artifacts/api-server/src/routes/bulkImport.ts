@@ -8,6 +8,7 @@ import { logAudit } from "../lib/audit";
 import { describeError } from "../lib/describeError";
 import { validateBody } from "../lib/validateRequest";
 import { BulkImportBody } from "../lib/schemas";
+import { invalidateCatalogCache } from "../lib/catalogCache";
 import crypto from "crypto";
 import type { ApiRequest } from "../types/apiRequest";
 
@@ -304,6 +305,12 @@ router.post(
           errors.push(`Row ${row.rowNum}: ${msg}`);
         }
       }
+    }
+
+    // Invalidate AI cache: bulk import may have created/merged products,
+    // so cached search_catalog responses are stale. Best-effort, non-blocking.
+    if (productsCreated > 0 || productsMerged > 0) {
+      invalidateCatalogCache("bulk_import.products").catch(() => {});
     }
 
     res.json({

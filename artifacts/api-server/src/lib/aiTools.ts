@@ -278,8 +278,15 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
   const maxPrice = typeof args.max_price === "number" ? args.max_price : null;
   const sunlight = typeof args.sunlight === "string" ? args.sunlight : null;
 
-  // Build ILIKE conditions from query tokens (same approach as buildCatalogContext
-  // but with optional price/sunlight filters).
+  // v3.6: Hybrid ILIKE + pg_trgm similarity search in a SINGLE query.
+  //
+  // Same pattern as aiContext.ts:searchProducts() — combine exact-substring
+  // matching (ILIKE) with fuzzy trigram similarity (similarity() > threshold)
+  // in one pass, sorted by a relevance score that boosts exact name hits.
+  //
+  // This replaces the v3.0 ILIKE-only path here (the tool previously had
+  // NO trigram support at all — only the auto-injected context did).
+  // Now both code paths share the same hybrid behavior.
   const tokens = query
     .toLowerCase()
     .split(/\s+/)
@@ -288,15 +295,34 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
 
   if (tokens.length === 0) return { results: [], count: 0 };
 
-  const conditions: string[] = [];
+  // Build ILIKE conditions. Each token placeholder is reused across the
+  // three columns (same substring).
   const params: unknown[] = [];
+  const tokenPlaceholders: string[] = [];
   for (const t of tokens) {
     params.push(`%${t}%`);
-    conditions.push(
-      `(p.name ILIKE $${params.length} OR p.scientific_name ILIKE $${params.length} OR p.description ILIKE $${params.length})`,
-    );
+    tokenPlaceholders.push(`$${params.length}`);
   }
-  let where = conditions.join(" OR ");
+  let where = tokenPlaceholders
+    .map(
+      (p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`,
+    )
+    .join(" OR ");
+
+  // Trigram WHERE clause.
+  const queryString = tokens.join(" ");
+  const trigramThreshold = Number(process.env.AI_TRIGRAM_THRESHOLD ?? 0.3);
+  params.push(queryString);
+  const trigramQueryParam = `$${params.length}`;
+  params.push(trigramThreshold);
+  const trigramThresholdParam = `$${params.length}`;
+
+  const trigramWhere = `(similarity(p.name, ${trigramQueryParam}) > ${trigramThresholdParam}
+     OR similarity(COALESCE(p.scientific_name, ''), ${trigramQueryParam}) > ${trigramThresholdParam}
+     OR similarity(COALESCE(p.description, ''), ${trigramQueryParam}) > ${trigramThresholdParam})`;
+
+  // Combine ILIKE + trigram into the final WHERE.
+  where = `(${where} OR ${trigramWhere})`;
 
   if (sunlight) {
     params.push(sunlight);
@@ -315,35 +341,107 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
     priceWhere = ` AND (prices.min_price IS NULL OR prices.min_price <= $${params.length})`;
   }
 
-  const result = await pool.query<CatalogResult>(
-    `SELECT
-       p.slug,
-       p.name,
-       p.scientific_name,
-       p.description,
-       p.sunlight,
-       p.watering,
-       p.mature_height,
-       p.product_status,
-       prices.min_price,
-       (p.images::jsonb->0->>'url') AS image
-     FROM products p
-     ${priceJoin}
-     WHERE p.deleted_at IS NULL AND (${where})${priceWhere}
-     ORDER BY
-       CASE WHEN p.name ILIKE $${params.length + 1} THEN 0 ELSE 1 END,
-       p.created_at DESC
-     LIMIT 8`,
-    [...params, `%${tokens[0]}%`],
-  );
+  // Relevance score (DESC): exact name ILIKE first token → 100, sci_name → 80,
+  // description → 60, plus trigram boosts (max ~30+15+5=50).
+  const firstTokenParam = tokenPlaceholders[0];
+  const scoreExpr = `(
+    CASE WHEN p.name ILIKE ${firstTokenParam} THEN 100
+         WHEN p.scientific_name ILIKE ${firstTokenParam} THEN 80
+         WHEN p.description ILIKE ${firstTokenParam} THEN 60
+         ELSE 0 END
+    + similarity(p.name, ${trigramQueryParam}) * 30
+    + similarity(COALESCE(p.scientific_name, ''), ${trigramQueryParam}) * 15
+    + similarity(COALESCE(p.description, ''), ${trigramQueryParam}) * 5
+  )`;
 
-  return {
-    results: result.rows.map((r) => ({
-      ...r,
-      description: r.description ? r.description.slice(0, 150) : null,
-    })),
-    count: result.rows.length,
-  };
+  try {
+    const result = await pool.query<CatalogResult>(
+      `SELECT
+         p.slug,
+         p.name,
+         p.scientific_name,
+         p.description,
+         p.sunlight,
+         p.watering,
+         p.mature_height,
+         p.product_status,
+         prices.min_price,
+         (p.images::jsonb->0->>'url') AS image
+       FROM products p
+       ${priceJoin}
+       WHERE p.deleted_at IS NULL AND ${where}${priceWhere}
+       ORDER BY ${scoreExpr} DESC, p.created_at DESC
+       LIMIT 8`,
+      params,
+    );
+
+    return {
+      results: result.rows.map((r) => ({
+        ...r,
+        description: r.description ? r.description.slice(0, 150) : null,
+      })),
+      count: result.rows.length,
+    };
+  } catch (err) {
+    // pg_trgm unavailable — fall back to ILIKE-only (drop the trigram
+    // clause + score expression). Non-fatal.
+    logger.debug(
+      { err: (err as any)?.message ?? String(err), query },
+      "AI tool search_catalog: hybrid trigram unavailable, falling back to ILIKE-only",
+    );
+
+    // Rebuild ILIKE-only WHERE + params (drop the 2 trigram params at the end).
+    const ilikeParams = params.slice(0, tokenPlaceholders.length);
+    if (sunlight) {
+      ilikeParams.push(sunlight);
+    }
+    if (maxPrice != null) {
+      ilikeParams.push(maxPrice as number);
+    }
+    let ilikeOnlyWhere = tokenPlaceholders
+      .map(
+        (p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`,
+      )
+      .join(" OR ");
+    if (sunlight) {
+      ilikeOnlyWhere += ` AND p.sunlight = $${tokenPlaceholders.length + 1}`;
+    }
+    let ilikePriceWhere = "";
+    if (maxPrice != null) {
+      const idx = tokenPlaceholders.length + (sunlight ? 1 : 0) + 1;
+      ilikePriceWhere = ` AND (prices.min_price IS NULL OR prices.min_price <= $${idx})`;
+    }
+
+    const result = await pool.query<CatalogResult>(
+      `SELECT
+         p.slug,
+         p.name,
+         p.scientific_name,
+         p.description,
+         p.sunlight,
+         p.watering,
+         p.mature_height,
+         p.product_status,
+         prices.min_price,
+         (p.images::jsonb->0->>'url') AS image
+       FROM products p
+       ${priceJoin}
+       WHERE p.deleted_at IS NULL AND (${ilikeOnlyWhere})${ilikePriceWhere}
+       ORDER BY
+         CASE WHEN p.name ILIKE ${tokenPlaceholders[0]} THEN 0 ELSE 1 END,
+         p.created_at DESC
+       LIMIT 8`,
+      ilikeParams,
+    );
+
+    return {
+      results: result.rows.map((r) => ({
+        ...r,
+        description: r.description ? r.description.slice(0, 150) : null,
+      })),
+      count: result.rows.length,
+    };
+  }
 }
 
 async function getProductCare(args: Record<string, unknown>): Promise<{

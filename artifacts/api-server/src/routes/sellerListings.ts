@@ -21,6 +21,7 @@ import { eq, and, inArray, sql, desc, asc } from "drizzle-orm";
 import { requireAuth, requireSeller, requireAdmin } from "../middlewares/auth";
 import { hasVerifiedPaymentConfig } from "@workspace/db/logic";
 import { notifyPreOrderCustomers } from "./preOrders";
+import { invalidateCatalogCache } from "../lib/catalogCache";
 
 export { hasVerifiedPaymentConfig };
 
@@ -818,6 +819,11 @@ router.post("/seller-listings", requireSeller, asyncHandler(async (req, res) => 
     )
     .returning();
 
+  // Invalidate AI cache: a new seller listing may change price ranges
+  // (min_price) for this product, so cached search_catalog responses are
+  // now stale. Best-effort, non-blocking.
+  invalidateCatalogCache("seller_listing.create").catch(() => {});
+
   res.status(201).json(toListingWithVariants(listing, insertedVariants));
 }));
 
@@ -1111,6 +1117,11 @@ router.put("/seller-listings/:id", requireSeller, asyncHandler(async (req: ApiRe
     .from(sellerListingVariantsTable)
     .where(eq(sellerListingVariantsTable.sellerListingId, id));
 
+  // Invalidate AI cache: prices / stock / availability on this listing may
+  // have changed, so cached search_catalog responses referencing this
+  // product's price range are stale. Best-effort, non-blocking.
+  invalidateCatalogCache("seller_listing.update").catch(() => {});
+
   res.json(toListingWithVariants(updated, finalVariants));
 }));
 
@@ -1151,6 +1162,11 @@ router.delete("/seller-listings/:id", requireSeller, asyncHandler(async (req: Ap
   if (existing.images?.length) {
     deleteCloudinaryAssets(existing.images).catch(() => {});
   }
+
+  // Invalidate AI cache: this listing's prices/availability are no longer
+  // part of the catalog, so cached search_catalog responses referencing
+  // this product's price range may be stale. Best-effort, non-blocking.
+  invalidateCatalogCache("seller_listing.delete").catch(() => {});
 
   res.json({ message: "Listing deleted" });
 }));
@@ -1649,6 +1665,12 @@ router.put("/admin/seller-listings/:id/approve", requireAdmin, asyncHandler(asyn
     .select()
     .from(sellerListingVariantsTable)
     .where(eq(sellerListingVariantsTable.sellerListingId, listing.id));
+
+  // Invalidate AI cache: this listing is now visible to buyers, so any
+  // cached search_catalog responses that excluded it are stale. Best-effort,
+  // non-blocking.
+  invalidateCatalogCache("admin.seller_listing.approve").catch(() => {});
+
   res.json(toListingWithVariants(listing, variants));
 }));
 
@@ -1672,6 +1694,12 @@ router.put("/admin/seller-listings/:id/reject", requireAdmin, asyncHandler(async
     .select()
     .from(sellerListingVariantsTable)
     .where(eq(sellerListingVariantsTable.sellerListingId, listing.id));
+
+  // Invalidate AI cache: this listing is no longer visible to buyers, so
+  // cached search_catalog responses that included it are stale. Best-effort,
+  // non-blocking.
+  invalidateCatalogCache("admin.seller_listing.reject").catch(() => {});
+
   res.json(toListingWithVariants(listing, variants));
 }));
 import type { ApiRequest } from "../types/apiRequest";

@@ -24,8 +24,10 @@
  *
  * Cache invalidation:
  *   - TTL-based: entries expire after AI_CACHE_TTL_SECONDS (default 1h)
- *   - Catalog changes: should invalidate (not implemented — would need a
- *     webhook from product update routes)
+ *   - Catalog changes: invalidated via `invalidateCatalogCache()` (see
+ *     lib/catalogCache.ts) — wired into all product/seller-listing
+ *     mutation routes (POST/PUT/DELETE /products, /seller-listings,
+ *     /admin/seller-listings/:id/{approve,reject}, /bulk-import).
  *
  * What's NOT cached (same rules as exact-match cache):
  *   - Private queries (USER-SCOPED tool calls: get_user_orders, get_order_details)

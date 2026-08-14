@@ -4,24 +4,24 @@
  * The job of this module is to make the AI "aware" of what's in the
  * TreeFriend database WITHOUT exposing the database directly to the model.
  *
- * Pattern (v3.0: Hybrid Naive RAG + pg_trgm fuzzy fallback):
+ * Pattern (v3.6: Hybrid ILIKE + pg_trgm similarity in a single query):
  *   1. Take the user's message.
  *   2. Pull keywords from it.
- *   3. ILIKE-search `products` (name, scientific name, description) and
- *      `blog_posts` (title, body) for those keywords.
- *   4. v3.0: If ILIKE finds nothing, fall back to pg_trgm similarity
- *      search (catches typos like "mangoo" → "mango" and fuzzy queries
- *      like "drought-resistant plant"). Requires the pg_trgm extension,
- *      which ensureAiTables.ts creates automatically.
+ *   3. Query `products` with a hybrid WHERE clause:
+ *        (name/sci_name/description ILIKE '%t%')        -- exact substring
+ *        OR (similarity(name, query) > threshold)        -- fuzzy trigram
+ *      sorted by a relevance score that boosts exact name ILIKE hits
+ *      over fuzzy description hits. See `searchProducts()` for details.
+ *   4. ILIKE-search `blog_posts` (title, body) for those keywords.
  *   5. Inject the top results into the system prompt as plain text.
  *
- * Why this works for our catalog size:
+ * Why hybrid (not pure-trigram, not ILIKE-then-trigram-fallback)?
  *   - Typical marketplace catalogs have hundreds to low thousands of SKUs.
- *     Keyword search over `name` + `scientific_name` + `description`
- *     catches the relevant 5-10 products in a few ms.
- *   - v3.0: trigram similarity catches the ~10% of queries that ILIKE
- *     misses (typos, fuzzy descriptors). Still no vector DB / embedding
- *     pipeline needed — pg_trgm is a Postgres extension, not a separate service.
+ *     The hybrid query catches BOTH exact substrings ("mango_tree_seedling")
+ *     AND typos ("mangoo") in a single round-trip, sorted by relevance.
+ *   - The old v3.0 two-step pattern (ILIKE first, trigram only if zero
+ *     results) hid trigram matches whenever ANY ILIKE match existed — even
+ *     unrelated ones — making typo-tolerance unreliable.
  *   - Embedding-based search (pgvector) would be more accurate for
  *     semantic queries ("drought-resistant indoor plant") but adds a
  *     vector DB dependency, embedding pipeline, and re-indexing on every
@@ -773,120 +773,124 @@ function extractSearchTokens(message: string): string[] {
 
 async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
   if (tokens.length === 0) return [];
-  // Build a single OR ILIKE clause: (name ILIKE '%t1%' OR scientific_name ILIKE '%t1%' OR ...)
-  // Same tokens searched across name + scientific_name + description.
+
+  // v3.6: Hybrid ILIKE + pg_trgm similarity search in a SINGLE query.
+  //
+  // Industry-standard pattern (Supabase docs, Postgres full-text-search +
+  // trigram, Elasticsearch multi_match with fuzziness, Algolia
+  // typo-tolerance): combine exact-substring matching (ILIKE) with fuzzy
+  // trigram similarity in one pass, sorted by a relevance score that
+  // boosts exact name hits over fuzzy description hits.
+  //
+  // Why hybrid (not pure-trigram, not ILIKE-then-trigram-fallback)?
+  //   - ILIKE '%mango%' catches "mango_tree_seedling" (underscored) where
+  //     trigram similarity('mango', 'mango_tree_seedling') may fall below
+  //     threshold because the strings are very different lengths.
+  //   - trigram catches "mangoo" (typo) where ILIKE misses entirely.
+  //   - Combining them in one query catches BOTH in a single round-trip
+  //     instead of the old two-step "ILIKE first, trigram only if 0
+  //     results" pattern, which hid trigram results whenever ANY ILIKE
+  //     result existed (even unrelated ones).
+  //
+  // Relevance score (DESC, higher = better match):
+  //   100  if name ILIKE the first token (highest priority — name match)
+  //   80   if scientific_name ILIKE the first token
+  //   60   if description ILIKE the first token
+  //   + similarity(name, query) * 30  (trigram boost, max ~30)
+  //   + similarity(scientific_name, query) * 15
+  //   + similarity(description, query) * 5
+  // The score is computed via CASE + similarity(); NULL scientific_name
+  // is handled by COALESCE so it doesn't poison the row.
   //
   // Schema: products uses `deleted_at TIMESTAMP` (null = live), not a
   // boolean `is_deleted` column. Filter: deleted_at IS NULL.
-  const conditions: string[] = [];
   const params: unknown[] = [];
+  const tokenPlaceholders: string[] = [];
   for (const t of tokens) {
     params.push(`%${t}%`);
-    conditions.push(`name ILIKE $${params.length}`);
-    params.push(`%${t}%`);
-    conditions.push(`scientific_name ILIKE $${params.length}`);
-    params.push(`%${t}%`);
-    conditions.push(`description ILIKE $${params.length}`);
+    tokenPlaceholders.push(`$${params.length}`);
   }
-  const where = conditions.join(" OR ");
-  // Add one more param for the name-priority sort tie-breaker.
-  params.push(`%${tokens[0]}%`);
-  const namePriorityParam = `$${params.length}`;
+  // Each token placeholder is reused across name + scientific_name +
+  // description (same substring, three columns). Cheaper than emitting
+  // 3× params for the same string.
+  const ilikeWhere = tokenPlaceholders
+    .map(
+      (p) => `(name ILIKE ${p} OR scientific_name ILIKE ${p} OR description ILIKE ${p})`,
+    )
+    .join(" OR ");
+
+  // Trigram params: combined query string + threshold.
+  const queryString = tokens.join(" ");
+  const trigramThreshold = Number(process.env.AI_TRIGRAM_THRESHOLD ?? 0.3);
+  params.push(queryString);
+  const trigramQueryParam = `$${params.length}`;
+  params.push(trigramThreshold);
+  const trigramThresholdParam = `$${params.length}`;
+
+  const trigramWhere = `(similarity(name, ${trigramQueryParam}) > ${trigramThresholdParam}
+     OR similarity(COALESCE(scientific_name, ''), ${trigramQueryParam}) > ${trigramThresholdParam}
+     OR similarity(COALESCE(description, ''), ${trigramQueryParam}) > ${trigramThresholdParam})`;
+
+  const firstTokenParam = tokenPlaceholders[0];
+  const scoreExpr = `(
+    CASE WHEN name ILIKE ${firstTokenParam} THEN 100
+         WHEN scientific_name ILIKE ${firstTokenParam} THEN 80
+         WHEN description ILIKE ${firstTokenParam} THEN 60
+         ELSE 0 END
+    + similarity(name, ${trigramQueryParam}) * 30
+    + similarity(COALESCE(scientific_name, ''), ${trigramQueryParam}) * 15
+    + similarity(COALESCE(description, ''), ${trigramQueryParam}) * 5
+  )`;
 
   try {
-    // Primary path: respect the soft-delete column (deleted_at IS NULL).
+    // Primary path: hybrid ILIKE + trigram. Respect the soft-delete column.
     const result = await pool.query(
       `SELECT name, slug, scientific_name, description, sunlight, watering,
-              soil_type, mature_height, product_status
+              soil_type, mature_height, product_status,
+              ${scoreExpr} AS relevance_score
        FROM products
-       WHERE deleted_at IS NULL AND (${where})
-       ORDER BY
-         CASE WHEN name ILIKE ${namePriorityParam} THEN 0 ELSE 1 END,
-         created_at DESC
+       WHERE deleted_at IS NULL
+         AND (${ilikeWhere} OR ${trigramWhere})
+       ORDER BY relevance_score DESC, created_at DESC
        LIMIT ${MAX_PRODUCTS}`,
       params,
     );
-    const rows = result.rows as ProductRow[];
-
-    // v3.0: If ILIKE found nothing, try pg_trgm fuzzy search as a fallback.
-    // This catches typos ("mangoo" -> "mango") and fuzzy descriptors
-    // ("drought-resistant plant") that ILIKE misses.
-    if (rows.length === 0) {
-      return await searchProductsTrigram(tokens);
-    }
-
-    return rows;
-  } catch {
-    // Fallback: older DBs may not have the deleted_at column yet (e.g. if
-    // migrations were only partially applied). Drop the soft-delete filter.
-    const result = await pool.query(
-      `SELECT name, slug, scientific_name, description, sunlight, watering,
-              soil_type, mature_height, product_status
-       FROM products
-       WHERE (${where})
-       ORDER BY created_at DESC
-       LIMIT ${MAX_PRODUCTS}`,
-      params.slice(0, params.length - 1), // drop the name-priority param
-    );
     return result.rows as ProductRow[];
-  }
-}
-
-/**
- * v3.0: pg_trgm fuzzy search fallback.
- *
- * Called when ILIKE returns zero results. Uses PostgreSQL's pg_trgm
- * extension to compute trigram similarity between the query tokens and
- * the product name/description. Returns products with similarity > 0.3
- * (configurable via AI_TRIGRAM_THRESHOLD env var), sorted by similarity.
- *
- * Requires the pg_trgm extension + GIN indexes (created by ensureAiTables.ts).
- * If the extension isn't available, this function returns [] (the caller
- * already has the empty ILIKE result, so the user just gets no catalog
- * context -- the model falls back to general botanical knowledge).
- */
-async function searchProductsTrigram(tokens: string[]): Promise<ProductRow[]> {
-  if (tokens.length === 0) return [];
-
-  // Combine tokens into a single query string for trigram matching.
-  // pg_trgm's similarity() function works best on multi-word strings.
-  const queryString = tokens.join(" ");
-  const threshold = Number(process.env.AI_TRIGRAM_THRESHOLD ?? 0.3);
-
-  try {
-    const result = await pool.query(
-      `SELECT name, slug, scientific_name, description, sunlight, watering,
-              soil_type, mature_height, product_status
-       FROM products
-       WHERE deleted_at IS NULL
-         AND (
-           similarity(name, $1) > $2
-           OR similarity(COALESCE(scientific_name, ''), $1) > $2
-           OR similarity(COALESCE(description, ''), $1) > $2
-         )
-       ORDER BY
-         GREATEST(
-           similarity(name, $1),
-           similarity(COALESCE(scientific_name, ''), $1),
-           similarity(COALESCE(description, ''), $1)
-         ) DESC
-       LIMIT ${MAX_PRODUCTS}`,
-      [queryString, threshold],
-    );
-
-    const rows = result.rows as ProductRow[];
-    if (rows.length > 0) {
-      logger.debug(
-        { tokens, queryString, count: rows.length },
-        "AI context: trigram fallback found results where ILIKE found none",
-      );
-    }
-    return rows;
   } catch (err) {
-    // pg_trgm extension not available, or GIN indexes missing. Silent
-    // fallback -- the user just gets no catalog context for this query.
-    logger.debug({ err, tokens }, "AI context: trigram search unavailable (extension missing?)");
-    return [];
+    // pg_trgm extension missing OR `similarity` function unavailable.
+    // Fall back to ILIKE-only (the v3.0 behavior). Non-fatal — the user
+    // gets exact-substring matches; only fuzzy/typo tolerance is lost.
+    logger.debug(
+      { err: (err as any)?.message ?? String(err), tokens },
+      "AI context: hybrid trigram search unavailable, falling back to ILIKE-only",
+    );
+    try {
+      const result = await pool.query(
+        `SELECT name, slug, scientific_name, description, sunlight, watering,
+                soil_type, mature_height, product_status
+         FROM products
+         WHERE deleted_at IS NULL AND (${ilikeWhere})
+         ORDER BY
+           CASE WHEN name ILIKE ${firstTokenParam} THEN 0 ELSE 1 END,
+           created_at DESC
+         LIMIT ${MAX_PRODUCTS}`,
+        params.slice(0, tokenPlaceholders.length),
+      );
+      return result.rows as ProductRow[];
+    } catch {
+      // Final fallback: older DBs may not have the deleted_at column yet
+      // (migrations partially applied). Drop the soft-delete filter.
+      const result = await pool.query(
+        `SELECT name, slug, scientific_name, description, sunlight, watering,
+                soil_type, mature_height, product_status
+         FROM products
+         WHERE (${ilikeWhere})
+         ORDER BY created_at DESC
+         LIMIT ${MAX_PRODUCTS}`,
+        params.slice(0, tokenPlaceholders.length),
+      );
+      return result.rows as ProductRow[];
+    }
   }
 }
 

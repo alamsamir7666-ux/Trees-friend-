@@ -22,8 +22,10 @@
  * Cache invalidation:
  *   - TTL-based: cached responses expire after AI_CACHE_TTL_SECONDS (default 1h)
  *   - Manual: DELETE /api/ai/admin/cache clears all entries
- *   - Automatic: product catalog changes should invalidate (via webhook
- *     from the admin product update route — not implemented yet)
+ *   - Automatic: product catalog changes invalidate via `invalidateCatalogCache()`
+ *     (see lib/catalogCache.ts) — wired into all product/seller-listing
+ *     mutation routes (POST/PUT/DELETE /products, /seller-listings,
+ *     /admin/seller-listings/:id/{approve,reject}, /bulk-import).
  *
  * What's NOT cached:
  *   - Messages that triggered USER-SCOPED tool calls (get_user_orders,

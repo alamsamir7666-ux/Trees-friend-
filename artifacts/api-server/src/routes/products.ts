@@ -23,6 +23,7 @@ import type { SQL } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../middlewares/auth";
 import { notifyStockAlerts } from "./stockAlerts";
 import { notifyPreOrderCustomers } from "./preOrders";
+import { invalidateCatalogCache } from "../lib/catalogCache";
 import type { ApiRequest } from "../types/apiRequest";
 import type { z } from "zod";
 import {
@@ -776,6 +777,11 @@ router.post("/products", requireAdmin, validateBody(CreateProductBody, "CreatePr
       })
       .returning();
 
+    // Invalidate AI cache entries derived from the catalog (best-effort,
+    // non-blocking — a missed invalidation just means the AI serves a
+    // slightly stale response for up to 5 min, the tool-call TTL).
+    invalidateCatalogCache("product.create").catch(() => {});
+
     res.status(201).json(toProduct(p, [], 0, 0));
   } catch (err) {
     logger.error({ err: err }, "Create product error");
@@ -889,6 +895,14 @@ router.put("/products/:id", requireAdmin, validateParams(UpdateProductParams, "U
       })
       .from(reviewsTable)
       .where(eq(reviewsTable.productId, p.id));
+
+    // Invalidate AI cache entries derived from the catalog (best-effort,
+    // non-blocking). The product's care info / description may have changed,
+    // so any cached `get_product_care` or `search_catalog` responses are
+    // now stale. The TTL would catch this in 5 min, but explicit
+    // invalidation gives the next user a fresh response immediately.
+    invalidateCatalogCache("product.update").catch(() => {});
+
     res.json(
       toProduct(
         p,
@@ -920,6 +934,10 @@ router.delete("/products/:id", requireAdmin, validateParams(DeleteProductParams,
       .update(productsTable)
       .set({ deletedAt: new Date(), productStatus: "discontinued" })
       .where(eq(productsTable.id, id));
+
+    // Invalidate AI cache: search_catalog / get_product_care responses may
+    // have referenced this product. Best-effort, non-blocking.
+    invalidateCatalogCache("product.delete").catch(() => {});
 
     res.json({ message: "Product deleted" });
   } catch (err) {
@@ -977,6 +995,11 @@ router.post("/products/:id/duplicate", requireAdmin, validateParams(GetProductPa
     // duplicated product now starts with zero variants, same as any
     // admin-created product post-Phase-2; sellers create their own listings
     // against it same as any other product.
+
+    // Invalidate AI cache: a new product is now searchable, so any cached
+    // "we don't have X" response is stale. Best-effort, non-blocking.
+    invalidateCatalogCache("product.duplicate").catch(() => {});
+
     res.status(201).json(toProduct(copy, [], 0, 0));
   } catch (err) {
     logger.error({ err }, "Route handler error");
