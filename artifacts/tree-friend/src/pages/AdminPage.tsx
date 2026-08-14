@@ -67,6 +67,7 @@ import { ArchivedOrdersTab } from "@/components/admin/tabs/ArchivedOrdersTab";
 import { MonthlyHistoryTab } from "@/components/admin/tabs/MonthlyHistoryTab";
 import { PaymentsTab } from "@/components/admin/tabs/PaymentsTab";
 import { AiInsightsTab } from "@/components/admin/tabs/AiInsightsTab";
+import { KbTab } from "@/components/admin/tabs/KbTab";
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -96,6 +97,7 @@ const navItems = [
   { id: "payments",   label: "Payments",        icon: Wallet },
   { id: "returns",    label: "Returns",          icon: RotateCcw },
   { id: "blog",       label: "Blog Posts",       icon: BookOpen },
+  { id: "kb",         label: "Knowledge Base",   icon: BookOpen },
   { id: "auditlogs",  label: "Audit Logs",       icon: Activity },
   { id: "qa",         label: "Q&A",              icon: HelpCircle },
   { id: "bulkimport",        label: "Bulk Import",       icon: Upload },
@@ -430,6 +432,7 @@ export function AdminPage() {
       case "settings":   return <SettingsTab />;
       case "returns":    return <ReturnsTab />;
       case "blog":       return <BlogTab />;
+      case "kb":         return <KbTab />;
       case "auditlogs":  return <AuditLogsTab />;
       case "qa":         return <QATab />;
       case "bulkimport":        return <BulkImportTab />;

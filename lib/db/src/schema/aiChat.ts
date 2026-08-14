@@ -7,6 +7,7 @@ import {
   boolean,
   index,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -275,3 +276,211 @@ export type AiChatFeedback = typeof aiChatFeedbackTable.$inferSelect;
 // Mark the module as side-effectful for the schema barrel — drizzle needs
 // the table objects to be imported so they're included in the schema bag.
 export const __aiChatSchemaMarker = sql`-- ai_chat schema loaded`;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 1: Knowledge Base tables ─────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// These four tables back the TreeBot Knowledge Base — curated plant-care
+// content (from YouTube transcripts, blog posts, manual writing) that the
+// AI uses as its primary information source before falling back to its
+// own training data.
+//
+// Phase 1 ships only the schema + category admin (no entries, no sources
+// UI, no AI integration). Phase 2 will populate ai_kb_entries + add the
+// `embedding` vector column + HNSW index. Phase 3 wires the search tool
+// into the AI route. Phase 4 adds tone matching via ai_kb_creators.
+//
+// The Drizzle definitions below mirror the SQL in ensureAiTables.ts so
+// they stay in sync for documentation + future drizzle-kit migration
+// generation. The routes use raw `pool.query` (not drizzle's query
+// builder) for these tables — the Drizzle definitions are decorative
+// but must stay accurate.
+
+/**
+ * KB content creators — YouTube channels, blog authors, or "Manual" for
+ * admin-typed content. Created in Phase 1 so ai_kb_sources can FK to it
+ * from day one; the admin UI for managing creators ships in Phase 4
+ * (along with tone matching).
+ *
+ *   - `slug` is globally unique (one "garden-with-arif" channel, not two).
+ *   - `entryCount` is a denormalized count maintained by Phase 2 logic
+ *     (increment on entry insert, decrement on delete). Read here for
+ *     fast admin listing without a JOIN.
+ *   - `toneProfile` is a JSON-serialized object stored as TEXT for
+ *     cross-Postgres compatibility (avoids jsonb vs json differences).
+ *     Phase 4 populates it; Phase 1 leaves it NULL.
+ *   - `toneMatchPercentage` overrides the global tone-match threshold
+ *     per creator (NULL = use global default). Phase 4 reads it.
+ */
+export const aiKbCreatorsTable = pgTable(
+  "ai_kb_creators",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull().unique(),
+    sourceType: text("source_type").default("manual").notNull(), // youtube | blog | facebook | manual
+    profileUrl: text("profile_url"),
+    entryCount: integer("entry_count").default(0).notNull(),
+    toneProfile: text("tone_profile"),
+    toneProfileUpdatedAt: timestamp("tone_profile_updated_at"),
+    toneMatchPercentage: integer("tone_match_percentage"),
+    isFeatured: boolean("is_featured").default(false).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("ai_kb_creators_slug_idx").on(table.slug),
+    index("ai_kb_creators_active_idx").on(table.isActive),
+    index("ai_kb_creators_entry_count_idx").on(table.entryCount),
+  ],
+);
+
+export type AiKbCreator = typeof aiKbCreatorsTable.$inferSelect;
+
+/**
+ * KB category tree — N-level hierarchy via `parentId` + a materialized
+ * `path` (e.g. '/1/3/7/') for fast subtree queries.
+ *
+ *   - `path` is `'/<root_id>/.../<self_id>/'`. A root has `path = '/<id>/'`.
+ *     Maintained by the kbCategories lib module (INSERT then UPDATE path
+ *     once the SERIAL id is known; UPDATE descendants on move).
+ *   - `depth` is 0 for root, 1 for child, 2 for grandchild, etc.
+ *   - `UNIQUE(parent_id, slug)` enforces sibling-slug uniqueness (two
+ *     roots can share a slug, but two children of the same parent cannot).
+ *     Postgres treats NULL parent_ids as distinct, so the UNIQUE
+ *     constraint doesn't merge root slugs — we add an app-level check
+ *     in the lib module to keep root slugs globally unique too.
+ *   - `parent_id` REFERENCES ai_kb_categories(id) ON DELETE CASCADE —
+ *     deleting a node cascades to all descendants.
+ */
+export const aiKbCategoriesTable = pgTable(
+  "ai_kb_categories",
+  {
+    id: serial("id").primaryKey(),
+    parentId: integer("parent_id").references((): AnyPgColumn => aiKbCategoriesTable.id, {
+      onDelete: "cascade",
+    }),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    description: text("description"),
+    path: text("path").default("/").notNull(),
+    depth: integer("depth").default(0).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("ai_kb_categories_parent_slug_unique")
+      .on(table.parentId, table.slug),
+    index("ai_kb_categories_path_idx").on(table.path),
+    index("ai_kb_categories_parent_idx").on(table.parentId),
+    index("ai_kb_categories_active_idx").on(table.isActive),
+  ],
+);
+
+export type AiKbCategory = typeof aiKbCategoriesTable.$inferSelect;
+
+/**
+ * Raw ingested KB content — one row per YouTube video, blog post, or
+ * manual upload. Phase 1 creates the table (empty); Phase 2 populates
+ * it via the chunking/embedding pipeline.
+ *
+ *   - `sourceUrl` is nullable (manual content has no URL). When present,
+ *     a partial UNIQUE index enforces no duplicates (NULLs are not
+ *     considered duplicates by default in Postgres).
+ *   - `processingStatus` tracks the ingestion pipeline: pending →
+ *     chunking → embedding → ready (or failed). Phase 2 reads/updates
+ *     this; Phase 1 leaves it at the default 'pending'.
+ *   - `rawMetadata` is JSON-serialized text (cross-PG compat).
+ */
+export const aiKbSourcesTable = pgTable(
+  "ai_kb_sources",
+  {
+    id: serial("id").primaryKey(),
+    creatorId: integer("creator_id").references(() => aiKbCreatorsTable.id, {
+      onDelete: "set null",
+    }),
+    sourceType: text("source_type").default("manual").notNull(),
+    sourceUrl: text("source_url"),
+    sourceTitle: text("source_title").notNull(),
+    sourceLanguage: text("source_language").default("en").notNull(),
+    sourcePublishedAt: timestamp("source_published_at"),
+    rawText: text("raw_text").notNull(),
+    rawMetadata: text("raw_metadata"),
+    processingStatus: text("processing_status").default("pending").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // Partial unique index — only applies when sourceUrl IS NOT NULL.
+    uniqueIndex("ai_kb_sources_url_unique")
+      .on(table.sourceUrl)
+      .where(sql`source_url IS NOT NULL`),
+    index("ai_kb_sources_creator_idx").on(table.creatorId),
+    index("ai_kb_sources_status_idx").on(table.processingStatus),
+  ],
+);
+
+export type AiKbSource = typeof aiKbSourcesTable.$inferSelect;
+
+/**
+ * Searchable KB chunks — the rows the AI's `search_knowledge_base` tool
+ * will return. Phase 1 creates the table empty; Phase 2 populates it
+ * (chunking source text, generating embeddings, writing rows).
+ *
+ *   - `creatorId` is denormalized from ai_kb_sources for fast filtering
+ *     by creator without a JOIN.
+ *   - `categoryId` is nullable + ON DELETE SET NULL — deleting a
+ *     category leaves its entries orphaned (rather than cascading) so
+ *     admins can re-categorize them. The kbCategories.deleteKbCategory
+ *     lib function rejects deletion if any descendant has entries, so
+ *     this ON DELETE SET NULL is a safety net, not the main path.
+ *   - `productId` is an FK to products.id in spirit, but we don't add
+ *     the FK constraint (the products table may not exist in all envs).
+ *   - `keywords` is a TEXT[] array with a GIN index for fast
+ *     array-overlap queries (WHERE keywords && ARRAY['mango','fungus']).
+ *   - `embedding` column + HNSW index are added in Phase 2 (not here).
+ */
+export const aiKbEntriesTable = pgTable(
+  "ai_kb_entries",
+  {
+    id: serial("id").primaryKey(),
+    sourceId: integer("source_id").references(() => aiKbSourcesTable.id, {
+      onDelete: "cascade",
+    }),
+    creatorId: integer("creator_id").references(() => aiKbCreatorsTable.id, {
+      onDelete: "set null",
+    }),
+    categoryId: integer("category_id").references(() => aiKbCategoriesTable.id, {
+      onDelete: "set null",
+    }),
+    productId: integer("product_id"),
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    contentSummary: text("content_summary"),
+    keywords: text("keywords").default("{}").notNull(),
+    chunkIndex: integer("chunk_index").default(0).notNull(),
+    chunkStartOffset: integer("chunk_start_offset"),
+    chunkEndOffset: integer("chunk_end_offset"),
+    priority: integer("priority").default(0).notNull(),
+    isActive: boolean("is_active").default(false).notNull(),
+    versionNumber: integer("version_number").default(1).notNull(),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("ai_kb_entries_category_idx").on(table.categoryId, table.isActive, table.priority),
+    index("ai_kb_entries_creator_idx").on(table.creatorId),
+    index("ai_kb_entries_product_idx").on(table.productId),
+    // Partial index — only active entries (the rows the search tool queries).
+    index("ai_kb_entries_active_idx")
+      .on(table.isActive)
+      .where(sql`is_active = true`),
+    // GIN index for keyword array overlap queries.
+    index("ai_kb_entries_keywords_idx").using("gin", table.keywords),
+  ],
+);
+
+export type AiKbEntry = typeof aiKbEntriesTable.$inferSelect;

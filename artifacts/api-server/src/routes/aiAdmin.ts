@@ -55,6 +55,20 @@ import {
 } from "../lib/evalHarness";
 import { streamChat, isAnyProviderConfigured } from "../lib/aiRouter";
 import { hasBotanicalKeyword } from "../lib/aiContext";
+// Phase 1: Knowledge Base category management.
+import {
+  listKbCategories,
+  getKbCategoryTree,
+  getKbCategory,
+  createKbCategory,
+  updateKbCategory,
+  moveKbCategory,
+  deleteKbCategory,
+  SLUG_REGEX,
+  SLUG_MAX_LENGTH,
+  NAME_MAX_LENGTH,
+  DESCRIPTION_MAX_LENGTH,
+} from "../lib/kbCategories";
 
 const router = Router();
 
@@ -1243,6 +1257,380 @@ router.get("/ai/admin/eval/results", async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "AI admin: list eval results failed");
     res.status(500).json({ error: "Failed to list eval results." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 1: Knowledge Base Category Management ────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Admin CRUD for the KB category tree. All endpoints require requireAdmin
+// (applied at the top of this file via `router.use(requireAdmin)`).
+//
+// Endpoints:
+//   GET    /ai/admin/kb/categories        — list all (flat, with entry_count)
+//   GET    /ai/admin/kb/categories/tree   — nested tree (for the admin UI)
+//   GET    /ai/admin/kb/categories/:id    — single category
+//   POST   /ai/admin/kb/categories        — create
+//   PUT    /ai/admin/kb/categories/:id    — update
+//   POST   /ai/admin/kb/categories/:id/move — move to a new parent
+//   DELETE /ai/admin/kb/categories/:id    — delete (rejects if has entries)
+//
+// Validation:
+//   name        — required, non-empty, max 100 chars
+//   slug        — required, matches /^[a-z0-9-]+$/, max 80 chars
+//   parentId    — optional, must be a valid existing category id (or null)
+//   description — optional, max 500 chars
+//
+// Error responses:
+//   400 — validation error (missing/invalid fields)
+//   404 — category not found
+//   409 — slug conflict, or delete attempted on category with entries
+//   500 — unexpected server error (logged, generic message returned)
+
+// ─── GET /ai/admin/kb/categories ─────────────────────────────────────────────
+// Returns ALL categories (active + inactive), ordered by path ASC so the
+// tree can be rebuilt by the caller. Each row includes a denormalized
+// `entryCount` (count of ai_kb_entries in that category — 0 in Phase 1
+// since the entries table is empty, but the JOIN is in place for Phase 2).
+router.get("/ai/admin/kb/categories", async (_req: Request, res: Response) => {
+  try {
+    const categories = await listKbCategories();
+    res.json({ categories, count: categories.length });
+  } catch (err) {
+    logger.error({ err }, "AI admin: list KB categories failed");
+    res.status(500).json({ error: "Failed to list KB categories." });
+  }
+});
+
+// ─── GET /ai/admin/kb/categories/tree ────────────────────────────────────────
+// Returns a nested tree structure for the admin UI. Root nodes are at the
+// top level, each with a `children` array (sorted by name). Built in
+// Node (not SQL) — see getKbCategoryTree() for rationale.
+router.get("/ai/admin/kb/categories/tree", async (_req: Request, res: Response) => {
+  try {
+    const tree = await getKbCategoryTree();
+    res.json({ tree, count: tree.length });
+  } catch (err) {
+    logger.error({ err }, "AI admin: get KB category tree failed");
+    res.status(500).json({ error: "Failed to build KB category tree." });
+  }
+});
+
+// ─── GET /ai/admin/kb/categories/:id ─────────────────────────────────────────
+// Returns a single category by id (with denormalized entryCount).
+router.get("/ai/admin/kb/categories/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid category id." });
+    return;
+  }
+  try {
+    const category = await getKbCategory(id);
+    if (!category) {
+      res.status(404).json({ error: "KB category not found." });
+      return;
+    }
+    res.json({ category });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: get KB category failed");
+    res.status(500).json({ error: "Failed to load KB category." });
+  }
+});
+
+// ─── POST /ai/admin/kb/categories ────────────────────────────────────────────
+// Creates a new category. The path + depth are computed automatically from
+// the parent (or as a root if parentId is null/omitted).
+//
+// Body: { name: string, slug: string, description?: string, parentId?: number | null }
+router.post("/ai/admin/kb/categories", async (req: Request, res: Response) => {
+  const { name, slug, description, parentId } = (req.body ?? {}) as {
+    name?: string;
+    slug?: string;
+    description?: string;
+    parentId?: number | null;
+  };
+
+  // Validate name.
+  if (typeof name !== "string" || name.trim().length === 0) {
+    res.status(400).json({ error: "name is required (non-empty string)." });
+    return;
+  }
+  if (name.trim().length > NAME_MAX_LENGTH) {
+    res.status(400).json({ error: `name is too long (max ${NAME_MAX_LENGTH} characters).` });
+    return;
+  }
+  // Validate slug.
+  if (typeof slug !== "string" || slug.trim().length === 0) {
+    res.status(400).json({ error: "slug is required (non-empty string)." });
+    return;
+  }
+  if (!SLUG_REGEX.test(slug.trim()) || slug.trim().length > SLUG_MAX_LENGTH) {
+    res.status(400).json({
+      error: `slug must match ${SLUG_REGEX} and be at most ${SLUG_MAX_LENGTH} characters.`,
+    });
+    return;
+  }
+  if (slug.trim().startsWith("-") || slug.trim().endsWith("-")) {
+    res.status(400).json({ error: "slug cannot start or end with a hyphen." });
+    return;
+  }
+  // Validate description (optional).
+  if (description !== undefined && description !== null && description.length > DESCRIPTION_MAX_LENGTH) {
+    res.status(400).json({
+      error: `description is too long (max ${DESCRIPTION_MAX_LENGTH} characters).`,
+    });
+    return;
+  }
+  // Validate parentId (optional — null/undefined means root).
+  let normalizedParentId: number | null = null;
+  if (parentId !== undefined && parentId !== null) {
+    normalizedParentId = Number(parentId);
+    if (!Number.isInteger(normalizedParentId) || normalizedParentId <= 0) {
+      res.status(400).json({ error: "parentId must be a positive integer or null." });
+      return;
+    }
+  }
+
+  try {
+    const created = await createKbCategory({
+      name: name.trim(),
+      slug: slug.trim(),
+      description: description?.trim() || null,
+      parentId: normalizedParentId,
+    });
+    if (!created) {
+      // createKbCategory returns null on validation failure, parent-not-found,
+      // or slug conflict. We can't easily distinguish them here without
+      // changing the function signature — but the most common cause is a
+      // slug conflict (the route already validated format + presence), so
+      // we return 409. If the parent didn't exist, that's also a 409
+      // (conflict with the requested state). For format errors that
+      // somehow slipped through (e.g. leading hyphen), we return 400.
+      // The lib's log entry has the specific reason for investigation.
+      res.status(409).json({
+        error: "Failed to create category. Slug conflict, parent not found, or validation error.",
+      });
+      return;
+    }
+    logger.info(
+      { id: created.id, slug: created.slug, parentId: created.parentId, createdBy: req.dbUser?.email },
+      "AI admin: created KB category",
+    );
+    res.status(201).json({ category: created });
+  } catch (err) {
+    logger.error({ err, name, slug, parentId }, "AI admin: create KB category failed");
+    res.status(500).json({ error: "Failed to create KB category." });
+  }
+});
+
+// ─── PUT /ai/admin/kb/categories/:id ─────────────────────────────────────────
+// Updates a category's name, slug, description, and/or isActive flag.
+// Parent changes are NOT allowed here — use POST .../:id/move instead.
+//
+// Body (all optional): { name?, slug?, description?, isActive? }
+router.put("/ai/admin/kb/categories/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid category id." });
+    return;
+  }
+  const { name, slug, description, isActive } = (req.body ?? {}) as {
+    name?: string;
+    slug?: string;
+    description?: string | null;
+    isActive?: boolean;
+  };
+
+  // Build the updates object, validating each field as we go.
+  const updates: {
+    name?: string;
+    slug?: string;
+    description?: string | null;
+    isActive?: boolean;
+  } = {};
+
+  if (name !== undefined) {
+    if (typeof name !== "string" || name.trim().length === 0) {
+      res.status(400).json({ error: "name must be a non-empty string." });
+      return;
+    }
+    if (name.trim().length > NAME_MAX_LENGTH) {
+      res.status(400).json({ error: `name is too long (max ${NAME_MAX_LENGTH} characters).` });
+      return;
+    }
+    updates.name = name.trim();
+  }
+
+  if (slug !== undefined) {
+    if (typeof slug !== "string" || slug.trim().length === 0) {
+      res.status(400).json({ error: "slug must be a non-empty string." });
+      return;
+    }
+    if (!SLUG_REGEX.test(slug.trim()) || slug.trim().length > SLUG_MAX_LENGTH) {
+      res.status(400).json({
+        error: `slug must match ${SLUG_REGEX} and be at most ${SLUG_MAX_LENGTH} characters.`,
+      });
+      return;
+    }
+    if (slug.trim().startsWith("-") || slug.trim().endsWith("-")) {
+      res.status(400).json({ error: "slug cannot start or end with a hyphen." });
+      return;
+    }
+    updates.slug = slug.trim();
+  }
+
+  if (description !== undefined && description !== null) {
+    if (typeof description !== "string") {
+      res.status(400).json({ error: "description must be a string or null." });
+      return;
+    }
+    if (description.length > DESCRIPTION_MAX_LENGTH) {
+      res.status(400).json({ error: `description is too long (max ${DESCRIPTION_MAX_LENGTH} characters).` });
+      return;
+    }
+    updates.description = description.trim() || null;
+  } else if (description === null) {
+    updates.description = null;
+  }
+
+  if (isActive !== undefined) {
+    if (typeof isActive !== "boolean") {
+      res.status(400).json({ error: "isActive must be a boolean." });
+      return;
+    }
+    updates.isActive = isActive;
+  }
+
+  // Reject no-op updates (no fields to update).
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No fields to update. Provide name, slug, description, or isActive." });
+    return;
+  }
+
+  try {
+    const updated = await updateKbCategory(id, updates);
+    if (!updated) {
+      // updateKbCategory returns null on not-found, validation failure,
+      // or slug conflict. The route already validated inputs, so the
+      // most common cause is not-found (404) or slug conflict (409).
+      // We probe the DB to distinguish.
+      const existing = await getKbCategory(id);
+      if (!existing) {
+        res.status(404).json({ error: "KB category not found." });
+      } else {
+        res.status(409).json({ error: "Slug conflict within parent, or validation error." });
+      }
+      return;
+    }
+    logger.info(
+      { id, updates, updatedBy: req.dbUser?.email },
+      "AI admin: updated KB category",
+    );
+    res.json({ category: updated });
+  } catch (err) {
+    logger.error({ err, id, updates }, "AI admin: update KB category failed");
+    res.status(500).json({ error: "Failed to update KB category." });
+  }
+});
+
+// ─── POST /ai/admin/kb/categories/:id/move ──────────────────────────────────
+// Moves a category to a new parent. The moved node's path + depth are
+// updated, along with all descendants. Cycle-checked (rejects moving a
+// node into its own subtree).
+//
+// Body: { parentId: number | null } — null for root.
+router.post("/ai/admin/kb/categories/:id/move", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid category id." });
+    return;
+  }
+  const { parentId } = (req.body ?? {}) as { parentId?: number | null };
+
+  // parentId must be a positive integer, or explicitly null (root).
+  // Omitting it is an error — the caller must be explicit.
+  if (parentId === undefined) {
+    res.status(400).json({ error: "parentId is required (use null for root)." });
+    return;
+  }
+  let normalizedParentId: number | null = null;
+  if (parentId !== null) {
+    normalizedParentId = Number(parentId);
+    if (!Number.isInteger(normalizedParentId) || normalizedParentId <= 0) {
+      res.status(400).json({ error: "parentId must be a positive integer or null." });
+      return;
+    }
+    if (normalizedParentId === id) {
+      res.status(400).json({ error: "Cannot move a category into itself." });
+      return;
+    }
+  }
+
+  try {
+    const ok = await moveKbCategory(id, normalizedParentId);
+    if (!ok) {
+      // moveKbCategory returns false on not-found, parent-not-found,
+      // or cycle. We probe to distinguish 404 from 409.
+      const existing = await getKbCategory(id);
+      if (!existing) {
+        res.status(404).json({ error: "KB category not found." });
+        return;
+      }
+      if (normalizedParentId !== null) {
+        const parent = await getKbCategory(normalizedParentId);
+        if (!parent) {
+          res.status(404).json({ error: "New parent category not found." });
+          return;
+        }
+      }
+      // Otherwise it's a cycle.
+      res.status(409).json({
+        error: "Cannot move a category into its own descendant (cycle).",
+      });
+      return;
+    }
+    logger.info(
+      { id, newParentId: normalizedParentId, movedBy: req.dbUser?.email },
+      "AI admin: moved KB category",
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, id, parentId }, "AI admin: move KB category failed");
+    res.status(500).json({ error: "Failed to move KB category." });
+  }
+});
+
+// ─── DELETE /ai/admin/kb/categories/:id ──────────────────────────────────────
+// Deletes a category. Rejects if the category OR any descendant has
+// entries (the admin must move or delete them first). On success, the
+// DELETE cascades to all descendants (FK has ON DELETE CASCADE).
+router.delete("/ai/admin/kb/categories/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid category id." });
+    return;
+  }
+  try {
+    const result = await deleteKbCategory(id);
+    if (!result.ok) {
+      // 404 for not-found, 409 for has-entries, 500 for db error.
+      if (result.reason === "not found") {
+        res.status(404).json({ error: "KB category not found." });
+      } else if (result.reason === "has entries") {
+        res.status(409).json({
+          error: "Cannot delete a category that has entries. Move or delete the entries first.",
+        });
+      } else {
+        res.status(500).json({ error: "Failed to delete KB category." });
+      }
+      return;
+    }
+    logger.info({ id, deletedBy: req.dbUser?.email }, "AI admin: deleted KB category");
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, id }, "AI admin: delete KB category failed");
+    res.status(500).json({ error: "Failed to delete KB category." });
   }
 });
 

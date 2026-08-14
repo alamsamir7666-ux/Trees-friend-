@@ -356,6 +356,110 @@ UPDATE ai_chat_feedback f
     AND s.user_id IS NULL
     AND f.rater_user_id IS NULL
     AND f.rater_session_sid IS NULL;
+
+-- ─── Phase 1: Knowledge Base schema ─────────────────────────────────────────
+-- Four tables that back the TreeBot Knowledge Base:
+--   ai_kb_creators     — content creators (YouTube channels, blog authors)
+--   ai_kb_categories   — N-level category tree (materialized path)
+--   ai_kb_sources      — raw ingested content (videos, blog posts, manual)
+--   ai_kb_entries      — searchable chunks (empty in Phase 1; Phase 2 fills)
+--
+-- Phase 1 only ships the schema + category admin. The entries/sources
+-- tables exist so the FK graph is in place from day one; Phase 2 will
+-- populate them + add the embedding column + HNSW index.
+--
+-- All statements are idempotent (IF NOT EXISTS) so this block is safe to
+-- re-run on every cold start. The seed inserts at the bottom use
+-- WHERE NOT EXISTS so they only fire on the first run.
+
+CREATE TABLE IF NOT EXISTS ai_kb_creators (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  source_type TEXT NOT NULL DEFAULT 'manual',  -- youtube | blog | facebook | manual
+  profile_url TEXT,
+  entry_count INTEGER NOT NULL DEFAULT 0,       -- denormalized count
+  tone_profile TEXT,                              -- jsonb stored as text (cross-PG compat)
+  tone_profile_updated_at TIMESTAMP,
+  tone_match_percentage INTEGER,                  -- NULL = use global default
+  is_featured BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ai_kb_creators_slug_idx ON ai_kb_creators (slug);
+CREATE INDEX IF NOT EXISTS ai_kb_creators_active_idx ON ai_kb_creators (is_active);
+CREATE INDEX IF NOT EXISTS ai_kb_creators_entry_count_idx ON ai_kb_creators (entry_count DESC);
+
+CREATE TABLE IF NOT EXISTS ai_kb_categories (
+  id SERIAL PRIMARY KEY,
+  parent_id INTEGER REFERENCES ai_kb_categories(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  description TEXT,
+  path TEXT NOT NULL DEFAULT '/',        -- materialized path, e.g. '/1/3/7/'
+  depth INTEGER NOT NULL DEFAULT 0,      -- 0 = root, 1 = child, 2 = grandchild
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  UNIQUE(parent_id, slug)               -- siblings can't share a slug
+);
+
+CREATE INDEX IF NOT EXISTS ai_kb_categories_path_idx ON ai_kb_categories (path);
+CREATE INDEX IF NOT EXISTS ai_kb_categories_parent_idx ON ai_kb_categories (parent_id);
+CREATE INDEX IF NOT EXISTS ai_kb_categories_active_idx ON ai_kb_categories (is_active);
+
+CREATE TABLE IF NOT EXISTS ai_kb_sources (
+  id SERIAL PRIMARY KEY,
+  creator_id INTEGER REFERENCES ai_kb_creators(id) ON DELETE SET NULL,
+  source_type TEXT NOT NULL DEFAULT 'manual',     -- youtube | blog | facebook | manual
+  source_url TEXT,                                 -- nullable for manual content; UNIQUE when present
+  source_title TEXT NOT NULL,
+  source_language TEXT NOT NULL DEFAULT 'en',      -- en | bn | banglish
+  source_published_at TIMESTAMP,
+  raw_text TEXT NOT NULL,
+  raw_metadata TEXT,                                -- jsonb as text
+  processing_status TEXT NOT NULL DEFAULT 'pending', -- pending | chunking | embedding | ready | failed
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Dedup: reject duplicate source_url (NULLs allowed, NULLs not considered duplicates by default)
+CREATE UNIQUE INDEX IF NOT EXISTS ai_kb_sources_url_unique
+  ON ai_kb_sources (source_url)
+  WHERE source_url IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS ai_kb_sources_creator_idx ON ai_kb_sources (creator_id);
+CREATE INDEX IF NOT EXISTS ai_kb_sources_status_idx ON ai_kb_sources (processing_status);
+
+CREATE TABLE IF NOT EXISTS ai_kb_entries (
+  id SERIAL PRIMARY KEY,
+  source_id INTEGER REFERENCES ai_kb_sources(id) ON DELETE CASCADE,
+  creator_id INTEGER REFERENCES ai_kb_creators(id) ON DELETE SET NULL,  -- denormalized for fast filtering
+  category_id INTEGER REFERENCES ai_kb_categories(id) ON DELETE SET NULL,
+  product_id INTEGER,                              -- FK to products.id, nullable; no FK constraint to avoid coupling
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,                            -- markdown, 200-500 words ideal
+  content_summary TEXT,                             -- AI-generated 1-sentence summary (Phase 2)
+  keywords TEXT[] NOT NULL DEFAULT '{}',
+  chunk_index INTEGER NOT NULL DEFAULT 0,
+  chunk_start_offset INTEGER,
+  chunk_end_offset INTEGER,
+  priority INTEGER NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT FALSE,
+  version_number INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ai_kb_entries_category_idx ON ai_kb_entries (category_id, is_active, priority DESC);
+CREATE INDEX IF NOT EXISTS ai_kb_entries_creator_idx ON ai_kb_entries (creator_id);
+CREATE INDEX IF NOT EXISTS ai_kb_entries_product_idx ON ai_kb_entries (product_id);
+CREATE INDEX IF NOT EXISTS ai_kb_entries_active_idx ON ai_kb_entries (is_active) WHERE is_active = TRUE;
+-- GIN index for keyword array search
+CREATE INDEX IF NOT EXISTS ai_kb_entries_keywords_idx ON ai_kb_entries USING gin (keywords);
+-- Note: the embedding column + HNSW index is added in Phase 2, not Phase 1
 `;
 
 export async function ensureAiTables(): Promise<void> {
@@ -393,6 +497,103 @@ export async function ensureAiTables(): Promise<void> {
       // Non-fatal: the route will fall back to the hardcoded template
       // if the seed fails. Log for investigation.
       logger.warn({ err: seedErr }, "AI: failed to seed prompt v1.0.0 text (route will use fallback)");
+    }
+
+    // ─── Phase 1: Knowledge Base seed data ────────────────────────────────
+    // Seed one default creator ("Manual") + three root categories so the
+    // admin UI has something to show on first load. Idempotent via
+    // WHERE NOT EXISTS — safe to re-run on every cold start. Wrap in a
+    // try/catch so a seed failure never blocks server startup (the admin
+    // can manually seed via the UI later).
+    try {
+      // Default "Manual" creator — used as the FK target for admin-typed
+      // KB content that has no upstream source.
+      await pool.query(
+        `INSERT INTO ai_kb_creators (name, slug, source_type, profile_url)
+         SELECT 'Manual', 'manual', 'manual', NULL
+         WHERE NOT EXISTS (SELECT 1 FROM ai_kb_creators WHERE slug = 'manual')`,
+      );
+
+      // Root category: "Plant Care" (depth 0, path '/<id>/').
+      await pool.query(
+        `INSERT INTO ai_kb_categories (name, slug, description, path, depth)
+         SELECT 'Plant Care', 'plant-care', 'General plant care guides', '/', 0
+         WHERE NOT EXISTS (
+           SELECT 1 FROM ai_kb_categories WHERE slug = 'plant-care' AND parent_id IS NULL
+         )`,
+      );
+
+      // After the root insert, backfill its path to '/<id>/' (the INSERT
+      // above uses a placeholder '/' because the id isn't known until
+      // after the row exists). Idempotent — only touches rows whose path
+      // is still the placeholder '/'.
+      await pool.query(
+        `UPDATE ai_kb_categories
+           SET path = '/' || id || '/'
+         WHERE parent_id IS NULL
+           AND path = '/'`,
+      );
+
+      // Two child categories under "Plant Care" — "Pests & Diseases" and
+      // "Gardening Tips". We look up the parent by slug+NULL parent_id
+      // (the uniqueness invariant for roots), then build the child path
+      // as '<parent.path><parent.id>/<child.id>/'. The INSERT uses a
+      // placeholder path of '<parent.path><parent.id>/' (without the
+      // child id); the backfill UPDATE below fixes it.
+      await pool.query(
+        `INSERT INTO ai_kb_categories (parent_id, name, slug, description, path, depth)
+         SELECT
+           p.id,
+           'Pests & Diseases',
+           'pests-diseases',
+           'Common pests and diseases',
+           p.path || p.id || '/',
+           1
+         FROM ai_kb_categories p
+         WHERE p.slug = 'plant-care' AND p.parent_id IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM ai_kb_categories WHERE slug = 'pests-diseases'
+           )`,
+      );
+      await pool.query(
+        `INSERT INTO ai_kb_categories (parent_id, name, slug, description, path, depth)
+         SELECT
+           p.id,
+           'Gardening Tips',
+           'gardening-tips',
+           'General gardening advice',
+           p.path || p.id || '/',
+           1
+         FROM ai_kb_categories p
+         WHERE p.slug = 'plant-care' AND p.parent_id IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM ai_kb_categories WHERE slug = 'gardening-tips'
+           )`,
+      );
+
+      // Backfill child paths: append the child id + '/' to the parent's
+      // path. The formula is `p.path || c.id || '/'` (NOT `p.path ||
+      // p.id || '/' || c.id || '/'` — the parent's id is ALREADY the
+      // last segment of p.path, so appending it again would double-count
+      // and produce paths like `/1/1/2/` instead of `/1/2/`).
+      //
+      // The WHERE clause `c.path NOT LIKE '%/' || c.id || '/'` only
+      // touches rows whose path doesn't end with `/<c.id>/` — i.e. the
+      // placeholder path from the INSERT. Already-correct rows (whether
+      // from a previous backfill or from createKbCategory) are skipped.
+      // This makes the backfill idempotent + safe to re-run on every
+      // cold start.
+      await pool.query(
+        `UPDATE ai_kb_categories c
+           SET path = p.path || c.id || '/'
+         FROM ai_kb_categories p
+         WHERE c.parent_id = p.id
+           AND c.depth = 1
+           AND c.path NOT LIKE '%/' || c.id || '/'`,
+      );
+    } catch (kbSeedErr) {
+      // Non-fatal — the admin can create categories manually via the UI.
+      logger.warn({ err: kbSeedErr }, "AI: failed to seed KB default categories (admin can create them manually)");
     }
   } catch (err) {
     logger.error({ err }, "Failed to ensure AI chat tables");
