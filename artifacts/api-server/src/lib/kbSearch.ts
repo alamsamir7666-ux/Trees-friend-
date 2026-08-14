@@ -48,6 +48,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
+import { getOrCreateQueryEmbedding } from "./queryEmbeddingCache";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -61,11 +62,11 @@ const MAX_AUTO_INJECT_ENTRIES = 3;
 
 // Composite scoring weights (must sum to 1.0).
 // See file header for the rationale.
-const WEIGHT_SEMANTIC = 0.40;
-const WEIGHT_KEYWORD = 0.20;
-const WEIGHT_AUTHORITY = 0.20;
-const WEIGHT_PRIORITY = 0.10;
-const WEIGHT_RECENCY = 0.10;
+const WEIGHT_SEMANTIC = 0.4;
+const WEIGHT_KEYWORD = 0.2;
+const WEIGHT_AUTHORITY = 0.2;
+const WEIGHT_PRIORITY = 0.1;
+const WEIGHT_RECENCY = 0.1;
 
 // Recency decay: 2 years (730 days). An entry created today has recency=1.0;
 // an entry created 730+ days ago has recency=0.0.
@@ -124,19 +125,33 @@ function getEmbeddingClient(): GoogleGenAI | null {
 }
 
 /**
- * Generates an embedding for the user's query (NOT the document — we use
- * RETRIEVAL_QUERY here, asymmetric to the entries' RETRIEVAL_DOCUMENT
- * embeddings from Phase 2). Returns null on failure (no API key, rate
- * limit, etc.) — the caller falls back to keyword-only search.
+ * Raw embedding generator — calls Gemini's `embedContent` API directly.
+ *
+ * This is the uncached "generator" function passed to
+ * `getOrCreateQueryEmbedding` (queryEmbeddingCache.ts). The cache layer
+ * handles L1 (in-process LRU), L2 (Redis), single-flight coalescing, and
+ * negative caching — this function is ONLY called on a cache miss.
+ *
+ * Uses `RETRIEVAL_QUERY` task type (NOT the document — asymmetric to the
+ * entries' RETRIEVAL_DOCUMENT embeddings from Phase 2). Returns null on
+ * failure (no API key, rate limit, etc.) — the caller (the cache) caches
+ * the null with a short TTL (negative caching) so we don't re-hammer
+ * Gemini on persistent failures.
+ *
+ * NOTE: this function receives the NORMALIZED query from the cache layer
+ * (already trimmed, lowercased, NFC-normalized, truncated to 2000 chars).
+ * We pass it through unchanged to Gemini — the cache key was computed from
+ * the same normalized form, so the cached vector is guaranteed to match
+ * the query that was asked.
  */
-async function generateQueryEmbedding(query: string): Promise<number[] | null> {
+async function generateQueryEmbeddingUncached(normalizedQuery: string): Promise<number[] | null> {
   const client = getEmbeddingClient();
   if (!client) return null;
 
   try {
     const result = await client.models.embedContent({
       model: EMBEDDING_MODEL,
-      contents: query.slice(0, MAX_QUERY_CHARS),
+      contents: normalizedQuery.slice(0, MAX_QUERY_CHARS),
       config: {
         // RETRIEVAL_QUERY — optimized for finding matching documents.
         // The entries were embedded with RETRIEVAL_DOCUMENT (Phase 2).
@@ -145,7 +160,7 @@ async function generateQueryEmbedding(query: string): Promise<number[] | null> {
       },
     });
 
-    const values = (result as { embeddings?: Array<{ values?: number[] }> })?.embeddings?.[0]?.values;
+    const values = (result as { embeddings?: { values?: number[] }[] })?.embeddings?.[0]?.values;
     if (!Array.isArray(values) || values.length === 0) {
       logger.warn("KB search: query embedding returned empty values");
       return null;
@@ -153,7 +168,11 @@ async function generateQueryEmbedding(query: string): Promise<number[] | null> {
     return values as number[];
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("429") || msg.toLowerCase().includes("quota") || msg.toLowerCase().includes("rate limit")) {
+    if (
+      msg.includes("429") ||
+      msg.toLowerCase().includes("quota") ||
+      msg.toLowerCase().includes("rate limit")
+    ) {
       logger.warn("KB search: query embedding rate-limited (falling back to keyword-only)");
     } else {
       logger.warn({ err: msg }, "KB search: query embedding failed (falling back to keyword-only)");
@@ -162,20 +181,133 @@ async function generateQueryEmbedding(query: string): Promise<number[] | null> {
   }
 }
 
+/**
+ * Generates an embedding for the user's query, with multi-tier caching.
+ *
+ * This is the cached entry point — wraps `generateQueryEmbeddingUncached`
+ * with the query-embedding cache (L1 in-process LRU + L2 Redis + single-flight
+ * coalescing + negative caching). See queryEmbeddingCache.ts for the full
+ * architecture.
+ *
+ * Why caching matters: before this, every chat message called Gemini's
+ * `embedContent` API directly. At ~100-300ms per call + 1500 RPD free-tier
+ * quota, the quota exhausted at single-digit chats/min. Repeat queries
+ * ("how often to water mango?") re-paid the cost on every ask. Now they
+ * hit L1 (zero latency) or L2 (~5ms) on the second+ ask.
+ *
+ * Returns null on failure (no API key, rate limit, etc.) — the caller
+ * falls back to keyword-only search. Nulls are negatively cached (60s
+ * TTL) to prevent re-hammering Gemini on persistent failures.
+ */
+async function generateQueryEmbedding(query: string): Promise<number[] | null> {
+  return getOrCreateQueryEmbedding(query, EMBEDDING_MODEL, generateQueryEmbeddingUncached);
+}
+
 // ─── Keyword extraction (mirrors aiContext.ts extractSearchTokens) ───────────
 
 const STOP_WORDS = new Set([
-  "the", "a", "an", "and", "or", "but", "is", "are", "was", "were", "be",
-  "been", "being", "have", "has", "had", "do", "does", "did", "will",
-  "would", "could", "should", "may", "might", "can", "i", "you", "he",
-  "she", "it", "we", "they", "this", "that", "these", "those", "what",
-  "which", "who", "when", "where", "why", "how", "of", "in", "on", "at",
-  "to", "for", "with", "from", "by", "about", "into", "through", "during",
-  "before", "after", "above", "below", "between", "under", "over", "again",
-  "further", "then", "once", "here", "there", "all", "any", "both", "each",
-  "few", "more", "most", "other", "some", "such", "no", "nor", "not",
-  "only", "own", "same", "so", "than", "too", "very", "s", "t", "just",
-  "don", "now", "my", "your", "his", "her", "its", "our", "their",
+  "the",
+  "a",
+  "an",
+  "and",
+  "or",
+  "but",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "have",
+  "has",
+  "had",
+  "do",
+  "does",
+  "did",
+  "will",
+  "would",
+  "could",
+  "should",
+  "may",
+  "might",
+  "can",
+  "i",
+  "you",
+  "he",
+  "she",
+  "it",
+  "we",
+  "they",
+  "this",
+  "that",
+  "these",
+  "those",
+  "what",
+  "which",
+  "who",
+  "when",
+  "where",
+  "why",
+  "how",
+  "of",
+  "in",
+  "on",
+  "at",
+  "to",
+  "for",
+  "with",
+  "from",
+  "by",
+  "about",
+  "into",
+  "through",
+  "during",
+  "before",
+  "after",
+  "above",
+  "below",
+  "between",
+  "under",
+  "over",
+  "again",
+  "further",
+  "then",
+  "once",
+  "here",
+  "there",
+  "all",
+  "any",
+  "both",
+  "each",
+  "few",
+  "more",
+  "most",
+  "other",
+  "some",
+  "such",
+  "no",
+  "nor",
+  "not",
+  "only",
+  "own",
+  "same",
+  "so",
+  "than",
+  "too",
+  "very",
+  "s",
+  "t",
+  "just",
+  "don",
+  "now",
+  "my",
+  "your",
+  "his",
+  "her",
+  "its",
+  "our",
+  "their",
 ]);
 
 /**
@@ -192,9 +324,7 @@ const STOP_WORDS = new Set([
  */
 function extractKeywords(query: string): string[] {
   // Match latin (3+) or Bengali (2+) word characters.
-  const tokens = query
-    .toLowerCase()
-    .match(/[a-z]{3,}|[\u0980-\u09ff]{2,}/gi) ?? [];
+  const tokens = query.toLowerCase().match(/[a-z]{3,}|[\u0980-\u09ff]{2,}/gi) ?? [];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const t of tokens) {
@@ -532,7 +662,10 @@ export async function getTopKbEntriesForPrompt(
 
     return { entries, injected: true, toneCreator };
   } catch (err) {
-    logger.error({ err }, "KB search: getTopKbEntriesForPrompt failed (non-fatal — AI falls back to training data)");
+    logger.error(
+      { err },
+      "KB search: getTopKbEntriesForPrompt failed (non-fatal — AI falls back to training data)",
+    );
     return { entries: [], injected: false, toneCreator: null };
   }
 }
@@ -557,10 +690,7 @@ function selectToneCreator(entries: KbSearchResult[]): {
   // Helper: check if a creator is eligible for tone matching.
   const isEligible = (e: KbSearchResult): boolean => {
     if (!e.creator) return false;
-    return (
-      e.creator.hasToneProfile &&
-      e.creator.entryCount >= TONE_THRESHOLD
-    );
+    return e.creator.hasToneProfile && e.creator.entryCount >= TONE_THRESHOLD;
   };
 
   // 1. Check if the top entry's creator is eligible.
@@ -570,7 +700,8 @@ function selectToneCreator(entries: KbSearchResult[]): {
       creatorId: top.entry.creatorId ?? 0,
       creatorName: top.creator.name,
       hasToneProfile: true,
-      toneMatchPercentage: top.creator.toneMatchPercentage ?? Number(process.env.AI_TONE_MATCH_PERCENTAGE ?? 60),
+      toneMatchPercentage:
+        top.creator.toneMatchPercentage ?? Number(process.env.AI_TONE_MATCH_PERCENTAGE ?? 60),
       entryCount: top.creator.entryCount,
     };
   }
@@ -603,7 +734,8 @@ function selectToneCreator(entries: KbSearchResult[]): {
           creatorId: best.entry.creatorId ?? 0,
           creatorName: best.creator.name,
           hasToneProfile: true,
-          toneMatchPercentage: best.creator.toneMatchPercentage ?? Number(process.env.AI_TONE_MATCH_PERCENTAGE ?? 60),
+          toneMatchPercentage:
+            best.creator.toneMatchPercentage ?? Number(process.env.AI_TONE_MATCH_PERCENTAGE ?? 60),
           entryCount: best.creator.entryCount,
         };
       }
@@ -637,25 +769,17 @@ function selectToneCreator(entries: KbSearchResult[]): {
 export function formatKbContextForPrompt(entries: KbSearchResult[]): string {
   if (!entries || entries.length === 0) return "";
 
-  const lines: string[] = [
-    "KNOWLEDGE BASE CONTEXT (use as PRIMARY source — cite the creator):",
-  ];
+  const lines: string[] = ["KNOWLEDGE BASE CONTEXT (use as PRIMARY source — cite the creator):"];
 
   for (const r of entries) {
     const creatorName = r.creator?.name ?? "Unknown";
     const sourceType = r.source?.type ?? "manual";
     const truncatedContent =
-      r.entry.content.length > 500
-        ? r.entry.content.slice(0, 500) + "…"
-        : r.entry.content;
-    const keywordsStr = r.entry.keywords.length > 0
-      ? `[Keywords: ${r.entry.keywords.join(", ")}]`
-      : "";
+      r.entry.content.length > 500 ? r.entry.content.slice(0, 500) + "…" : r.entry.content;
+    const keywordsStr =
+      r.entry.keywords.length > 0 ? `[Keywords: ${r.entry.keywords.join(", ")}]` : "";
 
-    lines.push(
-      `- "${r.entry.title}" (${creatorName} — ${sourceType})`,
-      `  ${truncatedContent}`,
-    );
+    lines.push(`- "${r.entry.title}" (${creatorName} — ${sourceType})`, `  ${truncatedContent}`);
     if (keywordsStr) lines.push(`  ${keywordsStr}`);
     lines.push(""); // blank line between entries
   }

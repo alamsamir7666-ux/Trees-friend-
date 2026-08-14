@@ -286,7 +286,10 @@ export async function createKbCategory(params: {
     return null;
   }
   if (description && description.length > DESCRIPTION_MAX_LENGTH) {
-    logger.warn({ descLength: description.length }, "KB categories: create failed — description too long");
+    logger.warn(
+      { descLength: description.length },
+      "KB categories: create failed — description too long",
+    );
     return null;
   }
 
@@ -330,36 +333,69 @@ export async function createKbCategory(params: {
         [parentId, slug],
       );
       if (dup.rows.length > 0) {
-        logger.warn({ slug, parentId }, "KB categories: create failed — slug conflict within parent");
+        logger.warn(
+          { slug, parentId },
+          "KB categories: create failed — slug conflict within parent",
+        );
         return null;
       }
     }
 
     // INSERT in a transaction, then UPDATE the path once we know the id.
-    // We use BEGIN/COMMIT directly (same pattern as promptVersioning.ts).
-    await pool.query("BEGIN");
+    //
+    // ─── Bug fix: real transaction via pool.connect() ───────────────────
+    // Previously used `pool.query("BEGIN")` + `pool.query("INSERT")` +
+    // `pool.query("UPDATE")` + `pool.query("COMMIT")`. Each `pool.query()`
+    // acquires a DIFFERENT connection from the pool — the BEGIN ran on
+    // connection A, the INSERT on connection B (outside the transaction!),
+    // the UPDATE on connection C, and the COMMIT on connection D. The
+    // "transaction" was completely non-functional: a failure between the
+    // INSERT and UPDATE would leave a row with the placeholder path '/'
+    // committed (no rollback), polluting the path index.
+    //
+    // Fix: acquire a single connection via `pool.connect()` + use
+    // `client.query()` for all statements. Release in a `finally` block
+    // so the connection is always returned to the pool (prevents pool
+    // exhaustion under error spikes).
     let createdId: number | null = null;
+    const client = await pool.connect();
     try {
-      const insertResult = await pool.query<{ id: number }>(
-        `INSERT INTO ai_kb_categories (parent_id, name, slug, description, path, depth, is_active)
-         VALUES ($1, $2, $3, $4, '/', $5, TRUE)
-         RETURNING id`,
-        [parentId, name, slug, description, parentDepth + 1],
-      );
-      createdId = insertResult.rows[0].id;
-      // Compute the real path: parentPath + id + '/' for children,
-      // '/' + id + '/' for roots.
-      const realPath = parentId === null
-        ? `/${createdId}/`
-        : `${parentPath}${createdId}/`;
-      await pool.query(
-        "UPDATE ai_kb_categories SET path = $1 WHERE id = $2",
-        [realPath, createdId],
-      );
-      await pool.query("COMMIT");
-    } catch (txErr) {
-      await pool.query("ROLLBACK");
-      throw txErr;
+      await client.query("BEGIN");
+      try {
+        const insertResult = await client.query<{ id: number }>(
+          `INSERT INTO ai_kb_categories (parent_id, name, slug, description, path, depth, is_active)
+           VALUES ($1, $2, $3, $4, '/', $5, TRUE)
+           RETURNING id`,
+          [parentId, name, slug, description, parentDepth + 1],
+        );
+        createdId = insertResult.rows[0].id;
+        // Compute the real path: parentPath + id + '/' for children,
+        // '/' + id + '/' for roots.
+        const realPath = parentId === null ? `/${createdId}/` : `${parentPath}${createdId}/`;
+        await client.query("UPDATE ai_kb_categories SET path = $1 WHERE id = $2", [
+          realPath,
+          createdId,
+        ]);
+        await client.query("COMMIT");
+      } catch (txErr) {
+        // Best-effort rollback — swallow rollback errors so the original
+        // error isn't masked. Connection is released in `finally`
+        // regardless; pg.Pool recycles broken connections on release.
+        try {
+          await client.query("ROLLBACK");
+        } catch (rbErr) {
+          logger.warn(
+            { err: (rbErr as Error)?.message },
+            "KB categories: create rollback failed (non-fatal — connection will be recycled)",
+          );
+        }
+        throw txErr;
+      }
+    } finally {
+      // ALWAYS release the connection — prevents pool exhaustion under
+      // error spikes. Safe to call even if the connection is in an error
+      // state (pg.Pool will close + recycle it).
+      client.release();
     }
 
     // Re-fetch the created row (with entry_count) to return.
@@ -367,7 +403,10 @@ export async function createKbCategory(params: {
     // succeeded inside the transaction), but we guard defensively in
     // case the ROLLBACK path left it null.
     if (createdId === null) {
-      logger.error({ name, slug, parentId }, "KB categories: create failed — no id returned from INSERT");
+      logger.error(
+        { name, slug, parentId },
+        "KB categories: create failed — no id returned from INSERT",
+      );
       return null;
     }
     return await getKbCategory(createdId);
@@ -434,11 +473,13 @@ export async function updateKbCategory(
       return null;
     }
   }
-  const description = updates.description !== undefined
-    ? (updates.description?.trim() || null)
-    : undefined;
+  const description =
+    updates.description !== undefined ? updates.description?.trim() || null : undefined;
   if (description !== undefined && description && description.length > DESCRIPTION_MAX_LENGTH) {
-    logger.warn({ id, descLength: description.length }, "KB categories: update failed — description too long");
+    logger.warn(
+      { id, descLength: description.length },
+      "KB categories: update failed — description too long",
+    );
     return null;
   }
 
@@ -481,7 +522,10 @@ export async function updateKbCategory(
           [current.parent_id, slug, id],
         );
         if (dup.rows.length > 0) {
-          logger.warn({ id, slug, parentId: current.parent_id }, "KB categories: update failed — slug conflict within parent");
+          logger.warn(
+            { id, slug, parentId: current.parent_id },
+            "KB categories: update failed — slug conflict within parent",
+          );
           return null;
         }
       }
@@ -618,47 +662,72 @@ export async function moveKbCategory(id: number, newParentId: number | null): Pr
     }
 
     // Compute the new path + depth for the moved node.
-    const newPath = newParentId === null
-      ? `/${id}/`
-      : `${newParentPath}${id}/`;
+    const newPath = newParentId === null ? `/${id}/` : `${newParentPath}${id}/`;
     const newDepth = newParentDepth + 1;
     const depthDelta = newDepth - oldDepth;
 
-    // Begin the transaction.
-    await pool.query("BEGIN");
+    // ─── Transaction: move node + rebuild descendant paths ──────────────
+    //
+    // Bug fix: previously used `pool.query("BEGIN")` + `pool.query("UPDATE")`
+    // + `pool.query("COMMIT")` — each `pool.query()` acquires a DIFFERENT
+    // connection from the pool, so the BEGIN/UPDATE/COMMIT ran on separate
+    // connections. The "transaction" was non-functional: a failure between
+    // the moved-node UPDATE and the descendant UPDATE would leave the tree
+    // in an inconsistent state (moved node has the new path, descendants
+    // still have the old path → broken subtree queries).
+    //
+    // Fix: acquire a single connection via `pool.connect()` + use
+    // `client.query()` for all statements. Release in `finally` so the
+    // connection is always returned to the pool.
+    const client = await pool.connect();
     try {
-      // Update the moved node.
-      await pool.query(
-        "UPDATE ai_kb_categories SET parent_id = $1, path = $2, depth = $3, updated_at = NOW() WHERE id = $4",
-        [newParentId, newPath, newDepth, id],
-      );
+      await client.query("BEGIN");
+      try {
+        // Update the moved node.
+        await client.query(
+          "UPDATE ai_kb_categories SET parent_id = $1, path = $2, depth = $3, updated_at = NOW() WHERE id = $4",
+          [newParentId, newPath, newDepth, id],
+        );
 
-      // Update all descendants: rebuild path via string replacement +
-      // shift depth by the delta. The LIKE pattern matches descendants
-      // (paths that start with oldPath AND aren't the moved node itself).
-      // REPLACE(path, oldPath, newPath) swaps the prefix correctly for
-      // nested descendants (e.g. '/1/3/7/' → '/2/5/3/7/' if old='/1/3/'
-      // and new='/2/5/3/').
-      await pool.query(
-        `UPDATE ai_kb_categories
-           SET path = REPLACE(path, $1, $2),
-               depth = depth + $3,
-               updated_at = NOW()
-         WHERE path LIKE $1 || '%'
-           AND id <> $4`,
-        [oldPath, newPath, depthDelta, id],
-      );
+        // Update all descendants: rebuild path via string replacement +
+        // shift depth by the delta. The LIKE pattern matches descendants
+        // (paths that start with oldPath AND aren't the moved node itself).
+        // REPLACE(path, oldPath, newPath) swaps the prefix correctly for
+        // nested descendants (e.g. '/1/3/7/' → '/2/5/3/7/' if old='/1/3/'
+        // and new='/2/5/3/').
+        await client.query(
+          `UPDATE ai_kb_categories
+             SET path = REPLACE(path, $1, $2),
+                 depth = depth + $3,
+                 updated_at = NOW()
+           WHERE path LIKE $1 || '%'
+             AND id <> $4`,
+          [oldPath, newPath, depthDelta, id],
+        );
 
-      await pool.query("COMMIT");
-    } catch (txErr) {
-      await pool.query("ROLLBACK");
-      throw txErr;
+        await client.query("COMMIT");
+      } catch (txErr) {
+        // Best-effort rollback — swallow rollback errors so the original
+        // error isn't masked. Connection is released in `finally`
+        // regardless; pg.Pool recycles broken connections on release.
+        try {
+          await client.query("ROLLBACK");
+        } catch (rbErr) {
+          logger.warn(
+            { err: (rbErr as Error)?.message },
+            "KB categories: move rollback failed (non-fatal — connection will be recycled)",
+          );
+        }
+        throw txErr;
+      }
+    } finally {
+      // ALWAYS release the connection — prevents pool exhaustion under
+      // error spikes. Safe to call even if the connection is in an error
+      // state (pg.Pool will close + recycle it).
+      client.release();
     }
 
-    logger.info(
-      { id, newParentId, oldPath, newPath, depthDelta },
-      "KB categories: moved category",
-    );
+    logger.info({ id, newParentId, oldPath, newPath, depthDelta }, "KB categories: moved category");
     return true;
   } catch (err) {
     logger.error({ err, id, newParentId }, "KB categories: move failed");
@@ -683,9 +752,7 @@ export async function moveKbCategory(id: number, newParentId: number | null): Pr
  *   { ok: false, reason: "has entries" }  — entries block the delete
  *   { ok: false, reason: "db error" }     — unexpected DB error
  */
-export async function deleteKbCategory(
-  id: number,
-): Promise<{ ok: boolean; reason?: string }> {
+export async function deleteKbCategory(id: number): Promise<{ ok: boolean; reason?: string }> {
   if (!Number.isInteger(id) || id <= 0) return { ok: false, reason: "Invalid id." };
   try {
     // Fetch the category (we need its path for the descendant query).

@@ -262,7 +262,11 @@ export async function createEntry(params: {
   }
   // Validate priority.
   const priority = params.priority ?? 0;
-  if (!Number.isInteger(priority) || priority < ENTRY_PRIORITY_MIN || priority > ENTRY_PRIORITY_MAX) {
+  if (
+    !Number.isInteger(priority) ||
+    priority < ENTRY_PRIORITY_MIN ||
+    priority > ENTRY_PRIORITY_MAX
+  ) {
     logger.warn({ priority }, "KB entries: create failed — invalid priority");
     return null;
   }
@@ -332,7 +336,7 @@ export async function createEntry(params: {
  */
 export async function createEntriesBatch(
   sourceId: number,
-  entries: Array<{
+  entries: {
     title: string;
     content: string;
     keywords?: string[];
@@ -342,7 +346,7 @@ export async function createEntriesBatch(
     chunkIndex?: number;
     chunkStartOffset?: number | null;
     chunkEndOffset?: number | null;
-  }>,
+  }[],
   createdBy: string | null = null,
 ): Promise<number[]> {
   if (!Number.isInteger(sourceId) || sourceId <= 0) return [];
@@ -358,12 +362,18 @@ export async function createEntriesBatch(
     }
     const content = e.content ?? "";
     if (!content || content.length > ENTRY_CONTENT_MAX_LENGTH) {
-      logger.warn({ i, contentLen: content.length }, "KB entries: batch create failed — invalid content");
+      logger.warn(
+        { i, contentLen: content.length },
+        "KB entries: batch create failed — invalid content",
+      );
       return [];
     }
     const keywords = (e.keywords ?? []).map((k) => k.trim()).filter(Boolean);
     if (keywords.length > ENTRY_KEYWORD_MAX_COUNT) {
-      logger.warn({ i, count: keywords.length }, "KB entries: batch create failed — too many keywords");
+      logger.warn(
+        { i, count: keywords.length },
+        "KB entries: batch create failed — too many keywords",
+      );
       return [];
     }
     for (const k of keywords) {
@@ -373,7 +383,11 @@ export async function createEntriesBatch(
       }
     }
     const priority = e.priority ?? 0;
-    if (!Number.isInteger(priority) || priority < ENTRY_PRIORITY_MIN || priority > ENTRY_PRIORITY_MAX) {
+    if (
+      !Number.isInteger(priority) ||
+      priority < ENTRY_PRIORITY_MIN ||
+      priority > ENTRY_PRIORITY_MAX
+    ) {
       logger.warn({ i, priority }, "KB entries: batch create failed — invalid priority");
       return [];
     }
@@ -391,66 +405,113 @@ export async function createEntriesBatch(
     }
     const creatorId = sourceResult.rows[0].creator_id;
 
-    // Build a single multi-row INSERT for efficiency.
+    // ─── Transaction: entries + entry_count + source status ──────────────
+    //
+    // All three writes (entry INSERTs, creator entry_count increment, source
+    // processing_status flip) MUST be in ONE transaction. Previously each
+    // `pool.query()` call acquired a DIFFERENT connection from the pool, so
+    // the `BEGIN`/`COMMIT`/`ROLLBACK` were sent on different connections —
+    // the "transaction" was completely non-functional. A partial failure
+    // (e.g. one INSERT failing) would leave the already-inserted rows
+    // committed with no rollback, AND the source status would never flip
+    // to 'embedding'.
+    //
+    // Fix: acquire a single connection via `pool.connect()` + use
+    // `client.query()` for all transaction statements. Release in a
+    // `finally` block so the connection is always returned to the pool
+    // (even on error — prevents pool exhaustion under failure spikes).
+    //
+    // We also moved the entry_count increment + source status update INSIDE
+    // the transaction. Previously they ran AFTER the (broken) transaction
+    // block — if the INSERT loop committed but the status UPDATE failed,
+    // the source was stuck in 'chunking' while entries existed. Now the
+    // source only flips to 'embedding' if the entries + count committed.
+    //
+    // The entry_count increment is wrapped in a nested try/catch (non-fatal)
+    // because it's a denormalized optimization — a failure shouldn't abort
+    // the whole batch. The INSERTs + source status are the source of truth.
     const createdIds: number[] = [];
-    await pool.query("BEGIN");
+    const client = await pool.connect();
     try {
-      for (let i = 0; i < entries.length; i++) {
-        const e = entries[i];
-        const keywords = (e.keywords ?? []).map((k) => k.trim()).filter(Boolean);
-        const result = await pool.query<{ id: number }>(
-          `INSERT INTO ai_kb_entries
-             (source_id, creator_id, category_id, product_id, title, content,
-              keywords, chunk_index, chunk_start_offset, chunk_end_offset,
-              priority, is_active, version_number, embedding_status, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, FALSE, 1, 'pending', $12)
-           RETURNING id`,
-          [
-            sourceId,
-            creatorId,
-            e.categoryId ?? null,
-            e.productId ?? null,
-            e.title.trim(),
-            e.content,
-            keywords,
-            e.chunkIndex ?? i,
-            e.chunkStartOffset ?? null,
-            e.chunkEndOffset ?? null,
-            e.priority ?? 0,
-            createdBy,
-          ],
-        );
-        createdIds.push(result.rows[0].id);
-      }
-      await pool.query("COMMIT");
-    } catch (txErr) {
-      await pool.query("ROLLBACK");
-      throw txErr;
-    }
-
-    // Increment the creator's entry_count by the batch size (one UPDATE).
-    if (creatorId !== null && createdIds.length > 0) {
+      await client.query("BEGIN");
       try {
-        await pool.query(
-          "UPDATE ai_kb_creators SET entry_count = entry_count + $1, updated_at = NOW() WHERE id = $2",
-          [createdIds.length, creatorId],
+        for (let i = 0; i < entries.length; i++) {
+          const e = entries[i];
+          const keywords = (e.keywords ?? []).map((k) => k.trim()).filter(Boolean);
+          const result = await client.query<{ id: number }>(
+            `INSERT INTO ai_kb_entries
+               (source_id, creator_id, category_id, product_id, title, content,
+                keywords, chunk_index, chunk_start_offset, chunk_end_offset,
+                priority, is_active, version_number, embedding_status, created_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, FALSE, 1, 'pending', $12)
+             RETURNING id`,
+            [
+              sourceId,
+              creatorId,
+              e.categoryId ?? null,
+              e.productId ?? null,
+              e.title.trim(),
+              e.content,
+              keywords,
+              e.chunkIndex ?? i,
+              e.chunkStartOffset ?? null,
+              e.chunkEndOffset ?? null,
+              e.priority ?? 0,
+              createdBy,
+            ],
+          );
+          createdIds.push(result.rows[0].id);
+        }
+
+        // Increment the creator's entry_count by the batch size (one UPDATE).
+        // Non-fatal: if this fails, the batch still committed — the count
+        // is a denormalized optimization, not a correctness invariant.
+        if (creatorId !== null && createdIds.length > 0) {
+          try {
+            await client.query(
+              "UPDATE ai_kb_creators SET entry_count = entry_count + $1, updated_at = NOW() WHERE id = $2",
+              [createdIds.length, creatorId],
+            );
+          } catch (err) {
+            logger.warn(
+              { err, creatorId, count: createdIds.length },
+              "KB entries: batch entry_count increment failed (non-fatal, transaction continues)",
+            );
+          }
+        }
+
+        // Update the source's processing_status to 'embedding'.
+        await client.query(
+          "UPDATE ai_kb_sources SET processing_status = 'embedding' WHERE id = $1",
+          [sourceId],
         );
-      } catch (err) {
-        logger.warn({ err, creatorId, count: createdIds.length }, "KB entries: batch entry_count increment failed (non-fatal)");
+
+        await client.query("COMMIT");
+      } catch (txErr) {
+        // Best-effort rollback — swallow rollback errors so the original
+        // error isn't masked. The connection is released in `finally`
+        // regardless; if the rollback failed, the connection is in an
+        // aborted state and `release()` will return it to the pool broken
+        // (pg.Pool handles this by closing it).
+        try {
+          await client.query("ROLLBACK");
+        } catch (rbErr) {
+          logger.warn(
+            { err: (rbErr as Error)?.message },
+            "KB entries: batch rollback failed (non-fatal — connection will be recycled)",
+          );
+        }
+        throw txErr;
       }
+
+      logger.info({ sourceId, count: createdIds.length, creatorId }, "KB entries: batch created");
+      return createdIds;
+    } finally {
+      // ALWAYS release the connection — prevents pool exhaustion under
+      // error spikes. `release()` is safe to call even if the connection
+      // is in an error state (pg.Pool will close + recycle it).
+      client.release();
     }
-
-    // Update the source's processing_status to 'embedding'.
-    await pool.query(
-      "UPDATE ai_kb_sources SET processing_status = 'embedding' WHERE id = $1",
-      [sourceId],
-    );
-
-    logger.info(
-      { sourceId, count: createdIds.length, creatorId },
-      "KB entries: batch created",
-    );
-    return createdIds;
   } catch (err) {
     logger.error({ err, sourceId, count: entries.length }, "KB entries: batch create failed");
     return [];
@@ -506,8 +567,15 @@ export async function updateEntry(
     }
   }
   if (updates.priority !== undefined) {
-    if (!Number.isInteger(updates.priority) || updates.priority < ENTRY_PRIORITY_MIN || updates.priority > ENTRY_PRIORITY_MAX) {
-      logger.warn({ id, priority: updates.priority }, "KB entries: update failed — invalid priority");
+    if (
+      !Number.isInteger(updates.priority) ||
+      updates.priority < ENTRY_PRIORITY_MIN ||
+      updates.priority > ENTRY_PRIORITY_MAX
+    ) {
+      logger.warn(
+        { id, priority: updates.priority },
+        "KB entries: update failed — invalid priority",
+      );
       return null;
     }
   }
