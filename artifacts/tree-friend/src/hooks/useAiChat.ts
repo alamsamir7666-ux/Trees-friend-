@@ -69,12 +69,31 @@ export interface ChatMessage {
   greeting?: boolean;
 }
 
+/**
+ * v3.7: A tool currently being executed by the AI. Tracked so the UI
+ * can show "Looking up your order..." chips during multi-tool rounds.
+ * Multiple tools can be active in parallel (the model can call several
+ * tools in one round), and the same tool can be called multiple times
+ * across rounds — `id` disambiguates them.
+ */
+export interface ActiveToolCall {
+  /** Unique ID (server sends `name` only; we synthesize `${name}-${n}`). */
+  id: string;
+  /** The tool name (e.g. `search_catalog`, `get_user_orders`). */
+  name: string;
+}
+
 interface UseAiChatResult {
   messages: ChatMessage[];
   loading: boolean;
   error: string | null;
   send: (text: string) => Promise<void>;
   clear: () => Promise<void>;
+  /**
+   * v3.7: Tools currently being executed. Empty when no tools are in
+   * flight. Render these as progress chips below the assistant bubble.
+   */
+  activeToolCalls: ActiveToolCall[];
 }
 
 /**
@@ -112,6 +131,15 @@ export function useAiChat(): UseAiChatResult {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * v3.7: Tools currently being executed by the AI. Tracked so the UI can
+   * render "Looking up your order..." chips. Each entry is removed when
+   * the matching `tool_result` event arrives. We use a counter to
+   * synthesize a unique `id` per `tool_call` event (the server only
+   * sends `name`), so the same tool called twice in sequence gets
+   * distinct entries — important for sequential multi-round flows.
+   */
+  const [activeToolCalls, setActiveToolCalls] = useState<ActiveToolCall[]>([]);
   // AbortController for the in-flight request, so we can cancel if the
   // user sends another message before the previous stream finishes.
   const abortRef = useRef<AbortController | null>(null);
@@ -124,6 +152,14 @@ export function useAiChat(): UseAiChatResult {
   // updated synchronously inside `send` (before the first await), so the
   // second click sees `true` and bails out.
   const loadingRef = useRef(false);
+
+  /**
+   * v3.7: monotonically increasing counter for synthesizing unique IDs for
+   * `tool_call` events. The server only sends the tool `name` (not an ID),
+   * but the same tool can be called multiple times across rounds. We
+   * synthesize `${name}-${counter}` so each call gets a distinct React key.
+   */
+  const toolCallCounterRef = useRef(0);
 
   // ─── Load history on mount ──────────────────────────────────────────────
   // The session token now lives in an HttpOnly cookie set by the server,
@@ -153,13 +189,10 @@ export function useAiChat(): UseAiChatResult {
     (async () => {
       try {
         const authHeader = await buildAuthHeader();
-        const res = await fetch(
-          `${BASE_URL}/api/ai/sessions/${encodeURIComponent(urlToken)}`,
-          {
-            credentials: "include", // ← send + receive cookies
-            headers: { ...authHeader },
-          },
-        );
+        const res = await fetch(`${BASE_URL}/api/ai/sessions/${encodeURIComponent(urlToken)}`, {
+          credentials: "include", // ← send + receive cookies
+          headers: { ...authHeader },
+        });
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
@@ -219,6 +252,9 @@ export function useAiChat(): UseAiChatResult {
 
     setError(null);
     setLoading(true);
+    // v3.7: reset tool-call tracking for the new request.
+    setActiveToolCalls([]);
+    toolCallCounterRef.current = 0;
 
     // Optimistic: append the user's message immediately.
     const userMsg: ChatMessage = { role: "user", content: trimmed };
@@ -296,7 +332,6 @@ export function useAiChat(): UseAiChatResult {
       let received = "";
       let serverSessionToken: string | null = null;
 
-      // eslint-disable-next-line no-constant-condition
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -337,11 +372,7 @@ export function useAiChat(): UseAiChatResult {
             received += payload.text;
             // Update the assistant message in place.
             setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsg.id
-                  ? { ...m, content: received }
-                  : m,
-              ),
+              prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: received } : m)),
             );
           } else if (payload.type === "messageId" && typeof payload.messageId === "number") {
             // Backend persisted the assistant message and is telling us its
@@ -349,11 +380,27 @@ export function useAiChat(): UseAiChatResult {
             // numeric id so FeedbackButtons can reference it.
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === assistantMsg.id
-                  ? { ...m, id: payload.messageId as number }
-                  : m,
+                m.id === assistantMsg.id ? { ...m, id: payload.messageId as number } : m,
               ),
             );
+          } else if (payload.type === "tool_call" && typeof payload.name === "string") {
+            // v3.7: A tool is about to execute. Add it to activeToolCalls
+            // so the UI can render a "Looking up..." chip. We synthesize a
+            // unique id because the server only sends `name` (the same tool
+            // can be called multiple times across rounds).
+            const counter = ++toolCallCounterRef.current;
+            const toolId = `${payload.name}-${counter}`;
+            setActiveToolCalls((prev) => [...prev, { id: toolId, name: payload.name }]);
+          } else if (payload.type === "tool_result" && typeof payload.name === "string") {
+            // v3.7: A tool finished executing. Remove it from activeToolCalls.
+            // We remove the FIRST matching entry (oldest) — if the same tool
+            // was called multiple times, the oldest in-flight call is the one
+            // most likely to have just completed.
+            setActiveToolCalls((prev) => {
+              const idx = prev.findIndex((t) => t.name === payload.name);
+              if (idx === -1) return prev;
+              return [...prev.slice(0, idx), ...prev.slice(idx + 1)];
+            });
           } else if (payload.type === "error") {
             setError(payload.message ?? "Stream failed.");
             // Replace the empty assistant bubble with an error message.
@@ -379,8 +426,7 @@ export function useAiChat(): UseAiChatResult {
                   m.id === assistantMsg.id
                     ? {
                         ...m,
-                        content:
-                          "Sorry, I couldn't generate a response. Please try again.",
+                        content: "Sorry, I couldn't generate a response. Please try again.",
                       }
                     : m,
                 ),
@@ -395,14 +441,13 @@ export function useAiChat(): UseAiChatResult {
       setError(msg);
       // Replace the placeholder assistant bubble with the error.
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsg.id
-            ? { ...m, content: `Error: ${msg}` }
-            : m,
-        ),
+        prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: `Error: ${msg}` } : m)),
       );
     } finally {
       setLoading(false);
+      // v3.7: clear any straggling tool calls (e.g. if the stream ended
+      // mid-tool-execution due to an error or abort).
+      setActiveToolCalls([]);
       // Bug #16 fix: reset the ref synchronously so the next `send` can
       // proceed immediately (not waiting for the next render cycle).
       loadingRef.current = false;
@@ -448,7 +493,7 @@ export function useAiChat(): UseAiChatResult {
     setError(null);
   }, []);
 
-  return { messages, loading, error, send, clear };
+  return { messages, loading, error, send, clear, activeToolCalls };
 }
 
 async function buildAuthHeader(): Promise<Record<string, string>> {

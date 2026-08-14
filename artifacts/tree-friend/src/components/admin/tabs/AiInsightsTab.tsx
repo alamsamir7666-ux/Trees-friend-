@@ -13,12 +13,28 @@
 import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@clerk/react";
 import {
-  Sparkles, MessageSquare, ThumbsUp, ThumbsDown, TrendingDown, Activity,
-  Users, RefreshCw, ChevronLeft, ChevronRight, ExternalLink,
+  Sparkles,
+  MessageSquare,
+  ThumbsUp,
+  ThumbsDown,
+  TrendingDown,
+  Activity,
+  Users,
+  RefreshCw,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  X,
 } from "lucide-react";
 import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, Legend,
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
 } from "recharts";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -26,7 +42,9 @@ import { Badge } from "@/components/ui/badge";
 import { useChartColors } from "@/hooks/useChartColors";
 import { MarkdownText } from "@/components/ai/MarkdownText";
 import {
-  extractFollowups, extractProductMentions, stripProductMentionMarkers,
+  extractFollowups,
+  extractProductMentions,
+  stripProductMentionMarkers,
 } from "@/components/ai/parseMessage";
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -96,16 +114,16 @@ export function AiInsightsTab() {
 
   const fetchAll = useCallback(async () => {
     const token = await getToken();
-    const headers: Record<string, string> = token
-      ? { Authorization: `Bearer ${token}` }
-      : {};
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
     const [ov, ts, kw, pr, fb] = await Promise.all([
       fetch(`${API}/api/ai/admin/overview`, { headers }).then((r) => r.json()),
       fetch(`${API}/api/ai/admin/timeseries?days=30`, { headers }).then((r) => r.json()),
       fetch(`${API}/api/ai/admin/top-questions?limit=15`, { headers }).then((r) => r.json()),
       fetch(`${API}/api/ai/admin/top-products?limit=15`, { headers }).then((r) => r.json()),
-      fetch(`${API}/api/ai/admin/feedback?rating=down&limit=${PAGE_SIZE}&offset=0`, { headers }).then((r) => r.json()),
+      fetch(`${API}/api/ai/admin/feedback?rating=down&limit=${PAGE_SIZE}&offset=0`, {
+        headers,
+      }).then((r) => r.json()),
     ]);
 
     setOverview(ov);
@@ -143,9 +161,7 @@ export function AiInsightsTab() {
 
   const fetchFeedbackPage = async (newOffset: number) => {
     const token = await getToken();
-    const headers: Record<string, string> = token
-      ? { Authorization: `Bearer ${token}` }
-      : {};
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
     const fb = await fetch(
       `${API}/api/ai/admin/feedback?rating=down&limit=${PAGE_SIZE}&offset=${newOffset}`,
       { headers },
@@ -190,12 +206,7 @@ export function AiInsightsTab() {
             </p>
           </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRefresh}
-          disabled={refreshing}
-        >
+        <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
           <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
           Refresh
         </Button>
@@ -314,21 +325,15 @@ export function AiInsightsTab() {
                 const pct = (k.count / max) * 100;
                 return (
                   <div key={k.word} className="flex items-center gap-3">
-                    <span className="text-xs text-muted-foreground w-5">
-                      {i + 1}.
-                    </span>
-                    <span className="text-sm font-medium min-w-[100px] truncate">
-                      {k.word}
-                    </span>
+                    <span className="text-xs text-muted-foreground w-5">{i + 1}.</span>
+                    <span className="text-sm font-medium min-w-[100px] truncate">{k.word}</span>
                     <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                       <div
                         className="h-full bg-primary rounded-full"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
-                    <span className="text-xs text-muted-foreground w-8 text-right">
-                      {k.count}
-                    </span>
+                    <span className="text-xs text-muted-foreground w-8 text-right">{k.count}</span>
                   </div>
                 );
               })}
@@ -351,9 +356,7 @@ export function AiInsightsTab() {
                 const pct = (p.count / max) * 100;
                 return (
                   <div key={p.name} className="flex items-center gap-3">
-                    <span className="text-xs text-muted-foreground w-5">
-                      {i + 1}.
-                    </span>
+                    <span className="text-xs text-muted-foreground w-5">{i + 1}.</span>
                     <a
                       href={`${API ? "" : ""}/products?q=${encodeURIComponent(p.name)}`}
                       className="text-sm font-medium min-w-[120px] truncate text-primary hover:underline flex items-center gap-1"
@@ -368,9 +371,7 @@ export function AiInsightsTab() {
                         style={{ width: `${pct}%` }}
                       />
                     </div>
-                    <span className="text-xs text-muted-foreground w-8 text-right">
-                      {p.count}
-                    </span>
+                    <span className="text-xs text-muted-foreground w-8 text-right">{p.count}</span>
                   </div>
                 );
               })}
@@ -397,7 +398,8 @@ export function AiInsightsTab() {
                 <ChevronLeft className="h-4 w-4" />
               </Button>
               <span className="text-xs text-muted-foreground px-2">
-                {feedbackOffset + 1}–{Math.min(feedbackOffset + PAGE_SIZE, feedbackTotal)} of {feedbackTotal}
+                {feedbackOffset + 1}–{Math.min(feedbackOffset + PAGE_SIZE, feedbackTotal)} of{" "}
+                {feedbackTotal}
               </span>
               <Button
                 variant="outline"
@@ -430,7 +432,11 @@ export function AiInsightsTab() {
 // ─── Sub-components ────────────────────────────────────────────────────────
 
 function StatCard({
-  icon, label, value, sub, tint,
+  icon,
+  label,
+  value,
+  sub,
+  tint,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -514,9 +520,7 @@ function EmptyChart() {
 }
 
 function EmptyList({ text }: { text: string }) {
-  return (
-    <div className="text-sm text-muted-foreground py-8 text-center">{text}</div>
-  );
+  return <div className="text-sm text-muted-foreground py-8 text-center">{text}</div>;
 }
 
 // ─── Conversations browser (v2.5) ───────────────────────────────────────
@@ -561,9 +565,7 @@ function ConversationsSection() {
       setLoading(true);
       try {
         const token = await getToken();
-        const headers: Record<string, string> = token
-          ? { Authorization: `Bearer ${token}` }
-          : {};
+        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
         const res = await fetch(
           `${API}/api/ai/admin/conversations?limit=${PAGE}&offset=${newOffset}`,
           { headers },
@@ -589,9 +591,7 @@ function ConversationsSection() {
     setThread(null);
     try {
       const token = await getToken();
-      const headers: Record<string, string> = token
-        ? { Authorization: `Bearer ${token}` }
-        : {};
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
       const res = await fetch(`${API}/api/ai/admin/conversations/${id}`, { headers });
       const data = await res.json();
       setThread(data.messages ?? []);
@@ -658,9 +658,7 @@ function ConversationsSection() {
                 </span>
               </div>
               {c.lastMessage && (
-                <p className="text-xs text-muted-foreground truncate">
-                  {c.lastMessage}
-                </p>
+                <p className="text-xs text-muted-foreground truncate">{c.lastMessage}</p>
               )}
               <div className="flex items-center gap-2 mt-1.5">
                 <span className="text-[10px] text-muted-foreground">
@@ -672,12 +670,18 @@ function ConversationsSection() {
                   </Badge>
                 )}
                 {c.positiveFeedback > 0 && (
-                  <Badge variant="outline" className="text-[9px] py-0 h-4 text-success border-success/30">
+                  <Badge
+                    variant="outline"
+                    className="text-[9px] py-0 h-4 text-success border-success/30"
+                  >
                     👍 {c.positiveFeedback}
                   </Badge>
                 )}
                 {c.negativeFeedback > 0 && (
-                  <Badge variant="outline" className="text-[9px] py-0 h-4 text-destructive border-destructive/30">
+                  <Badge
+                    variant="outline"
+                    className="text-[9px] py-0 h-4 text-destructive border-destructive/30"
+                  >
                     👎 {c.negativeFeedback}
                   </Badge>
                 )}
@@ -701,9 +705,7 @@ function ConversationsSection() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-4 py-3 border-b">
-              <h3 className="text-sm font-semibold">
-                Conversation #{selectedId}
-              </h3>
+              <h3 className="text-sm font-semibold">Conversation #{selectedId}</h3>
               <Button
                 variant="ghost"
                 size="sm"
@@ -730,23 +732,15 @@ function ConversationsSection() {
                   >
                     <div
                       className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
-                        m.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted border"
+                        m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted border"
                       }`}
                     >
-                      <div className="whitespace-pre-wrap break-words">
-                        {m.content}
-                      </div>
+                      <div className="whitespace-pre-wrap break-words">{m.content}</div>
                       {m.offTopic && (
-                        <div className="text-[10px] opacity-70 mt-1">
-                          ⚠ off-topic refusal
-                        </div>
+                        <div className="text-[10px] opacity-70 mt-1">⚠ off-topic refusal</div>
                       )}
                       {m.greeting && (
-                        <div className="text-[10px] opacity-70 mt-1">
-                          👋 greeting shortcut
-                        </div>
+                        <div className="text-[10px] opacity-70 mt-1">👋 greeting shortcut</div>
                       )}
                       {m.feedback && (
                         <div className="text-[10px] mt-1 opacity-70">

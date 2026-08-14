@@ -41,8 +41,14 @@ export type ChartPalette = {
   trendDown: string;
   /** Axis tick label color. */
   axisTick: string;
+  /** Axis line stroke color (the vertical/horizontal line along the axis). */
+  axisLine: string;
   /** CartesianGrid stroke color. */
   gridStroke: string;
+  /** Tooltip background color (chart overlays). */
+  tooltipBg: string;
+  /** Destructive / error color (refusals, failures). */
+  destructive: string;
   /** Default fallback color for unknown segments. */
   fallback: string;
 };
@@ -61,7 +67,10 @@ export const LIGHT_CHART_COLORS: ChartPalette = {
   trendUp: "#15803d",
   trendDown: "#b91c1c",
   axisTick: "#6b7280", // gray-500, matches --muted-foreground in light
+  axisLine: "#9ca3af", // gray-400, slightly darker than ticks for the line
   gridStroke: "#e5e7eb", // gray-200, matches --border in light
+  tooltipBg: "#ffffff", // white background for tooltip in light mode
+  destructive: "#b91c1c", // red-700, matches --destructive in light
   fallback: "#94a3b8", // slate-400
 };
 
@@ -79,7 +88,10 @@ export const DARK_CHART_COLORS: ChartPalette = {
   trendUp: "#4ade80",
   trendDown: "#f87171",
   axisTick: "#9ca3af", // gray-400, matches --muted-foreground in dark
+  axisLine: "#6b7280", // gray-500, slightly lighter than ticks for the line
   gridStroke: "#1f2937", // gray-800, matches --border in dark
+  tooltipBg: "#1f2937", // gray-800 background for tooltip in dark mode
+  destructive: "#f87171", // red-400, matches --destructive in dark
   fallback: "#64748b", // slate-500
 };
 
@@ -103,10 +115,7 @@ export const DARK_CHART_COLORS: ChartPalette = {
  * SellerOverviewTab.tsx and the status pill lookup tables in
  * OrdersTab.tsx / ArchivedOrdersTab.tsx -- they should stay in sync.
  */
-export const ORDER_STATUS_CHART_COLORS: Record<
-  string,
-  (palette: ChartPalette) => string
-> = {
+export const ORDER_STATUS_CHART_COLORS: Record<string, (palette: ChartPalette) => string> = {
   pending: (p) => p.accent, // amber/gold
   confirmed: (p) => p.categorical[3], // violet (info variant)
   processing: (p) => p.categorical[3], // violet
@@ -119,10 +128,7 @@ export const ORDER_STATUS_CHART_COLORS: Record<
  * Customer-segment chart colors (New / Returning / VIP) used in the
  * AdminAnalyticsPanel customer-segmentation chart.
  */
-export const SEGMENT_CHART_COLORS: Record<
-  string,
-  (palette: ChartPalette) => string
-> = {
+export const SEGMENT_CHART_COLORS: Record<string, (palette: ChartPalette) => string> = {
   New: (p) => p.categorical[3], // violet
   Returning: (p) => p.categorical[2], // teal/cyan
   VIP: (p) => p.accent, // gold

@@ -19,14 +19,24 @@
  *   - Off-topic refusal badges
  *   - "Signed in as" indicator
  */
+import { useEffect, useRef, useState, type FormEvent, type Key, useCallback } from "react";
+import { useAuth, useUser } from "@clerk/react";
 import {
-  useEffect, useRef, useState, type FormEvent, type Key, useCallback,
-} from "react";
-import { useAuth } from "@clerk/react";
-import {
-  Sparkles, Send, Trash2, X, Loader2, Leaf, ChevronDown, UserCircle2,
+  Sparkles,
+  Send,
+  Trash2,
+  X,
+  Loader2,
+  Leaf,
+  ChevronDown,
+  UserCircle2,
+  Search,
+  ShoppingCart,
+  FileText,
+  BookOpen,
+  HelpCircle,
 } from "lucide-react";
-import { useAiChat, type ChatMessage } from "@/hooks/useAiChat";
+import { useAiChat, type ChatMessage, type ActiveToolCall } from "@/hooks/useAiChat";
 import { MarkdownText } from "./MarkdownText";
 import { ProductChips } from "./ProductChips";
 import { FollowupChips } from "./FollowupChips";
@@ -64,8 +74,11 @@ interface AssistantPanelProps {
 }
 
 export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps) {
-  const { messages, loading, error, send, clear } = useAiChat();
-  const { user, isSignedIn } = useAuth();
+  const { messages, loading, error, send, clear, activeToolCalls } = useAiChat();
+  // useAuth() doesn't expose `user` directly (only isSignedIn + userId).
+  // useUser() returns the full user object (firstName, username, etc.).
+  const { isSignedIn } = useAuth();
+  const { user } = useUser();
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -117,11 +130,7 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
   const handleClear = async () => {
     if (loading) return;
     if (messages.length === 0) return;
-    if (
-      !window.confirm(
-        "Clear this conversation? TreeBot will forget everything we discussed.",
-      )
-    ) {
+    if (!window.confirm("Clear this conversation? TreeBot will forget everything we discussed.")) {
       return;
     }
     await clear();
@@ -219,10 +228,7 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
                     key={(m.id ?? `m${i}`) as Key}
                     message={m}
                     isStreaming={
-                      loading &&
-                      m.role === "assistant" &&
-                      i === messages.length - 1 &&
-                      !!m.content
+                      loading && m.role === "assistant" && i === messages.length - 1 && !!m.content
                     }
                     onPickFollowup={send}
                     disabled={loading}
@@ -230,6 +236,7 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
                   />
                 ))}
                 {isTyping && <TypingIndicator />}
+                {activeToolCalls.length > 0 && <ToolCallChips calls={activeToolCalls} />}
                 {error && (
                   <div className="text-center text-xs text-destructive py-2 px-4 rounded-lg bg-destructive/5">
                     {error}
@@ -284,11 +291,7 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
             className="h-9 w-9 shrink-0 rounded-xl bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed hover:bg-primary/90 active:scale-95 transition-all shadow-sm"
             aria-label="Send message"
           >
-            {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </button>
         </form>
         <p className="text-[10px] text-muted-foreground/60 text-center mt-2">
@@ -352,11 +355,7 @@ function MessageRow({
           {displayContent ? (
             <MarkdownText content={displayContent} />
           ) : (
-            !isStreaming && (
-              <span className="text-muted-foreground italic">
-                (empty response)
-              </span>
-            )
+            !isStreaming && <span className="text-muted-foreground italic">(empty response)</span>
           )}
           {isStreaming && (
             <span
@@ -379,9 +378,7 @@ function MessageRow({
             </span>
           )}
           {message.greeting && (
-            <span className="text-[10px] text-muted-foreground/60">
-              👋 Welcome
-            </span>
+            <span className="text-[10px] text-muted-foreground/60">👋 Welcome</span>
           )}
         </div>
 
@@ -392,11 +389,7 @@ function MessageRow({
 
         {/* v1.5: Follow-up chips */}
         {!isStreaming && followups.length > 0 && (
-          <FollowupChips
-            followups={followups}
-            onPick={onPickFollowup}
-            disabled={disabled}
-          />
+          <FollowupChips followups={followups} onPick={onPickFollowup} disabled={disabled} />
         )}
 
         {/* v1.5: Feedback buttons */}
@@ -436,6 +429,47 @@ function TypingIndicator() {
   );
 }
 
+// ─── Tool-call progress chips (v3.7) ────────────────────────────────────────
+
+/**
+ * v3.7: Maps internal tool names to user-friendly labels + icons.
+ * Rendered as chips below the assistant bubble while tools execute,
+ * so the user sees "Looking up your order..." instead of perceived silence.
+ *
+ * The tool names come from lib/aiTools.ts on the backend. If a new tool
+ * is added there without a corresponding entry here, the chip falls back
+ * to a generic label ("Working") + the HelpCircle icon.
+ */
+const TOOL_LABELS: Record<string, { label: string; Icon: typeof Search }> = {
+  search_catalog: { label: "Searching catalog", Icon: Search },
+  get_product_care: { label: "Loading care guide", Icon: Leaf },
+  get_user_orders: { label: "Looking up your orders", Icon: ShoppingCart },
+  get_order_details: { label: "Fetching order details", Icon: FileText },
+  search_knowledge_base: { label: "Searching knowledge base", Icon: BookOpen },
+};
+
+function ToolCallChips({ calls }: { calls: ActiveToolCall[] }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 animate-in fade-in slide-in-from-bottom-1 duration-200 pl-10">
+      {calls.map((call) => {
+        const meta = TOOL_LABELS[call.name];
+        const Label = meta?.label ?? "Working";
+        const Icon = meta?.Icon ?? HelpCircle;
+        return (
+          <span
+            key={call.id}
+            className="inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full bg-primary/10 text-primary border border-primary/20"
+          >
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <Icon className="h-3 w-3" />
+            <span className="font-medium">{Label}…</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Empty state ────────────────────────────────────────────────────────
 
 function EmptyState({ onPick }: { onPick: (s: string) => void }) {
@@ -453,8 +487,8 @@ function EmptyState({ onPick }: { onPick: (s: string) => void }) {
 
       <h3 className="font-semibold text-lg mb-1">Hi, I'm TreeBot 🌱</h3>
       <p className="text-sm text-muted-foreground mb-6 max-w-xs leading-relaxed">
-        Your AI plant assistant. Ask me anything about trees, plant care,
-        gardening, or browse our catalog.
+        Your AI plant assistant. Ask me anything about trees, plant care, gardening, or browse our
+        catalog.
       </p>
 
       {/* Suggestion cards */}

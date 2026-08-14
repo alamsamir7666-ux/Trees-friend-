@@ -58,14 +58,12 @@ import {
 } from "../lib/aiContext";
 import { AI_TOOL_DECLARATIONS, executeTool, USER_SCOPED_TOOLS } from "../lib/aiTools";
 import { streamChat, isAnyProviderConfigured } from "../lib/aiRouter";
+import type { ToolStreamEvent } from "../lib/aiToolLoop";
 import { describeError } from "../lib/describeError";
 import { redactPii } from "../lib/piiRedaction";
 import { calculateCost } from "../lib/costTracker";
 import { getCachedResponse, setCachedResponse } from "../lib/semanticCache";
-import {
-  getSemanticCachedResponse,
-  setSemanticCachedResponse,
-} from "../lib/embeddingCache";
+import { getSemanticCachedResponse, setSemanticCachedResponse } from "../lib/embeddingCache";
 import { getActivePrompt } from "../lib/promptVersioning";
 import { getTopKbEntriesForPrompt, formatKbContextForPrompt } from "../lib/kbSearch";
 import {
@@ -73,10 +71,7 @@ import {
   getEffectiveToneMatchPercentage,
   formatToneBlockForPrompt,
 } from "../lib/kbToneProfiles";
-import {
-  generateFollowupsStructured,
-  formatFollowupsBlock,
-} from "../lib/structuredOutput";
+import { generateFollowupsStructured, formatFollowupsBlock } from "../lib/structuredOutput";
 import { extractFollowups } from "../lib/followupParser";
 import {
   loadSessionMemory,
@@ -99,11 +94,7 @@ import {
   tokenMatchesIdentity,
   type SessionTokenPayload,
 } from "../lib/sessionToken";
-import {
-  setSessionCookie,
-  getSessionCookie,
-  clearSessionCookie,
-} from "../lib/sessionCookie";
+import { setSessionCookie, getSessionCookie, clearSessionCookie } from "../lib/sessionCookie";
 
 const router = Router();
 
@@ -448,9 +439,10 @@ async function resolveSessionToken(
         );
         return {
           sid: crypto.randomUUID(),
-          token: clerkUserId !== null
-            ? mintAuthenticatedSessionToken(clerkUserId)
-            : mintAnonymousSessionToken(),
+          token:
+            clerkUserId !== null
+              ? mintAuthenticatedSessionToken(clerkUserId)
+              : mintAnonymousSessionToken(),
           uid: clerkUserId,
           rotationReason: "new_session",
         };
@@ -858,9 +850,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // If no high-confidence matches, the AI can still call the
   // search_knowledge_base tool on-demand (declared in aiTools.ts).
   const kbContext = await getTopKbEntriesForPrompt(safeMessage, 3);
-  const knowledgeBlock = kbContext.injected
-    ? formatKbContextForPrompt(kbContext.entries)
-    : "";
+  const knowledgeBlock = kbContext.injected ? formatKbContextForPrompt(kbContext.entries) : "";
   if (kbContext.injected) {
     logger.info(
       {
@@ -885,11 +875,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     const profile = await getToneProfile(kbContext.toneCreator.creatorId);
     if (profile) {
       const matchPct = await getEffectiveToneMatchPercentage(kbContext.toneCreator.creatorId);
-      toneBlock = formatToneBlockForPrompt(
-        profile,
-        kbContext.toneCreator.creatorName,
-        matchPct,
-      );
+      toneBlock = formatToneBlockForPrompt(profile, kbContext.toneCreator.creatorName, matchPct);
       logger.info(
         {
           creator: kbContext.toneCreator.creatorName,
@@ -904,7 +890,13 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
 
   const systemPrompt =
     promptVersionInfo.text && promptVersionInfo.text.trim().length > 0
-      ? renderPromptTemplate(promptVersionInfo.text, summaryBlock, catalogContext, knowledgeBlock, toneBlock)
+      ? renderPromptTemplate(
+          promptVersionInfo.text,
+          summaryBlock,
+          catalogContext,
+          knowledgeBlock,
+          toneBlock,
+        )
       : buildSystemPrompt(catalogContext, summaryBlock, knowledgeBlock, toneBlock);
 
   // ─── 10. Set up SSE response ───
@@ -1040,6 +1032,48 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // duplicate fetch that was throwing away the .text).
 
   try {
+    // v3.7: onToolEvent callback — fires when a tool is about to execute
+    // and when it finishes. We forward these as SSE events so the frontend
+    // can render "Looking up your order..." chips during multi-tool rounds.
+    // This closes the perceived-silence gap: previously, when the model
+    // called a tool, the user saw NOTHING while the tool executed (100ms-2s
+    // for DB queries / KB searches). Now they see live progress.
+    //
+    // NOTE: we deliberately do NOT forward `args` to the client — tool args
+    // can contain sensitive data (order IDs, email addresses, search queries
+    // with PII). Only `name` + `ok` + `durationMs` are sent over SSE.
+    // The full event (with args) is logged server-side via the provider's
+    // existing logger.info call.
+    const onToolEvent = (event: ToolStreamEvent): void => {
+      try {
+        if (event.type === "tool_call") {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "tool_call",
+              name: event.name,
+            })}\n\n`,
+          );
+        } else if (event.type === "tool_result") {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "tool_result",
+              name: event.name,
+              ok: event.ok,
+              durationMs: event.durationMs,
+              ...(event.ok ? {} : { error: event.error }),
+            })}\n\n`,
+          );
+        }
+      } catch (writeErr) {
+        // Best-effort — if the response is closed (client disconnected),
+        // the write will throw. Swallow so the generator doesn't crash.
+        logger.debug(
+          { err: (writeErr as any)?.message ?? String(writeErr) },
+          "AI: onToolEvent write failed (client likely disconnected) — non-fatal",
+        );
+      }
+    };
+
     const stream = streamChat(
       systemPrompt,
       geminiHistory,
@@ -1057,6 +1091,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       (meta) => {
         metaHolder.value = meta;
       },
+      onToolEvent,
     );
     for await (const chunk of stream) {
       if (!chunk) continue;
@@ -1072,7 +1107,8 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     // text response, or when the model returned an empty completion.
     // Show a friendly fallback instead of "(empty response)".
     if (!fullResponse.trim()) {
-      const fallback = "I'm sorry, I couldn't generate a response for that. Could you try rephrasing your question?";
+      const fallback =
+        "I'm sorry, I couldn't generate a response for that. Could you try rephrasing your question?";
       fullResponse = fallback;
       // v3.5: Stream the fallback word-by-word too (consistent UX)
       await streamTextWordByWord(res, fallback);
@@ -1144,10 +1180,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       if (!found) {
         logger.info("AI: [followups] block missing, generating via structured output");
         try {
-          const structuredFollowups = await generateFollowupsStructured(
-            safeMessage,
-            fullResponse,
-          );
+          const structuredFollowups = await generateFollowupsStructured(safeMessage, fullResponse);
           if (structuredFollowups.length > 0) {
             const followupsBlock = formatFollowupsBlock(structuredFollowups);
             fullResponse += followupsBlock;
@@ -1165,9 +1198,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     // v3.2: also persist cost_usd, provider, prompt_version.
     // Phase 3: also persist KB usage (kb_hit, kb_entries_used, kb_search_performed, kb_context_injected).
     const kbSearchPerformed = (metaHolder.value?.toolCalls ?? []).includes("search_knowledge_base");
-    const kbEntriesUsed = kbContext.injected
-      ? kbContext.entries.map((e) => e.entry.id)
-      : null;
+    const kbEntriesUsed = kbContext.injected ? kbContext.entries.map((e) => e.entry.id) : null;
     assistantMsgId = await persistMessage(session.id, "assistant", fullResponse, {
       model: metaHolder.value?.model,
       responseMs: Date.now() - requestStartTime,
@@ -1540,10 +1571,11 @@ async function lookupSessionBySid(
   );
   return {
     sid: verified.sid,
-    token: verified.uid !== null
-      // Re-sign to ensure the token reflects the current uid binding.
-      ? signSessionToken({ sid: verified.sid, uid: verified.uid })
-      : signSessionToken({ sid: verified.sid, uid: null }),
+    token:
+      verified.uid !== null
+        ? // Re-sign to ensure the token reflects the current uid binding.
+          signSessionToken({ sid: verified.sid, uid: verified.uid })
+        : signSessionToken({ sid: verified.sid, uid: null }),
     uid: verified.uid,
     session: result.rows.length > 0 ? result.rows[0] : null,
   };
@@ -1573,15 +1605,18 @@ async function lookupSessionBySid(
  * (sliding expiration) — the caller does this by checking the return value
  * and calling `setSessionCookie` if `kind === "session"`.
  */
-function resolveRaterIdentity(req: Request): {
-  kind: "user";
-  userId: string;
-} | {
-  kind: "session";
-  sid: string;
-  /** The signed token to re-set on the response (sliding expiration). */
-  token: string;
-} | null {
+function resolveRaterIdentity(req: Request):
+  | {
+      kind: "user";
+      userId: string;
+    }
+  | {
+      kind: "session";
+      sid: string;
+      /** The signed token to re-set on the response (sliding expiration). */
+      token: string;
+    }
+  | null {
   // 1. Try authenticated identity first (Clerk or mobile JWT, resolved by
   //    the auth middleware that runs before us).
   const clerkUserId = req.userId ?? getAuth(req)?.userId ?? null;
@@ -1707,7 +1742,6 @@ async function verifyMessageOwnership(
   return { sessionId: session_id, sessionSid: session_token };
 }
 
-
 // ─── GET /ai/sessions/:token ────────────────────────────────────────────────
 // Returns the message history for a session, oldest-first. Used by the
 // frontend on mount to rehydrate the conversation.
@@ -1769,47 +1803,51 @@ router.get("/ai/sessions/:token", aiSessionReadLimiter, async (req: Request, res
 //     suspected (e.g. a victim reports their conversation mysteriously
 //     disappeared — we can correlate to a DELETE event).
 //   - Clears the cookie so the client starts fresh on the next request.
-router.delete("/ai/sessions/:token", aiSessionDeleteLimiter, async (req: Request, res: Response) => {
-  try {
-    const access = await verifySessionAccess(req, res);
-    if (!access) {
-      if (!res.headersSent) {
-        res.status(401).json({ error: "Invalid or expired session token." });
+router.delete(
+  "/ai/sessions/:token",
+  aiSessionDeleteLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const access = await verifySessionAccess(req, res);
+      if (!access) {
+        if (!res.headersSent) {
+          res.status(401).json({ error: "Invalid or expired session token." });
+        }
+        return;
       }
-      return;
-    }
 
-    if (!access.session) {
-      // Nothing to delete — idempotent success. Still clear the cookie
-      // so the client doesn't keep sending a stale token.
+      if (!access.session) {
+        // Nothing to delete — idempotent success. Still clear the cookie
+        // so the client doesn't keep sending a stale token.
+        clearSessionCookie(res);
+        res.json({ ok: true });
+        return;
+      }
+
+      // Delete the session row (CASCADE removes messages + feedback + events).
+      await pool.query(`DELETE FROM ai_chat_sessions WHERE session_token = $1`, [access.sid]);
+
+      // Audit log (best-effort) — who deleted what session.
+      await logAiEvent(access.session.id, "session_deleted", {
+        uid: access.uid,
+        ip: req.ip ?? req.socket?.remoteAddress ?? null,
+        userAgent: req.headers["user-agent"] ?? null,
+      }).catch(() => {});
+
+      // Clear the cookie so the client's next request mints a fresh session.
       clearSessionCookie(res);
+
+      logger.info(
+        { sessionId: access.session.id, sid: access.sid, uid: access.uid },
+        "AI: session deleted",
+      );
       res.json({ ok: true });
-      return;
+    } catch (err) {
+      logger.error({ err }, "AI: DELETE session failed");
+      res.status(500).json({ error: "Failed to clear chat history." });
     }
-
-    // Delete the session row (CASCADE removes messages + feedback + events).
-    await pool.query(`DELETE FROM ai_chat_sessions WHERE session_token = $1`, [access.sid]);
-
-    // Audit log (best-effort) — who deleted what session.
-    await logAiEvent(access.session.id, "session_deleted", {
-      uid: access.uid,
-      ip: req.ip ?? req.socket?.remoteAddress ?? null,
-      userAgent: req.headers["user-agent"] ?? null,
-    }).catch(() => {});
-
-    // Clear the cookie so the client's next request mints a fresh session.
-    clearSessionCookie(res);
-
-    logger.info(
-      { sessionId: access.session.id, sid: access.sid, uid: access.uid },
-      "AI: session deleted",
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    logger.error({ err }, "AI: DELETE session failed");
-    res.status(500).json({ error: "Failed to clear chat history." });
-  }
-});
+  },
+);
 
 // Touch the imports so unused-imports lint doesn't complain (these are
 // used via the type system and the table objects exported by @workspace/db
@@ -1863,151 +1901,108 @@ void describeError;
 //
 // Body: { messageId: number, rating: "up" | "down" }
 // Returns: { ok: true, rating: "up" | "down" | null }
-router.post(
-  "/ai/feedback",
-  aiFeedbackLimiter,
-  async (req: Request, res: Response) => {
-    const { messageId, rating } = (req.body ?? {}) as {
-      messageId?: number;
-      rating?: "up" | "down";
-    };
+router.post("/ai/feedback", aiFeedbackLimiter, async (req: Request, res: Response) => {
+  const { messageId, rating } = (req.body ?? {}) as {
+    messageId?: number;
+    rating?: "up" | "down";
+  };
 
-    // ─── 1. Validate input ─────────────────────────────────────────────────
-    // messageId must be a positive integer (reject floats, negatives, NaN).
-    // Using Number.isInteger prevents "1.5" and "1e2" from passing.
-    if (!messageId || typeof messageId !== "number" || !Number.isInteger(messageId) || messageId <= 0) {
-      res.status(400).json({ error: "messageId is required (must be a positive integer)." });
+  // ─── 1. Validate input ─────────────────────────────────────────────────
+  // messageId must be a positive integer (reject floats, negatives, NaN).
+  // Using Number.isInteger prevents "1.5" and "1e2" from passing.
+  if (
+    !messageId ||
+    typeof messageId !== "number" ||
+    !Number.isInteger(messageId) ||
+    messageId <= 0
+  ) {
+    res.status(400).json({ error: "messageId is required (must be a positive integer)." });
+    return;
+  }
+  if (rating !== "up" && rating !== "down") {
+    res.status(400).json({ error: 'rating must be "up" or "down".' });
+    return;
+  }
+
+  // ─── 2. Resolve rater identity ─────────────────────────────────────────
+  // Authenticated (Clerk) OR anonymous (signed session token). 401 if neither.
+  const rater = resolveRaterIdentity(req);
+  if (!rater) {
+    res.status(401).json({
+      error: "Please sign in or start a conversation to rate messages.",
+    });
+    return;
+  }
+
+  // For anonymous raters, refresh the session cookie (sliding expiration).
+  // Authenticated raters don't need a cookie refresh here (their Clerk
+  // session has its own refresh logic).
+  if (rater.kind === "session") {
+    setSessionCookie(res, rater.token);
+  }
+
+  try {
+    // ─── 3. Verify message ownership ───────────────────────────────────────
+    // The rater must own the session that contains the message. This is
+    // the key fix — it stops messageId enumeration.
+    const ownership = await verifyMessageOwnership(req, res, messageId, rater);
+    if (!ownership) {
+      // verifyMessageOwnership already sent the HTTP error response.
       return;
     }
-    if (rating !== "up" && rating !== "down") {
-      res.status(400).json({ error: 'rating must be "up" or "down".' });
-      return;
-    }
+    const { sessionId } = ownership;
 
-    // ─── 2. Resolve rater identity ─────────────────────────────────────────
-    // Authenticated (Clerk) OR anonymous (signed session token). 401 if neither.
-    const rater = resolveRaterIdentity(req);
-    if (!rater) {
-      res.status(401).json({
-        error: "Please sign in or start a conversation to rate messages.",
-      });
-      return;
-    }
+    // ─── 4. Scoped toggle / update / insert ───────────────────────────────
+    // Look up the rater's EXISTING feedback on this message (not anyone
+    // else's). The query is keyed on (message_id, rater identity) —
+    // different raters' rows are invisible to this query.
+    const raterUserId = rater.kind === "user" ? rater.userId : null;
+    const raterSessionSid = rater.kind === "session" ? rater.sid : null;
 
-    // For anonymous raters, refresh the session cookie (sliding expiration).
-    // Authenticated raters don't need a cookie refresh here (their Clerk
-    // session has its own refresh logic).
-    if (rater.kind === "session") {
-      setSessionCookie(res, rater.token);
-    }
-
-    try {
-      // ─── 3. Verify message ownership ───────────────────────────────────────
-      // The rater must own the session that contains the message. This is
-      // the key fix — it stops messageId enumeration.
-      const ownership = await verifyMessageOwnership(req, res, messageId, rater);
-      if (!ownership) {
-        // verifyMessageOwnership already sent the HTTP error response.
-        return;
-      }
-      const { sessionId } = ownership;
-
-      // ─── 4. Scoped toggle / update / insert ───────────────────────────────
-      // Look up the rater's EXISTING feedback on this message (not anyone
-      // else's). The query is keyed on (message_id, rater identity) —
-      // different raters' rows are invisible to this query.
-      const raterUserId = rater.kind === "user" ? rater.userId : null;
-      const raterSessionSid = rater.kind === "session" ? rater.sid : null;
-
-      const existing = await pool.query<{ id: number; rating: string }>(
-        `SELECT id, rating FROM ai_chat_feedback
+    const existing = await pool.query<{ id: number; rating: string }>(
+      `SELECT id, rating FROM ai_chat_feedback
           WHERE message_id = $1
             AND (rater_user_id IS NOT DISTINCT FROM $2
                  OR rater_session_sid IS NOT DISTINCT FROM $3)`,
-        [messageId, raterUserId, raterSessionSid],
-      );
+      [messageId, raterUserId, raterSessionSid],
+    );
 
-      // `IS NOT DISTINCT FROM` is the SQL-standard NULL-safe equality
-      // operator (NULL IS NOT DISTINCT FROM NULL → true). This handles
-      // both rater types correctly without OR-short-circuit issues.
+    // `IS NOT DISTINCT FROM` is the SQL-standard NULL-safe equality
+    // operator (NULL IS NOT DISTINCT FROM NULL → true). This handles
+    // both rater types correctly without OR-short-circuit issues.
 
-      if (existing.rows.length > 0) {
-        const row = existing.rows[0];
-        if (row.rating === rating) {
-          // Same rating clicked again → toggle OFF (delete the row).
-          // Scoped to THIS rater's row only — the WHERE clause on id
-          // (which is unique per rater) ensures we don't delete anyone
-          // else's feedback.
-          await pool.query(`DELETE FROM ai_chat_feedback WHERE id = $1`, [row.id]);
+    if (existing.rows.length > 0) {
+      const row = existing.rows[0];
+      if (row.rating === rating) {
+        // Same rating clicked again → toggle OFF (delete the row).
+        // Scoped to THIS rater's row only — the WHERE clause on id
+        // (which is unique per rater) ensures we don't delete anyone
+        // else's feedback.
+        await pool.query(`DELETE FROM ai_chat_feedback WHERE id = $1`, [row.id]);
 
-          // Audit log (best-effort).
-          await logAiEvent(sessionId, "feedback_deleted", {
-            messageId,
-            rating: row.rating,
-            raterKind: rater.kind,
-            raterUserId,
-            raterSessionSid,
-            ip: req.ip ?? req.socket?.remoteAddress ?? null,
-          }).catch(() => {});
-
-          res.json({ ok: true, rating: null });
-          return;
-        }
-        // Opposite rating → update in place (scoped to this rater's row).
-        await pool.query(
-          `UPDATE ai_chat_feedback SET rating = $1, created_at = NOW() WHERE id = $2`,
-          [rating, row.id],
-        );
-
-        await logAiEvent(sessionId, "feedback_updated", {
+        // Audit log (best-effort).
+        await logAiEvent(sessionId, "feedback_deleted", {
           messageId,
-          previousRating: row.rating,
-          newRating: rating,
+          rating: row.rating,
           raterKind: rater.kind,
           raterUserId,
           raterSessionSid,
           ip: req.ip ?? req.socket?.remoteAddress ?? null,
         }).catch(() => {});
 
-        res.json({ ok: true, rating });
+        res.json({ ok: true, rating: null });
         return;
       }
+      // Opposite rating → update in place (scoped to this rater's row).
+      await pool.query(
+        `UPDATE ai_chat_feedback SET rating = $1, created_at = NOW() WHERE id = $2`,
+        [rating, row.id],
+      );
 
-      // No existing feedback from this rater → insert.
-      // Both rater_user_id and rater_session_sid are written (one is NULL,
-      // the other is the rater's identity). The partial unique indexes
-      // enforce "one rating per (message, rater)" — if a concurrent
-      // request inserts the same combo first, this INSERT fails with a
-      // unique violation, which we catch and convert to a 409.
-      try {
-        await pool.query(
-          `INSERT INTO ai_chat_feedback
-             (message_id, session_id, rating, rater_user_id, rater_session_sid)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [messageId, sessionId, rating, raterUserId, raterSessionSid],
-        );
-      } catch (insertErr: any) {
-        // Unique violation (Postgres SQLSTATE 23505) — a concurrent request
-        // inserted the same (message, rater) combo first. Convert to a 409
-        // so the client can retry idempotently (the second attempt will
-        // hit the "existing" branch above and behave correctly).
-        if (insertErr?.code === "23505") {
-          logger.info(
-            { messageId, raterKind: rater.kind },
-            "AI: feedback INSERT hit unique constraint (concurrent insert) — returning 409",
-          );
-          res.status(409).json({
-            error: "Feedback already exists. Please retry.",
-            retry: true,
-          });
-          return;
-        }
-        throw insertErr; // Re-throw for the outer catch.
-      }
-
-      await logAiEvent(sessionId, "feedback_created", {
+      await logAiEvent(sessionId, "feedback_updated", {
         messageId,
-        rating,
+        previousRating: row.rating,
+        newRating: rating,
         raterKind: rater.kind,
         raterUserId,
         raterSessionSid,
@@ -2015,12 +2010,56 @@ router.post(
       }).catch(() => {});
 
       res.json({ ok: true, rating });
-    } catch (err) {
-      logger.error({ err, messageId, rating, raterKind: rater.kind }, "AI: feedback POST failed");
-      res.status(500).json({ error: "Failed to record feedback." });
+      return;
     }
-  },
-);
+
+    // No existing feedback from this rater → insert.
+    // Both rater_user_id and rater_session_sid are written (one is NULL,
+    // the other is the rater's identity). The partial unique indexes
+    // enforce "one rating per (message, rater)" — if a concurrent
+    // request inserts the same combo first, this INSERT fails with a
+    // unique violation, which we catch and convert to a 409.
+    try {
+      await pool.query(
+        `INSERT INTO ai_chat_feedback
+             (message_id, session_id, rating, rater_user_id, rater_session_sid)
+           VALUES ($1, $2, $3, $4, $5)`,
+        [messageId, sessionId, rating, raterUserId, raterSessionSid],
+      );
+    } catch (insertErr: any) {
+      // Unique violation (Postgres SQLSTATE 23505) — a concurrent request
+      // inserted the same (message, rater) combo first. Convert to a 409
+      // so the client can retry idempotently (the second attempt will
+      // hit the "existing" branch above and behave correctly).
+      if (insertErr?.code === "23505") {
+        logger.info(
+          { messageId, raterKind: rater.kind },
+          "AI: feedback INSERT hit unique constraint (concurrent insert) — returning 409",
+        );
+        res.status(409).json({
+          error: "Feedback already exists. Please retry.",
+          retry: true,
+        });
+        return;
+      }
+      throw insertErr; // Re-throw for the outer catch.
+    }
+
+    await logAiEvent(sessionId, "feedback_created", {
+      messageId,
+      rating,
+      raterKind: rater.kind,
+      raterUserId,
+      raterSessionSid,
+      ip: req.ip ?? req.socket?.remoteAddress ?? null,
+    }).catch(() => {});
+
+    res.json({ ok: true, rating });
+  } catch (err) {
+    logger.error({ err, messageId, rating, raterKind: rater.kind }, "AI: feedback POST failed");
+    res.status(500).json({ error: "Failed to record feedback." });
+  }
+});
 
 // ─── GET /ai/products-by-slug?slugs=alpha,beta ──────────────────────────────
 // Resolves an array of product slugs (extracted from AI responses by the

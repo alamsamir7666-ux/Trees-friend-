@@ -34,6 +34,13 @@ import type { FunctionDeclaration } from "@google/genai";
 import { checkCircuit, recordSuccess, recordFailure } from "./circuitBreaker";
 import { truncateHistory } from "./tokenCounter";
 import { isOnCooldown, setCooldown, clearAllCooldowns } from "./modelCooldown";
+import {
+  ToolRoundBudget,
+  signatureOf,
+  buildMaxRoundsErrorMessage,
+  buildForceFinalPromptSuffix,
+  type OnToolEvent,
+} from "./aiToolLoop";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
 // Groq models are stable (unlike Gemini's frequent deprecations), so we
@@ -220,9 +227,7 @@ function convertSchemaToOpenAI(schema: any): Record<string, unknown> {
   return result;
 }
 
-function convertDeclarationsToTools(
-  declarations: FunctionDeclaration[],
-): GroqTool[] {
+function convertDeclarationsToTools(declarations: FunctionDeclaration[]): GroqTool[] {
   return declarations.map((d) => ({
     type: "function" as const,
     function: {
@@ -267,9 +272,7 @@ async function callGroq(
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
-    const err = new Error(
-      `Groq API error ${response.status}: ${errText.slice(0, 500)}`,
-    ) as any;
+    const err = new Error(`Groq API error ${response.status}: ${errText.slice(0, 500)}`) as any;
     err.status = response.status;
     err.errorDetails = errText;
     throw err;
@@ -344,9 +347,7 @@ async function* streamGroqCompletion(
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
-    const err = new Error(
-      `Groq API error ${response.status}: ${errText.slice(0, 500)}`,
-    ) as any;
+    const err = new Error(`Groq API error ${response.status}: ${errText.slice(0, 500)}`) as any;
     err.status = response.status;
     err.errorDetails = errText;
     throw err;
@@ -359,11 +360,14 @@ async function* streamGroqCompletion(
   // Accumulate tool_calls from stream deltas.
   // Tool calls come in pieces: first chunk has {id, type, function: {name, arguments: ""}},
   // subsequent chunks append to function.arguments by index.
-  const toolCallAccumulator = new Map<number, {
-    id: string;
-    type: "function";
-    function: { name: string; arguments: string };
-  }>();
+  const toolCallAccumulator = new Map<
+    number,
+    {
+      id: string;
+      type: "function";
+      function: { name: string; arguments: string };
+    }
+  >();
   let finishReason: string | null = null;
   // Bug #9 fix: accumulate usage stats from the final stream chunk.
   // Groq sends a chunk with `usage` (and empty choices) after all content
@@ -394,11 +398,12 @@ async function* streamGroqCompletion(
 
       if (payloadStr === "[DONE]") {
         // Stream complete — return accumulated tool calls + usage stats
-        const toolCalls = toolCallAccumulator.size > 0
-          ? Array.from(toolCallAccumulator.entries())
-              .sort(([a], [b]) => a - b)
-              .map(([_, tc]) => tc)
-          : null;
+        const toolCalls =
+          toolCallAccumulator.size > 0
+            ? Array.from(toolCallAccumulator.entries())
+                .sort(([a], [b]) => a - b)
+                .map(([_, tc]) => tc)
+            : null;
         return { toolCalls, finishReason, usage };
       }
 
@@ -453,11 +458,12 @@ async function* streamGroqCompletion(
   }
 
   // If we get here without seeing [DONE], return what we have
-  const toolCalls = toolCallAccumulator.size > 0
-    ? Array.from(toolCallAccumulator.entries())
-        .sort(([a], [b]) => a - b)
-        .map(([_, tc]) => tc)
-    : null;
+  const toolCalls =
+    toolCallAccumulator.size > 0
+      ? Array.from(toolCallAccumulator.entries())
+          .sort(([a], [b]) => a - b)
+          .map(([_, tc]) => tc)
+      : null;
   return { toolCalls, finishReason, usage };
 }
 
@@ -497,6 +503,13 @@ export async function* streamGroqChat(
   },
   userId?: string | null,
   onMetadata?: (meta: { model: string; usage?: unknown; toolCalls?: string[] }) => void,
+  /**
+   * v3.7: Fired when a tool is about to be executed (`tool_call`) and when
+   * it finishes (`tool_result`). The route handler writes these as SSE
+   * events so the frontend can show "Looking up your order..." chips
+   * during multi-tool rounds. See lib/aiToolLoop.ts → ToolStreamEvent.
+   */
+  onToolEvent?: OnToolEvent,
 ): AsyncGenerator<string, void, unknown> {
   if (!isGroqConfigured()) {
     throw new Error("GROQ_API_KEY is not set. Get one at https://console.groq.com");
@@ -513,7 +526,9 @@ export async function* streamGroqChat(
     { role: "user", content: userMessage },
   ];
 
-  const groqTools = tools?.declarations ? convertDeclarationsToTools(tools.declarations) : undefined;
+  const groqTools = tools?.declarations
+    ? convertDeclarationsToTools(tools.declarations)
+    : undefined;
 
   // Build the model try-list: cached working model first, then chain,
   // filtering out models on cooldown.
@@ -551,46 +566,91 @@ export async function* streamGroqChat(
       // v3.2: uses streamGroqCompletion() for real SSE streaming instead
       // of the word-by-word hack. Tool calls are accumulated from stream
       // deltas and executed between rounds.
-      const MAX_TOOL_ROUNDS = 4;
+      //
+      // v3.6 (industry-standard tool-loop fix):
+      //   - MAX_TOOL_ROUNDS is now configurable via AI_MAX_TOOL_ROUNDS
+      //     (default 10, was 4). Shared with Gemini via ToolRoundBudget.
+      //   - Stuck detection: if the model calls the same tool with the
+      //     same args in two consecutive rounds, abort the loop and
+      //     fall through to the force-final path.
+      //   - Graceful degradation: when the budget is exhausted, make ONE
+      //     more call with tools DISABLED so the user gets a best-effort
+      //     text answer instead of a hard error.
+      //   - Tools are now passed on EVERY round (was: round 0 only).
+      //     This enables sequential tool calling — e.g. the model can
+      //     call get_user_orders first, then call get_product_care for
+      //     a specific product from the order, based on the order result.
+      //     Industry standard (OpenAI, Anthropic, Vercel AI SDK) all
+      //     support this pattern.
+      const budget = new ToolRoundBudget();
 
       // Bug #4 fix: track all tool calls across all rounds so we can emit
       // them in the final metadata callback. The route uses this to decide
       // cache policy (skip cache for user-scoped tools, short-TTL for catalog
       // tools).
       const toolCallsCalled: string[] = [];
+      // Bug #9 fix: capture usage from the LAST round that produced a
+      // StreamResult. If the force-final call runs, its usage overrides
+      // earlier ones (it's the most accurate final-token count).
+      let lastUsage: StreamResult["usage"] | undefined;
 
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        // v3.2: truncate history to fit the model's context window.
-        // This prevents 400 errors when the conversation is very long.
-        const { history: truncatedHistory, truncated } = truncateHistory(
-          systemPrompt,
-          history,
-          userMessage,
-          modelName,
-          !!groqTools,
-        );
-        if (truncated) {
-          logger.debug({ model: modelName, droppedMessages: truncated }, "Groq: truncated history to fit context window");
+      while (budget.hasBudget) {
+        const round = budget.currentRound;
+
+        if (budget.shouldWarnAboutHighRounds) {
+          logger.warn(
+            { round, maxRounds: budget.maxRoundsValue, model: modelName },
+            "Groq: tool loop exceeded soft warning threshold — investigate if this happens often",
+          );
+          budget.markWarned();
         }
 
-        // Build messages from the (possibly truncated) history
-        const roundMessages: GroqMessage[] = [
-          { role: "system", content: systemPrompt },
-          ...truncatedHistory.map((h) => ({
-            role: (h.role === "model" ? "assistant" : "user") as "assistant" | "user",
-            content: h.text,
-          })),
-          { role: "user", content: userMessage },
-        ];
-        // For rounds > 0, use the full messages array (includes tool results)
-        const messagesForRound = round === 0 ? roundMessages : messages;
+        // v3.2: truncate history to fit the model's context window.
+        // This prevents 400 errors when the conversation is very long.
+        // Only relevant on round 0 — later rounds use the `messages`
+        // array (which already includes tool results) directly.
+        let messagesForRound: GroqMessage[];
+        if (round === 0) {
+          const { history: truncatedHistory, truncated } = truncateHistory(
+            systemPrompt,
+            history,
+            userMessage,
+            modelName,
+            !!groqTools,
+          );
+          if (truncated) {
+            logger.debug(
+              { model: modelName, droppedMessages: truncated },
+              "Groq: truncated history to fit context window",
+            );
+          }
+          messagesForRound = [
+            { role: "system", content: systemPrompt },
+            ...truncatedHistory.map((h) => ({
+              role: (h.role === "model" ? "assistant" : "user") as "assistant" | "user",
+              content: h.text,
+            })),
+            { role: "user", content: userMessage },
+          ];
+          // Persist the round-0 messages into `messages` so subsequent
+          // rounds can append tool calls/results to it.
+          messages.length = 0;
+          messages.push(...messagesForRound);
+        } else {
+          messagesForRound = messages;
+        }
+
+        // v3.6: pass tools on EVERY round (was: round 0 only). This
+        // enables sequential tool calling where tool B's args depend on
+        // tool A's result. The max-rounds budget + stuck detection
+        // prevent runaway loops.
+        //
+        // The force-final path (when budget is exhausted) overrides
+        // this to `undefined` below.
+        const toolsForRound = groqTools;
 
         // Streaming call — yields text as it arrives, accumulates tool_calls
-        const stream = streamGroqCompletion(
-          modelName,
-          messagesForRound,
-          round === 0 ? groqTools : undefined,
-        );
+        const stream = streamGroqCompletion(modelName, messagesForRound, toolsForRound);
 
         let result: StreamResult | undefined;
         while (true) {
@@ -602,6 +662,10 @@ export async function* streamGroqChat(
           if (typeof value === "string") {
             yield value;
           }
+        }
+
+        if (result?.usage) {
+          lastUsage = result.usage;
         }
 
         // NOTE: we no longer emit metadata here per-round. We emit it ONCE
@@ -631,7 +695,36 @@ export async function* streamGroqChat(
             tool_calls: toolCalls,
           });
 
-          // Execute each tool + append the result as a "tool" role message
+          // v3.6: Stuck detection — if this round's tool calls are identical
+          // (same name + same args) to the PREVIOUS round's, the model is
+          // stuck in a loop. Break out and fall through to the force-final
+          // path.
+          const currentSignatures = toolCalls.map((tc) => {
+            let args: Record<string, unknown> = {};
+            try {
+              args = JSON.parse(tc.function.arguments || "{}");
+            } catch {
+              // malformed arguments — proceed with empty
+            }
+            return signatureOf(tc.function.name, args);
+          });
+          const stuckTool = budget.detectStuck(currentSignatures);
+          if (stuckTool) {
+            logger.error(
+              { round, stuckTool, model: modelName, maxRounds: budget.maxRoundsValue },
+              "Groq: stuck loop detected — model called the same tool with the same args in consecutive rounds",
+            );
+            // v3.7 fix: mark stuck BEFORE break so shouldForceFinal returns
+            // true and the graceful-degradation path runs (was: falling
+            // through to the safety-net throw, giving users a hard error).
+            budget.markStuck();
+            // Break out of the loop and fall through to graceful degradation.
+            break;
+          }
+          budget.recordRound(currentSignatures);
+
+          // v3.7: Execute each tool + append the result as a "tool" role message.
+          // Fire onToolEvent before+after each so the UI can show progress.
           for (const tc of toolCalls) {
             let args: Record<string, unknown> = {};
             try {
@@ -639,15 +732,51 @@ export async function* streamGroqChat(
             } catch {
               // malformed arguments — proceed with empty
             }
-            const toolResult = await tools.execute(tc.function.name, args, userId ?? null);
-            messages.push({
-              role: "tool",
-              content: JSON.stringify(toolResult),
-              tool_call_id: tc.id,
-            });
+            const toolName = tc.function.name;
+            if (onToolEvent) {
+              onToolEvent({ type: "tool_call", name: toolName, args });
+            }
+            const t0 = Date.now();
+            try {
+              const toolResult = await tools.execute(toolName, args, userId ?? null);
+              if (onToolEvent) {
+                onToolEvent({
+                  type: "tool_result",
+                  name: toolName,
+                  ok: true,
+                  durationMs: Date.now() - t0,
+                });
+              }
+              messages.push({
+                role: "tool",
+                content: JSON.stringify(toolResult),
+                tool_call_id: tc.id,
+              });
+            } catch (err) {
+              // String(err) always returns a string, so `?? "tool execution failed"`
+              // would be dead code. Use a fallback only for empty strings.
+              const rawMsg = (err as any)?.message ?? String(err);
+              const errMsg = rawMsg || "tool execution failed";
+              if (onToolEvent) {
+                onToolEvent({
+                  type: "tool_result",
+                  name: toolName,
+                  ok: false,
+                  error: errMsg,
+                  durationMs: Date.now() - t0,
+                });
+              }
+              // Push the error as the tool result so the model can react.
+              messages.push({
+                role: "tool",
+                content: JSON.stringify({ error: errMsg }),
+                tool_call_id: tc.id,
+              });
+            }
           }
 
           // Loop continues — Groq processes the tool results
+          budget.advance();
           continue;
         }
 
@@ -688,11 +817,11 @@ export async function* streamGroqChat(
             // route expects (promptTokenCount / candidatesTokenCount /
             // totalTokenCount — Gemini names, since the route's extraction
             // code was originally written for Gemini).
-            usage: result?.usage
+            usage: lastUsage
               ? {
-                  promptTokenCount: result.usage.prompt_tokens,
-                  candidatesTokenCount: result.usage.completion_tokens,
-                  totalTokenCount: result.usage.total_tokens,
+                  promptTokenCount: lastUsage.prompt_tokens,
+                  candidatesTokenCount: lastUsage.completion_tokens,
+                  totalTokenCount: lastUsage.total_tokens,
                 }
               : undefined,
             toolCalls: toolCallsCalled,
@@ -701,9 +830,86 @@ export async function* streamGroqChat(
         return;
       }
 
-      // Hit MAX_TOOL_ROUNDS
+      // ─── Graceful degradation: budget exhausted (or stuck loop) ───────
+      //
+      // Instead of throwing an error (the old behavior), make ONE more call
+      // with tools DISABLED + a "stop calling tools" system-prompt suffix.
+      // This forces Groq to produce a best-effort text answer using whatever
+      // information it already gathered from the tool calls. The user gets
+      // SOMETHING useful instead of a hard error.
+      //
+      // Industry references:
+      //   - Vercel AI SDK: emits a `tool-call-error` then continues the stream
+      //   - OpenAI Assistants: stops the run with `expired` status but keeps
+      //     partial output
+      //   - Anthropic: stops with `max_tokens` stop reason, keeps partial output
+      if (budget.shouldForceFinal) {
+        budget.markForceFinalEmitted();
+        logger.warn(
+          { rounds: budget.maxRoundsValue, model: modelName, hadStuckLoop: budget.hadStuckLoop },
+          "Groq: tool budget exhausted — making one force-final call with tools disabled (graceful degradation)",
+        );
+
+        // Append the force-final suffix to the system prompt.
+        const forceFinalMessages: GroqMessage[] = [
+          {
+            role: "system",
+            content:
+              (messages[0]?.role === "system" ? (messages[0].content as string) : systemPrompt) +
+              buildForceFinalPromptSuffix(),
+          },
+          ...messages.slice(messages[0]?.role === "system" ? 1 : 0),
+        ];
+
+        const forceStream = streamGroqCompletion(
+          modelName,
+          forceFinalMessages,
+          undefined, // no tools — force text answer
+        );
+
+        let forceResult: StreamResult | undefined;
+        while (true) {
+          const { value, done } = await forceStream.next();
+          if (done) {
+            forceResult = value as StreamResult;
+            break;
+          }
+          if (typeof value === "string") {
+            yield value;
+          }
+        }
+
+        if (forceResult?.usage) {
+          lastUsage = forceResult.usage;
+        }
+
+        // Record success/failure with circuit breaker. The force-final call
+        // succeeded if we got any text — even if it's a best-effort answer.
+        await recordSuccess("groq", modelName);
+        if (_workingModel !== modelName) {
+          _workingModel = modelName;
+        }
+
+        if (onMetadata) {
+          onMetadata({
+            model: modelName,
+            usage: lastUsage
+              ? {
+                  promptTokenCount: lastUsage.prompt_tokens,
+                  candidatesTokenCount: lastUsage.completion_tokens,
+                  totalTokenCount: lastUsage.total_tokens,
+                }
+              : undefined,
+            toolCalls: toolCallsCalled,
+          });
+        }
+        return;
+      }
+
+      // Safety net — should be unreachable. The force-final block above
+      // should always run when the budget is exhausted.
       await recordFailure("groq", modelName, "other");
-      throw new Error("Groq: hit max tool rounds — model kept calling functions without producing a final answer");
+      throw new Error(buildMaxRoundsErrorMessage(budget.maxRoundsValue));
     } catch (err) {
       lastErr = err;
 
@@ -750,9 +956,7 @@ export async function summarizeConversationGroq(
     throw new Error("GROQ_API_KEY is not set; cannot summarize conversation.");
   }
 
-  const transcript = messages
-    .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
-    .join("\n\n");
+  const transcript = messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n");
 
   const summaryPrompt = `Summarize the following plant-assistant conversation in 3-5 sentences.
 Capture:
@@ -770,9 +974,7 @@ ${transcript}
 SUMMARY:`;
 
   const model = _workingModel ?? GROQ_MODEL_CHAIN[0];
-  const response = await callGroq(model, [
-    { role: "user", content: summaryPrompt },
-  ]);
+  const response = await callGroq(model, [{ role: "user", content: summaryPrompt }]);
 
   const text = response.choices?.[0]?.message?.content;
   if (typeof text !== "string" || text.trim().length === 0) {

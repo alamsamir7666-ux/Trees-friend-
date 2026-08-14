@@ -45,7 +45,19 @@
  */
 import { GoogleGenAI, type FunctionDeclaration } from "@google/genai";
 import { logger } from "./logger";
-import { isOnCooldown, setCooldown, clearAllCooldowns, getCooldownRemaining } from "./modelCooldown";
+import {
+  isOnCooldown,
+  setCooldown,
+  clearAllCooldowns,
+  getCooldownRemaining,
+} from "./modelCooldown";
+import {
+  ToolRoundBudget,
+  signatureOf,
+  buildMaxRoundsErrorMessage,
+  buildForceFinalPromptSuffix,
+  type OnToolEvent,
+} from "./aiToolLoop";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
 // Google frequently deprecates Gemini models and rotates which ones are
@@ -215,10 +227,7 @@ export async function discoverAvailableModels(): Promise<string[] | null> {
       const name: string = model.name ?? model.model ?? "";
       // Field name varies: supportedGenerationMethods (REST) vs supported_methods (SDK)
       const methods: string[] =
-        model.supportedGenerationMethods ??
-        model.supported_methods ??
-        model.methods ??
-        [];
+        model.supportedGenerationMethods ?? model.supported_methods ?? model.methods ?? [];
       const bareName = name.replace(/^models\//, "");
       if (!bareName) return null;
       return { name: bareName, methods };
@@ -337,9 +346,7 @@ async function getModelChain(): Promise<string[]> {
 
   // Use discovered models if available AND non-empty, otherwise static chain.
   const baseChain =
-    _discoveredModels && _discoveredModels.length > 0
-      ? _discoveredModels
-      : MODEL_FALLBACK_CHAIN;
+    _discoveredModels && _discoveredModels.length > 0 ? _discoveredModels : MODEL_FALLBACK_CHAIN;
 
   // v3.3: Filter out models on cooldown (Redis-backed, async).
   // Check all models in parallel for speed.
@@ -443,7 +450,8 @@ function isQuotaExhaustedError(err: unknown): boolean {
 
   // Check the nested error message (Google SDK wraps the actual error).
   const nestedMsg = typeof e?.error?.message === "string" ? e.error.message.toLowerCase() : "";
-  if (/quota exceeded|rate limit|too many requests|resource_exhausted/i.test(nestedMsg)) return true;
+  if (/quota exceeded|rate limit|too many requests|resource_exhausted/i.test(nestedMsg))
+    return true;
 
   return false;
 }
@@ -755,6 +763,20 @@ SUMMARY:`;
  * v3.0: adds retry-on-transient-error (via withRetry inside callWithFallback),
  * env-configurable temperature/maxOutputTokens, and truncation detection.
  *
+ * v3.6 (industry-standard streaming fix):
+ *   - Uses `generateContentStream` for EVERY round, including tool rounds.
+ *     Text deltas are now streamed live even while the model is also
+ *     emitting function-call parts. Previously, only the final text round
+ *     streamed — multi-tool queries felt frozen until tools completed.
+ *   - Removed the redundant "re-call with streaming" API call that the
+ *     old code made on rounds > 0. The streaming already happened in the
+ *     same call that detected the (lack of) function calls.
+ *   - MAX_TOOL_ROUNDS is now configurable via AI_MAX_TOOL_ROUNDS (default
+ *     10, was 4), with stuck-detection (same tool + same args in two
+ *     consecutive rounds → abort) and graceful degradation (force-final
+ *     call with tools disabled when the budget is exhausted). See
+ *     lib/aiToolLoop.ts for the shared loop-control logic.
+ *
  * @param systemPrompt - Strict scope-restricting system instruction
  * @param history - Prior turns of the conversation, oldest first
  * @param userMessage - The new user message to respond to
@@ -783,6 +805,13 @@ export async function* streamGeminiChat(
   },
   userId?: string | null,
   onMetadata?: (meta: { model: string; usage?: unknown; toolCalls?: string[] }) => void,
+  /**
+   * v3.7: Fired when a tool is about to be executed (`tool_call`) and when
+   * it finishes (`tool_result`). The route handler writes these as SSE
+   * events so the frontend can show "Looking up your order..." chips
+   * during multi-tool rounds. See lib/aiToolLoop.ts → ToolStreamEvent.
+   */
+  onToolEvent?: OnToolEvent,
 ): AsyncGenerator<string, void, unknown> {
   const client = getClient();
   if (!client) {
@@ -808,12 +837,39 @@ export async function* streamGeminiChat(
     config.tools = [{ functionDeclarations: tools.declarations }];
   }
 
-  // ─── Multi-round function-calling loop ─────────────────────────────────
-  // Gemini may respond with a functionCall instead of text. We execute
-  // the function, append the result to contents, and call generateContent
-  // again. Loop until Gemini returns text (no function calls) or we hit
-  // the max rounds (prevents infinite loops if Gemini keeps calling tools).
-  const MAX_TOOL_ROUNDS = 4;
+  // ─── Multi-round function-calling loop (v3.6 streaming fix) ────────────
+  //
+  // Why we now stream EVERY round (not just the final text round):
+  //
+  //   The Gemini SDK's `generateContentStream` emits BOTH `text` parts
+  //   AND `functionCall` parts as stream chunks. So a single streaming
+  //   call can simultaneously:
+  //     - stream the model's "Let me look that up..." preamble text
+  //     - deliver the functionCall(s) once the model decides to call a tool
+  //
+  //   Previously we used non-streaming `generateContent` for tool rounds,
+  //   which meant:
+  //     1. The user saw NOTHING while the model was generating text + a
+  //        tool call (could be 2-5 seconds of perceived silence).
+  //     2. On the final text round (after tools completed), we made a
+  //        REDUNDANT extra API call to stream what we'd already fetched
+  //        non-streaming. That extra call added ~500ms latency and burned
+  //        an extra request against the quota.
+  //
+  //   The new flow:
+  //     - For each round, open a stream and iterate chunks.
+  //     - Yield text deltas as they arrive (the user sees them immediately).
+  //     - Accumulate functionCall parts in an array.
+  //     - When the stream ends, IF there are accumulated function calls,
+  //       execute them, append results to `contents`, and loop. The text
+  //       we already streamed was the model's "thinking aloud" — the
+  //       NEXT round will produce the actual answer.
+  //     - IF there are NO function calls, the streamed text IS the final
+  //       answer. Return. No redundant re-call.
+  //
+  // Loop control (max rounds, stuck detection, graceful degradation) is
+  // shared with groq.ts via the ToolRoundBudget helper in lib/aiToolLoop.ts.
+  const budget = new ToolRoundBudget();
 
   // Bug #4 fix: track all tool calls across all rounds so we can emit them
   // in the final metadata callback. The route uses this to decide cache
@@ -822,108 +878,148 @@ export async function* streamGeminiChat(
   let lastUsage: unknown = undefined;
   let lastModel: string = _workingModel ?? "unknown";
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    // Use non-streaming generateContent for function-calling rounds.
-    // Why: function calls come as a single structured response, not a stream.
-    // If we used generateContentStream, we'd have to buffer the whole thing
-    // anyway to detect function calls. Non-streaming is simpler + correct.
-    //
-    // On the FINAL round (when Gemini returns text, not function calls),
-    // we switch to streaming for real-time token delivery.
-    //
-    // callWithFallback wraps the generateContent call so that if the model
-    // 404s (deprecated for this API key), it automatically retries with the
-    // next model in the fallback chain. The first model that works is cached.
-    const response: any = await callWithFallback((modelName) =>
-      client.models.generateContent({
+  // v3.6: helper that performs ONE streaming round against Gemini.
+  // Returns the accumulated function calls (empty array if none) so the
+  // caller can decide whether to loop or terminate.
+  //
+  // The `forceNoTools` param is used by the graceful-degradation path:
+  // when we've hit the max-rounds budget, we call this with forceNoTools=true
+  // so Gemini is forced to produce a text answer instead of more tool calls.
+  const runOneStreamingRound = async function* (
+    roundContents: Record<string, unknown>[],
+    roundConfig: Record<string, unknown>,
+    forceNoTools: boolean,
+  ): AsyncGenerator<
+    string,
+    {
+      functionCalls: any[];
+      modelParts: any[];
+      finishReason: string | null;
+    },
+    unknown
+  > {
+    const effectiveConfig: Record<string, unknown> = { ...roundConfig };
+    if (forceNoTools) {
+      // Industry-standard "force final" pattern: remove tools from the
+      // config entirely + append a system instruction that tells the
+      // model to stop calling tools and produce a final answer.
+      delete effectiveConfig.tools;
+      const baseInstruction =
+        typeof effectiveConfig.systemInstruction === "string"
+          ? effectiveConfig.systemInstruction
+          : "";
+      effectiveConfig.systemInstruction = baseInstruction + buildForceFinalPromptSuffix();
+    }
+
+    // callWithFallback wraps the SDK call so a 404 (model deprecated for
+    // this API key) or 429 (quota exhausted) automatically retries with
+    // the next model in the fallback chain.
+    const stream: any = await callWithFallback((modelName) =>
+      client.models.generateContentStream({
         model: modelName,
-        contents,
-        config,
+        contents: roundContents,
+        config: effectiveConfig,
       }),
     );
 
-    // Track model + usage for the final metadata emission.
-    lastModel = _workingModel ?? "unknown";
-    lastUsage = (response as any)?.usageMetadata ?? undefined;
+    const functionCalls: any[] = [];
+    let modelParts: any[] = [];
+    let finishReason: string | null = null;
 
-    const functionCalls = response.functionCalls;
+    for await (const chunk of stream) {
+      // Yield text deltas as they arrive (real streaming).
+      // chunk.text is a convenience accessor that concatenates all text
+      // parts in this chunk. May be empty for chunks that only contain
+      // functionCall parts.
+      const text: string | undefined = chunk.text;
+      if (typeof text === "string" && text.length > 0) {
+        yield text;
+      }
 
-    if (functionCalls && functionCalls.length > 0 && tools) {
-      // ─── Execute each function call ───────────────────────────────────
-      // Bug #4 fix: record the tool names so we can emit them in the final
-      // metadata callback (used by the route for cache policy decisions).
-      for (const fc of functionCalls) {
-        if (typeof fc?.name === "string") {
-          toolCallsCalled.push(fc.name);
+      // Accumulate function calls + preserve original parts.
+      // Gemini 2.5 thinking models emit a `thoughtSignature` on the
+      // function-call part that MUST be echoed back unchanged — otherwise
+      // the next generateContent call fails with
+      // "Function call is missing a thought_signature". So we collect
+      // the FULL parts array from the candidate, not just the functionCall
+      // objects.
+      const candidates: any[] = chunk.candidates ?? [];
+      for (const cand of candidates) {
+        const parts: any[] = cand?.content?.parts ?? [];
+        if (parts.length > 0) {
+          modelParts = modelParts.concat(parts);
+        }
+        if (typeof cand?.finishReason === "string" && cand.finishReason.length > 0) {
+          finishReason = cand.finishReason;
+        }
+        for (const part of parts) {
+          if (part?.functionCall && typeof part.functionCall.name === "string") {
+            functionCalls.push(part.functionCall);
+          }
         }
       }
-      logger.info(
-        { round, calls: functionCalls.map((fc: any) => fc.name) },
-        "TreeBot: executing function calls",
-      );
 
-      // IMPORTANT: preserve the ORIGINAL parts from the model's response
-      // (not reconstructed ones). Gemini 2.5 thinking models emit a
-      // `thoughtSignature` on the function-call part that MUST be echoed
-      // back unchanged — otherwise the next generateContent call fails
-      // with "Function call is missing a thought_signature".
-      // response.candidates[0].content.parts contains the full original
-      // parts (including thought signatures, thought text, etc.).
-      const modelParts: any[] = response.candidates?.[0]?.content?.parts ?? [];
-
-      const functionResponseParts = await Promise.all(
-        functionCalls.map(async (fc: any) => {
-          const result = await tools.execute(fc.name, fc.args ?? {}, userId ?? null);
-          return {
-            functionResponse: {
-              name: fc.name,
-              response: { result },
-            },
-          };
-        }),
-      );
-
-      // Append the model's ORIGINAL parts (with thought signatures) + our
-      // function responses to the conversation.
-      contents = [
-        ...contents,
-        {
-          role: "model" as const,
-          parts: modelParts,
-        },
-        {
-          role: "user" as const,
-          parts: functionResponseParts,
-        },
-      ];
-      // Loop continues — Gemini processes the function responses.
-      continue;
+      // Track usage metadata (sent in the final chunk).
+      if (chunk?.usageMetadata) {
+        lastUsage = chunk.usageMetadata;
+      }
     }
 
-    // ─── No function calls — this is the final text response ────────────
-    // Re-stream it for real-time delivery. We call generateContentStream
-    // with the same contents (which now includes any tool results from
-    // previous rounds). Gemini generates the final text answer.
-    if (round === 0) {
-      // No tool calls were ever needed — we can stream directly from the
-      // first response we already have.
-      const text = response.text;
-      if (text) yield text;
+    return { functionCalls, modelParts, finishReason };
+  };
 
-      // v3.0: detect truncation. If the response hit maxOutputTokens,
-      // finishReason will be "MAX_TOKENS" and we should log it (the
-      // route's auto-continue logic can be added later if needed).
-      const finishReason = response.candidates?.[0]?.finishReason;
-      if (finishReason === "MAX_TOKENS") {
-        logger.warn(
-          { finishReason, maxOutputTokens: getMaxOutputTokens() },
-          "TreeBot: response was truncated (hit maxOutputTokens). Consider raising AI_MAX_TOKENS.",
-        );
+  // ─── Main loop ─────────────────────────────────────────────────────────
+  // Loop until either:
+  //   - The model returns no function calls (final text answer streamed).
+  //   - We exhaust the round budget (graceful degradation kicks in).
+  //   - Stuck detection fires (same tool + same args twice in a row).
+  while (budget.hasBudget) {
+    const round = budget.currentRound;
+
+    if (budget.shouldWarnAboutHighRounds) {
+      // Soft warning — operators should investigate. The loop continues
+      // (this is not necessarily a bug; some legitimate queries take 6+
+      // rounds when the model is paginating or refining searches).
+      logger.warn(
+        { round, maxRounds: budget.maxRoundsValue },
+        "TreeBot: tool loop exceeded soft warning threshold — investigate if this happens often",
+      );
+      budget.markWarned();
+    }
+
+    // Run one streaming round. Text deltas are yielded to the SSE
+    // response as they arrive (the generator below forwards them).
+    // The returned value gives us the accumulated function calls + parts.
+    const gen = runOneStreamingRound(contents, config, false);
+    let result: { functionCalls: any[]; modelParts: any[]; finishReason: string | null };
+    while (true) {
+      const { done, value } = await gen.next();
+      if (done) {
+        result = value as { functionCalls: any[]; modelParts: any[]; finishReason: string | null };
+        break;
       }
+      if (typeof value === "string") {
+        yield value;
+      }
+    }
 
-      // Bug #4 fix: emit the FINAL metadata with toolCalls info.
-      // This is called once after the streaming completes (not per-round).
-      // toolCallsCalled is empty here (round 0 = no tools called).
+    lastModel = _workingModel ?? "unknown";
+
+    // v3.0: detect truncation. If the response hit maxOutputTokens,
+    // finishReason will be "MAX_TOKENS" and we should log it (the
+    // route's auto-continue logic can be added later if needed).
+    if (result.finishReason === "MAX_TOKENS") {
+      logger.warn(
+        { finishReason: result.finishReason, maxOutputTokens: getMaxOutputTokens() },
+        "TreeBot: response was truncated (hit maxOutputTokens). Consider raising AI_MAX_TOKENS.",
+      );
+    }
+
+    const functionCalls = result.functionCalls;
+
+    if (functionCalls.length === 0 || !tools) {
+      // ─── No function calls — this was the final text response ────────
+      // The text was already streamed above. Emit metadata + return.
       if (onMetadata) {
         onMetadata({
           model: lastModel,
@@ -934,28 +1030,156 @@ export async function* streamGeminiChat(
       return;
     }
 
-    // We went through tool rounds — re-stream the final answer.
-    // Use callWithFallback here too so the streaming call retries on 404.
-    const finalStream: any = await callWithFallback((modelName) =>
-      client.models.generateContentStream({
-        model: modelName,
-        contents,
-        config: {
-          ...config,
-          // Don't expose tools on the final round — we want text, not more calls.
-          tools: undefined,
-        },
+    // ─── Function calls present — execute them and loop ─────────────────
+    // Bug #4 fix: record the tool names so we can emit them in the final
+    // metadata callback (used by the route for cache policy decisions).
+    for (const fc of functionCalls) {
+      if (typeof fc?.name === "string") {
+        toolCallsCalled.push(fc.name);
+      }
+    }
+    logger.info(
+      { round, calls: functionCalls.map((fc: any) => fc.name) },
+      "TreeBot: executing function calls",
+    );
+
+    // v3.6: Stuck detection — if this round's tool calls are identical
+    // (same name + same args) to the PREVIOUS round's, the model is
+    // stuck in a loop (the tool will return the same result, so the
+    // model has no new information). Abort with a friendly message.
+    const currentSignatures = functionCalls.map((fc: any) => signatureOf(fc.name, fc.args ?? {}));
+    const stuckTool = budget.detectStuck(currentSignatures);
+    if (stuckTool) {
+      logger.error(
+        { round, stuckTool, maxRounds: budget.maxRoundsValue },
+        "TreeBot: stuck loop detected — model called the same tool with the same args in consecutive rounds",
+      );
+      // v3.7 fix: mark stuck BEFORE break so shouldForceFinal returns true
+      // and the graceful-degradation path runs (was: falling through to
+      // the safety-net throw, giving users a hard error).
+      budget.markStuck();
+      // Don't throw — instead, fall through to the force-final path so
+      // the user gets SOMETHING. The stuck tool's results are already
+      // in `contents`, so the model can synthesize a best-effort answer.
+      break;
+    }
+    budget.recordRound(currentSignatures);
+
+    // IMPORTANT: preserve the ORIGINAL parts from the model's response
+    // (not reconstructed ones). Gemini 2.5 thinking models emit a
+    // `thoughtSignature` on the function-call part that MUST be echoed
+    // back unchanged — otherwise the next generateContent call fails
+    // with "Function call is missing a thought_signature".
+    // result.modelParts contains the full original parts (including
+    // thought signatures, thought text, etc.) accumulated from the stream.
+    const modelParts: any[] = result.modelParts;
+
+    // v3.7: Execute tools one-by-one, firing onToolEvent before+after each.
+    // We fire `tool_call` BEFORE execute() so the UI can show "Looking up..."
+    // immediately, and `tool_result` AFTER (with durationMs) so the UI can
+    // clear the chip. If execute() throws, we fire a `tool_result` with
+    // ok=false + the error message (the route still surfaces this to the
+    // client, but the model gets a structured error in the functionResponse).
+    const functionResponseParts = await Promise.all(
+      functionCalls.map(async (fc: any) => {
+        const toolName: string = fc.name;
+        const toolArgs = fc.args ?? {};
+        if (onToolEvent) {
+          onToolEvent({ type: "tool_call", name: toolName, args: toolArgs });
+        }
+        const t0 = Date.now();
+        try {
+          const result = await tools.execute(toolName, toolArgs, userId ?? null);
+          if (onToolEvent) {
+            onToolEvent({
+              type: "tool_result",
+              name: toolName,
+              ok: true,
+              durationMs: Date.now() - t0,
+            });
+          }
+          return {
+            functionResponse: {
+              name: toolName,
+              response: { result },
+            },
+          };
+        } catch (err) {
+          // String(err) always returns a string, so `?? "tool execution failed"`
+          // would be dead code. Use a fallback only for empty strings.
+          const rawMsg = (err as any)?.message ?? String(err);
+          const errMsg = rawMsg || "tool execution failed";
+          if (onToolEvent) {
+            onToolEvent({
+              type: "tool_result",
+              name: toolName,
+              ok: false,
+              error: errMsg,
+              durationMs: Date.now() - t0,
+            });
+          }
+          // Return the error as the function response so the model can
+          // react to it (e.g., tell the user the lookup failed).
+          return {
+            functionResponse: {
+              name: toolName,
+              response: { error: errMsg },
+            },
+          };
+        }
       }),
     );
 
-    for await (const chunk of finalStream) {
-      const text = chunk.text;
-      if (text) yield text;
-    }
+    // Append the model's ORIGINAL parts (with thought signatures) + our
+    // function responses to the conversation.
+    contents = [
+      ...contents,
+      {
+        role: "model" as const,
+        parts: modelParts,
+      },
+      {
+        role: "user" as const,
+        parts: functionResponseParts,
+      },
+    ];
 
-    // Bug #4 fix: emit the FINAL metadata with the accumulated toolCalls list.
-    // This lets the route decide cache policy (skip for user-scoped tools,
-    // short-TTL for catalog tools).
+    budget.advance();
+  }
+
+  // ─── Graceful degradation: budget exhausted (or stuck loop) ───────────
+  //
+  // Instead of throwing an error (the old behavior), make ONE more call
+  // with tools DISABLED. This forces Gemini to produce a best-effort
+  // text answer using whatever information it already gathered from the
+  // tool calls. The user gets SOMETHING useful instead of a hard error.
+  //
+  // Industry references:
+  //   - Vercel AI SDK: emits a `tool-call-error` then continues the stream
+  //   - OpenAI Assistants: stops the run with `expired` status but keeps
+  //     partial output
+  //   - Anthropic: stops with `max_tokens` stop reason, keeps partial output
+  //
+  // We use the same streaming-round helper with forceNoTools=true so the
+  // behavior is identical to a normal final round (text deltas stream
+  // live, no extra API round-trip).
+  if (budget.shouldForceFinal) {
+    budget.markForceFinalEmitted();
+    logger.warn(
+      { rounds: budget.maxRoundsValue, hadStuckLoop: budget.hadStuckLoop },
+      "TreeBot: tool budget exhausted — making one force-final call with tools disabled (graceful degradation)",
+    );
+
+    const forceGen = runOneStreamingRound(contents, config, true);
+    while (true) {
+      const { done, value } = await forceGen.next();
+      if (done) break;
+      if (typeof value === "string") {
+        yield value;
+      }
+    }
+    lastModel = _workingModel ?? "unknown";
+
     if (onMetadata) {
       onMetadata({
         model: lastModel,
@@ -966,12 +1190,25 @@ export async function* streamGeminiChat(
     return;
   }
 
-  // If we hit MAX_TOOL_ROUNDS, something is wrong (Gemini keeps calling tools).
+  // This branch is reached only if the force-final call already happened
+  // (shouldForceFinal was false) — meaning we already streamed a final
+  // answer above. Emit metadata as a safety net (it should have been
+  // emitted inside the force-final block).
+  if (onMetadata) {
+    onMetadata({
+      model: lastModel,
+      usage: lastUsage,
+      toolCalls: toolCallsCalled,
+    });
+  }
+
+  // If we somehow get here without having streamed anything, surface a
+  // clear error. The route will show the user a friendly fallback.
   logger.error(
-    { rounds: MAX_TOOL_ROUNDS },
-    "TreeBot: hit max tool rounds — Gemini kept calling functions without producing a final answer",
+    { rounds: budget.maxRoundsValue },
+    "TreeBot: tool loop ended without producing a final answer (this should not happen — force-final should have run)",
   );
-  throw new Error("AI assistant took too many tool calls. Please try rephrasing your question.");
+  throw new Error(buildMaxRoundsErrorMessage(budget.maxRoundsValue));
 }
 
 /**

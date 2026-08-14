@@ -48,6 +48,7 @@ import {
   getGroqDebugInfo,
   forceGroqRediscover,
 } from "./groq";
+import type { OnToolEvent } from "./aiToolLoop";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -55,11 +56,7 @@ export type ProviderName = "gemini" | "groq";
 
 export interface ChatTools {
   declarations: FunctionDeclaration[];
-  execute: (
-    name: string,
-    args: Record<string, unknown>,
-    userId: string | null,
-  ) => Promise<unknown>;
+  execute: (name: string, args: Record<string, unknown>, userId: string | null) => Promise<unknown>;
 }
 
 // ─── Provider chain config ──────────────────────────────────────────────────
@@ -80,9 +77,7 @@ export function getProviderChain(): ProviderName[] {
     .filter((s) => s.length > 0) as ProviderName[];
 
   // Filter to valid provider names + actually configured providers.
-  const valid = requested.filter(
-    (p) => p === "gemini" || p === "groq",
-  );
+  const valid = requested.filter((p) => p === "gemini" || p === "groq");
 
   const configured = valid.filter((p) => {
     if (p === "gemini") return isGeminiConfigured();
@@ -205,6 +200,14 @@ export async function* streamChat(
     /** Bug #4 fix: names of tools called during this request. */
     toolCalls?: string[];
   }) => void,
+  /**
+   * v3.7: Optional callback fired when a tool is about to execute
+   * (`tool_call`) or finishes (`tool_result`). Forwarded to whichever
+   * provider handles the request. The route handler attaches a callback
+   * that writes SSE events so the frontend can render "Looking up your
+   * order..." chips during multi-tool rounds.
+   */
+  onToolEvent?: OnToolEvent,
 ): AsyncGenerator<string, void, unknown> {
   const providers = getProviderChain();
 
@@ -229,9 +232,8 @@ export async function* streamChat(
               userMessage,
               tools,
               userId,
-              onMetadata
-                ? (meta) => onMetadata({ ...meta, provider: "gemini" })
-                : undefined,
+              onMetadata ? (meta) => onMetadata({ ...meta, provider: "gemini" }) : undefined,
+              onToolEvent,
             )
           : streamGroqChat(
               systemPrompt,
@@ -239,9 +241,8 @@ export async function* streamChat(
               userMessage,
               tools,
               userId,
-              onMetadata
-                ? (meta) => onMetadata({ ...meta, provider: "groq" })
-                : undefined,
+              onMetadata ? (meta) => onMetadata({ ...meta, provider: "groq" }) : undefined,
+              onToolEvent,
             );
 
       for await (const chunk of gen) {
@@ -365,10 +366,7 @@ export async function getProvidersDebugInfo(): Promise<{
   aiProvidersEnv: string | null;
 }> {
   const configured = getProviderChain();
-  const [geminiInfo, groqInfo] = await Promise.all([
-    getGeminiDebugInfo(),
-    getGroqDebugInfo(),
-  ]);
+  const [geminiInfo, groqInfo] = await Promise.all([getGeminiDebugInfo(), getGroqDebugInfo()]);
   return {
     providerChain: configured,
     configuredProviders: configured,

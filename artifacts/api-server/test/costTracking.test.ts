@@ -17,8 +17,7 @@ import { describe, it, expect } from "vitest";
 
 // Ensure the AI_SESSION_SECRET is set (required by sessionToken.ts which is
 // transitively imported). setupEnv.ts handles this for the rest of the suite.
-process.env.AI_SESSION_SECRET ??=
-  "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
+process.env.AI_SESSION_SECRET ??= "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
 
 import { calculateCost, getModelPricing, getAllPricing } from "../src/lib/costTracker";
 
@@ -175,7 +174,7 @@ describe("Bug #9 fix: Groq sends usage via stream_options.include_usage", () => 
       "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
       "utf8",
     );
-    expect(source).toContain("if (payload.usage && typeof payload.usage === \"object\")");
+    expect(source).toContain('if (payload.usage && typeof payload.usage === "object")');
     expect(source).toContain("usage = payload.usage");
   });
 
@@ -198,9 +197,13 @@ describe("Bug #9 fix: Groq sends usage via stream_options.include_usage", () => 
       "utf8",
     );
     // The onMetadata call should map prompt_tokens → promptTokenCount etc.
-    expect(source).toContain("promptTokenCount: result.usage.prompt_tokens");
-    expect(source).toContain("candidatesTokenCount: result.usage.completion_tokens");
-    expect(source).toContain("totalTokenCount: result.usage.total_tokens");
+    //
+    // v3.6: the variable was renamed from `result.usage` (single-round) to
+    // `lastUsage` (captured across all rounds, including the force-final
+    // graceful-degradation path). The field mapping itself is unchanged.
+    expect(source).toContain("promptTokenCount: lastUsage.prompt_tokens");
+    expect(source).toContain("candidatesTokenCount: lastUsage.completion_tokens");
+    expect(source).toContain("totalTokenCount: lastUsage.total_tokens");
   });
 
   it("onMetadata no longer hardcodes usage: undefined", async () => {
@@ -236,7 +239,7 @@ describe("Bug #10 fix: route derives token count correctly", () => {
       "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
       "utf8",
     );
-    expect(source).toContain("if (typeof usage.totalTokenCount === \"number\")");
+    expect(source).toContain('if (typeof usage.totalTokenCount === "number")');
     expect(source).toContain("tokenCount = usage.totalTokenCount");
   });
 
@@ -246,9 +249,7 @@ describe("Bug #10 fix: route derives token count correctly", () => {
       "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
       "utf8",
     );
-    expect(source).toContain(
-      "tokenCount = promptTokens + completionTokens",
-    );
+    expect(source).toContain("tokenCount = promptTokens + completionTokens");
   });
 
   it("only falls back to completion as lower bound (rare case)", async () => {
