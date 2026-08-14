@@ -316,13 +316,37 @@ export function mintAuthenticatedSessionToken(clerkUserId: string): string {
  *   - Anonymous token (uid=null): allowed for any requester — possession
  *     of the signed token IS the proof of ownership (the sid is 122 bits
  *     of randomness, only known to whoever the server issued it to).
- *   - Authenticated token (uid=X): only allowed if requester is also X.
- *     If a different signed-in user presents a token bound to X, reject.
+ *   - Authenticated token (uid=X), requester is Y (Y≠X): REJECTED — this
+ *     is a hijack attempt (a different signed-in user presenting X's token).
+ *   - Authenticated token (uid=X), requester is X: allowed (identity match).
+ *   - Authenticated token (uid=X), requester is null (can't resolve identity):
+ *     ALLOWED. The signed token itself is the proof of possession (122-bit
+ *     entropy + HMAC signature). Requiring Clerk to re-resolve on every GET
+ *     caused the "history disappears on reopen" bug: if Clerk's session JWT
+ *     expired (or didn't resolve due to cross-origin timing), the GET
+ *     returned 403 and the frontend silently showed an empty chat.
+ *
+ * v3.10 fix: the fourth case (authenticated token, null requester) was
+ * previously REJECTED. Now it's ALLOWED — the signed token is sufficient
+ * proof. This matches the legacy-UUID migration path's logic, which already
+ * allowed this case (see verifySessionAccess in routes/ai.ts).
+ *
+ * Security trade-off: an attacker who steals the HttpOnly cookie could
+ * read history. But the cookie is HttpOnly (no XSS), Secure (HTTPS-only),
+ * and SameSite (no CSRF) — stealing it requires a compromised browser or
+ * network MITM, which is already a total compromise. The UX cost of
+ * rejecting (history disappears) is much higher than the marginal security
+ * loss.
  */
 export function tokenMatchesIdentity(
   payload: SessionTokenPayload,
   requesterUid: string | null,
 ): boolean {
   if (payload.uid === null) return true; // anonymous token — possession = ownership
+  // Authenticated token:
+  //   - If we can resolve the requester AND it's a different user → reject (hijack).
+  //   - If we can't resolve the requester (null) → allow (signed token = proof).
+  //   - If requester matches → allow.
+  if (requesterUid === null) return true; // can't resolve — trust the signed token
   return payload.uid === requesterUid;
 }

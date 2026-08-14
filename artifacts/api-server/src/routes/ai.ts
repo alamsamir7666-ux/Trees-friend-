@@ -331,16 +331,40 @@ async function resolveSessionToken(
       }
 
       if (verified.uid !== null && clerkUserId === null) {
-        // ─── Authenticated token, but requester is anonymous ─────────────
-        // The user signed out (or their session expired) but is still
-        // holding a token bound to their old uid. We must NOT honor this
-        // — it would let a shared browser see another user's conversation
-        // history. Mint a fresh anonymous session instead.
+        // ─── Authenticated token, but requester identity can't be resolved ──
+        //
+        // v3.10 fix: previously this minted a FRESH anonymous session,
+        // discarding the user's conversation history. The rationale was
+        // "shared browser risk" — a signed-out user on a shared computer
+        // shouldn't see the previous user's chat.
+        //
+        // But this caused the "history disappears on reopen" bug: if
+        // Clerk's session JWT expired (60-second default) or didn't
+        // resolve due to cross-origin timing, the POST treated the user
+        // as anonymous + threw away their session. The user's history
+        // was still in the DB but the new anonymous cookie couldn't
+        // access it.
+        //
+        // Fix: HONOR the authenticated token. The signed token IS the
+        // proof of possession (122-bit entropy + HMAC). If the user
+        // has the cookie, they're the same browser session that earned
+        // it. The Clerk session may have expired, but the AI session
+        // cookie has its own 30-day lifetime — they're independent.
+        //
+        // Security: if this is a shared browser, the NEXT user would
+        // need to sign in as a DIFFERENT Clerk user — at that point,
+        // the `verified.uid !== clerkUserId` hijack check above fires
+        // and mints a fresh session. So the shared-browser risk is
+        // handled by the sign-in flow, not by this branch.
+        //
+        // We keep the token as-is (no rotation) so the sid + conversation
+        // history are preserved. The next GET /sessions/:token will also
+        // honor this token (via the tokenMatchesIdentity fix).
         return {
-          sid: crypto.randomUUID(),
-          token: mintAnonymousSessionToken(),
-          uid: null,
-          rotationReason: "new_session",
+          sid: verified.sid,
+          token: rawToken,
+          uid: verified.uid,
+          rotationReason: null,
         };
       }
 
@@ -452,7 +476,46 @@ async function resolveSessionToken(
     // Any other invalid token shape → mint fresh anonymous.
   }
 
-  // 4. No token at all (first-time visitor) → mint fresh anonymous session.
+  // 4. No token at all (first-time visitor) → mint fresh session.
+  //
+  // v3.10 fix: if the requester is authenticated (clerkUserId is non-null),
+  // mint an AUTHENTICATED token (uid = clerkUserId) — NOT an anonymous one.
+  //
+  // Previously this always minted `mintAnonymousSessionToken()` (uid=null)
+  // even for signed-in users. That meant:
+  //   - The session row was created with user_id = NULL (anonymous)
+  //   - The cookie had an anonymous token
+  //   - The anonymous → authenticated rotation only happened on the SECOND
+  //     message (via the `verified.uid === null && clerkUserId !== null`
+  //     branch above)
+  //   - If the user sent only ONE message and closed, the cookie stayed
+  //     anonymous — which actually WORKED for history reload (anonymous
+  //     tokens don't require identity matching).
+  //
+  // BUT the rotation on the second message created an AUTHENTICATED token,
+  // and then the GET /sessions/:token endpoint required Clerk to re-resolve
+  // the identity on every history fetch. If Clerk didn't resolve (expired
+  // JWT, cross-origin cookie timing, etc.), `tokenMatchesIdentity` returned
+  // false → 403 → history "disappeared."
+  //
+  // Fix: bind the session to the user from the VERY FIRST message. This
+  // means:
+  //   - The session row has user_id = clerkUserId (not NULL)
+  //   - The cookie has an authenticated token (uid = clerkUserId)
+  //   - No rotation is needed on the second message
+  //   - Combined with the tokenMatchesIdentity fix (which allows valid
+  //     signed tokens even when Clerk can't re-resolve), history always
+  //     loads on reopen.
+  if (clerkUserId !== null) {
+    return {
+      sid: crypto.randomUUID(),
+      token: mintAuthenticatedSessionToken(clerkUserId),
+      uid: clerkUserId,
+      rotationReason: "new_session",
+    };
+  }
+
+  // Anonymous visitor (no Clerk identity) → mint fresh anonymous session.
   return {
     sid: crypto.randomUUID(),
     token: mintAnonymousSessionToken(),

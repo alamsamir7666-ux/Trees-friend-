@@ -159,13 +159,19 @@ describe("sessionToken", () => {
       expect(tokenMatchesIdentity(verified, "user_a")).toBe(true);
     });
 
-    it("authenticated tokens match only the bound user", () => {
+    it("authenticated tokens match the bound user + allow null requester (signed token = proof)", () => {
       const uid = "user_xyz";
       const token = mintAuthenticatedSessionToken(uid);
       const verified = verifySessionToken(token)!;
+      // Matching identity → allowed.
       expect(tokenMatchesIdentity(verified, uid)).toBe(true);
-      expect(tokenMatchesIdentity(verified, null)).toBe(false); // signed-out requester
-      expect(tokenMatchesIdentity(verified, "user_different")).toBe(false); // different user
+      // v3.10 fix: null requester (Clerk couldn't resolve) → ALLOWED.
+      // The signed token itself is the proof of possession (122-bit entropy
+      // + HMAC). This fixes the "history disappears on reopen" bug where
+      // Clerk's session JWT expired between chat close + reopen.
+      expect(tokenMatchesIdentity(verified, null)).toBe(true);
+      // Different signed-in user → REJECTED (hijack attempt).
+      expect(tokenMatchesIdentity(verified, "user_different")).toBe(false);
     });
   });
 
