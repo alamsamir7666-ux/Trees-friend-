@@ -119,7 +119,9 @@ export function getProviderChain(): ProviderName[] {
  *   - Errors that occur AFTER streaming has started (can't switch mid-stream)
  */
 function shouldFallBackToNextProvider(err: unknown): boolean {
-  const msg = typeof (err as any)?.message === "string" ? (err as any).message : "";
+  const e = err as any;
+  const msg = typeof e?.message === "string" ? e.message : "";
+  const status = e?.status ?? e?.error?.code ?? e?.code;
 
   // Provider-level exhaustion errors → fall back
   if (/all configured gemini models are unavailable/i.test(msg)) return true;
@@ -133,6 +135,18 @@ function shouldFallBackToNextProvider(err: unknown): boolean {
 
   // Generic quota/rate-limit → fall back
   if (/quota exceeded|rate limit|too many requests/i.test(msg)) return true;
+
+  // ── Fix: 5xx server errors (503 "high demand", 502, 500) → fall back ──
+  // These are transient server-side issues — the other provider may not
+  // be experiencing the same overload. Falls back to Groq when Gemini is
+  // overloaded ("high demand"), and vice versa.
+  if (typeof status === "number" && status >= 500 && status < 600) return true;
+  // Also pattern-match the error messages (the raw Gemini 503 message is
+  // a JSON string embedded in err.message, not just the HTTP status).
+  if (/high demand|service unavailable|temporarily unavailable|currently unavailable/i.test(msg))
+    return true;
+  // Also catch the callWithFallback "all models 5xx" message
+  if (/all gemini models are temporarily unavailable/i.test(msg)) return true;
 
   // 401/403 auth errors → DON'T fall back (config issue, next provider
   // would need its own correct API key — but if it's configured, we'd

@@ -609,32 +609,52 @@ export async function callWithFallback<T>(fn: (modelName: string) => Promise<T>)
         }
         continue;
       }
-      // Non-404, non-429 error (auth, non-transient after retries, etc.) —
+      // Fix: 5xx server errors (503 "high demand", 502, 500) after retries
+      // exhausted. The `withRetry` wrapper already retried 3 times with
+      // exponential backoff. If it still fails, try the NEXT model —
+      // different Gemini models may be served by different backend servers,
+      // so one being overloaded doesn't mean they all are.
+      if (isTransientError(err)) {
+        logger.warn(
+          { model: modelName, err: describeErrorForLog(err) },
+          "TreeBot: transient 5xx error after retries exhausted, trying next model in fallback chain",
+        );
+        continue; // try the next model
+      }
+      // Non-404, non-429, non-transient error (auth, bad request, etc.) —
       // don't try other models, just rethrow. The route handler will surface it.
       throw err;
     }
   }
 
-  // All models in the chain returned 404 or 429.
+  // All models in the chain returned 404, 429, or 5xx (after retries).
   // Build a more helpful error message based on which error type dominated.
   const allQuota = isQuotaExhaustedError(lastErr);
+  const allTransient = !allQuota && isTransientError(lastErr);
   const errMsg = allQuota
     ? "TreeBot: ALL models in the fallback chain returned 429 quota exhausted. " +
       "Your Gemini free-tier daily quota is depleted across all models. " +
       "Action: wait for the quota to reset (usually at midnight Pacific time), " +
       "or upgrade to a paid tier at https://ai.google.dev/pricing."
-    : "TreeBot: ALL models in the fallback chain returned 404. " +
-      "Either the API key is invalid OR Google has deprecated every model we know. " +
-      "Action: visit https://ai.google.dev/gemini-api/docs/models to find the current model name, " +
-      "then set it as the AI_MODEL env var.";
+    : allTransient
+      ? "TreeBot: ALL models in the fallback chain returned 5xx (service unavailable). " +
+        "Gemini is experiencing high demand. This is usually temporary. " +
+        "The AI router should fall back to Groq."
+      : "TreeBot: ALL models in the fallback chain returned 404. " +
+        "Either the API key is invalid OR Google has deprecated every model we know. " +
+        "Action: visit https://ai.google.dev/gemini-api/docs/models to find the current model name, " +
+        "then set it as the AI_MODEL env var.";
 
-  logger.error({ err: lastErr, triedModels: tryModels, allQuota }, errMsg);
+  logger.error({ err: lastErr, triedModels: tryModels, allQuota, allTransient }, errMsg);
   throw new Error(
     allQuota
       ? "All Gemini models are rate-limited right now. Please try again later."
-      : "All configured Gemini models are unavailable. " +
-        "Please set the AI_MODEL env var to a currently-available model name " +
-        "(see https://ai.google.dev/gemini-api/docs/models).",
+      : allTransient
+        ? "All Gemini models are temporarily unavailable (503). " +
+          "The service is experiencing high demand. Please try again later."
+        : "All configured Gemini models are unavailable. " +
+          "Please set the AI_MODEL env var to a currently-available model name " +
+          "(see https://ai.google.dev/gemini-api/docs/models).",
   );
 }
 
