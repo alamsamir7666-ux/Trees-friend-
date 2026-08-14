@@ -278,16 +278,15 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
   const maxPrice = typeof args.max_price === "number" ? args.max_price : null;
   const sunlight = typeof args.sunlight === "string" ? args.sunlight : null;
 
-  // v3.7: Hybrid ILIKE + per-token pg_trgm similarity search.
+  // v3.10: Industry-standard hybrid search — tsvector (stemming) PRIMARY,
+  // trigram (typo tolerance) FALLBACK, ILIKE (substring) for compound names.
   //
-  // Same pattern as aiContext.ts:searchProducts() — combine exact-substring
-  // matching (ILIKE) with fuzzy trigram similarity in one pass, sorted by a
-  // relevance score that boosts exact name hits.
-  //
-  // v3.7 bugfix: per-token GREATEST(similarity(col, $t1), ...) instead of
-  // similarity(col, tokens.join(' ')). The joined-string form diluted the
-  // similarity score below threshold when the query had multiple words.
-  // See aiContext.ts:searchProducts() for the full rationale.
+  // Same pattern as aiContext.ts:searchProducts() — see that function for
+  // the full rationale. Short version:
+  //   - tsvector catches "watering" → "water" (stemming)
+  //   - trigram catches "mangoo" → "mango" (typo tolerance)
+  //   - ILIKE catches "mango_tree_seedling" (compound/underscored)
+  // Combined via OR; ranked by ts_rank_cd (×1000) + CASE + similarity boosts.
   const tokens = query
     .toLowerCase()
     .split(/\s+/)
@@ -304,7 +303,7 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
     params.push(`%${t}%`);
     tokenPlaceholders.push(`$${params.length}`);
   }
-  let where = tokenPlaceholders
+  let ilikeWhere = tokenPlaceholders
     .map((p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`)
     .join(" OR ");
 
@@ -326,8 +325,14 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
      OR ${greatestSim("COALESCE(p.scientific_name, '')")} > ${trigramThresholdParam}
      OR ${greatestSim("COALESCE(p.description, '')")} > ${trigramThresholdParam})`;
 
-  // Combine ILIKE + trigram into the final WHERE.
-  where = `(${where} OR ${trigramWhere})`;
+  // v3.10: tsvector full-text search (PRIMARY path).
+  const tsQuery = tokens.join(" ");
+  params.push(tsQuery);
+  const tsQueryParam = `$${params.length}`;
+  const tsvectorWhere = `(p.search_tsvector @@ websearch_to_tsquery('english', ${tsQueryParam}))`;
+
+  // Combine tsvector + ILIKE + trigram into the final WHERE.
+  let where = `(${tsvectorWhere} OR ${ilikeWhere} OR ${trigramWhere})`;
 
   if (sunlight) {
     params.push(sunlight);
@@ -346,11 +351,12 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
     priceWhere = ` AND (prices.min_price IS NULL OR prices.min_price <= $${params.length})`;
   }
 
-  // Relevance score (DESC): exact name ILIKE first token → 100, sci_name → 80,
-  // description → 60, plus per-token trigram boosts (max ~30+15+5=50).
+  // v3.10: ts_rank_cd (×1000) dominates; CASE (100/80/60) + similarity
+  // boosts (max ~50) act as tie-breakers for non-tsvector matches.
   const firstTokenParam = tokenPlaceholders[0];
   const scoreExpr = `(
-    CASE WHEN p.name ILIKE ${firstTokenParam} THEN 100
+    ts_rank_cd(p.search_tsvector, websearch_to_tsquery('english', ${tsQueryParam})) * 1000
+    + CASE WHEN p.name ILIKE ${firstTokenParam} THEN 100
          WHEN p.scientific_name ILIKE ${firstTokenParam} THEN 80
          WHEN p.description ILIKE ${firstTokenParam} THEN 60
          ELSE 0 END
@@ -388,62 +394,138 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
       count: result.rows.length,
     };
   } catch (err) {
-    // pg_trgm unavailable — fall back to ILIKE-only (drop the trigram
-    // clause + score expression). Non-fatal.
+    // tsvector column missing OR pg_trgm unavailable — fall back to
+    // ILIKE + trigram (drop the tsvector clause). Non-fatal.
     logger.debug(
       { err: (err as any)?.message ?? String(err), query },
-      "AI tool search_catalog: hybrid trigram unavailable, falling back to ILIKE-only",
+      "AI tool search_catalog: tsvector search unavailable, falling back to ILIKE + trigram",
     );
 
-    // Rebuild ILIKE-only WHERE + params (drop the 2 trigram params at the end).
-    const ilikeParams = params.slice(0, tokenPlaceholders.length);
-    if (sunlight) {
-      ilikeParams.push(sunlight);
+    // Rebuild WHERE without tsvector (keep ILIKE + trigram).
+    // Params layout: [ilike params..., trigram params..., trigramThreshold,
+    //                  tsQuery, (optional) sunlight, (optional) maxPrice]
+    // We need to drop tsQuery (the last-but-optional param before sunlight/maxPrice).
+    // Simplest: rebuild params from scratch for the fallback.
+    const fbParams: unknown[] = [];
+    const fbTokenPlaceholders: string[] = [];
+    for (const t of tokens) {
+      fbParams.push(`%${t}%`);
+      fbTokenPlaceholders.push(`$${fbParams.length}`);
     }
-    if (maxPrice != null) {
-      ilikeParams.push(maxPrice as number);
+    const fbTrigramParamPlaceholders: string[] = [];
+    for (const t of tokens) {
+      fbParams.push(t);
+      fbTrigramParamPlaceholders.push(`$${fbParams.length}`);
     }
-    let ilikeOnlyWhere = tokenPlaceholders
+    fbParams.push(trigramThreshold);
+    const fbTrigramThresholdParam = `$${fbParams.length}`;
+
+    const fbGreatestSim = (col: string): string =>
+      `GREATEST(${fbTrigramParamPlaceholders.map((p) => `similarity(${col}, ${p})`).join(", ")})`;
+
+    const fbTrigramWhere = `(${fbGreatestSim("p.name")} > ${fbTrigramThresholdParam}
+       OR ${fbGreatestSim("COALESCE(p.scientific_name, '')")} > ${fbTrigramThresholdParam}
+       OR ${fbGreatestSim("COALESCE(p.description, '')")} > ${fbTrigramThresholdParam})`;
+
+    let fbWhere = tokenPlaceholders
       .map((p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`)
       .join(" OR ");
+    fbWhere = `(${fbWhere} OR ${fbTrigramWhere})`;
+
     if (sunlight) {
-      ilikeOnlyWhere += ` AND p.sunlight = $${tokenPlaceholders.length + 1}`;
+      fbParams.push(sunlight);
+      fbWhere += ` AND p.sunlight = $${fbParams.length}`;
     }
-    let ilikePriceWhere = "";
+    let fbPriceWhere = "";
     if (maxPrice != null) {
-      const idx = tokenPlaceholders.length + (sunlight ? 1 : 0) + 1;
-      ilikePriceWhere = ` AND (prices.min_price IS NULL OR prices.min_price <= $${idx})`;
+      fbParams.push(maxPrice);
+      fbPriceWhere = ` AND (prices.min_price IS NULL OR prices.min_price <= $${fbParams.length})`;
     }
 
-    const result = await pool.query<CatalogResult>(
-      `SELECT
-         p.slug,
-         p.name,
-         p.scientific_name,
-         p.description,
-         p.sunlight,
-         p.watering,
-         p.mature_height,
-         p.product_status,
-         prices.min_price,
-         (p.images::jsonb->0->>'url') AS image
-       FROM products p
-       ${priceJoin}
-       WHERE p.deleted_at IS NULL AND (${ilikeOnlyWhere})${ilikePriceWhere}
-       ORDER BY
-         CASE WHEN p.name ILIKE ${tokenPlaceholders[0]} THEN 0 ELSE 1 END,
-         p.created_at DESC
-       LIMIT 8`,
-      ilikeParams,
-    );
+    try {
+      const result = await pool.query<CatalogResult>(
+        `SELECT
+           p.slug,
+           p.name,
+           p.scientific_name,
+           p.description,
+           p.sunlight,
+           p.watering,
+           p.mature_height,
+           p.product_status,
+           prices.min_price,
+           (p.images::jsonb->0->>'url') AS image
+         FROM products p
+         ${priceJoin}
+         WHERE p.deleted_at IS NULL AND ${fbWhere}${fbPriceWhere}
+         ORDER BY
+           CASE WHEN p.name ILIKE ${fbTokenPlaceholders[0]} THEN 100
+                WHEN p.scientific_name ILIKE ${fbTokenPlaceholders[0]} THEN 80
+                WHEN p.description ILIKE ${fbTokenPlaceholders[0]} THEN 60
+                ELSE 0 END,
+           p.created_at DESC
+         LIMIT 8`,
+        fbParams,
+      );
 
-    return {
-      results: result.rows.map((r) => ({
-        ...r,
-        description: r.description ? r.description.slice(0, 150) : null,
-      })),
-      count: result.rows.length,
-    };
+      return {
+        results: result.rows.map((r) => ({
+          ...r,
+          description: r.description ? r.description.slice(0, 150) : null,
+        })),
+        count: result.rows.length,
+      };
+    } catch {
+      // Final fallback: pure ILIKE (no trigram, no tsvector).
+      const ilikeParams = fbParams.slice(0, fbTokenPlaceholders.length);
+      if (sunlight) {
+        ilikeParams.push(sunlight);
+      }
+      if (maxPrice != null) {
+        ilikeParams.push(maxPrice as number);
+      }
+      let ilikeOnlyWhere = fbTokenPlaceholders
+        .map((p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`)
+        .join(" OR ");
+      if (sunlight) {
+        ilikeOnlyWhere += ` AND p.sunlight = $${fbTokenPlaceholders.length + 1}`;
+      }
+      let ilikePriceWhere = "";
+      if (maxPrice != null) {
+        const idx = fbTokenPlaceholders.length + (sunlight ? 1 : 0) + 1;
+        ilikePriceWhere = ` AND (prices.min_price IS NULL OR prices.min_price <= $${idx})`;
+      }
+
+      const result = await pool.query<CatalogResult>(
+        `SELECT
+           p.slug,
+           p.name,
+           p.scientific_name,
+           p.description,
+           p.sunlight,
+           p.watering,
+           p.mature_height,
+           p.product_status,
+           prices.min_price,
+           (p.images::jsonb->0->>'url') AS image
+         FROM products p
+         ${priceJoin}
+         WHERE p.deleted_at IS NULL AND (${ilikeOnlyWhere})${ilikePriceWhere}
+         ORDER BY
+           CASE WHEN p.name ILIKE ${fbTokenPlaceholders[0]} THEN 0 ELSE 1 END,
+           p.created_at DESC
+         LIMIT 8`,
+        ilikeParams,
+      );
+
+      return {
+        results: result.rows.map((r) => ({
+          ...r,
+          description: r.description ? r.description.slice(0, 150) : null,
+        })),
+        count: result.rows.length,
+      };
+    }
   }
 }
 

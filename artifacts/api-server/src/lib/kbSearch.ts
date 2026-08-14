@@ -441,6 +441,15 @@ export async function searchKnowledgeBase(params: {
     sqlParams.push(keywords);
   }
 
+  // v3.10: tsvector full-text search (stemming-aware) — PRIMARY keyword path.
+  // Replaces the old ARRAY(... INTERSECT ...) approach with proper stemming:
+  //   "watering" → "water", "mangoes" → "mango", "growing" → "grow"
+  // The search_tsvector column is maintained by a trigger (see ensureAiTables.ts).
+  // We pass the raw query (not just keywords) so websearch_to_tsquery can
+  // parse user-style syntax (OR, -exclude, "phrases").
+  const tsQueryParamIdx = paramIdx++;
+  sqlParams.push(query);
+
   // Category filter: search within this category + descendants (via path).
   if (params.categoryId !== undefined && Number.isInteger(params.categoryId)) {
     whereClauses.push(
@@ -479,17 +488,45 @@ export async function searchKnowledgeBase(params: {
     ? `(1 - (e.embedding <=> $${embeddingParamIdx}::vector)) * ${WEIGHT_SEMANTIC}`
     : `0`;
 
-  // Keyword overlap: fraction of the entry's keywords that appear in the
-  // query's keyword array. 0 if no query keywords or entry has no keywords.
-  // Using COALESCE + NULLIF to avoid division by zero.
-  const keywordSelect = keywordArrayParamIdx
+  // v3.10: Keyword matching uses ts_rank_cd on search_tsvector (stemming-aware)
+  // as PRIMARY, with the old ARRAY(... INTERSECT ...) keyword-overlap as a
+  // SECONDARY signal for the keywords[] array (which may contain curated
+  // terms not in the body text).
+  //
+  // ts_rank_cd returns 0.0-~1.0, so we scale it to 0-1 for the composite
+  // score. The old keyword_overlap (0-1) is kept as a tiebreaker — if
+  // ts_rank_cd is 0 (no tsvector match) but the query keywords overlap with
+  // the entry's keywords[] array, we still get a non-zero score.
+  //
+  // This hybrid catches:
+  //   - "watering frequency" → matches "water" + "frequent" (stemming)
+  //   - curated keywords not in body text (e.g. "fungus" in keywords[] but
+  //     the entry says "fungal infection" — tsvector stems "fungal" → "fung"
+  //     which matches "fungus" → "fung", but the keyword array is a backup)
+  const tsRankExpr = `ts_rank_cd(e.search_tsvector, websearch_to_tsquery('english', $${tsQueryParamIdx}))`;
+  const keywordOverlapExpr = keywordArrayParamIdx
     ? `COALESCE(
         array_length(ARRAY(SELECT unnest(e.keywords) INTERSECT SELECT unnest($${keywordArrayParamIdx}::text[])), 1)::float
           / NULLIF(array_length(e.keywords, 1), 0)::float,
         0
       )`
     : `0`;
+
+  // Combined keyword score: ts_rank_cd (PRIMARY, weight 0.7) + keyword_overlap (SECONDARY, weight 0.3).
+  // Both are 0-1, so the combined is 0-1. This keeps the WEIGHT_KEYWORD
+  // (0.20) contribution in the composite score unchanged.
+  const keywordSelect = `LEAST(1.0, (${tsRankExpr} * 0.7 + ${keywordOverlapExpr} * 0.3))`;
   const keywordOrderBy = `${keywordSelect} * ${WEIGHT_KEYWORD}`;
+
+  // v3.10: WHERE includes the tsvector match so entries with no embedding
+  // AND no keyword-array overlap BUT with a stemming match are still found.
+  // The OR means: semantic (if embedding) OR tsvector match OR keyword overlap.
+  // Previously the WHERE only had `is_active = TRUE` + filters — entries were
+  // returned regardless of match, then ranked by score (0 if no match). Now
+  // we filter to only matching entries, which is more efficient + correct.
+  whereClauses.push(
+    `(${queryEmbedding ? `1 - (e.embedding <=> $${embeddingParamIdx}::vector) > 0.3 OR ` : ""}e.search_tsvector @@ websearch_to_tsquery('english', $${tsQueryParamIdx})${keywordArrayParamIdx ? ` OR ${keywordOverlapExpr} > 0` : ""})`,
+  );
 
   // Authority: min(entry_count / 50, 1.0). 0 if no creator.
   const authoritySelect = `LEAST(COALESCE(c.entry_count, 0)::float / ${AUTHORITY_CAP}, 1.0)`;

@@ -155,6 +155,114 @@ CREATE INDEX IF NOT EXISTS products_name_trgm_idx
 CREATE INDEX IF NOT EXISTS products_description_trgm_idx
   ON products USING gin (description gin_trgm_ops);
 
+-- ─── v3.10: tsvector columns for stemming-aware full-text search ────────────
+--
+-- Industry-standard hybrid pattern:
+--   PRIMARY:  websearch_to_tsquery('english', ...) @@ search_tsvector → ts_rank_cd
+--   FALLBACK: trigram similarity() for typo tolerance (the GIN indexes above)
+--
+-- Stemming catches "watering" → "water", "mangoes" → "mango", "growing" →
+-- "grow" — none of which ILIKE or trigram can do. The Snowball stemmer
+-- ('english' config) handles all of these automatically.
+--
+-- We store the tsvector as a COLUMN (not computed in each query) + maintain
+-- it via a trigger so searches read the precomputed value (fast on large
+-- tables). setweight() prioritizes name (A) > sci_name/excerpt (B) >
+-- description/content (C) so name matches rank higher.
+--
+-- The UPDATE backfills existing rows on first run. The trigger keeps new
+-- rows in sync. Both are idempotent (IF NOT EXISTS / OR REPLACE).
+--
+-- See migration 0006_tsvector_fulltext_search.sql for the full rationale.
+
+-- products: tsvector on (name, scientific_name, description)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS search_tsvector tsvector;
+
+UPDATE products
+SET search_tsvector =
+  setweight(to_tsvector('english', COALESCE(name, '')), 'A') ||
+  setweight(to_tsvector('english', COALESCE(scientific_name, '')), 'B') ||
+  setweight(to_tsvector('english', COALESCE(description, '')), 'C')
+WHERE search_tsvector IS NULL;
+
+CREATE INDEX IF NOT EXISTS products_search_tsvector_idx
+  ON products USING gin (search_tsvector);
+
+DROP TRIGGER IF EXISTS products_search_tsvector_trigger ON products;
+DROP FUNCTION IF EXISTS products_search_tsvector_update();
+CREATE OR REPLACE FUNCTION products_search_tsvector_update() RETURNS trigger AS $$
+BEGIN
+  NEW.search_tsvector :=
+    setweight(to_tsvector('english', COALESCE(NEW.name, '')), 'A') ||
+    setweight(to_tsvector('english', COALESCE(NEW.scientific_name, '')), 'B') ||
+    setweight(to_tsvector('english', COALESCE(NEW.description, '')), 'C');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+CREATE TRIGGER products_search_tsvector_trigger
+  BEFORE INSERT OR UPDATE OF name, scientific_name, description
+  ON products
+  FOR EACH ROW
+  EXECUTE FUNCTION products_search_tsvector_update();
+
+-- blog_posts: tsvector on (title, excerpt, content)
+ALTER TABLE blog_posts ADD COLUMN IF NOT EXISTS search_tsvector tsvector;
+
+UPDATE blog_posts
+SET search_tsvector =
+  setweight(to_tsvector('english', COALESCE(title, '')), 'A') ||
+  setweight(to_tsvector('english', COALESCE(excerpt, '')), 'B') ||
+  setweight(to_tsvector('english', COALESCE(regexp_replace(content, '<[^>]+>', ' ', 'g'), '')), 'C')
+WHERE search_tsvector IS NULL;
+
+CREATE INDEX IF NOT EXISTS blog_posts_search_tsvector_idx
+  ON blog_posts USING gin (search_tsvector);
+
+DROP TRIGGER IF EXISTS blog_posts_search_tsvector_trigger ON blog_posts;
+DROP FUNCTION IF EXISTS blog_posts_search_tsvector_update();
+CREATE OR REPLACE FUNCTION blog_posts_search_tsvector_update() RETURNS trigger AS $$
+BEGIN
+  NEW.search_tsvector :=
+    setweight(to_tsvector('english', COALESCE(NEW.title, '')), 'A') ||
+    setweight(to_tsvector('english', COALESCE(NEW.excerpt, '')), 'B') ||
+    setweight(to_tsvector('english', COALESCE(regexp_replace(NEW.content, '<[^>]+>', ' ', 'g'), '')), 'C');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+CREATE TRIGGER blog_posts_search_tsvector_trigger
+  BEFORE INSERT OR UPDATE OF title, excerpt, content
+  ON blog_posts
+  FOR EACH ROW
+  EXECUTE FUNCTION blog_posts_search_tsvector_update();
+
+-- ai_kb_entries: tsvector on (title, content)
+ALTER TABLE ai_kb_entries ADD COLUMN IF NOT EXISTS search_tsvector tsvector;
+
+UPDATE ai_kb_entries
+SET search_tsvector =
+  setweight(to_tsvector('english', COALESCE(title, '')), 'A') ||
+  setweight(to_tsvector('english', COALESCE(content, '')), 'C')
+WHERE search_tsvector IS NULL;
+
+CREATE INDEX IF NOT EXISTS ai_kb_entries_search_tsvector_idx
+  ON ai_kb_entries USING gin (search_tsvector);
+
+DROP TRIGGER IF EXISTS ai_kb_entries_search_tsvector_trigger ON ai_kb_entries;
+DROP FUNCTION IF EXISTS ai_kb_entries_search_tsvector_update();
+CREATE OR REPLACE FUNCTION ai_kb_entries_search_tsvector_update() RETURNS trigger AS $$
+BEGIN
+  NEW.search_tsvector :=
+    setweight(to_tsvector('english', COALESCE(NEW.title, '')), 'A') ||
+    setweight(to_tsvector('english', COALESCE(NEW.content, '')), 'C');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+CREATE TRIGGER ai_kb_entries_search_tsvector_trigger
+  BEFORE INSERT OR UPDATE OF title, content
+  ON ai_kb_entries
+  FOR EACH ROW
+  EXECUTE FUNCTION ai_kb_entries_search_tsvector_update();
+
 -- ─── v3.2: Prompt versioning ────────────────────────────────────────────────
 -- Stores versioned system prompts so admins can A/B test + roll back
 -- without a code deploy. The "active" version is controlled by the

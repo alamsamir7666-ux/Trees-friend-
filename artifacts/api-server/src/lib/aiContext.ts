@@ -777,50 +777,38 @@ function extractSearchTokens(message: string): string[] {
 async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
   if (tokens.length === 0) return [];
 
-  // v3.7: Hybrid ILIKE + per-token pg_trgm similarity search.
+  // v3.10: Industry-standard hybrid search — tsvector (stemming) PRIMARY,
+  // trigram (typo tolerance) FALLBACK.
   //
-  // Industry-standard pattern (Supabase docs, Elasticsearch multi_match
-  // with fuzziness, Algolia typo-tolerance): combine exact-substring
-  // matching (ILIKE) with fuzzy trigram similarity in one pass, sorted
-  // by a relevance score that boosts exact name hits over fuzzy
-  // description hits.
+  //   PRIMARY:   websearch_to_tsquery('english', $q) @@ search_tsvector
+  //              ranked by ts_rank_cd (cover density)
+  //   FALLBACK:  GREATEST(similarity(col, $t1), ...) > threshold
+  //              for typo-tolerance ("mangoo" → "mango")
   //
-  // Why hybrid (not pure-trigram, not ILIKE-then-trigram-fallback)?
-  //   - ILIKE '%mango%' catches "mango_tree_seedling" (underscored) where
-  //     trigram similarity('mango', 'mango_tree_seedling') may fall below
-  //     threshold because the strings are very different lengths.
-  //   - trigram catches "mangoo" (typo) where ILIKE misses entirely.
-  //   - Combining them in one query catches BOTH in a single round-trip
-  //     instead of the old two-step "ILIKE first, trigram only if 0
-  //     results" pattern, which hid trigram results whenever ANY ILIKE
-  //     result existed (even unrelated ones).
+  // Why tsvector PRIMARY (not ILIKE, not pure trigram)?
+  //   - Stemming: "watering" → "water", "mangoes" → "mango", "growing" →
+  //     "grow". Neither ILIKE nor trigram does this — only the Snowball
+  //     stemmer in to_tsvector('english', ...).
+  //   - Performance: GIN index on search_tsvector → sub-millisecond on
+  //     100K+ rows. ILIKE '%term%' is a seq scan.
+  //   - Relevance: ts_rank_cd orders by cover density (how close matched
+  //     lexemes are), which is more accurate than ILIKE's binary match.
   //
-  // ─── v3.7 bugfix: PER-TOKEN similarity, not joined-string ───────────────
-  // Previously, trigram similarity was computed against
-  // `tokens.join(" ")` (e.g. "mangoo tree name listed website"). That
-  // DILUTED the score: `similarity('Keitt Mango', 'mangoo')` = 0.357
-  // (above 0.3 threshold) but `similarity('Keitt Mango', 'mangoo tree
-  // name listed website')` = 0.13 (below threshold), so the typo
-  // "mangoo" returned zero mangoes despite being a perfect fuzzy match.
+  // Why trigram FALLBACK (not replacement)?
+  //   - Typo tolerance: "mangoo" doesn't stem to "mango" — the stemmer
+  //     treats it as an unknown word. Trigram similarity catches it.
+  //   - Underscored/compound names: "mango_tree_seedling" — trigram
+  //     similarity may fall below threshold (length mismatch), but
+  //     ILIKE catches it. So we keep ILIKE too.
   //
-  // Fix: for each column, compute GREATEST(similarity(col, $t1),
-  // similarity(col, $t2), …) — the best per-token similarity. This is
-  // how Elasticsearch multi_match + fuzziness works internally (best
-  // per-term match wins) and matches user intent: "find me products that
-  // fuzzy-match ANY of my search terms."
+  // The OR in WHERE combines all three: tsvector matches OR ILIKE OR
+  // trigram. ts_rank_cd ranks the tsvector matches highest; the CASE
+  // + similarity() boosts add fine-grained ordering for ILIKE/trigram.
   //
-  // Relevance score (DESC, higher = better match):
-  //   100  if name ILIKE the first token (highest priority — name match)
-  //   80   if scientific_name ILIKE the first token
-  //   60   if description ILIKE the first token
-  //   + greatest_sim(name) * 30  (trigram boost, max ~30)
-  //   + greatest_sim(scientific_name) * 15
-  //   + greatest_sim(description) * 5
-  // The score is computed via CASE + similarity(); NULL scientific_name
-  // is handled by COALESCE so it doesn't poison the row.
-  //
-  // Schema: products uses `deleted_at TIMESTAMP` (null = live), not a
-  // boolean `is_deleted` column. Filter: deleted_at IS NULL.
+  // Schema: products.search_tsvector is maintained by a trigger
+  // (see ensureAiTables.ts / migration 0006). It's a weighted tsvector:
+  //   setweight(name, 'A') || setweight(sci_name, 'B') || setweight(desc, 'C')
+  // so name matches rank higher than description matches.
   const params: unknown[] = [];
   const tokenPlaceholders: string[] = [];
   for (const t of tokens) {
@@ -856,9 +844,24 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
      OR ${greatestSim("COALESCE(scientific_name, '')")} > ${trigramThresholdParam}
      OR ${greatestSim("COALESCE(description, '')")} > ${trigramThresholdParam})`;
 
+  // v3.10: tsvector full-text search (PRIMARY path).
+  // websearch_to_tsquery handles user-style search syntax (OR, -exclude,
+  // "phrases"). The query is built from tokens joined by spaces.
+  const tsQuery = tokens.join(" ");
+  params.push(tsQuery);
+  const tsQueryParam = `$${params.length}`;
+  const tsvectorWhere = `(search_tsvector @@ websearch_to_tsquery('english', ${tsQueryParam}))`;
+
   const firstTokenParam = tokenPlaceholders[0];
+
+  // v3.10: ts_rank_cd for tsvector relevance (cover density — how close
+  // matched lexemes are). Scaled by 1000 so it dominates the CASE/similarity
+  // boosts (ts_rank_cd returns 0.0-~1.0 typically; ×1000 = 0-1000).
+  // The CASE (100/80/60) + similarity boosts (max ~50) act as tie-breakers
+  // for rows with no tsvector match (ILIKE/trigram only).
   const scoreExpr = `(
-    CASE WHEN name ILIKE ${firstTokenParam} THEN 100
+    ts_rank_cd(search_tsvector, websearch_to_tsquery('english', ${tsQueryParam})) * 1000
+    + CASE WHEN name ILIKE ${firstTokenParam} THEN 100
          WHEN scientific_name ILIKE ${firstTokenParam} THEN 80
          WHEN description ILIKE ${firstTokenParam} THEN 60
          ELSE 0 END
@@ -868,49 +871,58 @@ async function searchProducts(tokens: string[]): Promise<ProductRow[]> {
   )`;
 
   try {
-    // Primary path: hybrid ILIKE + trigram. Respect the soft-delete column.
+    // Primary path: tsvector + ILIKE + trigram. Respect the soft-delete column.
     const result = await pool.query(
       `SELECT name, slug, scientific_name, description, sunlight, watering,
               soil_type, mature_height, product_status,
               ${scoreExpr} AS relevance_score
        FROM products
        WHERE deleted_at IS NULL
-         AND (${ilikeWhere} OR ${trigramWhere})
+         AND (${tsvectorWhere} OR ${ilikeWhere} OR ${trigramWhere})
        ORDER BY relevance_score DESC, created_at DESC
        LIMIT ${MAX_PRODUCTS}`,
       params,
     );
     return result.rows as ProductRow[];
   } catch (err) {
-    // pg_trgm extension missing OR `similarity` function unavailable.
-    // Fall back to ILIKE-only (the v3.0 behavior). Non-fatal — the user
-    // gets exact-substring matches; only fuzzy/typo tolerance is lost.
+    // tsvector column missing OR pg_trgm extension missing. Fall back to
+    // ILIKE + trigram (the v3.7 behavior). Non-fatal — the user gets
+    // substring + typo matches; only stemming is lost.
     logger.debug(
       { err: (err as any)?.message ?? String(err), tokens },
-      "AI context: hybrid trigram search unavailable, falling back to ILIKE-only",
+      "AI context: tsvector search unavailable, falling back to ILIKE + trigram",
     );
     try {
       const result = await pool.query(
         `SELECT name, slug, scientific_name, description, sunlight, watering,
-                soil_type, mature_height, product_status
+                soil_type, mature_height, product_status,
+                (CASE WHEN name ILIKE ${firstTokenParam} THEN 100
+                      WHEN scientific_name ILIKE ${firstTokenParam} THEN 80
+                      WHEN description ILIKE ${firstTokenParam} THEN 60
+                      ELSE 0 END
+                 + ${greatestSim("name")} * 30
+                 + ${greatestSim("COALESCE(scientific_name, '')")} * 15
+                 + ${greatestSim("COALESCE(description, '')")} * 5
+                ) AS relevance_score
          FROM products
-         WHERE deleted_at IS NULL AND (${ilikeWhere})
-         ORDER BY
-           CASE WHEN name ILIKE ${firstTokenParam} THEN 0 ELSE 1 END,
-           created_at DESC
+         WHERE deleted_at IS NULL
+           AND (${ilikeWhere} OR ${trigramWhere})
+         ORDER BY relevance_score DESC, created_at DESC
          LIMIT ${MAX_PRODUCTS}`,
-        params.slice(0, tokenPlaceholders.length),
+        params,
       );
       return result.rows as ProductRow[];
     } catch {
-      // Final fallback: older DBs may not have the deleted_at column yet
-      // (migrations partially applied). Drop the soft-delete filter.
+      // Final fallback: older DBs may not have the deleted_at column or
+      // pg_trgm extension. Drop both — pure ILIKE (v3.0 behavior).
       const result = await pool.query(
         `SELECT name, slug, scientific_name, description, sunlight, watering,
                 soil_type, mature_height, product_status
          FROM products
          WHERE (${ilikeWhere})
-         ORDER BY created_at DESC
+         ORDER BY
+           CASE WHEN name ILIKE ${firstTokenParam} THEN 0 ELSE 1 END,
+           created_at DESC
          LIMIT ${MAX_PRODUCTS}`,
         params.slice(0, tokenPlaceholders.length),
       );
@@ -924,6 +936,9 @@ async function searchBlogPosts(tokens: string[]): Promise<BlogRow[]> {
   // Schema: blog_posts has `content` (not `body`) and `published_at`
   // (null = draft). No `is_published` boolean column — filter on
   // published_at IS NOT NULL for "live" posts.
+  //
+  // v3.10: uses search_tsvector (stemming-aware) as PRIMARY + ILIKE as
+  // fallback. Same pattern as searchProducts.
   const conditions: string[] = [];
   const params: unknown[] = [];
   for (const t of tokens) {
@@ -934,30 +949,54 @@ async function searchBlogPosts(tokens: string[]): Promise<BlogRow[]> {
     params.push(`%${t}%`);
     conditions.push(`content ILIKE $${params.length}`);
   }
-  const where = conditions.join(" OR ");
+  const ilikeWhere = conditions.join(" OR ");
+
+  // v3.10: tsvector path.
+  const tsQuery = tokens.join(" ");
+  params.push(tsQuery);
+  const tsQueryParam = `$${params.length}`;
+  const tsvectorWhere = `(search_tsvector @@ websearch_to_tsquery('english', ${tsQueryParam}))`;
 
   try {
     const result = await pool.query(
-      `SELECT title, slug, excerpt, content
+      `SELECT title, slug, excerpt, content,
+              ts_rank_cd(search_tsvector, websearch_to_tsquery('english', ${tsQueryParam})) AS relevance_score
        FROM blog_posts
-       WHERE published_at IS NOT NULL AND (${where})
-       ORDER BY published_at DESC NULLS LAST, created_at DESC
+       WHERE published_at IS NOT NULL AND (${tsvectorWhere} OR ${ilikeWhere})
+       ORDER BY relevance_score DESC NULLS LAST, published_at DESC NULLS LAST, created_at DESC
        LIMIT ${MAX_BLOG_POSTS}`,
       params,
     );
     return result.rows as BlogRow[];
-  } catch {
-    // Fallback: if published_at column doesn't exist (very old DB), just
-    // return all matches. Better to have context than none.
-    const result = await pool.query(
-      `SELECT title, slug, excerpt, content
-       FROM blog_posts
-       WHERE (${where})
-       ORDER BY created_at DESC
-       LIMIT ${MAX_BLOG_POSTS}`,
-      params,
+  } catch (err) {
+    // tsvector column missing — fall back to ILIKE-only.
+    logger.debug(
+      { err: (err as any)?.message ?? String(err), tokens },
+      "AI context: blog_posts tsvector search unavailable, falling back to ILIKE-only",
     );
-    return result.rows as BlogRow[];
+    try {
+      const result = await pool.query(
+        `SELECT title, slug, excerpt, content
+         FROM blog_posts
+         WHERE published_at IS NOT NULL AND (${ilikeWhere})
+         ORDER BY published_at DESC NULLS LAST, created_at DESC
+         LIMIT ${MAX_BLOG_POSTS}`,
+        params.slice(0, params.length - 1),
+      );
+      return result.rows as BlogRow[];
+    } catch {
+      // Fallback: if published_at column doesn't exist (very old DB), just
+      // return all matches. Better to have context than none.
+      const result = await pool.query(
+        `SELECT title, slug, excerpt, content
+         FROM blog_posts
+         WHERE (${ilikeWhere})
+         ORDER BY created_at DESC
+         LIMIT ${MAX_BLOG_POSTS}`,
+        params.slice(0, params.length - 1),
+      );
+      return result.rows as BlogRow[];
+    }
   }
 }
 
