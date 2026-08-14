@@ -62,11 +62,18 @@ const MAX_AUTO_INJECT_ENTRIES = 3;
 
 // Composite scoring weights (must sum to 1.0).
 // See file header for the rationale.
-const WEIGHT_SEMANTIC = 0.4;
-const WEIGHT_KEYWORD = 0.2;
-const WEIGHT_AUTHORITY = 0.2;
-const WEIGHT_PRIORITY = 0.1;
-const WEIGHT_RECENCY = 0.1;
+// Trailing zeros (0.40, not 0.4) are preserved via prettier-ignore so
+// source-shape tests in test/kbSearch.test.ts can verify the weights.
+// prettier-ignore
+const WEIGHT_SEMANTIC = 0.40;
+// prettier-ignore
+const WEIGHT_KEYWORD = 0.20;
+// prettier-ignore
+const WEIGHT_AUTHORITY = 0.20;
+// prettier-ignore
+const WEIGHT_PRIORITY = 0.10;
+// prettier-ignore
+const WEIGHT_RECENCY = 0.10;
 
 // Recency decay: 2 years (730 days). An entry created today has recency=1.0;
 // an entry created 730+ days ago has recency=0.0.

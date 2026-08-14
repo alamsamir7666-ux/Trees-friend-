@@ -888,8 +888,44 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
 
   // v3.0: Now that the user message is persisted, check if we should
   // summarize the conversation. This may call Gemini (to generate the
-  // summary) -- if it fails, we proceed without a summary (non-fatal).
-  const memory = await maybeSummarize(session.id, existingMemory);
+  // summary) — if it fails, we proceed without a summary (non-fatal).
+  //
+  // ─── v3.8: fire-and-forget (non-blocking) summarization ─────────────
+  //
+  // Previously this was `const memory = await maybeSummarize(...)`, which
+  // BLOCKED the request path for 1-3s while Gemini generated the summary
+  // BEFORE the first token could stream. Every threshold-crossing turn
+  // (turn 12, then every 8 turns after) added 1-3s of dead latency.
+  //
+  // The summary is NOT needed for the current turn — it's needed for
+  // FUTURE turns (to compress older messages so they fit the token budget).
+  // The current turn already has the last AI_MAX_HISTORY messages in the
+  // history array, which covers recent context. The summary only matters
+  // for messages OLDER than that, which the model wouldn't see either way.
+  //
+  // Fix: kick off the summarization in the background + use the EXISTING
+  // memory (loaded above) for the current turn. The new summary lands in
+  // the DB + is picked up by the NEXT request's `loadSessionMemory`.
+  //
+  // Trade-off: the current turn runs with a stale (or null) summary. This
+  // is the standard industry pattern (OpenAI Assistants, Anthropic prompt
+  // caching, LangChain memory all do this) — the freshness gain of one
+  // turn is never worth 1-3s of blocking latency.
+  //
+  // The background promise is detached + self-contained:
+  //   - It catches its own errors (already does — maybeSummarize has an
+  //     outer try/catch that returns existingMemory on failure).
+  //   - We attach a `.catch()` here as a second safety net so an
+  //     unexpected throw never becomes an unhandled rejection (which
+  //     would crash the process in Node 15+ / Vercel).
+  //   - We DO NOT await it — the request proceeds immediately.
+  maybeSummarize(session.id, existingMemory).catch((err) => {
+    logger.warn(
+      { err: (err as Error)?.message, sessionId: session.id },
+      "Memory: background maybeSummarize failed (non-fatal — current turn uses existing memory)",
+    );
+  });
+  const memory = existingMemory;
 
   // ─── 8. Build Gemini history (respects summary cutoff) ───
   // If a summary exists, only messages with id > cutoffId are included.
