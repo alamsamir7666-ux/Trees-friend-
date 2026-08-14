@@ -514,17 +514,19 @@ IMPORTANT: Order/account queries are IN-SCOPE. When a user asks about their orde
 
 LANGUAGE: Reply in the same language as the user's message. Support English, বাংলা (Bengali Unicode), and Banglish (Bengali written in Latin script). If the user mixes languages, mirror their mix.
 
-TOOLS (v2.5):
+TOOLS (v3.0 — Phase 3):
 You have access to function-calling tools that let you query the TreeFriend database:
 - search_catalog(query, max_price?, sunlight?) — search products with optional filters
 - get_product_care(product_slug) — get detailed care info for a specific product
 - get_user_orders() — get the signed-in user's recent orders (requires sign-in)
 - get_order_details(order_number) — get detailed status for a specific order
+- search_knowledge_base(query, category_slug?, product_slug?, max_results?) — search curated plant care content from creators
 
 USE TOOLS when:
 - The user asks about specific products → call search_catalog first, then get_product_care if they want details
 - The user asks "where is my order" or "what did I buy" → call get_user_orders
 - The user mentions a specific order number → call get_order_details
+- The user asks a specific botanical question and no KNOWLEDGE BASE CONTEXT was injected → call search_knowledge_base
 
 If a tool returns "not signed in", tell the user to sign in to access that feature.
 Don't call tools unnecessarily — if the CATALOG CONTEXT already has the answer, use it.
@@ -538,6 +540,16 @@ RULES:
 - Don't be sycophantic ("Great question!"). Just answer.
 - v3.0: If a PRIOR CONVERSATION SUMMARY block is present, use it for long-term context. Don't re-ask questions the summary already answers (e.g. if the summary says the user has a balcony garden, don't ask about their setup again).
 
+KNOWLEDGE BASE (v3.0 — Phase 3):
+When a KNOWLEDGE BASE CONTEXT block is present, use it as your PRIMARY source for factual information. The KB contains vetted content from plant care experts and content creators — it's more accurate and up-to-date than your training data.
+
+Rules for KB usage:
+- If the KB context answers the user's question, use the KB content and cite the creator (e.g. "According to Green Garden BD's YouTube video...").
+- If the KB context partially answers the question, use what's relevant + supplement with your training data for missing details.
+- If the KB context doesn't answer the question, fall back to your training data (no citation needed).
+- Always call the search_knowledge_base tool if the user asks a specific botanical question and no KB context was injected. The tool returns more detailed results than the pre-injected context.
+- NEVER invent content that isn't in the KB or your training data. If you don't know, say so.
+
 FORMATTING — STRICTLY FOLLOW:
 After your main answer, ALWAYS append a follow-up suggestions block in this EXACT format (the frontend parses it to render clickable chips):
 
@@ -547,37 +559,46 @@ After your main answer, ALWAYS append a follow-up suggestions block in this EXAC
 - Third short question
 [/followups]
 
-The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.{{summary}}{{catalog}}
+The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.{{summary}}{{knowledge}}{{catalog}}
 
 REMEMBER: Stay strictly on-topic. If you're unsure whether a question is botanical, refuse politely. Always include the [followups]...[/followups] block at the end.`;
 
 /**
- * Renders a prompt template by replacing `{{summary}}` and `{{catalog}}`
- * placeholders with the dynamic values.
+ * Renders a prompt template by replacing `{{summary}}`, `{{knowledge}}`,
+ * and `{{catalog}}` placeholders with the dynamic values.
+ *
+ * Placeholder order in the template: `{{summary}}{{knowledge}}{{catalog}}`
+ * (knowledge is BEFORE catalog so the AI sees KB context first — higher
+ * priority than product listings).
  *
  * If a placeholder is missing from the template, the dynamic value is
- * appended at the end (backward compat with prompts that don't include
- * the placeholders — they still get the context, just at the end).
+ * appended in the right position (backward compat with prompts that
+ * don't include the placeholders — they still get the context, just at
+ * the end). The knowledge block (if non-empty) is inserted BEFORE the
+ * catalog block in the fallback path.
  *
  * This is the single source of truth for placeholder substitution.
  * Both the DB-driven path (route uses active prompt text from DB) and
  * the fallback path (route uses SYSTEM_PROMPT_TEMPLATE_V1) go through
  * this function, ensuring consistent behavior.
  *
- * @param template The prompt text with optional `{{summary}}`/`{{catalog}}` placeholders.
+ * @param template The prompt text with optional `{{summary}}`/`{{knowledge}}`/`{{catalog}}` placeholders.
  * @param summaryBlock The conversation summary block (or "" if no summary).
  * @param catalogContext The catalog search results (or "" if no matches).
+ * @param knowledgeBlock The KB context block (or "" if no high-confidence KB matches).
  */
 export function renderPromptTemplate(
   template: string,
   summaryBlock: string,
   catalogContext: string,
+  knowledgeBlock: string = "",
 ): string {
   const contextBlock = catalogContext
     ? `\n\nCATALOG CONTEXT (use when relevant; cite exact product names):\n${catalogContext}\n`
     : `\n\nCATALOG CONTEXT: (no matching products or articles found for this query)\n`;
 
   const summary = summaryBlock || "";
+  const knowledge = knowledgeBlock || "";
 
   let rendered = template;
 
@@ -587,6 +608,19 @@ export function renderPromptTemplate(
   } else if (summary) {
     // No placeholder but summary exists — append at the end (backward compat).
     rendered = rendered + "\n" + summary;
+  }
+
+  // Replace {{knowledge}} placeholder if present.
+  if (rendered.includes("{{knowledge}}")) {
+    rendered = rendered.replaceAll("{{knowledge}}", knowledge);
+  } else if (knowledge) {
+    // No placeholder but knowledge exists — insert before the catalog
+    // block (so KB context appears first = higher priority). We find the
+    // catalog block + prepend the knowledge block to it.
+    rendered = rendered.replace(
+      /(\n\nCATALOG CONTEXT)/,
+      `\n\n${knowledge}$1`,
+    );
   }
 
   // Replace {{catalog}} placeholder if present.
@@ -620,8 +654,12 @@ export function renderPromptTemplate(
  *   - Future code that needs to build a prompt without the versioning
  *     system (e.g. a one-off script).
  */
-export function buildSystemPrompt(catalogContext: string, summaryBlock: string = ""): string {
-  return renderPromptTemplate(SYSTEM_PROMPT_TEMPLATE_V1, summaryBlock, catalogContext);
+export function buildSystemPrompt(
+  catalogContext: string,
+  summaryBlock: string = "",
+  knowledgeBlock: string = "",
+): string {
+  return renderPromptTemplate(SYSTEM_PROMPT_TEMPLATE_V1, summaryBlock, catalogContext, knowledgeBlock);
 }
 
 // ─── Internals ───────────────────────────────────────────────────────────────

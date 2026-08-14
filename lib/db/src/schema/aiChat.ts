@@ -129,6 +129,20 @@ export const aiChatMessagesTable = pgTable(
     // Gemini because it was captured in the session summary. Lets the
     // admin see which messages are "compressed" vs sent verbatim.
     summarized: boolean("summarized").default(false).notNull(),
+
+    // ─── Phase 3: KB usage logging ──────────────────────────────────────────
+    // Tracks which KB entries were used for each assistant response. All
+    // four columns are nullable (NULL for user messages + legacy rows
+    // created before Phase 3). See ensureAiTables.ts for the full docs.
+    //
+    //   kbHit              — TRUE if KB context was injected OR the tool was called.
+    //   kbEntriesUsed      — array of ai_kb_entries.id values injected into the prompt.
+    //   kbSearchPerformed  — TRUE if the AI called search_knowledge_base.
+    //   kbContextInjected  — TRUE if KB context was auto-injected (pre-search).
+    kbHit: boolean("kb_hit"),
+    kbEntriesUsed: integer("kb_entries_used").array(),
+    kbSearchPerformed: boolean("kb_search_performed"),
+    kbContextInjected: boolean("kb_context_injected"),
   },
   (table) => [
     // The hot path is "fetch the last N messages for a session, oldest first"
@@ -141,6 +155,11 @@ export const aiChatMessagesTable = pgTable(
       .where(sql`off_topic = true`),
     // v3.0: model-usage analytics (group by model, count, avg response_ms).
     index("ai_chat_messages_model_idx").on(table.model),
+    // Phase 3: KB hit-rate dashboard (queries last 30 days of assistant
+    // messages where kb_hit = TRUE). Partial index keeps it small.
+    index("ai_chat_messages_kb_hit_idx")
+      .on(table.createdAt)
+      .where(sql`kb_hit = true`),
   ],
 );
 

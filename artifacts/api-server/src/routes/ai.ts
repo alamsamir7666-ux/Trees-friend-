@@ -67,6 +67,7 @@ import {
   setSemanticCachedResponse,
 } from "../lib/embeddingCache";
 import { getActivePrompt } from "../lib/promptVersioning";
+import { getTopKbEntriesForPrompt, formatKbContextForPrompt } from "../lib/kbSearch";
 import {
   generateFollowupsStructured,
   formatFollowupsBlock,
@@ -569,14 +570,20 @@ async function persistMessage(
     costUsd?: number;
     provider?: string;
     promptVersion?: string;
+    // Phase 3: KB usage logging (only set on assistant messages).
+    kbHit?: boolean;
+    kbEntriesUsed?: number[] | null;
+    kbSearchPerformed?: boolean;
+    kbContextInjected?: boolean;
   } = {},
 ): Promise<number | undefined> {
   try {
     const result = await pool.query<{ id: number }>(
       `INSERT INTO ai_chat_messages (session_id, role, content, off_topic, greeting,
                                       pii_redacted, model, response_ms, token_count,
-                                      cost_usd, provider, prompt_version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                      cost_usd, provider, prompt_version,
+                                      kb_hit, kb_entries_used, kb_search_performed, kb_context_injected)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING id`,
       [
         sessionId,
@@ -591,6 +598,12 @@ async function persistMessage(
         options.costUsd ?? null,
         options.provider ?? null,
         options.promptVersion ?? null,
+        // Phase 3: KB usage columns. NULL for user messages + legacy callers
+        // that don't pass the KB options. The DB columns are nullable.
+        options.kbHit ?? null,
+        options.kbEntriesUsed ?? null,
+        options.kbSearchPerformed ?? null,
+        options.kbContextInjected ?? null,
       ],
     );
     // Bump updated_at on the session so we can sort by "most recently active"
@@ -832,10 +845,32 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   const promptVersionInfo = await getActivePrompt();
   const catalogContext = await buildCatalogContext(safeMessage);
   const summaryBlock = buildSummaryPromptBlock(memory.summary);
+
+  // ─── Phase 3: Build Knowledge Base context ────────────────────────────────
+  // Pre-search the KB for the user's message. If high-confidence matches
+  // are found (score > 0.5), inject the top 3 into the system prompt as
+  // "KNOWLEDGE BASE CONTEXT". The AI uses this as its primary source.
+  // If no high-confidence matches, the AI can still call the
+  // search_knowledge_base tool on-demand (declared in aiTools.ts).
+  const kbContext = await getTopKbEntriesForPrompt(safeMessage, 3);
+  const knowledgeBlock = kbContext.injected
+    ? formatKbContextForPrompt(kbContext.entries)
+    : "";
+  if (kbContext.injected) {
+    logger.info(
+      {
+        entryCount: kbContext.entries.length,
+        topScore: kbContext.entries[0]?.score,
+        entryIds: kbContext.entries.map((e) => e.entry.id),
+      },
+      "AI: KB context injected into prompt",
+    );
+  }
+
   const systemPrompt =
     promptVersionInfo.text && promptVersionInfo.text.trim().length > 0
-      ? renderPromptTemplate(promptVersionInfo.text, summaryBlock, catalogContext)
-      : buildSystemPrompt(catalogContext, summaryBlock);
+      ? renderPromptTemplate(promptVersionInfo.text, summaryBlock, catalogContext, knowledgeBlock)
+      : buildSystemPrompt(catalogContext, summaryBlock, knowledgeBlock);
 
   // ─── 10. Set up SSE response ───
   res.setHeader("Content-Type", "text/event-stream");
@@ -1093,6 +1128,11 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     // We need its DB id so the frontend can wire up feedback buttons.
     // v3.0: also persist model, response_ms, and token_count.
     // v3.2: also persist cost_usd, provider, prompt_version.
+    // Phase 3: also persist KB usage (kb_hit, kb_entries_used, kb_search_performed, kb_context_injected).
+    const kbSearchPerformed = (metaHolder.value?.toolCalls ?? []).includes("search_knowledge_base");
+    const kbEntriesUsed = kbContext.injected
+      ? kbContext.entries.map((e) => e.entry.id)
+      : null;
     assistantMsgId = await persistMessage(session.id, "assistant", fullResponse, {
       model: metaHolder.value?.model,
       responseMs: Date.now() - requestStartTime,
@@ -1100,6 +1140,12 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       costUsd: costBreakdown?.costUsd,
       provider: metaHolder.value?.provider,
       promptVersion: promptVersionInfo.version,
+      // Phase 3: KB usage logging.
+      // kb_hit = TRUE if KB context was injected OR the AI called the tool.
+      kbHit: kbContext.injected || kbSearchPerformed,
+      kbEntriesUsed,
+      kbSearchPerformed,
+      kbContextInjected: kbContext.injected,
     });
 
     // v3.2/v3.4: store the response in BOTH caches for future hits.

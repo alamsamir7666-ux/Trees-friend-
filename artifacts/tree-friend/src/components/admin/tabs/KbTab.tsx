@@ -33,6 +33,8 @@ import {
   FolderOpen,
   ArrowRightCircle,
   AlertCircle,
+  Sparkles,
+  TrendingUp,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -42,6 +44,8 @@ import {
   fetchKbSource,
   fetchKbEntries,
   fetchKbEntry,
+  fetchKbInsights,
+  testKbSearch,
   updateKbCategory,
   moveKbCategory,
   deleteKbCategory,
@@ -61,6 +65,8 @@ import {
   type KbEntry,
   type KbChunkSuggestion,
   type KbChunkResult,
+  type KbInsights,
+  type KbSearchTestResponse,
 } from "@/lib/kbApi";
 import { KbCategoryModal } from "@/components/admin/modals/KbCategoryModal";
 import { KbSourceUploadModal } from "@/components/admin/modals/KbSourceUploadModal";
@@ -79,7 +85,7 @@ import { KbEntryEditorModal } from "@/components/admin/modals/KbEntryEditorModal
  */
 export function KbTab() {
   const apiFetch = useApiFetch();
-  const [activeSubTab, setActiveSubTab] = useState<"categories" | "sources" | "entries">(
+  const [activeSubTab, setActiveSubTab] = useState<"categories" | "sources" | "entries" | "insights">(
     "categories",
   );
   // Shared category tree (used by Categories view + as dropdown options in
@@ -118,7 +124,7 @@ export function KbTab() {
     <div className="space-y-4">
       {/* Sub-tab navigation */}
       <div className="flex gap-1 border-b">
-        {(["categories", "sources", "entries"] as const).map((id) => (
+        {(["categories", "sources", "entries", "insights"] as const).map((id) => (
           <button
             key={id}
             onClick={() => setActiveSubTab(id)}
@@ -131,6 +137,7 @@ export function KbTab() {
             {id === "categories" && "Categories"}
             {id === "sources" && "Sources"}
             {id === "entries" && "Entries"}
+            {id === "insights" && "Insights"}
           </button>
         ))}
       </div>
@@ -150,6 +157,7 @@ export function KbTab() {
         />
       )}
       {activeSubTab === "entries" && <KbEntriesView tree={tree} />}
+      {activeSubTab === "insights" && <KbInsightsView />}
     </div>
   );
 }
@@ -1667,6 +1675,343 @@ function KbEntriesView({ tree }: { tree: KbCategoryNode[] }) {
           refetch();
         }}
       />
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 3: KbInsightsView ────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * KB Insights view — admin dashboard for monitoring KB usage.
+ *
+ * Shows:
+ *   - Stat cards: Total Entries, Active Entries, Entries with Embeddings,
+ *     KB Hit Rate (30 days).
+ *   - Entries per category (horizontal bar chart — top 10).
+ *   - Entries per creator (horizontal bar chart — top 10).
+ *   - Search tester: a text input + "Search" button that calls
+ *     POST /api/ai/admin/kb/search + shows results with scores + breakdown.
+ *
+ * Data is fetched on mount + on "Refresh" button click. The search tester
+ * has its own state (query + results) so it doesn't refetch the stats.
+ */
+function KbInsightsView() {
+  const apiFetch = useApiFetch();
+  const [insights, setInsights] = useState<KbInsights | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Search tester state.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<KbSearchTestResponse | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+
+  const refetch = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const data = await fetchKbInsights(apiFetch);
+      setInsights(data);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load KB insights");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [apiFetch]);
+
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
+
+  async function handleSearch(e: React.FormEvent) {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setSearchError("");
+    try {
+      const result = await testKbSearch(apiFetch, searchQuery.trim(), { maxResults: 10 });
+      setSearchResults(result);
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : "Search failed");
+      setSearchResults(null);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        {[1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} className="h-24 rounded-xl" />
+        ))}
+      </div>
+    );
+  }
+
+  if (!insights) {
+    return (
+      <div className="bg-card rounded-2xl border p-8 text-center text-sm text-muted-foreground">
+        Failed to load insights.{" "}
+        <button onClick={refetch} className="text-primary hover:underline">
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  const maxCategoryCount = Math.max(...insights.entriesByCategory.map((c) => c.count), 1);
+  const maxCreatorCount = Math.max(...insights.entriesByCreator.map((c) => c.count), 1);
+
+  return (
+    <div className="space-y-4">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">KB Insights</h2>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={refetch}
+          disabled={refreshing}
+          className="rounded-xl"
+        >
+          <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
+      </div>
+
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard
+          label="Total Entries"
+          value={insights.totalEntries}
+          icon={<BookOpen className="h-5 w-5" />}
+        />
+        <StatCard
+          label="Active Entries"
+          value={insights.activeEntries}
+          icon={<BookOpen className="h-5 w-5" />}
+          subtitle={`${insights.totalEntries > 0 ? Math.round((insights.activeEntries / insights.totalEntries) * 100) : 0}% of total`}
+        />
+        <StatCard
+          label="With Embeddings"
+          value={insights.entriesWithEmbeddings}
+          icon={<Sparkles className="h-5 w-5" />}
+          subtitle={`${insights.totalEntries > 0 ? Math.round((insights.entriesWithEmbeddings / insights.totalEntries) * 100) : 0}% of total`}
+        />
+        <StatCard
+          label="KB Hit Rate (30d)"
+          value={`${insights.hitRate.hitRatePercent}%`}
+          icon={<TrendingUp className="h-5 w-5" />}
+          subtitle={`${insights.hitRate.kbHits} / ${insights.hitRate.totalAssistantMessages} responses`}
+        />
+      </div>
+
+      {/* Hit rate breakdown */}
+      <div className="bg-card rounded-2xl border p-5">
+        <h3 className="font-medium mb-3">KB Usage (Last 30 Days)</h3>
+        <div className="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <p className="text-2xl font-bold text-primary">{insights.hitRate.kbHits}</p>
+            <p className="text-xs text-muted-foreground">KB hits (injected or tool called)</p>
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-primary">{insights.hitRate.contextInjected}</p>
+            <p className="text-xs text-muted-foreground">Auto-injected into prompt</p>
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-primary">{insights.hitRate.toolCalls}</p>
+            <p className="text-xs text-muted-foreground">AI called search tool</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Bar charts */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Entries by category */}
+        <div className="bg-card rounded-2xl border p-5">
+          <h3 className="font-medium mb-3">Entries by Category</h3>
+          {insights.entriesByCategory.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No categories yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {insights.entriesByCategory.map((c) => (
+                <div key={c.categoryName} className="flex items-center gap-2 text-sm">
+                  <span className="w-32 truncate text-muted-foreground">{c.categoryName}</span>
+                  <div className="flex-1 h-6 bg-muted rounded-md overflow-hidden">
+                    <div
+                      className="h-full bg-primary/70 rounded-md transition-all"
+                      style={{ width: `${(c.count / maxCategoryCount) * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-8 text-right font-mono text-xs">{c.count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Entries by creator */}
+        <div className="bg-card rounded-2xl border p-5">
+          <h3 className="font-medium mb-3">Entries by Creator</h3>
+          {insights.entriesByCreator.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No creators yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {insights.entriesByCreator.map((c) => (
+                <div key={c.creatorName} className="flex items-center gap-2 text-sm">
+                  <span className="w-32 truncate text-muted-foreground">{c.creatorName}</span>
+                  <div className="flex-1 h-6 bg-muted rounded-md overflow-hidden">
+                    <div
+                      className="h-full bg-primary/70 rounded-md transition-all"
+                      style={{ width: `${(c.count / maxCreatorCount) * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-8 text-right font-mono text-xs">{c.count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Search tester */}
+      <div className="bg-card rounded-2xl border p-5 space-y-3">
+        <div>
+          <h3 className="font-medium">Search Tester</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Test the KB search engine. See what results the AI would get + the score breakdown for each.
+          </p>
+        </div>
+        <form onSubmit={handleSearch} className="flex gap-2">
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="e.g. mango watering summer"
+            className="rounded-xl flex-1"
+            maxLength={200}
+          />
+          <Button
+            type="submit"
+            disabled={searching || !searchQuery.trim()}
+            className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground"
+          >
+            {searching ? "Searching…" : "Search"}
+          </Button>
+        </form>
+
+        {searchError && (
+          <div className="rounded-xl bg-destructive/10 border border-destructive/20 px-3 py-2 text-sm text-destructive flex items-start gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>{searchError}</span>
+          </div>
+        )}
+
+        {searchResults && (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              {searchResults.count} result{searchResults.count === 1 ? "" : "s"} for "{searchResults.query}"
+            </p>
+            {searchResults.results.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                No results. The KB may be empty or no entries match this query.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {searchResults.results.map((r, idx) => (
+                  <div key={r.id} className="rounded-xl border p-3 space-y-2 bg-muted/20">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm">
+                          <span className="text-muted-foreground">#{idx + 1}</span>{" "}
+                          {r.title}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {r.creator && `${r.creator} · `}
+                          {r.category && `${r.category} · `}
+                          {r.source && `${r.source}`}
+                        </p>
+                      </div>
+                      <Badge variant="secondary" className="text-xs shrink-0">
+                        score: {r.score}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground line-clamp-2">{r.content}</p>
+                    {/* Score breakdown */}
+                    <div className="grid grid-cols-5 gap-1 text-[10px]">
+                      <ScoreBar label="Semantic" value={r.breakdown.semantic} weight="40%" />
+                      <ScoreBar label="Keyword" value={r.breakdown.keyword} weight="20%" />
+                      <ScoreBar label="Authority" value={r.breakdown.authority} weight="20%" />
+                      <ScoreBar label="Priority" value={r.breakdown.priority} weight="10%" />
+                      <ScoreBar label="Recency" value={r.breakdown.recency} weight="10%" />
+                    </div>
+                    {r.keywords.length > 0 && (
+                      <div className="flex gap-1 flex-wrap">
+                        {r.keywords.map((k) => (
+                          <Badge key={k} variant="outline" className="text-[10px] px-1.5 py-0">
+                            {k}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Helper components for the insights view ─────────────────────────────────
+
+function StatCard({
+  label,
+  value,
+  icon,
+  subtitle,
+}: {
+  label: string;
+  value: number | string;
+  icon: React.ReactNode;
+  subtitle?: string;
+}) {
+  return (
+    <div className="bg-card rounded-2xl border p-4 space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          {label}
+        </span>
+        <span className="text-muted-foreground">{icon}</span>
+      </div>
+      <p className="text-2xl font-bold">{value}</p>
+      {subtitle && <p className="text-[11px] text-muted-foreground/70">{subtitle}</p>}
+    </div>
+  );
+}
+
+function ScoreBar({ label, value, weight }: { label: string; value: number; weight: string }) {
+  // Color: green for high scores, yellow for medium, red for low.
+  const color =
+    value >= 0.7 ? "bg-green-500/70" : value >= 0.4 ? "bg-yellow-500/70" : "bg-red-500/50";
+  return (
+    <div className="space-y-0.5">
+      <div className="flex justify-between text-muted-foreground">
+        <span>{label}</span>
+        <span className="font-mono">{value.toFixed(2)}</span>
+      </div>
+      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+        <div
+          className={`h-full ${color} rounded-full transition-all`}
+          style={{ width: `${value * 100}%` }}
+        />
+      </div>
+      <p className="text-[9px] text-muted-foreground/60 text-center">w: {weight}</p>
     </div>
   );
 }

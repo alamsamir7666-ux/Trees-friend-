@@ -113,6 +113,7 @@ import {
   ENTRY_PRIORITY_MAX,
 } from "../lib/kbEntries";
 import { chunkTextWithAI } from "../lib/kbChunking";
+import { searchKnowledgeBase, getKbStats } from "../lib/kbSearch";
 
 const router = Router();
 
@@ -2526,6 +2527,122 @@ router.delete("/ai/admin/kb/entries/:id", async (req: Request, res: Response) =>
   } catch (err) {
     logger.error({ err, id }, "AI admin: delete KB entry failed");
     res.status(500).json({ error: "Failed to delete KB entry." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 3: KB Insights + Search Tester ──────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Admin endpoints for monitoring KB usage + testing the search engine.
+// Both inherit requireAdmin (mounted at the top of this file).
+//
+//   GET  /ai/admin/kb/insights — KB stats + hit rate (last 30 days)
+//   POST /ai/admin/kb/search   — test the search engine (admin can see
+//                                what results the AI would get + the score
+//                                breakdown for each result)
+
+// ─── GET /ai/admin/kb/insights ────────────────────────────────────────────────
+// Returns KB stats (total/active/embedded entries, entries by category/creator)
+// + the KB hit rate over the last 30 days (what % of assistant messages used
+// KB context, what % called the search tool, what % had context auto-injected).
+router.get("/ai/admin/kb/insights", async (_req: Request, res: Response) => {
+  try {
+    const stats = await getKbStats();
+
+    // KB hit rate over the last 30 days. Queries ai_chat_messages for the
+    // 4 KB usage columns (added by the Phase 3 migration).
+    const hitRateResult = await pool.query<{
+      total: string;
+      kb_hits: string;
+      tool_calls: string;
+      injected: string;
+    }>(`
+      SELECT
+        COUNT(*)::bigint AS total,
+        COUNT(*) FILTER (WHERE kb_hit = TRUE)::bigint AS kb_hits,
+        COUNT(*) FILTER (WHERE kb_search_performed = TRUE)::bigint AS tool_calls,
+        COUNT(*) FILTER (WHERE kb_context_injected = TRUE)::bigint AS injected
+      FROM ai_chat_messages
+      WHERE role = 'assistant'
+        AND created_at > NOW() - INTERVAL '30 days'
+    `);
+
+    const total = Number(hitRateResult.rows[0]?.total ?? 0);
+    const kbHits = Number(hitRateResult.rows[0]?.kb_hits ?? 0);
+    const hitRate = total > 0 ? Math.round((kbHits / total) * 1000) / 10 : 0;
+
+    res.json({
+      ...stats,
+      hitRate: {
+        totalAssistantMessages: total,
+        kbHits,
+        toolCalls: Number(hitRateResult.rows[0]?.tool_calls ?? 0),
+        contextInjected: Number(hitRateResult.rows[0]?.injected ?? 0),
+        hitRatePercent: hitRate, // e.g. 42.5
+      },
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: KB insights failed");
+    res.status(500).json({ error: "Failed to load KB insights." });
+  }
+});
+
+// ─── POST /ai/admin/kb/search ────────────────────────────────────────────────
+// Tests the KB search engine. Admin can search the KB to see what results
+// the AI would get + the score breakdown (semantic/keyword/authority/
+// priority/recency) for each result. Uses minScore=0.0 so ALL results are
+// returned (even low-relevance ones — admins want to see everything).
+router.post("/ai/admin/kb/search", async (req: Request, res: Response) => {
+  const { query, categoryId, productSlug, maxResults } = (req.body ?? {}) as {
+    query?: string;
+    categoryId?: number;
+    productSlug?: string;
+    maxResults?: number;
+  };
+
+  if (typeof query !== "string" || query.trim().length === 0) {
+    res.status(400).json({ error: "query is required (non-empty string)." });
+    return;
+  }
+
+  try {
+    const results = await searchKnowledgeBase({
+      query: query.trim(),
+      categoryId: typeof categoryId === "number" ? categoryId : undefined,
+      productSlug: typeof productSlug === "string" ? productSlug : undefined,
+      maxResults: Math.min(maxResults ?? 5, 10),
+      // Show all results for debugging — admins want to see what the AI
+      // would get, including low-relevance ones. The AI's actual search
+      // (tool call) uses minScore=0.3; auto-injection uses 0.5.
+      minScore: 0.0,
+    });
+
+    res.json({
+      query: query.trim(),
+      results: results.map((r) => ({
+        id: r.entry.id,
+        title: r.entry.title,
+        content: r.entry.content.slice(0, 500) + (r.entry.content.length > 500 ? "…" : ""),
+        score: Math.round(r.score * 100) / 100,
+        breakdown: {
+          semantic: Math.round(r.semanticSimilarity * 100) / 100,
+          keyword: Math.round(r.keywordOverlap * 100) / 100,
+          authority: Math.round(r.creatorAuthority * 100) / 100,
+          priority: Math.round(r.priority * 100) / 100,
+          recency: Math.round(r.recency * 100) / 100,
+        },
+        creator: r.creator?.name ?? null,
+        category: r.category?.name ?? null,
+        source: r.source?.title ?? null,
+        sourceType: r.source?.type ?? null,
+        keywords: r.entry.keywords,
+      })),
+      count: results.length,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: KB search failed");
+    res.status(500).json({ error: "Failed to search KB." });
   }
 });
 

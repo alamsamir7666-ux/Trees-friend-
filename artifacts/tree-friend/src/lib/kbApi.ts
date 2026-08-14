@@ -578,3 +578,82 @@ export async function deleteKbEntry(apiFetch: ApiFetch, id: number): Promise<voi
   const res = await apiFetch(`/api/ai/admin/kb/entries/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await parseError(res));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Phase 3: KB Insights + Search Tester ──────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Insights types ───────────────────────────────────────────────────────────
+
+export interface KbInsights {
+  totalEntries: number;
+  activeEntries: number;
+  entriesWithEmbeddings: number;
+  entriesByCategory: { categoryName: string; count: number }[];
+  entriesByCreator: { creatorName: string; count: number }[];
+  hitRate: {
+    totalAssistantMessages: number;
+    kbHits: number;
+    toolCalls: number;
+    contextInjected: number;
+    hitRatePercent: number; // e.g. 42.5
+  };
+}
+
+// ─── Search tester types ─────────────────────────────────────────────────────
+
+export interface KbSearchTestResult {
+  id: number;
+  title: string;
+  content: string;
+  score: number;
+  breakdown: {
+    semantic: number;
+    keyword: number;
+    authority: number;
+    priority: number;
+    recency: number;
+  };
+  creator: string | null;
+  category: string | null;
+  source: string | null;
+  sourceType: string | null;
+  keywords: string[];
+}
+
+export interface KbSearchTestResponse {
+  query: string;
+  results: KbSearchTestResult[];
+  count: number;
+}
+
+// ─── API functions ────────────────────────────────────────────────────────────
+
+export async function fetchKbInsights(apiFetch: ApiFetch): Promise<KbInsights> {
+  const res = await apiFetch("/api/ai/admin/kb/insights");
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as KbInsights;
+}
+
+export async function testKbSearch(
+  apiFetch: ApiFetch,
+  query: string,
+  filters?: {
+    categoryId?: number;
+    productSlug?: string;
+    maxResults?: number;
+  },
+): Promise<KbSearchTestResponse> {
+  const res = await apiFetch("/api/ai/admin/kb/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query,
+      categoryId: filters?.categoryId,
+      productSlug: filters?.productSlug,
+      maxResults: filters?.maxResults,
+    }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as KbSearchTestResponse;
+}

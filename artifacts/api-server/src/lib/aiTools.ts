@@ -39,6 +39,7 @@ import { Type } from "@google/genai";
 import type { FunctionDeclaration } from "@google/genai";
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
+import { searchKnowledgeBase } from "./kbSearch";
 
 // ─── Tool declarations (sent to Gemini) ──────────────────────────────────────
 
@@ -83,6 +84,11 @@ export const USER_SCOPED_TOOLS: ReadonlySet<string> = new Set([
 export const CATALOG_TOOLS: ReadonlySet<string> = new Set([
   "search_catalog",
   "get_product_care",
+  // Phase 3: KB tool is catalog-like (public data, cacheable with short TTL).
+  // KB entries are public content (vetted by admins) that changes slowly.
+  // The 5-min TTL (default) is appropriate — if an admin edits an entry,
+  // the cache expires within 5 min + the next query picks up the change.
+  "search_knowledge_base",
 ]);
 
 export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
@@ -162,6 +168,51 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ["order_number"],
     },
   },
+  // ─── Phase 3: Knowledge Base search tool ────────────────────────────────────
+  // The 5th tool. Searches the curated KB (vetted plant care content from
+  // YouTube channels, blogs, manual uploads). The AI should use this as
+  // its PRIMARY source for botanical questions — the content is more
+  // accurate + up-to-date than the model's training data.
+  //
+  // The route also auto-injects the top 3 KB entries into the system
+  // prompt (if they score above 0.5). The AI calls this tool on-demand
+  // for: (a) questions not covered by the injected context, or (b) when
+  // the user asks for more detail on a specific sub-topic.
+  {
+    name: "search_knowledge_base",
+    description:
+      "Search the TreeFriend Knowledge Base for curated plant care guides, " +
+      "care tips, and expert advice from content creators. Returns the most " +
+      "relevant entries with their source attribution (creator name + source type). " +
+      "Use this as your PRIMARY source for botanical questions — the content is " +
+      "vetted by admins and more accurate than your training data. " +
+      "Always cite the creator when using KB content (e.g. 'According to Green Garden BD...').",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        query: {
+          type: Type.STRING,
+          description:
+            "Search keywords — what the user is asking about. " +
+            'e.g. "mango watering summer", "lotus seed planting", "pest control mango"',
+        },
+        category_slug: {
+          type: Type.STRING,
+          description:
+            'Optional category slug to filter within. e.g. "plant-care", "pests-diseases"',
+        },
+        product_slug: {
+          type: Type.STRING,
+          description: "Optional product slug to filter entries linked to a specific product.",
+        },
+        max_results: {
+          type: Type.NUMBER,
+          description: "Maximum results to return (default 5, max 10).",
+        },
+      },
+      required: ["query"],
+    },
+  },
 ];
 
 // ─── Tool executor ───────────────────────────────────────────────────────────
@@ -190,6 +241,8 @@ export async function executeTool(
         return await getUserOrders(userId);
       case "get_order_details":
         return await getOrderDetails(args, userId);
+      case "search_knowledge_base":
+        return await searchKb(args);
       default:
         logger.warn({ name }, "AI tool: unknown function called");
         return { error: `Unknown function: ${name}` };
@@ -442,5 +495,97 @@ async function getOrderDetails(
       })),
       location: [r.city, r.district].filter(Boolean).join(", ") || null,
     },
+  };
+}
+
+// ─── Phase 3: search_knowledge_base tool implementation ──────────────────────
+
+/**
+ * Executes the `search_knowledge_base` tool call from the AI.
+ *
+ * Resolves the optional `category_slug` to a categoryId (single slug, not
+ * a path — Phase 3 supports one level; a future enhancement could parse
+ * "plant-care/mango" as a path). Then calls `searchKnowledgeBase` with
+ * the query + filters.
+ *
+ * Returns `{ results, count }` where each result has:
+ *   - title, content, keywords, category, product, creator, source
+ *   - relevance_score (0-1, rounded to 2 decimals)
+ *
+ * The AI uses this to answer the user's question with KB content + cite
+ * the creator. The route logs that the tool was called (kb_search_performed
+ * = TRUE on the assistant message).
+ *
+ * @internal — called by executeTool, not exported.
+ */
+async function searchKb(args: Record<string, unknown>): Promise<{
+  results: Array<{
+    title: string;
+    content: string;
+    keywords: string[];
+    category: string | null;
+    product: string | null;
+    creator: string | null;
+    source: { type: string; title: string; url: string | null } | null;
+    relevance_score: number;
+  }>;
+  count: number;
+  message?: string;
+}> {
+  const query = String(args.query ?? "").trim();
+  if (!query) {
+    return { results: [], count: 0, message: "Query is required." };
+  }
+
+  const categorySlug = typeof args.category_slug === "string" ? args.category_slug : null;
+  const productSlug = typeof args.product_slug === "string" ? args.product_slug : null;
+  const maxResults = Math.min(Number(args.max_results ?? 5) || 5, 10);
+
+  // Resolve category_slug to categoryId.
+  // Phase 3 supports a single slug (the last segment of a path like
+  // "plant-care/mango" — we take "mango"). A future enhancement could
+  // resolve the full path via the materialized path column.
+  let categoryId: number | undefined;
+  if (categorySlug) {
+    const slug = categorySlug.split("/").pop() ?? categorySlug;
+    try {
+      const result = await pool.query<{ id: number }>(
+        "SELECT id FROM ai_kb_categories WHERE slug = $1 AND is_active = TRUE LIMIT 1",
+        [slug],
+      );
+      if (result.rows.length > 0) {
+        categoryId = result.rows[0].id;
+      }
+    } catch (err) {
+      logger.warn({ err, slug }, "search_knowledge_base: category lookup failed (ignoring filter)");
+    }
+  }
+
+  const results = await searchKnowledgeBase({
+    query,
+    categoryId,
+    productSlug: productSlug ?? undefined,
+    maxResults,
+    minScore: 0.3, // tool threshold — slightly lower than auto-injection (0.5)
+  });
+
+  return {
+    results: results.map((r) => ({
+      title: r.entry.title,
+      content: r.entry.content,
+      keywords: r.entry.keywords,
+      category: r.category?.name ?? null,
+      product: r.entry.productId ? `product_id:${r.entry.productId}` : null,
+      creator: r.creator?.name ?? null,
+      source: r.source
+        ? {
+            type: r.source.type,
+            title: r.source.title,
+            url: r.source.url,
+          }
+        : null,
+      relevance_score: Math.round(r.score * 100) / 100,
+    })),
+    count: results.length,
   };
 }

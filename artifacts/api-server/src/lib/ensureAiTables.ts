@@ -505,6 +505,36 @@ ALTER TABLE ai_kb_sources
   ADD COLUMN IF NOT EXISTS chunking_model TEXT,
   ADD COLUMN IF NOT EXISTS chunked_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS chunking_error TEXT;
+
+-- ─── Phase 3: KB usage logging on assistant messages ────────────────────────
+-- Tracks which KB entries were used for each assistant response. This lets
+-- admins see "80% of answers used KB, 20% used AI training data" and which
+-- specific entries were referenced (for analytics + debugging).
+--
+--   kb_hit               — TRUE if KB context was injected OR the search_knowledge_base
+--                          tool was called. The headline "KB hit rate" metric.
+--   kb_entries_used      — array of ai_kb_entries.id values that were injected
+--                          into the prompt (NULL if none). Doesn't include
+--                          entries returned by the tool call (those go back
+--                          to the AI, not the route — we only log the tool
+--                          was called via kb_search_performed).
+--   kb_search_performed  — TRUE if the AI called the search_knowledge_base tool.
+--   kb_context_injected  — TRUE if KB context was auto-injected into the prompt
+--                          (pre-search, before the AI decides to call the tool).
+--
+-- The partial index on kb_hit = TRUE powers the admin "KB hit rate" dashboard
+-- (queries the last 30 days of assistant messages).
+ALTER TABLE ai_chat_messages
+  ADD COLUMN IF NOT EXISTS kb_hit BOOLEAN,
+  ADD COLUMN IF NOT EXISTS kb_entries_used INTEGER[],
+  ADD COLUMN IF NOT EXISTS kb_search_performed BOOLEAN,
+  ADD COLUMN IF NOT EXISTS kb_context_injected BOOLEAN;
+
+-- Index for fast "KB hit rate" queries (admin dashboard). Partial index
+-- keeps it small (only kb_hit = TRUE rows).
+CREATE INDEX IF NOT EXISTS ai_chat_messages_kb_hit_idx
+  ON ai_chat_messages (created_at DESC)
+  WHERE kb_hit = TRUE;
 `;
 
 export async function ensureAiTables(): Promise<void> {
