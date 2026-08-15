@@ -162,46 +162,37 @@ export function useAiChat(): UseAiChatResult {
   const toolCallCounterRef = useRef(0);
 
   // ─── Load history on mount ──────────────────────────────────────────────
-  // The session token now lives in an HttpOnly cookie set by the server,
-  // so we don't need to read it from localStorage here. We just send the
-  // request with `credentials: "include"` and the browser attaches the
-  // cookie automatically. For legacy users (localStorage still has a bare
-  // UUID), we fall back to putting it in the URL — the server's
-  // `verifySessionAccess` will migrate it to a cookie on the next POST /ai/chat.
+  // v3.10: uses GET /api/ai/sessions/current (cookie-only, no URL token).
   //
-  // Bug #8 fix: the old code called `setMessages(data.messages.map(...))`
-  // which REPLACED the entire state. If the user had already typed + sent
-  // a message before the GET resolved (slow network), their optimistic
-  // user message + streaming assistant placeholder were wiped. The new code
-  // MERGES: history is prepended, but any ephemeral `pending-*` messages
-  // (the optimistic user msg + assistant placeholder) are preserved.
+  // The previous flow sent `GET /api/ai/sessions/anonymous` (with the
+  // literal string "anonymous" as the URL token). That caused the
+  // "history disappears on reopen" bug: if the cookie wasn't sent
+  // (cross-origin SameSite issue, browser cookie blocking, or expired
+  // cookie), the backend's `verifySessionAccess` rejected "anonymous"
+  // as neither a valid signed token nor a valid legacy UUID → 401 →
+  // the frontend's `if (!res.ok) return;` silent-failed → empty chat.
+  //
+  // The new `/current` route reads ONLY from the cookie. If no cookie
+  // exists, it returns empty history (200, not 401) — the frontend
+  // starts fresh, and the next POST mints a new session via Set-Cookie.
+  // This is the standard pattern for cookie-based session APIs.
+  //
+  // Bug #8 fix: MERGE instead of REPLACE. Preserve any ephemeral
+  // `pending-*` messages (optimistic user msg + assistant placeholder)
+  // that the user added before this GET resolved.
   useEffect(() => {
     let cancelled = false;
-    const legacyToken = getLegacySessionToken();
-    // Build the URL: if we have a legacy token, include it in the path
-    // (for migration). Otherwise, use a placeholder — the server reads
-    // from the cookie. The path token is required by the route signature
-    // (`/ai/sessions/:token`) so we send the legacy UUID if we have one,
-    // or a fresh anonymous one if not (the server will verify + reject if
-    // it's not signed, then fall back to the cookie).
-    const urlToken = legacyToken ?? "anonymous";
 
     (async () => {
       try {
         const authHeader = await buildAuthHeader();
-        const res = await fetch(`${BASE_URL}/api/ai/sessions/${encodeURIComponent(urlToken)}`, {
+        const res = await fetch(`${BASE_URL}/api/ai/sessions/current`, {
           credentials: "include", // ← send + receive cookies
           headers: { ...authHeader },
         });
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
-        // If the server returned a new signed token (via migration), the
-        // Set-Cookie header on the response already set it — no JS action
-        // needed. We just clear the legacy localStorage value if present.
-        if (legacyToken && data.sessionToken && data.sessionToken !== legacyToken) {
-          clearLegacySessionToken();
-        }
         if (Array.isArray(data.messages) && data.messages.length > 0) {
           const historyMessages: ChatMessage[] = data.messages.map((m: any) => ({
             id: m.id,

@@ -1920,6 +1920,98 @@ async function verifyMessageOwnership(
   return { sessionId: session_id, sessionSid: session_token };
 }
 
+// ─── GET /ai/sessions/current ───────────────────────────────────────────────
+// v3.10: cookie-only history fetch. No URL token needed.
+//
+// The frontend's `useAiChat` hook calls this on mount to rehydrate the
+// conversation. The previous flow (`GET /ai/sessions/:token` with the
+// literal string "anonymous" as the URL token) caused the "history
+// disappears on reopen" bug:
+//
+//   1. Frontend sends `GET /api/ai/sessions/anonymous`
+//   2. Backend's `verifySessionAccess` reads the cookie (preferred) OR the
+//      URL token (fallback). If the cookie is present + valid, it works.
+//   3. BUT if the cookie is NOT sent (cross-origin SameSite issue, browser
+//      cookie blocking, or the cookie expired), the URL token "anonymous"
+//      is NOT a valid signed token AND NOT a valid legacy UUID → 401 →
+//      frontend silent-fails (`if (!res.ok) return;`) → empty chat.
+//
+// This route fixes that: it reads ONLY from the cookie. If no cookie
+// exists, it returns empty history (200, not 401) — the frontend starts
+// fresh, and the next POST will mint a new session via Set-Cookie.
+//
+// This is the standard pattern for cookie-based session APIs (Rails
+// `current_user`, Django `request.user`, Next-auth `/api/auth/session`).
+router.get("/ai/sessions/current", aiSessionReadLimiter, async (req: Request, res: Response) => {
+  try {
+    const cookieToken = getSessionCookie(req);
+    if (!cookieToken) {
+      // No cookie → no existing session. Return empty history (200, not 401).
+      // The frontend starts fresh; the next POST mints a new session.
+      res.json({ sessionToken: null, title: null, messages: [] });
+      return;
+    }
+
+    const verified = verifySessionToken(cookieToken);
+    if (!verified) {
+      // Cookie exists but signature is invalid (tampered, or signed with an
+      // old secret). Clear the cookie + return empty history.
+      clearSessionCookie(res);
+      res.json({ sessionToken: null, title: null, messages: [] });
+      return;
+    }
+
+    // Ownership check: if the token is authenticated (uid=X), verify the
+    // requester matches — UNLESS we can't resolve the requester (null),
+    // in which case we trust the signed token (v3.10 fix — see
+    // tokenMatchesIdentity).
+    const requesterUid = req.userId ?? getAuth(req)?.userId ?? null;
+    if (!tokenMatchesIdentity(verified, requesterUid)) {
+      logger.warn(
+        { tokenUid: verified.uid, requesterUid },
+        "AI: GET /sessions/current denied — identity mismatch (possible hijack)",
+      );
+      res.status(403).json({ error: "You do not have access to this session." });
+      return;
+    }
+
+    // Re-sign + re-set the cookie (sliding expiration).
+    const token = signSessionToken({ sid: verified.sid, uid: verified.uid });
+    setSessionCookie(res, token);
+
+    // Look up the session row.
+    const result = await pool.query<SessionRow>(
+      `SELECT id, session_token, title, user_id FROM ai_chat_sessions WHERE session_token = $1`,
+      [verified.sid],
+    );
+    if (result.rows.length === 0) {
+      // Cookie has a valid sid but no DB row (session was deleted, or the
+      // cookie outlived the row). Return empty history.
+      res.json({ sessionToken: token, title: null, messages: [] });
+      return;
+    }
+
+    const session = result.rows[0];
+    const maxHistory = Number(process.env.AI_MAX_HISTORY ?? 20);
+    const messages = await fetchHistory(session.id, maxHistory);
+    res.json({
+      sessionToken: token,
+      title: session.title,
+      messages: messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        createdAt: m.created_at,
+        offTopic: m.off_topic,
+        greeting: m.greeting,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI: GET /sessions/current failed");
+    res.status(500).json({ error: "Failed to load chat history." });
+  }
+});
+
 // ─── GET /ai/sessions/:token ────────────────────────────────────────────────
 // Returns the message history for a session, oldest-first. Used by the
 // frontend on mount to rehydrate the conversation.

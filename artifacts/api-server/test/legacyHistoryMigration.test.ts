@@ -120,9 +120,12 @@ describe("Frontend useAiChat.ts sends legacy UUID in URL for migration", () => {
     expect(frontendSource).toContain("getLegacySessionToken()");
   });
 
-  it("sends the legacy UUID in the URL path (for migration)", () => {
-    expect(frontendSource).toContain("const urlToken = legacyToken ?? \"anonymous\"");
-    expect(frontendSource).toContain("/api/ai/sessions/${encodeURIComponent(urlToken)}");
+  it("uses GET /api/ai/sessions/current (cookie-only, no URL token)", () => {
+    // v3.10: the frontend now uses /current (cookie-only) instead of
+    // /:token with "anonymous" as a placeholder. This fixes the
+    // "history disappears on reopen" bug where a missing/invalid cookie
+    // + the "anonymous" URL token caused a 401 → empty chat.
+    expect(frontendSource).toContain("/api/ai/sessions/current");
   });
 
   it("uses credentials: 'include' (sends + receives cookies)", () => {
