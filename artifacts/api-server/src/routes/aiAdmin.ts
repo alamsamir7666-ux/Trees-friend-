@@ -3082,4 +3082,79 @@ router.get("/ai/admin/security/attack-log", async (req: Request, res: Response) 
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── v5.3.1: Topic classifier endpoints ─────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//   GET  /api/ai/admin/topic/health          — config + cache stats
+//   POST /api/ai/admin/topic/test             — test a message against the classifier
+//   POST /api/ai/admin/topic/clear-cache      — clear the topic cache
+
+// ─── GET /api/ai/admin/topic/health ─────────────────────────────────────────
+router.get("/ai/admin/topic/health", async (_req: Request, res: Response) => {
+  try {
+    const { isTopicClassifierConfigured } = await import("../lib/topicClassifier");
+    const { getTopicCacheStats } = await import("../lib/topicClassifierCache");
+    const cacheStats = await getTopicCacheStats();
+    res.json({
+      enabled: (process.env.TOPIC_CLASSIFIER_ENABLED ?? "true").toLowerCase() !== "false",
+      llmConfigured: isTopicClassifierConfigured(),
+      groqConfigured: Boolean(process.env.GROQ_API_KEY),
+      geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+      cache: cacheStats,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: topic health failed");
+    res.status(500).json({ error: "Failed to get topic classifier status." });
+  }
+});
+
+// ─── POST /api/ai/admin/topic/test ──────────────────────────────────────────
+// Tests a message against the topic classifier. Admins can use this to
+// verify the classifier is working + see what score a message gets.
+//
+// Body: { message: string, skipCache?: boolean }
+// Returns: { isOnTopic, confidence, provider, explanation, latencyMs }
+router.post("/ai/admin/topic/test", async (req: Request, res: Response) => {
+  try {
+    const { message, skipCache } = (req.body ?? {}) as { message?: string; skipCache?: boolean };
+    if (typeof message !== "string" || !message.trim()) {
+      res.status(400).json({ error: "message is required (non-empty string)." });
+      return;
+    }
+    const { classifyTopic } = await import("../lib/topicClassifier");
+
+    // If skipCache, clear the cache for this message first so we get a fresh
+    // LLM classification (useful for testing prompt changes).
+    if (skipCache) {
+      const { clearAllTopicCache } = await import("../lib/topicClassifierCache");
+      await clearAllTopicCache();
+    }
+
+    const result = await classifyTopic(message);
+    res.json({
+      isOnTopic: result.isOnTopic,
+      confidence: result.confidence,
+      provider: result.provider,
+      explanation: result.explanation ?? null,
+      latencyMs: result.latencyMs,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: topic test failed");
+    res.status(500).json({ error: "Failed to test message." });
+  }
+});
+
+// ─── POST /api/ai/admin/topic/clear-cache ───────────────────────────────────
+router.post("/ai/admin/topic/clear-cache", async (_req: Request, res: Response) => {
+  try {
+    const { clearAllTopicCache } = await import("../lib/topicClassifierCache");
+    const cleared = await clearAllTopicCache();
+    res.json({ cleared });
+  } catch (err) {
+    logger.error({ err }, "AI admin: topic cache clear failed");
+    res.status(500).json({ error: "Failed to clear topic cache." });
+  }
+});
+
 export default router;

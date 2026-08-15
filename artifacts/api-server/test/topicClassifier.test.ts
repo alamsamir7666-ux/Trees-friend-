@@ -114,9 +114,94 @@ describe("Topic classifier: architecture is industry-standard", () => {
     expect(source).toContain("off_topic_refused");
   });
 
+  it("logs LLM-allowed-via-keyword-gate-failure events (v5.3.1)", () => {
+    const source = readSource("artifacts/api-server/src/routes/ai.ts");
+    expect(source).toContain("topic_allowed_via_llm");
+  });
+
   it("allows LLM-configured fail-open when classifier unavailable", () => {
     const source = readSource("artifacts/api-server/src/lib/topicClassifier.ts");
     expect(source).toContain("fail-open");
     expect(source).toContain("No LLM configured");
+  });
+});
+
+// ─── Cache tests (v5.3.1) ────────────────────────────────────────────────────
+
+describe("Topic classifier: multi-tier cache (v5.3.1)", () => {
+  it("topicClassifierCache.ts exports the full cache API", () => {
+    const source = readSource("artifacts/api-server/src/lib/topicClassifierCache.ts");
+    expect(source).toContain("export async function getCachedTopicClassification");
+    expect(source).toContain("export async function setCachedTopicClassification");
+    expect(source).toContain("export async function clearAllTopicCache");
+    expect(source).toContain("export async function getTopicCacheStats");
+    expect(source).toContain("export function getInFlightTopicClassification");
+    expect(source).toContain("export function setInFlightTopicClassification");
+  });
+
+  it("uses L1 LRU + L2 Redis (multi-tier, industry standard)", () => {
+    const source = readSource("artifacts/api-server/src/lib/topicClassifierCache.ts");
+    expect(source).toContain("class L1Cache");
+    expect(source).toContain("getRedis");
+    expect(source).toContain("LRU");
+  });
+
+  it("uses single-flight (concurrent identical messages = 1 LLM call)", () => {
+    const source = readSource("artifacts/api-server/src/lib/topicClassifierCache.ts");
+    expect(source).toContain("_inFlight");
+    expect(source).toContain("single-flight");
+    expect(source).toContain("Critical for traffic spikes");
+  });
+
+  it("uses ai:topic: namespace (separate from ai:inj: and ai:cache:)", () => {
+    const source = readSource("artifacts/api-server/src/lib/topicClassifierCache.ts");
+    expect(source).toContain("`ai:topic:");
+    expect(source).toContain('match: "ai:topic:*"');
+  });
+
+  it("caches failures with short TTL (negative caching)", () => {
+    const source = readSource("artifacts/api-server/src/lib/topicClassifierCache.ts");
+    expect(source).toContain("NEGATIVE_TTL_SECONDS");
+    expect(source).toContain("isFailure");
+  });
+
+  it("cache key is order-independent + normalized (NFC + lowercase)", () => {
+    const source = readSource("artifacts/api-server/src/lib/topicClassifierCache.ts");
+    expect(source).toContain("normalizeMessage");
+    expect(source).toContain("NFC");
+    expect(source).toContain("toLowerCase");
+  });
+
+  it("classifyTopic() checks cache before calling LLM", () => {
+    const source = readSource("artifacts/api-server/src/lib/topicClassifier.ts");
+    expect(source).toContain("getCachedTopicClassification");
+    expect(source).toContain("setCachedTopicClassification");
+    expect(source).toContain("getInFlightTopicClassification");
+    expect(source).toContain("setInFlightTopicClassification");
+    expect(source).toContain("cache HIT");
+    expect(source).toContain("single-flight coalesced");
+  });
+});
+
+// ─── Admin endpoint tests (v5.3.1) ───────────────────────────────────────────
+
+describe("Topic classifier: admin endpoints (v5.3.1)", () => {
+  it("aiAdmin.ts exposes GET /ai/admin/topic/health", () => {
+    const source = readSource("artifacts/api-server/src/routes/aiAdmin.ts");
+    expect(source).toContain('"/ai/admin/topic/health"');
+    expect(source).toContain("getTopicCacheStats");
+  });
+
+  it("aiAdmin.ts exposes POST /ai/admin/topic/test (with skipCache option)", () => {
+    const source = readSource("artifacts/api-server/src/routes/aiAdmin.ts");
+    expect(source).toContain('"/ai/admin/topic/test"');
+    expect(source).toContain("skipCache");
+    expect(source).toContain("classifyTopic");
+  });
+
+  it("aiAdmin.ts exposes POST /ai/admin/topic/clear-cache", () => {
+    const source = readSource("artifacts/api-server/src/routes/aiAdmin.ts");
+    expect(source).toContain('"/ai/admin/topic/clear-cache"');
+    expect(source).toContain("clearAllTopicCache");
   });
 });

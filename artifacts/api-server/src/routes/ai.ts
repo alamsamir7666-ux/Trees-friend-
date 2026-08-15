@@ -939,6 +939,21 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       { provider: topicCheck.provider, confidence: topicCheck.confidence },
       "AI: keyword gate failed but LLM classifier allowed message",
     );
+
+    // v5.3.1: Log the LLM-allowed-via-keyword-gate-failure event for
+    // observability. This tells admins how many messages the keyword list
+    // missed (and the LLM caught) — useful for deciding which keywords to
+    // add to the fast-path list.
+    try {
+      const session = await findOrCreateSession(resolved.sid, safeMessage, resolved.uid);
+      await logAiEvent(session.id, "topic_allowed_via_llm", {
+        provider: topicCheck.provider,
+        confidence: topicCheck.confidence,
+        messagePreview: safeMessage.slice(0, 100),
+      }).catch(() => {});
+    } catch {
+      // best-effort — don't block the chat
+    }
   }
 
   // ─── 4b. Pure greeting shortcut ───
