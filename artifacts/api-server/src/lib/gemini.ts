@@ -57,6 +57,7 @@ import {
   buildMaxRoundsErrorMessage,
   buildForceFinalPromptSuffix,
   type OnToolEvent,
+  type ToolCallSignature,
 } from "./aiToolLoop";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
@@ -355,7 +356,10 @@ export async function discoverAvailableModels(): Promise<string[] | null> {
       // so getModelChain() uses the static chain instead of an empty array.
       if (available.length === 0) {
         logger.warn(
-          { responseType: typeof response, responsePreview: JSON.stringify(response).slice(0, 500) },
+          {
+            responseType: typeof response,
+            responsePreview: JSON.stringify(response).slice(0, 500),
+          },
           "TreeBot: ListModels returned 0 models that support generateContent. " +
             "This is likely a response-shape mismatch — falling back to static chain. " +
             "The static chain will be used, but may waste time on 404s.",
@@ -872,7 +876,10 @@ SUMMARY:`;
  *   the model name + token count on the assistant message row.
  */
 export async function* streamGeminiChat(
-  systemPrompt: string,
+  // BUG-I5 fix: accept either a string (original behavior) or a getter
+  // function `() => string` (so the prompt can change between tool rounds).
+  // The getter is called before each round to get the current prompt.
+  systemPrompt: string | (() => string),
   history: { role: "user" | "model"; text: string }[],
   userMessage: string,
   tools?: {
@@ -892,6 +899,12 @@ export async function* streamGeminiChat(
    * during multi-tool rounds. See lib/aiToolLoop.ts → ToolStreamEvent.
    */
   onToolEvent?: OnToolEvent,
+  /**
+   * BUG-I5 fix: callback invoked after each tool round. If it returns a
+   * string, that string replaces the system prompt for subsequent rounds.
+   * Forwarded from `streamChat` in aiRouter.ts.
+   */
+  onToolRoundComplete?: (round: number, toolCalls: ToolCallSignature[]) => string | void,
 ): AsyncGenerator<string, void, unknown> {
   const client = getClient();
   if (!client) {
@@ -901,6 +914,14 @@ export async function* streamGeminiChat(
     );
   }
 
+  // BUG-I5 fix: resolve the system prompt source to a string for the
+  // current round. Called before each `generateContentStream` call.
+  // The getter pattern means the route's `onToolRoundComplete` callback
+  // can mutate `currentSystemPrompt` in the route's closure, and the
+  // getter will return the updated value on the next call.
+  const resolveSystemPrompt = (): string =>
+    typeof systemPrompt === "function" ? systemPrompt() : systemPrompt;
+
   // The @google/genai SDK accepts an array of `contents` for history
   // plus the new message.
   let contents: Record<string, unknown>[] = [
@@ -909,7 +930,9 @@ export async function* streamGeminiChat(
   ];
 
   const config: Record<string, unknown> = {
-    systemInstruction: systemPrompt,
+    // BUG-I5 fix: use the resolved system prompt (calls the getter if
+    // a getter was passed). Updated before each round below.
+    systemInstruction: resolveSystemPrompt(),
     temperature: getTemperature(),
     maxOutputTokens: getMaxOutputTokens(),
   };
@@ -1056,6 +1079,13 @@ export async function* streamGeminiChat(
   while (budget.hasBudget) {
     const round = budget.currentRound;
 
+    // BUG-I5 fix: refresh the system prompt before each round. If the
+    // route passed a getter (`() => currentSystemPrompt`), this calls
+    // the getter — which may have been updated by `onToolRoundComplete`
+    // in a previous round (e.g. to clear the {{knowledge}} block after
+    // the first search_knowledge_base call).
+    config.systemInstruction = resolveSystemPrompt();
+
     if (budget.shouldWarnAboutHighRounds) {
       // Soft warning — operators should investigate. The loop continues
       // (this is not necessarily a bug; some legitimate queries take 6+
@@ -1111,7 +1141,11 @@ export async function* streamGeminiChat(
         let continueCount = 0;
         const maxAutoContinues = getMaxAutoContinues();
 
-        while (result.finishReason === "MAX_TOKENS" && continueCount < maxAutoContinues && !budget.hadStuckLoop) {
+        while (
+          result.finishReason === "MAX_TOKENS" &&
+          continueCount < maxAutoContinues &&
+          !budget.hadStuckLoop
+        ) {
           continueCount++;
           logger.info(
             { continueCount, maxAutoContinues, maxOutputTokens: getMaxOutputTokens() },
@@ -1135,7 +1169,11 @@ export async function* streamGeminiChat(
             },
             {
               role: "user" as const,
-              parts: [{ text: "Continue your previous response exactly from where it was cut off. Do not repeat what you already said — just complete the remaining content." }],
+              parts: [
+                {
+                  text: "Continue your previous response exactly from where it was cut off. Do not repeat what you already said — just complete the remaining content.",
+                },
+              ],
             },
           ];
 
@@ -1143,11 +1181,19 @@ export async function* streamGeminiChat(
           // a text response, not calling more tools). The text deltas
           // are yielded to the SSE stream as they arrive.
           const continueGen = runOneStreamingRound(contents, config, true);
-          let continueResult: { functionCalls: any[]; modelParts: any[]; finishReason: string | null };
+          let continueResult: {
+            functionCalls: any[];
+            modelParts: any[];
+            finishReason: string | null;
+          };
           while (true) {
             const { done, value } = await continueGen.next();
             if (done) {
-              continueResult = value as { functionCalls: any[]; modelParts: any[]; finishReason: string | null };
+              continueResult = value as {
+                functionCalls: any[];
+                modelParts: any[];
+                finishReason: string | null;
+              };
               break;
             }
             if (typeof value === "string") {
@@ -1165,7 +1211,11 @@ export async function* streamGeminiChat(
 
         if (result.finishReason === "MAX_TOKENS") {
           logger.warn(
-            { finishReason: result.finishReason, maxOutputTokens: getMaxOutputTokens(), continueCount },
+            {
+              finishReason: result.finishReason,
+              maxOutputTokens: getMaxOutputTokens(),
+              continueCount,
+            },
             "TreeBot: response still truncated after auto-continue limit. Consider raising AI_MAX_TOKENS or AI_MAX_AUTO_CONTINUES.",
           );
         }
@@ -1216,6 +1266,19 @@ export async function* streamGeminiChat(
       break;
     }
     budget.recordRound(currentSignatures);
+
+    // BUG-I5 fix: notify the route handler that a tool round completed.
+    // If the callback returns a string, the route has updated
+    // `currentSystemPrompt` in its closure — the getter will return the
+    // new value on the next iteration (we re-read config.systemInstruction
+    // at the top of the loop). Used to clear the {{knowledge}} block after
+    // the first search_knowledge_base call so the LLM doesn't see stale
+    // auto-inject context mixed with fresh tool results.
+    if (onToolRoundComplete) {
+      // round is 0-indexed here (budget.currentRound starts at 0); pass
+      // 1-indexed to the callback for human-readability.
+      onToolRoundComplete(round + 1, currentSignatures);
+    }
 
     // IMPORTANT: preserve the ORIGINAL parts from the model's response
     // (not reconstructed ones). Gemini 2.5 thinking models emit a

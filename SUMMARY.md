@@ -1,74 +1,96 @@
-# Summary — BUG-K9 + BUG-I1 Fix
+# Summary — BUG-I4 + BUG-I5 Fix
 
 ## Problem
 
-Two HIGH/CRITICAL bugs in the Trees-friend monorepo:
+Two HIGH-severity bugs in the Trees-friend monorepo, both stemming from
+the same architectural flaw: **the system prompt is built ONCE per HTTP
+request, but the LLM may make multiple tool-call rounds inside that
+request, and the prompt's dynamic blocks (`{{tone}}`, `{{knowledge}}`)
+become stale or wrong as the conversation evolves**.
 
-1. **BUG-K9** — When the reranker provider chain fell back to the Local
-   provider (which always succeeds by returning `score: 1.0` for every
-   doc), those useless 1.0-scored results were cached as a **positive**
-   cache entry for 1 hour. This blocked Cohere/Jina recovery for up to
-   55 minutes after they became available again. The `isFallback`
-   detection only matched `provider === "fallback"` (set when ALL
-   providers fail) — but Local returns `provider: "local"`, so its
-   results were indistinguishable from a real successful rerank.
+1. **BUG-I4** — The tone profile was locked to the auto-inject top
+   entry's creator. If the LLM later called `search_knowledge_base` and
+   got entries from a DIFFERENT creator, the response would adopt
+   Creator A's tone while citing Creator B's content — mismatched
+   attribution.
 
-2. **BUG-I1** — The KB retrieval had TWO call paths with INCONSISTENT
-   parameters:
-   - **Auto-inject path** (`getTopKbEntriesForPrompt`): `minScore=0.5`,
-     `skipRerank=true`, `maxResults=3`, content truncated to 500 chars
-   - **Tool path** (`searchKb`): `minScore=0.3`, `skipRerank=false`,
-     `maxResults=5`, full content (no truncation)
-
-   The LLM could see entry A (score 0.6) via auto-inject, then call the
-   tool and get entries A + B (where B scored 0.4 and was filtered from
-   auto-inject) — the textbook "two-source RAG inconsistency" anti-pattern.
+2. **BUG-I5** — The system prompt was NOT rebuilt between tool-call
+   rounds. If the LLM called `search_knowledge_base({query: "mango"})`
+   in round 1 and `search_knowledge_base({query: "neem"})` in round 2,
+   the system prompt's `{{knowledge}}` block still reflected the
+   ORIGINAL user message — the LLM had to mentally merge stale
+   auto-inject context with fresh tool results.
 
 ## Files Changed
 
-| File                                                       | Status   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ---------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `artifacts/api-server/src/lib/rerankerCache.ts`            | Modified | BUG-K9: added `FALLBACK_PROVIDERS = new Set(["fallback", "local", "disabled"])`; `isFallback` detection now uses `FALLBACK_PROVIDERS.has(r.provider)`; log message includes `isFallback` flag + `provider` field; explanatory comment block documents the Vercel AI SDK pattern.                                                                                                                                                                                         |
-| `artifacts/api-server/src/lib/kbSearch.ts`                 | Modified | BUG-I1: added + exported `UNIFIED_MIN_SCORE = 0.3`, `UNIFIED_MAX_RESULTS = 5`, `UNIFIED_SKIP_RERANK = false`, `UNIFIED_CONTENT_TRUNCATE_CHARS = 500`. `getTopKbEntriesForPrompt` now uses these (was `MIN_SCORE_AUTO_INJECT = 0.5`, `MAX_AUTO_INJECT_ENTRIES = 3`, `skipRerank: true`). `formatKbContextForPrompt` uses `UNIFIED_CONTENT_TRUNCATE_CHARS`. Old constants removed; `MAX_RESULTS_DEFAULT` + `MIN_SCORE_DEFAULT` kept as deprecated aliases for back-compat. |
-| `artifacts/api-server/src/lib/aiTools.ts`                  | Modified | BUG-I1: imports `UNIFIED_MIN_SCORE` + `UNIFIED_CONTENT_TRUNCATE_CHARS` from `kbSearch`. `searchKb` uses `UNIFIED_MIN_SCORE` (was hardcoded `0.3`) + truncates content to `UNIFIED_CONTENT_TRUNCATE_CHARS` (was full content). Tool declaration `max_results` description mentions auto-inject consistency.                                                                                                                                                               |
-| `artifacts/api-server/src/routes/ai.ts`                    | Modified | BUG-I1: removed the explicit `3` arg from `getTopKbEntriesForPrompt(safeMessage)` call (now uses unified default of 5).                                                                                                                                                                                                                                                                                                                                                  |
-| `artifacts/api-server/src/lib/aiContext.ts`                | Modified | BUG-I1: system prompt's KB section now documents the unified retrieval contract — tells the LLM that auto-inject + tool use the SAME parameters (minScore=0.3, reranked, 5 entries max, 500 chars per entry) and to cite only once if an entry appears in both.                                                                                                                                                                                                          |
-| `artifacts/api-server/test/rerankerFallbackCache.test.ts`  | **New**  | 23 tests: `FALLBACK_PROVIDERS` includes all 3 providers, `isFallback` uses Set, TTL selection, log message includes flag + provider, `rerankerLocal.ts` + `reranker.ts getProviderChain()` unmodified.                                                                                                                                                                                                                                                                   |
-| `artifacts/api-server/test/kbRetrievalUnification.test.ts` | **New**  | 30 tests: `UNIFIED_*` constants defined + exported, `getTopKbEntriesForPrompt` uses them, old constants removed, `routes/ai.ts` no explicit `3` arg, `aiTools.ts searchKb` uses unified config + truncates, tool declaration mentions consistency, system prompt documents unified behavior, back-compat aliases preserved.                                                                                                                                              |
-| `artifacts/api-server/test/kbSearch.test.ts`               | Modified | Updated 3 tests that asserted on the old constants (`MIN_SCORE_AUTO_INJECT = 0.5`, `MAX_AUTO_INJECT_ENTRIES = 3`, hardcoded `minScore: 0.3`) to reflect the unified config.                                                                                                                                                                                                                                                                                              |
-| `artifacts/api-server/test/embeddingCacheVersion.test.ts`  | Modified | Fixed a pre-existing regex bug (test #5) — the regex didn't match multi-line function calls. Now uses `[\s\S]` to span newlines.                                                                                                                                                                                                                                                                                                                                         |
+| File                                                    | Status   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `artifacts/api-server/src/lib/kbToneProfiles.ts`        | Modified | BUG-I4: `formatToneBlockForPrompt` now includes a rule that the tone applies ONLY to auto-injected entries; for tool-returned entries from a different creator, use NEUTRAL tone. References the `tone_locked_creator` field.                                                                                                                                                                                                                                 |
+| `artifacts/api-server/src/lib/aiTools.ts`               | Modified | BUG-I4: added `ToolContext` interface + `ChatTools` interface + `ToolExecutor` type. `executeTool` + `searchKb` accept `context?: ToolContext`. `searchKb` returns `tone_locked_creator: context?.toneLockedCreatorName ?? null` in the response envelope. Tool description mentions `tone_locked_creator` + neutral tone rule.                                                                                                                               |
+| `artifacts/api-server/src/lib/aiContext.ts`             | Modified | BUG-I5: added `clearKbBlockFromPrompt(systemPrompt)` — finds the `KNOWLEDGE BASE CONTEXT (...)` header, replaces the block with a "cleared — see tool results above" marker. Does NOT touch the `TONE MATCHING` block. Uses regex to find the next section boundary.                                                                                                                                                                                          |
+| `artifacts/api-server/src/lib/aiRouter.ts`              | Modified | BUG-I5: `streamChat` now accepts `systemPrompt: string \| (() => string)` (getter support) + `onToolRoundComplete?: (round, toolCalls) => string \| void` callback. Added `OnToolRoundComplete` + `SystemPromptSource` exported types. Forwards both to `streamGeminiChat` / `streamGroqChat`.                                                                                                                                                                |
+| `artifacts/api-server/src/lib/gemini.ts`                | Modified | BUG-I5: `streamGeminiChat` accepts the getter + `onToolRoundComplete`. Refreshes `config.systemInstruction` before each round via `resolveSystemPrompt()`. Calls `onToolRoundComplete(round + 1, currentSignatures)` after `budget.recordRound`. Imports `ToolCallSignature`.                                                                                                                                                                                 |
+| `artifacts/api-server/src/lib/groq.ts`                  | Modified | BUG-I5: same as gemini.ts — accepts getter + `onToolRoundComplete`, refreshes `messages[0]` (system message) before each round, calls `onToolRoundComplete` after the tool round.                                                                                                                                                                                                                                                                             |
+| `artifacts/api-server/src/routes/ai.ts`                 | Modified | BUG-I4: wraps `executeTool` in a closure that captures `kbContext.toneCreator?.creatorId/Name` as `ToolContext`. BUG-I5: declares `let currentSystemPrompt = systemPrompt`, passes `() => currentSystemPrompt` getter to `streamChat`, defines `onToolRoundComplete` callback that clears the `{{knowledge}}` block after the first `search_knowledge_base` call. Cache key (BUG-2) still uses the ORIGINAL `systemPrompt` const (NOT `currentSystemPrompt`). |
+| `artifacts/api-server/test/toneScoping.test.ts`         | **New**  | 26 tests: tone block scoping, `ToolContext` interface, `ChatTools.execute` signature, `executeTool` passes context, `searchKb` returns `tone_locked_creator`, route captures tone context, tool description mentions tone, gemini.ts/groq.ts unmodified (closure approach).                                                                                                                                                                                   |
+| `artifacts/api-server/test/systemPromptRebuild.test.ts` | **New**  | 38 tests: `streamChat` getter + `onToolRoundComplete`, `clearKbBlockFromPrompt` exported + finds KB header + replaces with marker + doesn't touch TONE MATCHING, route declares `currentSystemPrompt` + passes getter + callback, gemini.ts/groq.ts call `onToolRoundComplete`, cache key uses ORIGINAL `systemPrompt`, behavioral tests for `clearKbBlockFromPrompt`.                                                                                        |
+| `artifacts/api-server/test/kbSearch.test.ts`            | Modified | Updated 1 test that asserted on `searchKb(args)` to reflect the new `searchKb(args, userId, context)` signature (BUG-I4 fix).                                                                                                                                                                                                                                                                                                                                 |
 
 ## Architecture Decisions
 
-1. **Negative Caching for Degraded Responses** (BUG-K9) — Vercel AI SDK
-   pattern: `rerank()` distinguishes `relevanceScore === null` from real
-   scores and never caches the former. Our equivalent: never cache
-   `"local"` / `"disabled"` / `"fallback"` provider results as positive.
-   The 60s TTL means the next request retries the real providers.
+1. **Per-Citation Tone Scoping** (BUG-I4) — Anthropic pattern: scope
+   tone instructions to specific source materials; don't apply one
+   source's tone to another's content. Implemented via prompt text
+   (rule in `formatToneBlockForPrompt`) + tool result envelope metadata
+   (`tone_locked_creator` field — OpenAI function-calling best practice).
 
-2. **Single Retriever Pattern** (BUG-I1) — LangChain's `RetrievalQA`
-   enforces this by always pulling from the same `retriever` instance
-   for both the "stuff" path and the tool-call path. Anthropic's
-   Contextual Retrieval pattern explicitly warns against "two divergent
-   retrieval paths with no shared contract". Our `UNIFIED_*` constants
-   are the shared contract.
+2. **Closure Approach for ToolContext** (BUG-I4) — `routes/ai.ts` wraps
+   `executeTool` in a closure that captures the tone-locked creator info.
+   `gemini.ts`/`groq.ts` don't need to know about `ToolContext` — they
+   just call `tools.execute(name, args, userId)` with 3 args, and the
+   closure adds the 4th (context) automatically. Cleaner than threading
+   `ToolContext` through every layer.
 
-3. **What is NOT changed** — `rerankerLocal.ts` (contract is correct:
-   `provider: "local"`, `score: 1.0`, always succeeds), `getProviderChain()`
-   in `reranker.ts` (chain Cohere → Jina → Local is correct), `catalogCache.ts`
-   (BUG-6 was already fixed in BUG-1), `kbCache.ts` + `kbContentVersion.ts`
-   (already correct from BUG-1/BUG-3), migrations 0000-0009 (already shipped).
+3. **Mutable Prompt via Closure Capture** (BUG-I5) — The route passes
+   `() => currentSystemPrompt` (a getter) instead of a string. The
+   `onToolRoundComplete` callback mutates `currentSystemPrompt` in the
+   route's closure, and the getter returns the updated value on the next
+   call. Standard JavaScript closure pattern (React `useState` setter,
+   Redux `getState()`).
+
+4. **Clear, Don't Recompute** (BUG-I5) — After the first
+   `search_knowledge_base` call, the auto-inject `{{knowledge}}` block
+   is CLEARED (replaced with a marker), not recomputed with the tool's
+   query. Recomputing would be expensive (another DB query + reranker
+   call per round). The tool results are now the primary source —
+   keeping the auto-inject block would create the Anthropic Contextual
+   Retrieval anti-pattern: "stale auto-inject context mixed with fresh
+   tool results".
+
+5. **Cache Key Preserves Original Prompt** (BUG-I5) — The cache key
+   (BUG-2) still uses the ORIGINAL `systemPrompt` const (with the KB
+   block), NOT `currentSystemPrompt` (which gets cleared mid-stream).
+   This is critical: the cache lookup at the start of the request used
+   the original prompt, so the cache write at the end must use the same
+   key. Verified via test.
+
+6. **Tone Block Persists Across Rounds** (BUG-I5) — `clearKbBlockFromPrompt`
+   only clears the `KNOWLEDGE BASE CONTEXT` block, NOT the `TONE MATCHING`
+   block. Tone persists across tool rounds (the tone-locked creator
+   doesn't change mid-request). The LLM should still apply the tone-locked
+   creator's style, but for tool-returned entries from a different
+   creator, use neutral tone (per BUG-I4 fix).
 
 ## Test Results
 
-- **New tests**: 53/53 passing across 2 new test files
-  (`rerankerFallbackCache.test.ts` 23, `kbRetrievalUnification.test.ts` 30).
-- **Existing tests**: 311/311 related source-shape tests pass (BUG-1/2/3/K19
-  regression suite + `kbSearch.test.ts` updated + `embeddingCacheVersion.test.ts`
-  regex bug fixed). Full suite: 1042/1042 pass (excluding 3 pre-existing
-  `kbToneProfiles.test.ts` failures + 13 DB-integration test files that
-  require localhost Postgres — all pre-existing, not caused by this fix).
-- **Typecheck**: `pnpm typecheck` + `pnpm typecheck:test` + `pnpm typecheck:libs`
-  all pass with zero errors.
-- **Lint**: 0 errors on modified files (8 warnings, all pre-existing
-  `any` types in error-access patterns).
+- **New tests**: 64/64 passing across 2 new test files
+  (`toneScoping.test.ts` 26, `systemPromptRebuild.test.ts` 38).
+- **Existing tests**: 1106/1106 pass (excluding 3 pre-existing
+  `kbToneProfiles.test.ts` failures + 13 DB-integration test files
+  requiring localhost Postgres — all pre-existing, not caused by this
+  fix). Updated 1 test in `kbSearch.test.ts` for the new `searchKb`
+  signature.
+- **Typecheck**: `pnpm typecheck` + `pnpm typecheck:test` +
+  `pnpm typecheck:libs` all pass with zero errors.
+- **Lint**: 0 errors on modified files (53 warnings, all pre-existing
+  `any` types in error-access patterns + non-null assertions in tests).

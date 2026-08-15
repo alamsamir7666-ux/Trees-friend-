@@ -48,7 +48,7 @@ import {
   getGroqDebugInfo,
   forceGroqRediscover,
 } from "./groq";
-import type { OnToolEvent } from "./aiToolLoop";
+import type { OnToolEvent, ToolCallSignature } from "./aiToolLoop";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -58,6 +58,41 @@ export interface ChatTools {
   declarations: FunctionDeclaration[];
   execute: (name: string, args: Record<string, unknown>, userId: string | null) => Promise<unknown>;
 }
+
+/**
+ * BUG-I5 fix: callback invoked after each tool round.
+ *
+ * The Gemini/Groq loops call this with `(round, toolCalls)` after each
+ * tool round completes. If the callback returns a string, that string
+ * replaces the system prompt for subsequent rounds.
+ *
+ * Used by `routes/ai.ts` to clear the `{{knowledge}}` block from the
+ * system prompt after the first `search_knowledge_base` tool call —
+ * the tool results are now the primary source, and keeping the
+ * auto-inject block around would create confusion (stale context mixed
+ * with fresh tool results).
+ *
+ * The `round` parameter is 1-indexed (round 1 is the first tool round).
+ * The `toolCalls` parameter is the array of tool call signatures from
+ * that round (used to detect whether `search_knowledge_base` was called).
+ */
+export type OnToolRoundComplete = (round: number, toolCalls: ToolCallSignature[]) => string | void;
+
+/**
+ * BUG-I5 fix: system prompt source.
+ *
+ * Can be a plain string (the original behavior — the prompt is fixed
+ * for the whole request) OR a getter function `() => string` (the
+ * prompt can change between tool rounds). The getter is called before
+ * each round to get the current prompt.
+ *
+ * The route handler uses the getter pattern: it declares
+ * `let currentSystemPrompt = systemPrompt` and passes
+ * `() => currentSystemPrompt` to `streamChat`. The `onToolRoundComplete`
+ * callback updates `currentSystemPrompt` (via closure capture), and the
+ * getter returns the updated value on the next call.
+ */
+export type SystemPromptSource = string | (() => string);
 
 // ─── Provider chain config ──────────────────────────────────────────────────
 
@@ -188,7 +223,10 @@ function shouldFallBackToNextProvider(err: unknown): boolean {
  * @yields string — incremental text deltas
  */
 export async function* streamChat(
-  systemPrompt: string,
+  // BUG-I5 fix: accept either a string (original behavior) or a getter
+  // function `() => string` (so the prompt can change between tool rounds).
+  // The getter is called before each round to get the current prompt.
+  systemPrompt: SystemPromptSource,
   history: { role: "user" | "model"; text: string }[],
   userMessage: string,
   tools?: ChatTools,
@@ -208,6 +246,17 @@ export async function* streamChat(
    * order..." chips during multi-tool rounds.
    */
   onToolEvent?: OnToolEvent,
+  /**
+   * BUG-I5 fix: callback invoked after each tool round. If it returns a
+   * string, that string replaces the system prompt for subsequent rounds.
+   *
+   * The route handler uses this to clear the `{{knowledge}}` block from
+   * the system prompt after the first `search_knowledge_base` tool call —
+   * the tool results are now the primary source, and keeping the
+   * auto-inject block around would create confusion (stale context mixed
+   * with fresh tool results).
+   */
+  onToolRoundComplete?: OnToolRoundComplete,
 ): AsyncGenerator<string, void, unknown> {
   const providers = getProviderChain();
 
@@ -219,30 +268,53 @@ export async function* streamChat(
     );
   }
 
+  // BUG-I5 fix: resolve the system prompt source to a string for the
+  // current round. Called before each provider attempt (in case the
+  // prompt was updated by a previous provider's tool round — though in
+  // practice the fallback path doesn't run tool rounds before failing).
+  // The getter pattern means the route's `onToolRoundComplete` callback
+  // can mutate `currentSystemPrompt` in the route's closure, and the
+  // getter will return the updated value on the next call.
+  const resolveSystemPrompt = (): string =>
+    typeof systemPrompt === "function" ? systemPrompt() : systemPrompt;
+
   let lastErr: unknown = null;
 
   for (const provider of providers) {
     let yieldedAny = false;
     try {
+      // BUG-I5 fix: pass the getter (or string) to the provider. The
+      // provider's tool loop calls the getter before each round to get
+      // the current prompt. We wrap in a thunk so the provider doesn't
+      // need to know whether it's a string or getter.
+      //
+      // We also pass `onToolRoundComplete` so the provider can call it
+      // after each tool round (the provider has the `signatures` array
+      // from its stuck-detection logic).
+      const systemPromptForProvider: string | (() => string) =
+        typeof systemPrompt === "function" ? systemPrompt : resolveSystemPrompt();
+
       const gen =
         provider === "gemini"
           ? streamGeminiChat(
-              systemPrompt,
+              systemPromptForProvider,
               history,
               userMessage,
               tools,
               userId,
               onMetadata ? (meta) => onMetadata({ ...meta, provider: "gemini" }) : undefined,
               onToolEvent,
+              onToolRoundComplete,
             )
           : streamGroqChat(
-              systemPrompt,
+              systemPromptForProvider,
               history,
               userMessage,
               tools,
               userId,
               onMetadata ? (meta) => onMetadata({ ...meta, provider: "groq" }) : undefined,
               onToolEvent,
+              onToolRoundComplete,
             );
 
       for await (const chunk of gen) {

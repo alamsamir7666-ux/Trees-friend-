@@ -758,6 +758,84 @@ export function buildSystemPrompt(
   );
 }
 
+// ─── BUG-I5 fix: clear the KB block after the first tool round ──────────────
+
+/**
+ * Clears the KNOWLEDGE BASE CONTEXT block from a rendered system prompt,
+ * replacing it with a brief marker.
+ *
+ * The KB block is added by `formatKbContextForPrompt()` and looks like:
+ *
+ *   KNOWLEDGE BASE CONTEXT (use as PRIMARY source — cite the creator):
+ *   - "Title" (Creator — source)
+ *     Content...
+ *   - "Title 2" ...
+ *
+ * After the LLM calls `search_knowledge_base`, the tool results are the
+ * primary source — keeping the auto-inject block around would create
+ * confusion (stale context mixed with fresh tool results). This is the
+ * Anthropic Contextual Retrieval anti-pattern: "stale auto-inject
+ * context mixed with fresh tool results".
+ *
+ * This function finds the block (delimited by the header line) and
+ * replaces it with:
+ *
+ *   KNOWLEDGE BASE CONTEXT: (cleared — see search_knowledge_base tool
+ *   results above for the current KB context)
+ *
+ * The TONE MATCHING block is NOT touched — tone persists across tool
+ * rounds (the tone-locked creator doesn't change mid-request). The LLM
+ * should still apply the tone-locked creator's style to its response,
+ * but for tool-returned entries from a different creator, it should use
+ * neutral tone (per BUG-I4 fix).
+ *
+ * @param systemPrompt - the rendered system prompt
+ * @returns the system prompt with the KB block cleared (or unchanged if
+ *          no KB block was present)
+ */
+export function clearKbBlockFromPrompt(systemPrompt: string): string {
+  // The exact header emitted by formatKbContextForPrompt in kbSearch.ts.
+  const HEADER_PATTERN = /KNOWLEDGE BASE CONTEXT \(use as PRIMARY source — cite the creator\):/;
+  const REPLACEMENT =
+    "KNOWLEDGE BASE CONTEXT: (cleared — see search_knowledge_base tool " +
+    "results above for the current KB context)";
+
+  const match = HEADER_PATTERN.exec(systemPrompt);
+  if (!match) return systemPrompt; // no KB block present, nothing to clear
+
+  const headerEnd = match.index + match[0].length;
+  const restOfPrompt = systemPrompt.slice(headerEnd);
+
+  // The KB block ends at the next known section header. The rendered
+  // prompt's structure (post-placeholder-substitution) is:
+  //
+  //   ... main template ...
+  //   {{summary}} (if any) — PRIOR CONVERSATION SUMMARY block
+  //   {{knowledge}} — KNOWLEDGE BASE CONTEXT block (THIS is what we clear)
+  //   {{catalog}} — CATALOG CONTEXT block
+  //   {{tone}} — TONE MATCHING block (if any)
+  //   ... REMEMBER: ... (final template tail)
+  //
+  // The KB block ends when we hit one of: CATALOG CONTEXT, TONE MATCHING,
+  // PRIOR CONVERSATION SUMMARY, FORMATTING, REMEMBER, or the end of the
+  // prompt. We match `\n\n` before the section name to ensure we're at
+  // a section boundary (not a mid-paragraph mention).
+  const NEXT_SECTION_PATTERN =
+    /\n\n(CATALOG CONTEXT|TONE MATCHING|PRIOR CONVERSATION SUMMARY|FORMATTING|REMEMBER|AVAILABLE TOOLS|FOLLOWUP|YOU MUST|BUG-I1)/;
+  const nextSectionMatch = NEXT_SECTION_PATTERN.exec(restOfPrompt);
+
+  let blockEnd: number;
+  if (nextSectionMatch) {
+    blockEnd = headerEnd + nextSectionMatch.index;
+  } else {
+    // No next section found — the KB block is the last block. Clear to
+    // the end of the prompt.
+    blockEnd = systemPrompt.length;
+  }
+
+  return systemPrompt.slice(0, match.index) + REPLACEMENT + systemPrompt.slice(blockEnd);
+}
+
 // ─── Internals ───────────────────────────────────────────────────────────────
 
 interface ProductRow {

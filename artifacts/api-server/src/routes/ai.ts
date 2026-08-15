@@ -52,6 +52,11 @@ import {
   buildCatalogContext,
   buildSystemPrompt,
   renderPromptTemplate,
+  // BUG-I5 fix: clear the {{knowledge}} block from the system prompt
+  // after the first search_knowledge_base tool call. The tool results
+  // are now the primary source — keeping the auto-inject block around
+  // would create confusion (stale context mixed with fresh tool results).
+  clearKbBlockFromPrompt,
   hasBotanicalKeyword,
   isPureGreeting,
   GREETING_INTRO_MESSAGE,
@@ -59,7 +64,7 @@ import {
 } from "../lib/aiContext";
 import { AI_TOOL_DECLARATIONS, executeTool, USER_SCOPED_TOOLS } from "../lib/aiTools";
 import { streamChat, isAnyProviderConfigured } from "../lib/aiRouter";
-import type { ToolStreamEvent } from "../lib/aiToolLoop";
+import type { ToolStreamEvent, ToolCallSignature } from "../lib/aiToolLoop";
 import { describeError } from "../lib/describeError";
 import { redactPii } from "../lib/piiRedaction";
 import { calculateCost } from "../lib/costTracker";
@@ -1436,14 +1441,73 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       }
     };
 
+    // BUG-I5 fix: declare a mutable `currentSystemPrompt` that the
+    // `onToolRoundComplete` callback can update. We pass a getter
+    // `() => currentSystemPrompt` to `streamChat` so the provider reads
+    // the CURRENT value before each round (not the original).
+    //
+    // The cache key (BUG-2) still uses the ORIGINAL `systemPrompt` const
+    // (declared earlier) — NOT `currentSystemPrompt`. This is critical:
+    // the cache lookup at the start of the request used the original
+    // prompt, so the cache write at the end must use the same key. If
+    // we used `currentSystemPrompt` (which gets cleared mid-stream), the
+    // cache key would differ from the lookup, and the cached response
+    // wouldn't be found on subsequent requests.
+    let currentSystemPrompt = systemPrompt;
+
+    // BUG-I5 fix: after the first search_knowledge_base tool call, clear
+    // the {{knowledge}} block from the system prompt. The tool results
+    // are now the primary source — keeping the auto-inject block around
+    // would create confusion (stale context mixed with fresh tool results).
+    const onToolRoundComplete = (round: number, toolCalls: ToolCallSignature[]): string | void => {
+      // Only clear on the FIRST tool round (round === 1). Subsequent
+      // rounds keep the cleared prompt — the LLM should rely on tool
+      // results, not re-injected context.
+      if (round !== 1) return;
+
+      // Check if any of the tool calls was search_knowledge_base.
+      const calledKbTool = toolCalls.some((tc) => tc.name === "search_knowledge_base");
+      if (!calledKbTool) return;
+
+      // Replace the {{knowledge}} block content with a brief marker.
+      const clearedPrompt = clearKbBlockFromPrompt(currentSystemPrompt);
+      if (clearedPrompt !== currentSystemPrompt) {
+        currentSystemPrompt = clearedPrompt;
+        logger.info(
+          { round },
+          "AI: cleared {{knowledge}} block from system prompt after search_knowledge_base tool call (BUG-I5 fix)",
+        );
+      }
+      return clearedPrompt;
+    };
+
     const stream = streamChat(
-      systemPrompt,
+      // BUG-I5 fix: pass a getter `() => currentSystemPrompt` instead of
+      // the original `systemPrompt` const. The provider reads the getter
+      // before each round, so it sees the cleared prompt after the first
+      // tool call. The original `systemPrompt` const is still used for
+      // the cache key (above + at the cache write site).
+      () => currentSystemPrompt,
       geminiHistory,
       safeMessage,
       // v2.5: expose function-calling tools to the AI provider
+      //
+      // BUG-I4 fix: wrap executeTool in a closure that captures the
+      // tone-locked creator info from kbContext.toneCreator. This way
+      // gemini.ts/groq.ts don't need to know about ToolContext — they
+      // just call tools.execute(name, args, userId) with 3 args, and
+      // the closure adds the 4th (context) automatically. The
+      // search_knowledge_base tool reads context.toneLockedCreatorName
+      // and surfaces it as `tone_locked_creator` in its response envelope
+      // so the LLM can detect creator mismatches and use neutral tone
+      // for off-creator citations.
       {
         declarations: AI_TOOL_DECLARATIONS,
-        execute: executeTool,
+        execute: (name, args, uid) =>
+          executeTool(name, args, uid, {
+            toneLockedCreatorId: kbContext.toneCreator?.creatorId ?? null,
+            toneLockedCreatorName: kbContext.toneCreator?.creatorName ?? null,
+          }),
       },
       clerkUserId,
       // v3.0: metadata callback -- the provider calls this with model + usage
@@ -1487,6 +1551,11 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
         }
       },
       onToolEvent,
+      // BUG-I5 fix: callback invoked after each tool round. If it returns
+      // a string, that string replaces the system prompt for subsequent
+      // rounds. The route uses this to clear the {{knowledge}} block after
+      // the first search_knowledge_base call.
+      onToolRoundComplete,
     );
     for await (const chunk of stream) {
       if (!chunk) continue;

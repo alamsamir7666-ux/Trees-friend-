@@ -40,6 +40,7 @@ import {
   buildMaxRoundsErrorMessage,
   buildForceFinalPromptSuffix,
   type OnToolEvent,
+  type ToolCallSignature,
 } from "./aiToolLoop";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
@@ -542,7 +543,10 @@ function isQuotaExhaustedError(err: unknown): boolean {
  * @yields string — incremental text deltas (same as Gemini)
  */
 export async function* streamGroqChat(
-  systemPrompt: string,
+  // BUG-I5 fix: accept either a string (original behavior) or a getter
+  // function `() => string` (so the prompt can change between tool rounds).
+  // The getter is called before each round to get the current prompt.
+  systemPrompt: string | (() => string),
   history: { role: "user" | "model"; text: string }[],
   userMessage: string,
   tools?: {
@@ -562,15 +566,33 @@ export async function* streamGroqChat(
    * during multi-tool rounds. See lib/aiToolLoop.ts → ToolStreamEvent.
    */
   onToolEvent?: OnToolEvent,
+  /**
+   * BUG-I5 fix: callback invoked after each tool round. If it returns a
+   * string, that string replaces the system prompt for subsequent rounds.
+   * Forwarded from `streamChat` in aiRouter.ts.
+   */
+  onToolRoundComplete?: (round: number, toolCalls: ToolCallSignature[]) => string | void,
 ): AsyncGenerator<string, void, unknown> {
   if (!isGroqConfigured()) {
     throw new Error("GROQ_API_KEY is not set. Get one at https://console.groq.com");
   }
 
+  // BUG-I5 fix: resolve the system prompt source to a string for the
+  // current round. Called before each round. The getter pattern means
+  // the route's `onToolRoundComplete` callback can mutate
+  // `currentSystemPrompt` in the route's closure, and the getter will
+  // return the updated value on the next call.
+  const resolveSystemPrompt = (): string =>
+    typeof systemPrompt === "function" ? systemPrompt() : systemPrompt;
+
   // Build the message array in OpenAI format.
   // Convert Gemini's "model" role → OpenAI's "assistant" role.
+  //
+  // BUG-I5 fix: use the resolved system prompt (calls the getter if a
+  // getter was passed). The system message at index 0 is rebuilt before
+  // each round (see the refresh below in the tool loop).
   const messages: GroqMessage[] = [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: resolveSystemPrompt() },
     ...history.map((h) => ({
       role: (h.role === "model" ? "assistant" : "user") as "assistant" | "user",
       content: h.text,
@@ -669,8 +691,11 @@ export async function* streamGroqChat(
         // array (which already includes tool results) directly.
         let messagesForRound: GroqMessage[];
         if (round === 0) {
+          // BUG-I5 fix: resolve the system prompt via the getter (in case
+          // it changed between rounds — though for round 0 it hasn't yet).
+          const resolvedSystemPrompt = resolveSystemPrompt();
           const { history: truncatedHistory, truncated } = truncateHistory(
-            systemPrompt,
+            resolvedSystemPrompt,
             history,
             userMessage,
             modelName,
@@ -683,7 +708,7 @@ export async function* streamGroqChat(
             );
           }
           messagesForRound = [
-            { role: "system", content: systemPrompt },
+            { role: "system", content: resolvedSystemPrompt },
             ...truncatedHistory.map((h) => ({
               role: (h.role === "model" ? "assistant" : "user") as "assistant" | "user",
               content: h.text,
@@ -874,6 +899,26 @@ export async function* streamGroqChat(
           // Push all tool-result messages in original order (Promise.all
           // preserves array order regardless of resolution order).
           messages.push(...toolMessages);
+
+          // BUG-I5 fix: notify the route handler that a tool round completed.
+          // If the callback returns a string, the route has updated
+          // `currentSystemPrompt` in its closure — we refresh the system
+          // message below so the next round sees the updated prompt.
+          // Used to clear the {{knowledge}} block after the first
+          // search_knowledge_base call so the LLM doesn't see stale
+          // auto-inject context mixed with fresh tool results.
+          if (onToolRoundComplete) {
+            // round is 0-indexed in Groq's loop; pass 1-indexed to the
+            // callback for human-readability + consistency with Gemini.
+            onToolRoundComplete(round + 1, currentSignatures);
+          }
+
+          // BUG-I5 fix: refresh the system message at index 0 before the
+          // next round. If the route passed a getter, this calls the
+          // getter — which may have been updated by `onToolRoundComplete`
+          // above (the callback updates `currentSystemPrompt` in the
+          // route's closure, and the getter returns the new value).
+          messages[0] = { role: "system", content: resolveSystemPrompt() };
 
           // Loop continues — Groq processes the tool results
           budget.advance();

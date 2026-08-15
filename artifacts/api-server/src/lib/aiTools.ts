@@ -50,6 +50,67 @@ import { searchKnowledgeBase, UNIFIED_MIN_SCORE, UNIFIED_CONTENT_TRUNCATE_CHARS 
 // ─── Tool declarations (sent to Gemini) ──────────────────────────────────────
 
 /**
+ * BUG-I4 fix: per-request tool execution context.
+ *
+ * The route handler builds this object from `kbContext.toneCreator` and
+ * passes it into `executeTool` via a closure (so gemini.ts/groq.ts don't
+ * need to know about tone — they just call `tools.execute(name, args,
+ * userId)` and the closure adds the context).
+ *
+ * Tools that return KB entries (e.g. `search_knowledge_base`) read
+ * `toneLockedCreatorName` from the context and surface it as
+ * `tone_locked_creator` in the response envelope. The LLM uses this to
+ * detect creator mismatches: when `results[].creator !== tone_locked_creator`,
+ * it uses neutral tone for those citations (per the rule added to
+ * `formatToneBlockForPrompt` in kbToneProfiles.ts).
+ *
+ * Null when no tone is active (no auto-injected KB entries, or the top
+ * creator has no tone profile).
+ */
+export interface ToolContext {
+  /** The creator whose tone profile is locked into the system prompt's
+   * {{tone}} block. Null when no tone is active. */
+  toneLockedCreatorId?: number | null;
+  toneLockedCreatorName?: string | null;
+}
+
+/**
+ * Tools exposed to the AI provider (Gemini/Groq).
+ *
+ * `execute` is called by the streaming loop when the LLM emits a
+ * `functionCall`. The result is sent back to the LLM as a
+ * `functionResponse` so it can incorporate the data into its next
+ * response.
+ *
+ * BUG-I4 fix: `execute` now accepts an optional `context?: ToolContext`
+ * as the 4th parameter. Existing callers that don't pass it still work
+ * (the context is undefined → `tone_locked_creator` is null in the
+ * response envelope, and the LLM treats that as "no tone active").
+ */
+export interface ChatTools {
+  declarations: FunctionDeclaration[];
+  execute: (
+    name: string,
+    args: Record<string, unknown>,
+    userId: string | null,
+    context?: ToolContext,
+  ) => Promise<unknown>;
+}
+
+/**
+ * BUG-I4 fix: the tool declarations type used by gemini.ts/groq.ts.
+ *
+ * gemini.ts and groq.ts import this inline type (they don't import
+ * `ChatTools` from aiRouter.ts because that would create a circular
+ * dependency). Their `execute` signature accepts the same optional
+ * `context` parameter.
+ */
+export type ToolExecutor = {
+  declarations: FunctionDeclaration[];
+  execute: ChatTools["execute"];
+};
+
+/**
  * Tools that return USER-SCOPED data (orders, account info).
  *
  * ─── Bug #4 fix: cache policy ─────────────────────────────────────────────────
@@ -192,7 +253,15 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       "relevant entries with their source attribution (creator name + source type). " +
       "Use this as your PRIMARY source for botanical questions — the content is " +
       "vetted by admins and more accurate than your training data. " +
-      "Always cite the creator when using KB content (e.g. 'According to Green Garden BD...').",
+      "Always cite the creator when using KB content (e.g. 'According to Green Garden BD...'). " +
+      // BUG-I4 fix: tell the LLM about the tone_locked_creator field so it
+      // can detect creator mismatches and use neutral tone for off-creator
+      // citations (per the rule in the system prompt's TONE MATCHING block).
+      "Each result includes a `creator` field. If the response includes a " +
+      "`tone_locked_creator` field at the top level, that's the creator whose " +
+      "tone is currently active in the system prompt. For results where " +
+      "`creator` !== `tone_locked_creator`, use neutral tone in your citation " +
+      "— do not apply the tone-locked creator's style to a different creator's content.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -249,6 +318,12 @@ export async function executeTool(
   name: string,
   args: Record<string, unknown>,
   userId: string | null,
+  // BUG-I4 fix: per-request tool context. Carries the tone-locked creator
+  // info so search_knowledge_base can surface `tone_locked_creator` in its
+  // response envelope. Optional for back-compat with callers that don't
+  // pass it (the response will have `tone_locked_creator: null`, which the
+  // LLM treats as "no tone active").
+  context?: ToolContext,
 ): Promise<unknown> {
   // v5.6: per-tool rate limit check (before execution)
   // The IP is not available in this context (executeTool is called from
@@ -287,7 +362,9 @@ export async function executeTool(
       case "get_order_details":
         return await getOrderDetails(args, userId);
       case "search_knowledge_base":
-        return await searchKb(args);
+        // BUG-I4 fix: pass the tool context so searchKb can include
+        // `tone_locked_creator` in the response envelope.
+        return await searchKb(args, userId, context);
       default:
         logger.warn({ name }, "AI tool: unknown function called");
         return { error: `Unknown function: ${name}` };
@@ -748,7 +825,14 @@ async function getOrderDetails(
  *
  * @internal — called by executeTool, not exported.
  */
-async function searchKb(args: Record<string, unknown>): Promise<{
+async function searchKb(
+  args: Record<string, unknown>,
+  userId: string | null,
+  // BUG-I4 fix: carries the tone-locked creator info so we can surface
+  // `tone_locked_creator` in the response envelope. The LLM compares
+  // each result's `creator` field to this value to detect mismatches.
+  context?: ToolContext,
+): Promise<{
   results: {
     title: string;
     content: string;
@@ -760,11 +844,23 @@ async function searchKb(args: Record<string, unknown>): Promise<{
     relevance_score: number;
   }[];
   count: number;
+  // BUG-I4 fix: the creator whose tone is currently active in the system
+  // prompt's {{tone}} block. Null when no tone is active. The LLM uses
+  // this to detect creator mismatches: when results[].creator !==
+  // tone_locked_creator, the LLM uses neutral tone for those citations.
+  tone_locked_creator: string | null;
   message?: string;
 }> {
   const query = String(args.query ?? "").trim();
   if (!query) {
-    return { results: [], count: 0, message: "Query is required." };
+    return {
+      results: [],
+      count: 0,
+      message: "Query is required.",
+      // BUG-I4 fix: still surface the tone-locked creator even on the
+      // empty-query early return so the LLM has consistent metadata.
+      tone_locked_creator: context?.toneLockedCreatorName ?? null,
+    };
   }
 
   const categorySlug = typeof args.category_slug === "string" ? args.category_slug : null;
@@ -830,5 +926,10 @@ async function searchKb(args: Record<string, unknown>): Promise<{
       relevance_score: Math.round(r.score * 100) / 100,
     })),
     count: results.length,
+    // BUG-I4 fix: surface the tone-locked creator so the LLM can detect
+    // mismatches between the auto-injected tone and the tool-returned
+    // entries' creators. When results[].creator !== tone_locked_creator,
+    // the LLM should use neutral tone for those citations.
+    tone_locked_creator: context?.toneLockedCreatorName ?? null,
   };
 }

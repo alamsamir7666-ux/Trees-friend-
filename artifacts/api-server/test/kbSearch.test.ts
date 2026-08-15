@@ -278,7 +278,10 @@ describe("Phase 3: aiTools.ts search_knowledge_base tool", () => {
 
   it("executeTool switch has case 'search_knowledge_base'", () => {
     expect(source).toContain('case "search_knowledge_base"');
-    expect(source).toContain("searchKb(args)");
+    // BUG-I4 fix: searchKb now takes (args, userId, context) instead of
+    // just (args). The context carries the tone-locked creator info so
+    // the tool can surface `tone_locked_creator` in the response envelope.
+    expect(source).toContain("searchKb(args, userId, context)");
   });
 
   it("CATALOG_TOOLS includes search_knowledge_base (cacheable with short TTL)", () => {

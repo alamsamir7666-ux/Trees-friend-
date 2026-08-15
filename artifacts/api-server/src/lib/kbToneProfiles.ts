@@ -565,6 +565,19 @@ export function formatToneBlockForPrompt(
   lines.push(
     "- Respond in the same language as the user's message (the creator's tone should adapt to the user's language).",
   );
+  // BUG-I4 fix: scope the tone to the auto-injected entries. If the LLM
+  // calls search_knowledge_base and gets entries from a DIFFERENT creator,
+  // it must use neutral tone for those citations — don't apply this
+  // creator's tone to another creator's content (mismatched attribution).
+  // The tool result envelope includes a `tone_locked_creator` field so
+  // the LLM can detect mismatches: when results[].creator !== tone_locked_creator,
+  // use neutral tone for those citations.
+  lines.push(`- IMPORTANT: This tone applies ONLY to the auto-injected KNOWLEDGE BASE`);
+  lines.push(`  CONTEXT block above (entries from "${creatorName}"). If you call the`);
+  lines.push(`  search_knowledge_base tool and receive entries from a DIFFERENT creator`);
+  lines.push(`  (check the \`creator\` field on each tool result against the response's`);
+  lines.push(`  \`tone_locked_creator\` field), use NEUTRAL tone for those citations —`);
+  lines.push(`  do not apply ${creatorName}'s tone to a different creator's content.`);
 
   return lines.join("\n");
 }
