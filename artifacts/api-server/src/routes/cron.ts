@@ -293,4 +293,28 @@ router.post("/cron/kb-tone-profiles", async (req, res) => {
   }
 });
 
+/**
+ * POST /api/cron/kb-bm25-stats
+ *
+ * v5.0: Refreshes the BM25 term statistics table (ai_kb_term_stats).
+ * Rebuilds the IDF values for every lexeme in the KB — critical for
+ * BM25 scoring accuracy. Schedule: every 6 hours (see vercel.json).
+ *
+ * Idempotent: the underlying refresh_kb_term_stats() SQL function uses
+ * TRUNCATE + INSERT in a single transaction, so concurrent runs serialize
+ * at the DB level.
+ */
+router.post("/cron/kb-bm25-stats", async (req, res) => {
+  if (!requireCronAuth(req, res)) return;
+  try {
+    logger.info("Cron: running BM25 stats refresh");
+    const { refreshBm25Stats } = await import("../jobs/bm25StatsJob");
+    const result = await refreshBm25Stats({ force: true });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "Cron: BM25 stats refresh failed");
+    res.status(500).json({ error: "Cron job failed" });
+  }
+});
+
 export default router;

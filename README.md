@@ -4,19 +4,19 @@ A Bangladesh-targeted plant marketplace where buyers can purchase trees, sapling
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| **Frontend** | React 19, Vite, TypeScript, TanStack Query, wouter, Tailwind CSS, shadcn/ui, Radix UI, Clerk, framer-motion, Recharts, TipTap |
-| **Backend** | Node.js 24, Express 5, TypeScript, Drizzle ORM, PostgreSQL |
-| **Database** | PostgreSQL (Supabase / Neon) |
-| **Auth** | Clerk (web) + custom HS256 JWT (mobile) |
-| **Payments** | bKash Tokenized Checkout |
-| **Couriers** | Pathao, Steadfast |
-| **Images** | Cloudinary |
-| **Email** | Resend |
-| **Rate Limiting** | Upstash Redis (sliding window) |
-| **Mobile** | Flutter (Expo) — shares the API server |
-| **Monorepo** | pnpm 9.15 workspaces |
+| Layer             | Technology                                                                                                                    |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Frontend**      | React 19, Vite, TypeScript, TanStack Query, wouter, Tailwind CSS, shadcn/ui, Radix UI, Clerk, framer-motion, Recharts, TipTap |
+| **Backend**       | Node.js 24, Express 5, TypeScript, Drizzle ORM, PostgreSQL                                                                    |
+| **Database**      | PostgreSQL (Supabase / Neon)                                                                                                  |
+| **Auth**          | Clerk (web) + custom HS256 JWT (mobile)                                                                                       |
+| **Payments**      | bKash Tokenized Checkout                                                                                                      |
+| **Couriers**      | Pathao, Steadfast                                                                                                             |
+| **Images**        | Cloudinary                                                                                                                    |
+| **Email**         | Resend                                                                                                                        |
+| **Rate Limiting** | Upstash Redis (sliding window)                                                                                                |
+| **Mobile**        | Flutter (Expo) — shares the API server                                                                                        |
+| **Monorepo**      | pnpm 9.15 workspaces                                                                                                          |
 
 ## Project Structure
 
@@ -139,21 +139,39 @@ pnpm --filter db run studio               # Drizzle Studio (DB browser)
 
 See `artifacts/api-server/.env.example` for the full list (22 vars, all documented with generation commands and default behavior). Key ones:
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `CLERK_SECRET_KEY` | Yes | Clerk secret key |
-| `CLERK_PUBLISHABLE_KEY` | Yes | Clerk publishable key |
-| `MOBILE_JWT_SECRET` | Yes | HS256 secret for mobile JWT (generate: `openssl rand -base64 32`) |
-| `CREDENTIAL_ENCRYPTION_KEY` | Yes | AES-256-GCM key for credential encryption (generate: `openssl rand -base64 48`) |
-| `COURIER_WEBHOOK_SECRET` | Yes | Shared secret for courier webhooks |
-| `ADMIN_EMAILS` | Yes | Comma-separated admin email addresses |
-| `ALLOWED_ORIGINS` | Yes (prod) | Comma-separated allowed CORS origins |
-| `UPSTASH_REDIS_REST_URL` | No | Upstash Redis URL (rate limiting; in-memory fallback in dev) |
-| `UPSTASH_REDIS_REST_TOKEN` | No | Upstash Redis token |
-| `CLOUDINARY_*` | No | Cloudinary credentials (image uploads) |
-| `RESEND_API_KEY` | No | Resend API key (transactional email) |
-| `BKASH_API_BASE_URL` | No | bKash API base URL (defaults to sandbox) |
+| Variable                    | Required   | Description                                                                     |
+| --------------------------- | ---------- | ------------------------------------------------------------------------------- |
+| `DATABASE_URL`              | Yes        | PostgreSQL connection string                                                    |
+| `CLERK_SECRET_KEY`          | Yes        | Clerk secret key                                                                |
+| `CLERK_PUBLISHABLE_KEY`     | Yes        | Clerk publishable key                                                           |
+| `MOBILE_JWT_SECRET`         | Yes        | HS256 secret for mobile JWT (generate: `openssl rand -base64 32`)               |
+| `CREDENTIAL_ENCRYPTION_KEY` | Yes        | AES-256-GCM key for credential encryption (generate: `openssl rand -base64 48`) |
+| `COURIER_WEBHOOK_SECRET`    | Yes        | Shared secret for courier webhooks                                              |
+| `ADMIN_EMAILS`              | Yes        | Comma-separated admin email addresses                                           |
+| `ALLOWED_ORIGINS`           | Yes (prod) | Comma-separated allowed CORS origins                                            |
+| `UPSTASH_REDIS_REST_URL`    | No         | Upstash Redis URL (rate limiting; in-memory fallback in dev)                    |
+| `UPSTASH_REDIS_REST_TOKEN`  | No         | Upstash Redis token                                                             |
+| `CLOUDINARY_*`              | No         | Cloudinary credentials (image uploads)                                          |
+| `RESEND_API_KEY`            | No         | Resend API key (transactional email)                                            |
+| `BKASH_API_BASE_URL`        | No         | bKash API base URL (defaults to sandbox)                                        |
+
+### v5.0 BM25 + Reranker (optional, recommended)
+
+| Variable                         | Required | Description                                                                                                                        |
+| -------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `COHERE_API_KEY`                 | No       | Cohere API key for Rerank v3 (multilingual, supports Bangla). Free tier: 1000 calls/month. Get one at https://dashboard.cohere.com |
+| `JINA_API_KEY`                   | No       | Jina API key for Reranker v2 (open-source alternative). Free tier: 1M tokens/month. Get one at https://jina.ai/reranker            |
+| `JINA_RERANKER_URL`              | No       | Self-hosted Jina-compatible reranker endpoint (skips JINA_API_KEY)                                                                 |
+| `RERANKER_PROVIDER`              | No       | `"auto"` (default, tries Cohere→Jina→local) \| `"cohere"` \| `"jina"` \| `"local"`                                                 |
+| `RERANKER_TOP_K`                 | No       | Candidates to retrieve before reranking (default 20)                                                                               |
+| `RERANKER_TOP_N`                 | No       | Results to return after reranking (default 5)                                                                                      |
+| `RERANKER_TIMEOUT_MS`            | No       | API call timeout, max 10000 (default 3000)                                                                                         |
+| `RERANKER_MIN_SCORE`             | No       | Minimum rerank score to include (default 0.0)                                                                                      |
+| `RERANKER_CACHE_TTL_SECONDS`     | No       | Cache TTL for rerank results (default 3600 = 1h)                                                                                   |
+| `RERANKER_ENABLED`               | No       | Master switch, `"true"` (default) or `"false"`                                                                                     |
+| `BM25_STATS_REFRESH_INTERVAL_MS` | No       | BM25 IDF refresh interval (default 21600000 = 6h)                                                                                  |
+
+If no reranker API keys are set, the system gracefully degrades to local fallback (returns first-pass order). BM25 always works (no external dependencies).
 
 ## Database Schema
 
@@ -183,14 +201,15 @@ import { validateBody } from "../lib/validateRequest";
 import type { ApiRequest } from "../types/apiRequest";
 import type { z } from "zod";
 
-router.post("/orders",
+router.post(
+  "/orders",
   requireAuth,
   checkoutLimiter,
   validateBody(CreateOrderBody, "CreateOrderBody"),
   async (req: ApiRequest<z.infer<typeof CreateOrderBody>>, res) => {
     // req.body is now fully typed as z.infer<typeof CreateOrderBody>
     // req.userId is set by requireAuth
-  }
+  },
 );
 ```
 

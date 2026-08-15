@@ -281,8 +281,11 @@ export const aiChatFeedbackTable = pgTable(
       .where(sql`rater_session_sid IS NOT NULL`),
     // Lookup index for the route's toggle/update/insert logic. Composite
     // covers "does rater X already have a rating on message Y?".
-    index("ai_chat_feedback_rater_lookup_idx")
-      .on(table.messageId, table.raterUserId, table.raterSessionSid),
+    index("ai_chat_feedback_rater_lookup_idx").on(
+      table.messageId,
+      table.raterUserId,
+      table.raterSessionSid,
+    ),
     // "Show me all 👎 ratings from last week" — for the admin panel.
     // (Downgraded from uniqueIndex to index — the v1.5 schema declared it
     // unique but the SQL never was; this matches the actual runtime.)
@@ -398,8 +401,7 @@ export const aiKbCategoriesTable = pgTable(
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("ai_kb_categories_parent_slug_unique")
-      .on(table.parentId, table.slug),
+    uniqueIndex("ai_kb_categories_parent_slug_unique").on(table.parentId, table.slug),
     index("ai_kb_categories_path_idx").on(table.path),
     index("ai_kb_categories_parent_idx").on(table.parentId),
     index("ai_kb_categories_active_idx").on(table.isActive),
@@ -515,6 +517,15 @@ export const aiKbEntriesTable = pgTable(
     embeddingStatus: text("embedding_status").default("pending").notNull(),
     embeddingError: text("embedding_error"),
     embeddingGeneratedAt: timestamp("embedding_generated_at"),
+
+    // ─── v5.0: BM25 support columns ─────────────────────────────────────
+    // bm25_doc_length: precomputed |D| (number of lexemes in search_tsvector).
+    // Maintained by a trigger (migration 0007) so it's always in sync with
+    // search_tsvector. Used by the bm25_score() PL/pgSQL function for
+    // document length normalization in the BM25 formula.
+    // Declared as integer (default 0) — the trigger populates it on
+    // INSERT/UPDATE of title or content.
+    bm25DocLength: integer("bm25_doc_length").default(0).notNull(),
   },
   (table) => [
     index("ai_kb_entries_category_idx").on(table.categoryId, table.isActive, table.priority),

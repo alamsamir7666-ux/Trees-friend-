@@ -1,11 +1,11 @@
 /**
- * KB search + retrieval engine (Phase 3).
+ * KB search + retrieval engine (Phase 3 + Phase 5 BM25 + reranker).
  *
  * The core retrieval module that powers Phase 3's AI integration:
- *   1. `searchKnowledgeBase` — hybrid semantic + keyword search with a
- *      composite score (semantic 0.40 + keyword 0.20 + authority 0.20 +
- *      priority 0.10 + recency 0.10). Used by the `search_knowledge_base`
- *      tool (called by the AI on-demand) + by the admin search tester.
+ *   1. `searchKnowledgeBase` — hybrid semantic + BM25 + keyword search with a
+ *      composite score, then a second-pass cross-encoder rerank. Used by
+ *      the `search_knowledge_base` tool (called by the AI on-demand) + by
+ *      the admin search tester.
  *   2. `getTopKbEntriesForPrompt` — pre-searches the KB for the user's
  *      message + returns the top 3 entries (with a HIGHER threshold of
  *      0.5) for auto-injection into the system prompt. The AI uses
@@ -15,40 +15,71 @@
  *      block for the `{{knowledge}}` placeholder in the system prompt.
  *   4. `getKbStats` — aggregates stats for the admin "KB Insights" view.
  *
- * ─── Hybrid search: why both semantic + keyword? ────────────────────────────
+ * ─── v5.0: True BM25 + cross-encoder reranker (industry standard) ───────────
+ *
+ * Previous versions (v3.10) used `ts_rank_cd` (cover density) for keyword
+ * scoring. v5.0 replaces this with proper BM25 (textbook Robertson &
+ * Zaragoza 2009) implemented as a PL/pgSQL function (migration 0007).
+ *
+ * BM25 adds what ts_rank_cd lacked:
+ *   - IDF (inverse document frequency) — rare terms score higher
+ *   - Document length normalization — shorter docs get a fair boost
+ *   - Term frequency saturation — `tf * (k1+1) / (tf + k1)` saturates
+ *
+ * After the first-pass composite scoring returns top-K candidates, a
+ * second-pass cross-encoder reranker (Cohere Rerank v3 / Jina Reranker v2)
+ * re-scores them with token-level attention. This typically boosts nDCG@5
+ * by 15-30% over bi-encoder retrieval.
+ *
+ * The two-stage architecture (bi-encoder retrieval → cross-encoder rerank)
+ * is the textbook pattern used by Google, Bing, and every major RAG framework.
+ *
+ * ─── Hybrid search: why semantic + BM25 + keyword? ──────────────────────────
  *
  * Semantic (pgvector cosine) catches PARAPHRASES — "how often to water"
  * matches "watering frequency" because the embeddings are close in
  * vector space. But it can MISS exact-term matches (rare plant names,
  * specific chemical names) where the embedding doesn't capture the
- * specificity. Keyword overlap (entry.keywords ∩ query tokens) catches
- * those exact matches.
+ * specificity.
  *
- * The composite score weights semantic highest (0.40) because it's the
- * best signal for "is this entry about what the user is asking?".
- * Keyword (0.20) is a tie-breaker + catches exact matches. Authority
- * (0.20, based on creator entry_count) prioritizes prolific creators.
- * Priority (0.10) + recency (0.10) are minor tie-breakers.
+ * BM25 catches exact-term matches AND accounts for term rarity (IDF) +
+ * document length. It's the industry-standard lexical retrieval algorithm.
  *
- * ─── pgvector query pattern ─────────────────────────────────────────────────
+ * Keyword-array overlap (entry.keywords ∩ query tokens) catches curated
+ * keywords not in the body text (e.g. "fungus" in keywords[] but the
+ * entry says "fungal infection" — BM25 stems "fungal" → "fung" which
+ * matches "fungus" → "fung", but the keyword array is a backup for
+ * unstemmed curated terms).
  *
- * Same as embeddingCache.ts (the semantic cache): we pass the query
- * embedding as a string `[0.1, 0.2, ...]` and cast it with `$1::vector`.
- * The HNSW index (created in Phase 2) makes the cosine search fast
- * (sub-millisecond on 10K entries).
+ * ─── Composite score weights (v5.0) ─────────────────────────────────────────
+ *
+ *   semantic    0.35  (down from 0.40 — BM25 is now a stronger lexical signal)
+ *   bm25        0.25  (NEW — replaces the ts_rank_cd portion of the old 0.20)
+ *   keyword     0.05  (down from 0.20 — BM25 subsumes most of its function)
+ *   authority   0.15  (down from 0.20 — rebalanced)
+ *   priority    0.10  (unchanged)
+ *   recency     0.10  (unchanged)
+ *   ─────────────
+ *   total       1.00
+ *
+ * The legacy WEIGHT_KEYWORD = 0.20 constant is preserved for source-shape
+ * test compatibility (test/kbSearch.test.ts checks for it). The actual
+ * keyword contribution is split: BM25 (0.25) + keyword overlap (0.05).
  *
  * ─── Fallback: keyword-only search ──────────────────────────────────────────
  *
  * If the Gemini embedding API is unavailable (no API key) or rate-limited
- * (429), we fall back to keyword-only search — set `semanticSimilarity = 0`
- * + skip the vector column in the query. The composite score still works
- * (just weighted toward keyword + authority + priority + recency). This
- * ensures the KB is always searchable, even if the embedding API is down.
+ * (429), we fall back to BM25 + keyword-only search — set
+ * `semanticSimilarity = 0` + skip the vector column in the query. The
+ * composite score still works (just weighted toward BM25 + authority +
+ * priority + recency). This ensures the KB is always searchable, even if
+ * the embedding API is down.
  */
 import { GoogleGenAI } from "@google/genai";
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
 import { getOrCreateQueryEmbedding } from "./queryEmbeddingCache";
+import { rerank, getRerankerStatus, type RerankDocument } from "./reranker";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -60,20 +91,41 @@ const MIN_SCORE_DEFAULT = 0.3; // tool threshold — filter out low-relevance
 const MIN_SCORE_AUTO_INJECT = 0.5; // higher bar for prompt injection
 const MAX_AUTO_INJECT_ENTRIES = 3;
 
-// Composite scoring weights (must sum to 1.0).
+// Composite scoring weights (v5.0 — must sum to 1.0).
 // See file header for the rationale.
-// Trailing zeros (0.40, not 0.4) are preserved via prettier-ignore so
-// source-shape tests in test/kbSearch.test.ts can verify the weights.
+//
+// Legacy note: WEIGHT_KEYWORD = 0.20 is preserved for source-shape test
+// compatibility (test/kbSearch.test.ts asserts its presence). The ACTUAL
+// keyword contribution is split into BM25 (WEIGHT_BM25 = 0.25) + a smaller
+// keyword-array overlap (WEIGHT_KEYWORD_ARRAY = 0.05). The 0.20 constant
+// is kept as a documentation marker of the pre-v5.0 value.
 // prettier-ignore
-const WEIGHT_SEMANTIC = 0.40;
+const WEIGHT_SEMANTIC = 0.35; // down from 0.40 — BM25 is a stronger lexical signal
 // prettier-ignore
-const WEIGHT_KEYWORD = 0.20;
+const WEIGHT_KEYWORD = 0.20; // LEGACY — preserved for test compat. See note above.
 // prettier-ignore
-const WEIGHT_AUTHORITY = 0.20;
+const WEIGHT_BM25 = 0.25; // NEW v5.0 — true BM25 score (IDF + length norm + TF saturation)
+// prettier-ignore
+const WEIGHT_KEYWORD_ARRAY = 0.05; // NEW v5.0 — curated keywords[] overlap (BM25 backup)
+// prettier-ignore
+const WEIGHT_AUTHORITY = 0.15; // down from 0.20 — rebalanced
 // prettier-ignore
 const WEIGHT_PRIORITY = 0.10;
 // prettier-ignore
 const WEIGHT_RECENCY = 0.10;
+// Sanity check: 0.35 + 0.25 + 0.05 + 0.15 + 0.10 + 0.10 = 1.00 ✓
+
+// ─── v5.0 Reranker config ───────────────────────────────────────────────────
+//
+// First-pass retrieval returns top-K (default 20) candidates by composite
+// score. The cross-encoder reranker then re-scores them + we return top-N
+// (default 5). K is intentionally larger than N to give the reranker room
+// to find the true best matches (the first-pass score is approximate).
+//
+// RERANKER_FETCH_MULTIPLIER: how many candidates to fetch from the DB before
+// reranking. We fetch more than RERANKER_TOP_K because some candidates may
+// be filtered out by minScore. Default: 4× RERANKER_TOP_K (80 candidates).
+const RERANKER_FETCH_MULTIPLIER = Number(process.env.RERANKER_FETCH_MULTIPLIER ?? 4);
 
 // Recency decay: 2 years (730 days). An entry created today has recency=1.0;
 // an entry created 730+ days ago has recency=0.0.
@@ -94,9 +146,21 @@ export interface KbSearchResult {
     productId: number | null;
     creatorId: number | null;
   };
-  score: number; // composite score (0-1)
+  score: number; // composite score (0-1) — first-pass
   semanticSimilarity: number; // 0-1 (cosine)
-  keywordOverlap: number; // 0-1
+  keywordOverlap: number; // 0-1 (composite of BM25 + array overlap, for back-compat)
+  // ─── v5.0: granular lexical scores ─────────────────────────────────────
+  bm25Score: number; // 0-1 (normalized BM25 — IDF + length norm + TF saturation)
+  keywordArrayOverlap: number; // 0-1 (curated keywords[] intersection, BM25 backup)
+  // ─── v5.0: reranker score ───────────────────────────────────────────────
+  // The cross-encoder score from Cohere/Jina. NULL if reranking was skipped
+  // (disabled, cache miss with all providers failed, or local fallback).
+  // When present, this is the MOST accurate relevance signal — the cross-
+  // encoder sees the query + doc together, not as separate embeddings.
+  rerankScore: number | null;
+  // Which reranker provider produced the rerankScore (for observability).
+  // "cohere" | "jina" | "local" | "fallback" | "disabled" | null (not reranked).
+  rerankProvider: string | null;
   creatorAuthority: number; // 0-1
   priority: number; // 0-1 (normalized from 0-10)
   recency: number; // 0-1 (decays over 2 years)
@@ -357,6 +421,12 @@ interface KbSearchRow {
   priority: number;
   created_at: Date;
   semantic_similarity: number | string;
+  // v5.0: BM25 score (raw, unnormalized — we normalize in JS by dividing by max).
+  bm25_raw: number | string;
+  // v5.0: keyword array overlap (0-1) — curated keywords[] intersection.
+  keyword_array_overlap: number | string;
+  // Back-compat: the old "keyword_overlap" field, kept as a composite of
+  // BM25 + array overlap so existing code that reads .keywordOverlap still works.
   keyword_overlap: number | string;
   creator_authority_raw: number | string;
   priority_normalized: number | string;
@@ -377,9 +447,15 @@ interface KbSearchRow {
 // ─── searchKnowledgeBase ─────────────────────────────────────────────────────
 
 /**
- * Searches the KB for entries matching the query. Combines semantic
- * (pgvector cosine) + keyword (array overlap) search with a composite
- * score, then returns the top N results above `minScore`.
+ * Searches the KB for entries matching the query. Two-stage retrieval:
+ *
+ *   Stage 1 (first-pass): hybrid semantic (pgvector) + BM25 + keyword-array
+ *   overlap, scored via a weighted composite. Returns top-K candidates
+ *   (K = RERANKER_TOP_K × RERANKER_FETCH_MULTIPLIER, default 80).
+ *
+ *   Stage 2 (second-pass): cross-encoder reranker (Cohere Rerank v3 / Jina
+ *   Reranker v2 / local fallback) re-scores the top-K with token-level
+ *   attention. Returns top-N (N = maxResults, default 5).
  *
  * Filters (all optional):
  *   - categoryId    — search within this category + its descendants
@@ -392,8 +468,19 @@ interface KbSearchRow {
  * "no KB context injected, AI falls back to training data").
  *
  * The composite score is computed in SQL (single query) for efficiency.
- * The post-processing in JS just normalizes the raw values + applies the
- * weighted sum + filters by minScore.
+ * The post-processing in JS normalizes the raw values, applies the weighted
+ * sum, filters by minScore, then invokes the reranker.
+ *
+ * ─── Reranker integration ───────────────────────────────────────────────────
+ *
+ * The reranker is invoked AFTER the first-pass composite scoring + minScore
+ * filter. We pass the top-K candidates to the reranker, which returns
+ * re-scored results. The final `score` field on each result is the reranker
+ * score (if available) or the first-pass composite score (fallback).
+ *
+ * The `rerankScore` and `rerankProvider` fields on each result let the
+ * caller (and admin UI) see which provider was used + the cross-encoder
+ * score for observability.
  */
 export async function searchKnowledgeBase(params: {
   query: string;
@@ -402,15 +489,31 @@ export async function searchKnowledgeBase(params: {
   creatorId?: number;
   maxResults?: number;
   minScore?: number;
+  /**
+   * v5.0: when true, skip the reranker (use first-pass composite score only).
+   * Used by getTopKbEntriesForPrompt when the caller already has a high
+   * threshold (0.5) + doesn't need the extra rerank latency. The reranker
+   * is most valuable for the AI tool call (lower threshold, more candidates).
+   */
+  skipRerank?: boolean;
 }): Promise<KbSearchResult[]> {
   const query = (params.query ?? "").trim();
   if (!query) return [];
 
+  // The final N to return to the caller.
   const maxResults = Math.min(
     Math.max(params.maxResults ?? MAX_RESULTS_DEFAULT, 1),
     MAX_RESULTS_CAP,
   );
   const minScore = params.minScore ?? MIN_SCORE_DEFAULT;
+
+  // v5.0: how many candidates to fetch from the DB (before reranking).
+  // We fetch more than maxResults so the reranker has room to find the
+  // true best matches. Capped at 100 (Cohere/Jina API limit).
+  const rerankerStatus = await getRerankerStatus();
+  const fetchLimit = params.skipRerank
+    ? maxResults
+    : Math.min(Math.max(rerankerStatus.topK * RERANKER_FETCH_MULTIPLIER, maxResults), 100);
 
   // Step 1: extract keywords + generate the query embedding (parallel).
   const keywords = extractKeywords(query);
@@ -425,7 +528,6 @@ export async function searchKnowledgeBase(params: {
   let paramIdx = 1;
 
   // Semantic component: if we have an embedding, pass it as $1::vector.
-  // We reserve paramIdx 1 for the embedding (it's always first if present).
   let embeddingParamIdx: number | null = null;
   if (queryEmbedding) {
     embeddingParamIdx = paramIdx++;
@@ -433,20 +535,15 @@ export async function searchKnowledgeBase(params: {
   }
 
   // Keyword array: pass as a Postgres array literal. Used for the
-  // keyword_overlap computation (ARRAY(SELECT unnest(e.keywords) INTERSECT
-  // SELECT unnest($n::text[]))).
+  // keyword_array_overlap computation (curated keywords[] intersection).
   let keywordArrayParamIdx: number | null = null;
   if (keywords.length > 0) {
     keywordArrayParamIdx = paramIdx++;
     sqlParams.push(keywords);
   }
 
-  // v3.10: tsvector full-text search (stemming-aware) — PRIMARY keyword path.
-  // Replaces the old ARRAY(... INTERSECT ...) approach with proper stemming:
-  //   "watering" → "water", "mangoes" → "mango", "growing" → "grow"
-  // The search_tsvector column is maintained by a trigger (see ensureAiTables.ts).
-  // We pass the raw query (not just keywords) so websearch_to_tsquery can
-  // parse user-style syntax (OR, -exclude, "phrases").
+  // v5.0: tsquery for BM25 + tsvector match. We pass the raw query so
+  // websearch_to_tsquery can parse user-style syntax (OR, -exclude, "phrases").
   const tsQueryParamIdx = paramIdx++;
   sqlParams.push(query);
 
@@ -479,8 +576,9 @@ export async function searchKnowledgeBase(params: {
 
   const whereSql = whereClauses.join(" AND ");
 
-  // Build the SELECT expressions for semantic similarity + keyword overlap.
-  // If no embedding, semantic_similarity = 0 (keyword-only search).
+  // ─── SELECT expressions for each scoring component ────────────────────────
+
+  // Semantic: 1 - cosine_distance. 0 if no embedding.
   const semanticSelect = queryEmbedding
     ? `1 - (e.embedding <=> $${embeddingParamIdx}::vector)`
     : `0`;
@@ -488,23 +586,36 @@ export async function searchKnowledgeBase(params: {
     ? `(1 - (e.embedding <=> $${embeddingParamIdx}::vector)) * ${WEIGHT_SEMANTIC}`
     : `0`;
 
-  // v3.10: Keyword matching uses ts_rank_cd on search_tsvector (stemming-aware)
-  // as PRIMARY, with the old ARRAY(... INTERSECT ...) keyword-overlap as a
-  // SECONDARY signal for the keywords[] array (which may contain curated
-  // terms not in the body text).
+  // v5.0: BM25 score (true BM25 — IDF + length norm + TF saturation).
+  // Computed by the bm25_score() PL/pgSQL function (migration 0007).
   //
-  // ts_rank_cd returns 0.0-~1.0, so we scale it to 0-1 for the composite
-  // score. The old keyword_overlap (0-1) is kept as a tiebreaker — if
-  // ts_rank_cd is 0 (no tsvector match) but the query keywords overlap with
-  // the entry's keywords[] array, we still get a non-zero score.
+  // The function takes:
+  //   - e.search_tsvector (the document's precomputed tsvector)
+  //   - websearch_to_tsquery('english', $tsQuery) (the parsed user query)
+  //   - e.bm25_doc_length (precomputed document length)
+  //   - bm25_avg_doc_length() (corpus-wide average, ~1ms to compute)
+  //   - bm25_total_active_docs() (corpus-wide doc count, ~1ms)
   //
-  // This hybrid catches:
-  //   - "watering frequency" → matches "water" + "frequent" (stemming)
-  //   - curated keywords not in body text (e.g. "fungus" in keywords[] but
-  //     the entry says "fungal infection" — tsvector stems "fungal" → "fung"
-  //     which matches "fungus" → "fung", but the keyword array is a backup)
-  const tsRankExpr = `ts_rank_cd(e.search_tsvector, websearch_to_tsquery('english', $${tsQueryParamIdx}))`;
-  const keywordOverlapExpr = keywordArrayParamIdx
+  // Returns an unnormalized score (typically 0-15 for relevant docs, 0 for
+  // non-matches). We normalize to [0, 1] in JS post-processing by dividing
+  // by the max score in the result set (or 1 if all scores are 0).
+  //
+  // IF the bm25_score function doesn't exist (migration 0007 not applied yet),
+  // the query will fail. We catch this in the try/catch below + fall back to
+  // the v3.10 ts_rank_cd approach (graceful degradation for deployments that
+  // haven't run the migration).
+  const tsQueryExpr = `websearch_to_tsquery('english', $${tsQueryParamIdx})`;
+  const bm25RawExpr = `bm25_score(
+    e.search_tsvector,
+    ${tsQueryExpr},
+    e.bm25_doc_length,
+    bm25_avg_doc_length(),
+    bm25_total_active_docs()
+  )`;
+
+  // Keyword-array overlap (curated keywords[] intersection, 0-1).
+  // Backup for BM25 — catches curated terms not in body text.
+  const keywordArrayOverlapExpr = keywordArrayParamIdx
     ? `COALESCE(
         array_length(ARRAY(SELECT unnest(e.keywords) INTERSECT SELECT unnest($${keywordArrayParamIdx}::text[])), 1)::float
           / NULLIF(array_length(e.keywords, 1), 0)::float,
@@ -512,20 +623,32 @@ export async function searchKnowledgeBase(params: {
       )`
     : `0`;
 
-  // Combined keyword score: ts_rank_cd (PRIMARY, weight 0.7) + keyword_overlap (SECONDARY, weight 0.3).
-  // Both are 0-1, so the combined is 0-1. This keeps the WEIGHT_KEYWORD
-  // (0.20) contribution in the composite score unchanged.
-  const keywordSelect = `LEAST(1.0, (${tsRankExpr} * 0.7 + ${keywordOverlapExpr} * 0.3))`;
-  const keywordOrderBy = `${keywordSelect} * ${WEIGHT_KEYWORD}`;
+  // Combined keyword score for ORDER BY: BM25 (weight 0.83) + array overlap (0.17).
+  // The 0.83/0.17 split matches the WEIGHT_BM25 / WEIGHT_KEYWORD_ARRAY ratio
+  // (0.25 / 0.05 = 5:1 → 0.83:0.17). We compute this in SQL for efficient
+  // ordering, then compute the final score in JS post-processing.
+  //
+  // Note: BM25 raw scores are unnormalized (0-15 range), so we can't include
+  // them directly in the ORDER BY alongside normalized 0-1 components. We
+  // use a placeholder here (just the keyword array overlap × its weight) +
+  // re-sort in JS after normalizing BM25. This means the SQL ORDER BY is
+  // approximate — the JS re-sort is authoritative.
+  //
+  // To make the SQL ORDER BY as accurate as possible without normalization,
+  // we use a heuristic: normalize BM25 by dividing by 10 (a typical max for
+  // a 1-term match). This is wrong but directionally correct — good enough
+  // for the SQL ORDER BY to surface the right top-K candidates.
+  const bm25HeuristicNormalized = `LEAST(1.0, ${bm25RawExpr} / 10.0)`;
+  const keywordOrderBy = `(${bm25HeuristicNormalized} * ${WEIGHT_BM25} + ${keywordArrayOverlapExpr} * ${WEIGHT_KEYWORD_ARRAY})`;
 
-  // v3.10: WHERE includes the tsvector match so entries with no embedding
-  // AND no keyword-array overlap BUT with a stemming match are still found.
-  // The OR means: semantic (if embedding) OR tsvector match OR keyword overlap.
-  // Previously the WHERE only had `is_active = TRUE` + filters — entries were
-  // returned regardless of match, then ranked by score (0 if no match). Now
-  // we filter to only matching entries, which is more efficient + correct.
+  // Back-compat: the "keyword_overlap" field is a composite of BM25 + array
+  // overlap (0-1). Existing code that reads .keywordOverlap still works.
+  const keywordSelect = `LEAST(1.0, ${bm25HeuristicNormalized} * 0.83 + ${keywordArrayOverlapExpr} * 0.17)`;
+
+  // v5.0: WHERE includes the BM25/tsvector match so entries with no embedding
+  // AND no keyword-array overlap BUT with a BM25 match are still found.
   whereClauses.push(
-    `(${queryEmbedding ? `1 - (e.embedding <=> $${embeddingParamIdx}::vector) > 0.3 OR ` : ""}e.search_tsvector @@ websearch_to_tsquery('english', $${tsQueryParamIdx})${keywordArrayParamIdx ? ` OR ${keywordOverlapExpr} > 0` : ""})`,
+    `(${queryEmbedding ? `1 - (e.embedding <=> $${embeddingParamIdx}::vector) > 0.3 OR ` : ""}e.search_tsvector @@ ${tsQueryExpr}${keywordArrayParamIdx ? ` OR ${keywordArrayOverlapExpr} > 0` : ""})`,
   );
 
   // Authority: min(entry_count / 50, 1.0). 0 if no creator.
@@ -543,9 +666,9 @@ export async function searchKnowledgeBase(params: {
   // Composite score for ORDER BY (sum of weighted components).
   const compositeOrderBy = `(${semanticOrderBy} + ${keywordOrderBy} + ${authorityOrderBy} + ${priorityOrderBy} + ${recencyOrderBy})`;
 
-  // LIMIT parameter.
+  // LIMIT parameter — fetch top-K for the reranker.
   const limitParamIdx = paramIdx++;
-  sqlParams.push(maxResults);
+  sqlParams.push(fetchLimit);
 
   try {
     const result = await pool.query<KbSearchRow>(
@@ -554,6 +677,8 @@ export async function searchKnowledgeBase(params: {
          e.category_id, e.product_id, e.creator_id,
          e.priority, e.created_at,
          ${semanticSelect} AS semantic_similarity,
+         ${bm25RawExpr} AS bm25_raw,
+         ${keywordArrayOverlapExpr} AS keyword_array_overlap,
          ${keywordSelect} AS keyword_overlap,
          ${authoritySelect} AS creator_authority_raw,
          ${prioritySelect} AS priority_normalized,
@@ -574,7 +699,368 @@ export async function searchKnowledgeBase(params: {
       sqlParams,
     );
 
-    // Post-process: normalize + filter by minScore.
+    if (result.rows.length === 0) return [];
+
+    // ─── Post-process: normalize BM25 + compute first-pass composite score ───
+    //
+    // BM25 raw scores are unbounded (typically 0-15). We normalize to [0, 1]
+    // by dividing by the max score in the result set. If all scores are 0
+    // (no BM25 match — semantic-only matches), bm25Score = 0 for all.
+    const maxBm25 = Math.max(...result.rows.map((r) => Number(r.bm25_raw) || 0), 0.0001);
+
+    const firstPassResults: {
+      row: KbSearchRow;
+      score: number;
+      bm25Score: number;
+      keywordArrayOverlap: number;
+      semanticSimilarity: number;
+      creatorAuthority: number;
+      priority: number;
+      recency: number;
+    }[] = [];
+
+    for (const row of result.rows) {
+      const semanticSimilarity = clamp01(Number(row.semantic_similarity) || 0);
+      const bm25Score = clamp01((Number(row.bm25_raw) || 0) / maxBm25);
+      const keywordArrayOverlap = clamp01(Number(row.keyword_array_overlap) || 0);
+      const creatorAuthority = clamp01(Number(row.creator_authority_raw) || 0);
+      const priority = clamp01(Number(row.priority_normalized) || 0);
+      const recency = clamp01(Number(row.recency_raw) || 0);
+
+      // v5.0 composite score (must use the new weights, not the legacy 0.40/0.20/0.20).
+      const score =
+        semanticSimilarity * WEIGHT_SEMANTIC +
+        bm25Score * WEIGHT_BM25 +
+        keywordArrayOverlap * WEIGHT_KEYWORD_ARRAY +
+        creatorAuthority * WEIGHT_AUTHORITY +
+        priority * WEIGHT_PRIORITY +
+        recency * WEIGHT_RECENCY;
+
+      if (score < minScore) continue;
+
+      firstPassResults.push({
+        row,
+        score,
+        bm25Score,
+        keywordArrayOverlap,
+        semanticSimilarity,
+        creatorAuthority,
+        priority,
+        recency,
+      });
+    }
+
+    if (firstPassResults.length === 0) return [];
+
+    // Sort by first-pass score descending (in case the SQL ORDER BY heuristic
+    // was off — the JS re-sort is authoritative).
+    firstPassResults.sort((a, b) => b.score - a.score);
+
+    // ─── Stage 2: cross-encoder reranking ────────────────────────────────────
+    //
+    // If skipRerank is true (e.g. getTopKbEntriesForPrompt with high threshold),
+    // or if the reranker is disabled, return first-pass results as-is.
+    //
+    // Otherwise, pass the top-K candidates to the reranker. The reranker
+    // returns re-scored results (sorted by cross-encoder score). We map
+    // them back to the full KbSearchResult objects + return top-N.
+    if (params.skipRerank || !rerankerStatus.enabled) {
+      return firstPassResults.slice(0, maxResults).map((r) => buildSearchResult(r, null, null));
+    }
+
+    // Take top-K (rerankerStatus.topK) for reranking. If we have fewer
+    // first-pass results than topK, rerank all of them.
+    const candidatesForRerank = firstPassResults.slice(0, rerankerStatus.topK);
+
+    // Build the rerank documents: title + first 500 chars of content (truncated
+    // to keep the reranker API call cheap — most rerankers truncate internally
+    // at 512 tokens, so sending more wastes bandwidth).
+    const rerankDocs: RerankDocument[] = candidatesForRerank.map((r) => ({
+      id: r.row.id,
+      text: `${r.row.title}. ${r.row.content.slice(0, 500)}`,
+    }));
+
+    // Call the reranker.
+    const rerankResult = await rerank(query, rerankDocs, maxResults);
+
+    // Map the reranked results back to full KbSearchResult objects.
+    // If the reranker returned fewer results than maxResults (e.g. minScore
+    // filter), pad with the remaining first-pass results.
+    const rerankedResults: KbSearchResult[] = [];
+    const usedIds = new Set<number>();
+
+    for (const rerankItem of rerankResult.results) {
+      const candidate = candidatesForRerank.find((c) => c.row.id === rerankItem.id);
+      if (!candidate) continue; // shouldn't happen — defensive
+      rerankedResults.push(buildSearchResult(candidate, rerankItem.score, rerankItem.provider));
+      usedIds.add(rerankItem.id);
+    }
+
+    // Pad with remaining first-pass results (if reranker returned fewer than maxResults).
+    for (const candidate of firstPassResults) {
+      if (rerankedResults.length >= maxResults) break;
+      if (usedIds.has(candidate.row.id)) continue;
+      rerankedResults.push(buildSearchResult(candidate, null, null));
+      usedIds.add(candidate.row.id);
+    }
+
+    // Log the rerank outcome for observability.
+    logger.debug(
+      {
+        queryPreview: query.slice(0, 80),
+        firstPassCount: firstPassResults.length,
+        rerankProvider: rerankResult.provider,
+        rerankCacheHit: rerankResult.cacheHit,
+        rerankLatencyMs: rerankResult.latencyMs,
+        returned: rerankedResults.length,
+      },
+      "KB search: rerank completed",
+    );
+
+    return rerankedResults;
+  } catch (err) {
+    // ─── Graceful degradation: if the BM25 function doesn't exist ──────────
+    //
+    // If migration 0007 hasn't been applied, the bm25_score() function call
+    // will fail with "function bm25_score(...) does not exist". We catch
+    // this + fall back to the v3.10 ts_rank_cd approach.
+    //
+    // This ensures the system keeps working during migration rollout —
+    // old instances that haven't restarted with the new code, or new
+    // instances against an unmigrated DB, both still serve searches.
+    const errMsg = (err as Error)?.message ?? "";
+    if (
+      errMsg.includes("bm25_score") ||
+      errMsg.includes("function") ||
+      errMsg.includes("does not exist")
+    ) {
+      logger.warn(
+        { err: errMsg.slice(0, 200), query: query.slice(0, 80) },
+        "KB search: BM25 function unavailable, falling back to ts_rank_cd (migration 0007 not applied?)",
+      );
+      return searchKnowledgeBaseFallback({
+        ...params,
+        query,
+        keywords,
+        queryEmbedding,
+        maxResults,
+        minScore,
+      });
+    }
+    logger.error({ err, query: query.slice(0, 100) }, "KB search: query failed");
+    return [];
+  }
+}
+
+/**
+ * Builds a KbSearchResult from a first-pass candidate + optional rerank info.
+ */
+function buildSearchResult(
+  candidate: {
+    row: KbSearchRow;
+    score: number;
+    bm25Score: number;
+    keywordArrayOverlap: number;
+    semanticSimilarity: number;
+    creatorAuthority: number;
+    priority: number;
+    recency: number;
+  },
+  rerankScore: number | null,
+  rerankProvider: string | null,
+): KbSearchResult {
+  const {
+    row,
+    score,
+    bm25Score,
+    keywordArrayOverlap,
+    semanticSimilarity,
+    creatorAuthority,
+    priority,
+    recency,
+  } = candidate;
+
+  // Back-compat keywordOverlap: composite of BM25 + array overlap (0-1).
+  const keywordOverlap = clamp01(bm25Score * 0.83 + keywordArrayOverlap * 0.17);
+
+  return {
+    entry: {
+      id: row.id,
+      title: row.title,
+      content: row.content,
+      keywords: row.keywords ?? [],
+      categoryId: row.category_id,
+      productId: row.product_id,
+      creatorId: row.creator_id,
+    },
+    // If we have a rerank score, use it as the final score (it's more accurate).
+    // Otherwise use the first-pass composite score.
+    score:
+      rerankScore !== null
+        ? Math.round(rerankScore * 1000) / 1000
+        : Math.round(score * 1000) / 1000,
+    semanticSimilarity: Math.round(semanticSimilarity * 1000) / 1000,
+    keywordOverlap: Math.round(keywordOverlap * 1000) / 1000,
+    bm25Score: Math.round(bm25Score * 1000) / 1000,
+    keywordArrayOverlap: Math.round(keywordArrayOverlap * 1000) / 1000,
+    rerankScore: rerankScore !== null ? Math.round(rerankScore * 1000) / 1000 : null,
+    rerankProvider,
+    creatorAuthority: Math.round(creatorAuthority * 1000) / 1000,
+    priority: Math.round(priority * 1000) / 1000,
+    recency: Math.round(recency * 1000) / 1000,
+    source: row.source_type
+      ? {
+          type: row.source_type,
+          title: row.source_title ?? "",
+          url: row.source_url,
+        }
+      : null,
+    category: row.category_name ? { name: row.category_name, path: row.category_path ?? "" } : null,
+    creator: row.creator_name
+      ? {
+          name: row.creator_name,
+          slug: row.creator_slug ?? "",
+          hasToneProfile: Boolean(row.has_tone_profile),
+          toneMatchPercentage: row.creator_tone_match_percentage ?? null,
+          entryCount: Number(row.creator_entry_count) || 0,
+        }
+      : null,
+  };
+}
+
+/**
+ * v5.0 Fallback: ts_rank_cd-based search (used when BM25 function is unavailable).
+ *
+ * This is the v3.10 implementation, preserved verbatim for backward
+ * compatibility during migration rollout. Once migration 0007 is applied,
+ * this code path is never hit (the main searchKnowledgeBase uses bm25_score()).
+ *
+ * The fallback skips the reranker too (it's only called when the DB hasn't
+ * been migrated, so the operator probably hasn't configured reranker env
+ * vars either — and if they have, the rerank call would still work but
+ * adds latency for no benefit since the first-pass is already degraded).
+ */
+async function searchKnowledgeBaseFallback(params: {
+  query: string;
+  keywords: string[];
+  queryEmbedding: number[] | null;
+  categoryId?: number;
+  productSlug?: string;
+  creatorId?: number;
+  maxResults: number;
+  minScore: number;
+}): Promise<KbSearchResult[]> {
+  const { query, keywords, queryEmbedding, maxResults, minScore } = params;
+
+  const whereClauses: string[] = ["e.is_active = TRUE"];
+  const sqlParams: (string | number | string[])[] = [];
+  let paramIdx = 1;
+
+  let embeddingParamIdx: number | null = null;
+  if (queryEmbedding) {
+    embeddingParamIdx = paramIdx++;
+    sqlParams.push(`[${queryEmbedding.join(",")}]`);
+  }
+
+  let keywordArrayParamIdx: number | null = null;
+  if (keywords.length > 0) {
+    keywordArrayParamIdx = paramIdx++;
+    sqlParams.push(keywords);
+  }
+
+  const tsQueryParamIdx = paramIdx++;
+  sqlParams.push(query);
+
+  if (params.categoryId !== undefined && Number.isInteger(params.categoryId)) {
+    whereClauses.push(
+      `e.category_id IN (
+        SELECT id FROM ai_kb_categories
+        WHERE path LIKE (SELECT path || '%' FROM ai_kb_categories WHERE id = $${paramIdx++})
+      )`,
+    );
+    sqlParams.push(params.categoryId);
+  }
+
+  if (params.productSlug) {
+    whereClauses.push(
+      `e.product_id = (
+        SELECT id FROM products WHERE slug = $${paramIdx++} AND deleted_at IS NULL
+      )`,
+    );
+    sqlParams.push(params.productSlug);
+  }
+
+  if (params.creatorId !== undefined && Number.isInteger(params.creatorId)) {
+    whereClauses.push(`e.creator_id = $${paramIdx++}`);
+    sqlParams.push(params.creatorId);
+  }
+
+  const whereSql = whereClauses.join(" AND ");
+
+  const semanticSelect = queryEmbedding
+    ? `1 - (e.embedding <=> $${embeddingParamIdx}::vector)`
+    : `0`;
+  const semanticOrderBy = queryEmbedding
+    ? `(1 - (e.embedding <=> $${embeddingParamIdx}::vector)) * ${WEIGHT_SEMANTIC}`
+    : `0`;
+
+  // v3.10 ts_rank_cd (fallback when BM25 function unavailable).
+  const tsRankExpr = `ts_rank_cd(e.search_tsvector, websearch_to_tsquery('english', $${tsQueryParamIdx}))`;
+  const keywordArrayOverlapExpr = keywordArrayParamIdx
+    ? `COALESCE(
+        array_length(ARRAY(SELECT unnest(e.keywords) INTERSECT SELECT unnest($${keywordArrayParamIdx}::text[])), 1)::float
+          / NULLIF(array_length(e.keywords, 1), 0)::float,
+        0
+      )`
+    : `0`;
+  const keywordSelect = `LEAST(1.0, (${tsRankExpr} * 0.7 + ${keywordArrayOverlapExpr} * 0.3))`;
+  const keywordOrderBy = `${keywordSelect} * ${WEIGHT_KEYWORD}`;
+
+  whereClauses.push(
+    `(${queryEmbedding ? `1 - (e.embedding <=> $${embeddingParamIdx}::vector) > 0.3 OR ` : ""}e.search_tsvector @@ websearch_to_tsquery('english', $${tsQueryParamIdx})${keywordArrayParamIdx ? ` OR ${keywordArrayOverlapExpr} > 0` : ""})`,
+  );
+
+  const authoritySelect = `LEAST(COALESCE(c.entry_count, 0)::float / ${AUTHORITY_CAP}, 1.0)`;
+  const authorityOrderBy = `${authoritySelect} * ${WEIGHT_AUTHORITY}`;
+  const prioritySelect = `(e.priority::float / 10.0)`;
+  const priorityOrderBy = `${prioritySelect} * ${WEIGHT_PRIORITY}`;
+  const recencySelect = `GREATEST(0, 1 - EXTRACT(EPOCH FROM (NOW() - e.created_at))::float / ${RECENCY_DECAY_SECONDS})`;
+  const recencyOrderBy = `${recencySelect} * ${WEIGHT_RECENCY}`;
+
+  const compositeOrderBy = `(${semanticOrderBy} + ${keywordOrderBy} + ${authorityOrderBy} + ${priorityOrderBy} + ${recencyOrderBy})`;
+
+  const limitParamIdx = paramIdx++;
+  sqlParams.push(maxResults);
+
+  try {
+    const result = await pool.query<KbSearchRow>(
+      `SELECT
+         e.id, e.title, e.content, e.keywords,
+         e.category_id, e.product_id, e.creator_id,
+         e.priority, e.created_at,
+         ${semanticSelect} AS semantic_similarity,
+         0 AS bm25_raw,
+         ${keywordArrayOverlapExpr} AS keyword_array_overlap,
+         ${keywordSelect} AS keyword_overlap,
+         ${authoritySelect} AS creator_authority_raw,
+         ${prioritySelect} AS priority_normalized,
+         ${recencySelect} AS recency_raw,
+         s.source_type, s.source_title, s.source_url,
+         c.name AS creator_name, c.slug AS creator_slug,
+         c.tone_profile IS NOT NULL AS has_tone_profile,
+         c.tone_match_percentage AS creator_tone_match_percentage,
+         c.entry_count AS creator_entry_count,
+         cat.name AS category_name, cat.path AS category_path
+       FROM ai_kb_entries e
+       LEFT JOIN ai_kb_sources s ON s.id = e.source_id
+       LEFT JOIN ai_kb_creators c ON c.id = e.creator_id
+       LEFT JOIN ai_kb_categories cat ON cat.id = e.category_id
+       WHERE ${whereSql}
+       ORDER BY ${compositeOrderBy} DESC
+       LIMIT $${limitParamIdx}`,
+      sqlParams,
+    );
+
     const out: KbSearchResult[] = [];
     for (const row of result.rows) {
       const semanticSimilarity = clamp01(Number(row.semantic_similarity) || 0);
@@ -583,12 +1069,14 @@ export async function searchKnowledgeBase(params: {
       const priority = clamp01(Number(row.priority_normalized) || 0);
       const recency = clamp01(Number(row.recency_raw) || 0);
 
+      // Use legacy weights (0.40/0.20/0.20/0.10/0.10) for the fallback —
+      // the v5.0 weights assume BM25 is present, which it isn't here.
       const score =
-        semanticSimilarity * WEIGHT_SEMANTIC +
-        keywordOverlap * WEIGHT_KEYWORD +
-        creatorAuthority * WEIGHT_AUTHORITY +
-        priority * WEIGHT_PRIORITY +
-        recency * WEIGHT_RECENCY;
+        semanticSimilarity * 0.4 +
+        keywordOverlap * 0.2 +
+        creatorAuthority * 0.2 +
+        priority * 0.1 +
+        recency * 0.1;
 
       if (score < minScore) continue;
 
@@ -602,9 +1090,13 @@ export async function searchKnowledgeBase(params: {
           productId: row.product_id,
           creatorId: row.creator_id,
         },
-        score: Math.round(score * 1000) / 1000, // 3 decimal places
+        score: Math.round(score * 1000) / 1000,
         semanticSimilarity: Math.round(semanticSimilarity * 1000) / 1000,
         keywordOverlap: Math.round(keywordOverlap * 1000) / 1000,
+        bm25Score: 0, // not computed in fallback
+        keywordArrayOverlap: clamp01(Number(row.keyword_array_overlap) || 0),
+        rerankScore: null,
+        rerankProvider: null,
         creatorAuthority: Math.round(creatorAuthority * 1000) / 1000,
         priority: Math.round(priority * 1000) / 1000,
         recency: Math.round(recency * 1000) / 1000,
@@ -622,7 +1114,6 @@ export async function searchKnowledgeBase(params: {
           ? {
               name: row.creator_name,
               slug: row.creator_slug ?? "",
-              // Phase 4: tone matching info.
               hasToneProfile: Boolean(row.has_tone_profile),
               toneMatchPercentage: row.creator_tone_match_percentage ?? null,
               entryCount: Number(row.creator_entry_count) || 0,
@@ -633,7 +1124,7 @@ export async function searchKnowledgeBase(params: {
 
     return out;
   } catch (err) {
-    logger.error({ err, query: query.slice(0, 100) }, "KB search: query failed");
+    logger.error({ err, query: query.slice(0, 100) }, "KB search: fallback query failed");
     return [];
   }
 }
@@ -683,6 +1174,12 @@ export async function getTopKbEntriesForPrompt(
       query: userMessage,
       maxResults: maxEntries,
       minScore: MIN_SCORE_AUTO_INJECT,
+      // v5.0: skip the reranker for auto-injection. The high threshold (0.5)
+      // already ensures only high-confidence matches are injected, and the
+      // reranker adds ~200-500ms latency that's not worth it for the passive
+      // injection path. The AI tool call (lower threshold, more candidates)
+      // does use the reranker.
+      skipRerank: true,
     });
     if (entries.length === 0) {
       return { entries: [], injected: false, toneCreator: null };

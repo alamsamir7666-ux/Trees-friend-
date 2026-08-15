@@ -263,6 +263,158 @@ CREATE TRIGGER ai_kb_entries_search_tsvector_trigger
   FOR EACH ROW
   EXECUTE FUNCTION ai_kb_entries_search_tsvector_update();
 
+-- ─── v5.0: True BM25 scoring (migration 0007) ───────────────────────────────
+-- Implements industry-standard BM25 (Robertson & Zaragoza 2009) to replace
+-- the v3.10 ts_rank_cd-only scoring. BM25 adds:
+--   - IDF (inverse document frequency) — rare terms score higher
+--   - Document length normalization — shorter docs get a fair boost
+--   - Term frequency saturation — tf * (k1+1) / (tf + k1) saturates
+--
+-- This block mirrors lib/db/migrations/0007_bm25_reranker.sql. It's
+-- idempotent (CREATE ... IF NOT EXISTS / OR REPLACE) so it's safe to run
+-- on every cold start. The migration file is the canonical source; this
+-- embedded copy ensures new deployments get BM25 without manually running
+-- migrations.
+--
+-- See migration 0007 for the full design rationale.
+
+-- ai_kb_term_stats: precomputed IDF table (refreshed by jobs/bm25StatsJob.ts)
+CREATE TABLE IF NOT EXISTS ai_kb_term_stats (
+  lexeme TEXT NOT NULL PRIMARY KEY,
+  doc_count INTEGER NOT NULL DEFAULT 0,
+  idf DOUBLE PRECISION NOT NULL DEFAULT 0,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ai_kb_term_stats_lexeme_idx
+  ON ai_kb_term_stats (lexeme);
+
+-- bm25_doc_length column on ai_kb_entries (precomputed |D| for BM25 formula)
+ALTER TABLE ai_kb_entries
+  ADD COLUMN IF NOT EXISTS bm25_doc_length INTEGER NOT NULL DEFAULT 0;
+
+-- Backfill existing rows
+UPDATE ai_kb_entries
+SET bm25_doc_length = coalesce(
+  (SELECT count(*) FROM unnest(search_tsvector)),
+  0
+)
+WHERE bm25_doc_length = 0;
+
+-- Trigger to maintain bm25_doc_length on insert/update
+DROP TRIGGER IF EXISTS ai_kb_entries_bm25_doclength_trigger ON ai_kb_entries;
+DROP FUNCTION IF EXISTS ai_kb_entries_bm25_doclength_update();
+CREATE OR REPLACE FUNCTION ai_kb_entries_bm25_doclength_update() RETURNS trigger AS $$
+BEGIN
+  NEW.bm25_doc_length := coalesce(
+    (SELECT count(*) FROM unnest(NEW.search_tsvector)),
+    0
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+CREATE TRIGGER ai_kb_entries_bm25_doclength_trigger
+  BEFORE INSERT OR UPDATE OF title, content
+  ON ai_kb_entries
+  FOR EACH ROW
+  EXECUTE FUNCTION ai_kb_entries_bm25_doclength_update();
+
+-- bm25_score() PL/pgSQL function — textbook BM25 with Lucene/BM25+ IDF
+CREATE OR REPLACE FUNCTION bm25_score(
+  p_tsvector tsvector,
+  p_tsquery tsquery,
+  p_doc_length integer,
+  p_avg_doc_len double precision DEFAULT 100.0,
+  p_total_docs integer DEFAULT 1000,
+  p_k1 double precision DEFAULT 1.2,
+  p_b double precision DEFAULT 0.75
+) RETURNS double precision AS $$
+DECLARE
+  v_score double precision := 0.0;
+  v_lexeme text;
+  v_tf integer;
+  v_doc_count integer;
+  v_idf double precision;
+  v_norm double precision;
+  v_avgdl double precision;
+BEGIN
+  IF p_tsvector IS NULL OR p_tsquery IS NULL OR p_doc_length IS NULL THEN
+    RETURN 0.0;
+  END IF;
+  v_avgdl := GREATEST(p_avg_doc_len, 1.0);
+  v_norm := 1.0 - p_b + p_b * (p_doc_length::double precision / v_avgdl);
+  FOR v_lexeme IN
+    SELECT lexeme FROM unnest(CAST(p_tsquery::text AS tsvector))
+  LOOP
+    SELECT count(*)::integer INTO v_tf
+    FROM unnest(p_tsvector)
+    WHERE lexeme = v_lexeme;
+    IF v_tf = 0 OR v_tf IS NULL THEN
+      CONTINUE;
+    END IF;
+    SELECT coalesce(doc_count, 1) INTO v_doc_count
+    FROM ai_kb_term_stats
+    WHERE lexeme = v_lexeme
+    LIMIT 1;
+    IF v_doc_count IS NULL THEN
+      v_doc_count := 1;
+    END IF;
+    v_idf := ln(1.0 + (p_total_docs::double precision - v_doc_count + 0.5)
+                     / (v_doc_count + 0.5));
+    v_score := v_score + (v_idf * (v_tf::double precision * (p_k1 + 1.0)))
+              / (v_tf::double precision + p_k1 * v_norm);
+  END LOOP;
+  RETURN v_score;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Helper: average doc length across active entries
+CREATE OR REPLACE FUNCTION bm25_avg_doc_length() RETURNS double precision AS $$
+DECLARE
+  v_avg double precision;
+BEGIN
+  SELECT coalesce(avg(bm25_doc_length), 100.0) INTO v_avg
+  FROM ai_kb_entries
+  WHERE is_active = true;
+  RETURN v_avg;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- Helper: count of active entries
+CREATE OR REPLACE FUNCTION bm25_total_active_docs() RETURNS integer AS $$
+DECLARE
+  v_count integer;
+BEGIN
+  SELECT count(*)::integer INTO v_count
+  FROM ai_kb_entries
+  WHERE is_active = true;
+  RETURN v_count;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- refresh_kb_term_stats() — rebuilds the IDF table (called by bm25StatsJob.ts)
+CREATE OR REPLACE FUNCTION refresh_kb_term_stats() RETURNS void AS $$
+DECLARE v_total_docs integer;
+BEGIN
+  SELECT count(*)::integer INTO v_total_docs
+  FROM ai_kb_entries WHERE is_active = true;
+  TRUNCATE ai_kb_term_stats;
+  INSERT INTO ai_kb_term_stats (lexeme, doc_count, idf, updated_at)
+  SELECT
+    word AS lexeme,
+    ndoc AS doc_count,
+    ln(1.0 + (v_total_docs::double precision - ndoc + 0.5)
+              / (ndoc + 0.5)),
+    NOW()
+  FROM ts_stat('SELECT search_tsvector FROM ai_kb_entries WHERE is_active = true');
+END;
+$$ LANGUAGE plpgsql;
+
+-- Partial index on is_active for fast stats refresh + active-entry scans
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ai_kb_entries_active_partial_idx
+  ON ai_kb_entries (id)
+  WHERE is_active = true;
+
 -- ─── v3.2: Prompt versioning ────────────────────────────────────────────────
 -- Stores versioned system prompts so admins can A/B test + roll back
 -- without a code deploy. The "active" version is controlled by the
@@ -694,7 +846,10 @@ export async function ensureAiTables(): Promise<void> {
     } catch (seedErr) {
       // Non-fatal: the route will fall back to the hardcoded template
       // if the seed fails. Log for investigation.
-      logger.warn({ err: seedErr }, "AI: failed to seed prompt v1.0.0 text (route will use fallback)");
+      logger.warn(
+        { err: seedErr },
+        "AI: failed to seed prompt v1.0.0 text (route will use fallback)",
+      );
     }
 
     // ─── Phase 1: Knowledge Base seed data ────────────────────────────────
@@ -791,7 +946,10 @@ export async function ensureAiTables(): Promise<void> {
       );
     } catch (kbSeedErr) {
       // Non-fatal — the admin can create categories manually via the UI.
-      logger.warn({ err: kbSeedErr }, "AI: failed to seed KB default categories (admin can create them manually)");
+      logger.warn(
+        { err: kbSeedErr },
+        "AI: failed to seed KB default categories (admin can create them manually)",
+      );
     }
   } catch (err) {
     logger.error({ err }, "Failed to ensure AI chat tables");

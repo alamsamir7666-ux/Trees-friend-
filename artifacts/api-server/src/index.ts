@@ -9,6 +9,7 @@ import { runPaymentExpirationJob } from "./jobs/paymentExpirationJob";
 import { runAiSessionCleanup } from "./jobs/aiSessionCleanup";
 import { runKbEmbeddingJob } from "./jobs/kbEmbeddingJob";
 import { runKbToneProfileJob } from "./jobs/kbToneProfileJob";
+import { startBm25StatsJob } from "./jobs/bm25StatsJob";
 
 // Note: ensureConversationsTables() is invoked from app.ts at module load,
 // so it runs on every cold start (including Vercel serverless). We do NOT
@@ -62,6 +63,13 @@ app.listen(port, (err) => {
   // Phase 4 background job. On Vercel (serverless), this runs via
   // POST /api/cron/kb-tone-profiles instead.
   scheduleKbToneProfileJob();
+
+  // v5.0: BM25 term stats refresh — runs every 6 hours, rebuilds the
+  // ai_kb_term_stats table (IDF values for every lexeme in the KB).
+  // Critical for BM25 scoring accuracy — without fresh stats, rare-vs-
+  // common term weighting drifts. On Vercel (serverless), this runs via
+  // POST /api/cron/kb-bm25-stats instead.
+  startBm25StatsJob();
 });
 
 // ─── Keep-alive: ping self every 14 min so Render free tier never sleeps ─────

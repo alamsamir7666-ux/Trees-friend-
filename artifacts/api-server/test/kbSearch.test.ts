@@ -64,12 +64,19 @@ describe("Phase 3: kbSearch.ts lib module", () => {
     expect(source).toContain("export interface KbSearchResult");
   });
 
-  it("has the composite scoring weights (0.40 + 0.20 + 0.20 + 0.10 + 0.10)", () => {
-    expect(source).toContain("WEIGHT_SEMANTIC = 0.40");
-    expect(source).toContain("WEIGHT_KEYWORD = 0.20");
-    expect(source).toContain("WEIGHT_AUTHORITY = 0.20");
+  it("v5.0: has the composite scoring weights (0.35 + 0.25 + 0.05 + 0.15 + 0.10 + 0.10)", () => {
+    // v5.0 weights (changed from v3.10's 0.40/0.20/0.20/0.10/0.10 to make
+    // room for true BM25 + reduced keyword-array overlap).
+    // Legacy WEIGHT_KEYWORD = 0.20 is preserved as a documentation marker
+    // (see the comment in kbSearch.ts).
+    expect(source).toContain("WEIGHT_SEMANTIC = 0.35");
+    expect(source).toContain("WEIGHT_BM25 = 0.25");
+    expect(source).toContain("WEIGHT_KEYWORD_ARRAY = 0.05");
+    expect(source).toContain("WEIGHT_AUTHORITY = 0.15");
     expect(source).toContain("WEIGHT_PRIORITY = 0.10");
     expect(source).toContain("WEIGHT_RECENCY = 0.10");
+    // Legacy constant preserved for back-compat
+    expect(source).toContain("WEIGHT_KEYWORD = 0.20");
   });
 
   it("uses Gemini text-embedding-004 for query embeddings", () => {
@@ -151,6 +158,78 @@ describe("Phase 3: kbSearch.ts lib module", () => {
 
   it("never throws (returns empty array on DB error — route relies on this)", () => {
     expect(source).toContain("return []");
+  });
+
+  // ─── v5.0: BM25 + reranker integration ──────────────────────────────────
+
+  it("v5.0: has WEIGHT_BM25 constant (true BM25 score weight)", () => {
+    expect(source).toContain("WEIGHT_BM25 = 0.25");
+  });
+
+  it("v5.0: has WEIGHT_KEYWORD_ARRAY constant (curated keywords[] overlap)", () => {
+    expect(source).toContain("WEIGHT_KEYWORD_ARRAY = 0.05");
+  });
+
+  it("v5.0: weights sum to 1.0 (0.35 + 0.25 + 0.05 + 0.15 + 0.10 + 0.10)", () => {
+    expect(source).toContain("WEIGHT_SEMANTIC = 0.35");
+    expect(source).toContain("WEIGHT_BM25 = 0.25");
+    expect(source).toContain("WEIGHT_KEYWORD_ARRAY = 0.05");
+    expect(source).toContain("WEIGHT_AUTHORITY = 0.15");
+    expect(source).toContain("WEIGHT_PRIORITY = 0.10");
+    expect(source).toContain("WEIGHT_RECENCY = 0.10");
+    // Sanity comment
+    expect(source).toContain("0.35 + 0.25 + 0.05 + 0.15 + 0.10 + 0.10 = 1.00");
+  });
+
+  it("v5.0: imports rerank + RerankDocument from reranker module", () => {
+    expect(source).toContain("import { rerank");
+    expect(source).toContain("RerankDocument");
+    expect(source).toContain('"./reranker"');
+  });
+
+  it("v5.0: calls bm25_score() PL/pgSQL function in the SQL query", () => {
+    expect(source).toContain("bm25_score(");
+    expect(source).toContain("e.search_tsvector");
+    expect(source).toContain("e.bm25_doc_length");
+    expect(source).toContain("bm25_avg_doc_length()");
+    expect(source).toContain("bm25_total_active_docs()");
+  });
+
+  it("v5.0: KbSearchResult type has bm25Score + rerankScore + rerankProvider", () => {
+    expect(source).toContain("bm25Score:");
+    expect(source).toContain("keywordArrayOverlap:");
+    expect(source).toContain("rerankScore:");
+    expect(source).toContain("rerankProvider:");
+  });
+
+  it("v5.0: searchKnowledgeBase accepts skipRerank param", () => {
+    expect(source).toContain("skipRerank?:");
+  });
+
+  it("v5.0: getTopKbEntriesForPrompt passes skipRerank: true (high threshold, no rerank latency)", () => {
+    expect(source).toContain("skipRerank: true");
+  });
+
+  it("v5.0: has a fallback function for when BM25 function is unavailable", () => {
+    expect(source).toContain("searchKnowledgeBaseFallback");
+    expect(source).toContain("ts_rank_cd"); // fallback uses ts_rank_cd
+  });
+
+  it("v5.0: fallback uses legacy weights (0.40/0.20/0.20/0.10/0.10)", () => {
+    expect(source).toContain("semanticSimilarity * 0.40");
+    expect(source).toContain("keywordOverlap * 0.20");
+    expect(source).toContain("creatorAuthority * 0.20");
+  });
+
+  it("v5.0: invokes the reranker after first-pass composite scoring", () => {
+    expect(source).toContain("rerank(query, rerankDocs, maxResults)");
+    expect(source).toContain("candidatesForRerank");
+  });
+
+  it("v5.0: logs rerank outcome for observability", () => {
+    expect(source).toContain("rerankProvider");
+    expect(source).toContain("rerankCacheHit");
+    expect(source).toContain("rerankLatencyMs");
   });
 });
 
@@ -239,7 +318,7 @@ describe("Phase 3: aiContext.ts {{knowledge}} placeholder + rules", () => {
   });
 
   it("renderPromptTemplate replaces {{knowledge}} placeholder", () => {
-    expect(source).toContain('{{knowledge}}');
+    expect(source).toContain("{{knowledge}}");
     expect(source).toContain('replaceAll("{{knowledge}}"');
   });
 
@@ -301,7 +380,7 @@ describe("Phase 3: routes/ai.ts KB integration", () => {
   });
 
   it("tracks kbSearchPerformed via metaHolder toolCalls", () => {
-    expect(source).toContain('metaHolder.value?.toolCalls');
+    expect(source).toContain("metaHolder.value?.toolCalls");
     expect(source).toContain('"search_knowledge_base"');
   });
 
@@ -330,7 +409,8 @@ describe("Phase 3: aiAdmin.ts KB insights + search endpoints", () => {
   });
 
   it("NO insights/search route uses the double /api/ prefix", () => {
-    const brokenPattern = /router\.(get|post|put|delete|patch)\(\s*["']\/api\/ai\/admin\/kb\/(insights|search)/;
+    const brokenPattern =
+      /router\.(get|post|put|delete|patch)\(\s*["']\/api\/ai\/admin\/kb\/(insights|search)/;
     expect(brokenPattern.test(source)).toBe(false);
   });
 

@@ -33,10 +33,7 @@ import {
   forceRediscover,
   isGeminiConfigured,
 } from "../lib/gemini";
-import {
-  getProvidersDebugInfo,
-  forceAllProvidersRediscover,
-} from "../lib/aiRouter";
+import { getProvidersDebugInfo, forceAllProvidersRediscover } from "../lib/aiRouter";
 // Bug #3 fix: prompt versioning + eval harness admin endpoints.
 import {
   listPromptVersions,
@@ -46,15 +43,8 @@ import {
   activatePromptVersion,
   deletePromptVersion,
 } from "../lib/promptVersioning";
-import {
-  getEvalCases,
-  getEvalResults,
-  evaluateResponse,
-  saveEvalResult,
-  type EvalCase,
-} from "../lib/evalHarness";
+import { getEvalCases, getEvalResults, evaluateResponse, saveEvalResult } from "../lib/evalHarness";
 import { streamChat, isAnyProviderConfigured } from "../lib/aiRouter";
-import { hasBotanicalKeyword } from "../lib/aiContext";
 // Phase 1: Knowledge Base category management.
 import {
   listKbCategories,
@@ -94,7 +84,6 @@ import {
   SOURCE_URL_MAX_LENGTH,
   RAW_TEXT_MAX_LENGTH,
   VALID_LANGUAGES,
-  type KbSource,
 } from "../lib/kbSources";
 import {
   listKbEntries,
@@ -1005,12 +994,7 @@ router.post("/ai/admin/prompts", async (req: Request, res: Response) => {
   // createdBy: the admin's email from req.dbUser (set by requireAuth).
   const createdBy = req.dbUser?.email ?? "admin";
   try {
-    const created = await createPromptVersion(
-      version,
-      promptText,
-      changeLog ?? "",
-      createdBy,
-    );
+    const created = await createPromptVersion(version, promptText, changeLog ?? "", createdBy);
     if (!created) {
       // createPromptVersion returns null on validation failure or
       // duplicate version (UNIQUE constraint). Check if it's a duplicate.
@@ -1149,10 +1133,13 @@ router.post("/ai/admin/eval/run", async (req: Request, res: Response) => {
 
     // Generate a run ID for grouping results.
     const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    logger.info({ runId, caseCount: cases.length, useJudge, categoryFilter }, "AI admin: starting eval run");
+    logger.info(
+      { runId, caseCount: cases.length, useJudge, categoryFilter },
+      "AI admin: starting eval run",
+    );
 
     // Run each case sequentially (parallel would blow the rate limit).
-    const results: Array<{
+    const results: {
       caseId: number;
       question: string;
       response: string;
@@ -1163,7 +1150,7 @@ router.post("/ai/admin/eval/run", async (req: Request, res: Response) => {
       model: string | null;
       provider: string | null;
       error: string | null;
-    }> = [];
+    }[] = [];
 
     for (const evalCase of cases) {
       const caseStart = Date.now();
@@ -1189,7 +1176,7 @@ router.post("/ai/admin/eval/run", async (req: Request, res: Response) => {
           evalCase.question,
           { declarations: [], execute: async () => ({ error: "Tools disabled in eval" }) },
           undefined, // no userId (eval is anonymous)
-          (meta) => {
+          (_meta) => {
             // We could capture model/provider here for tracking.
           },
         );
@@ -1210,7 +1197,10 @@ router.post("/ai/admin/eval/run", async (req: Request, res: Response) => {
             // The judge-enhanced result is saved separately if needed.
             // For now, we just use the basic metrics for the pass/fail.
           } catch (judgeErr) {
-            logger.warn({ err: judgeErr, caseId: evalCase.id }, "AI admin: eval judge failed (non-fatal)");
+            logger.warn(
+              { err: judgeErr, caseId: evalCase.id },
+              "AI admin: eval judge failed (non-fatal)",
+            );
           }
         }
 
@@ -1431,7 +1421,11 @@ router.post("/ai/admin/kb/categories", async (req: Request, res: Response) => {
     return;
   }
   // Validate description (optional).
-  if (description !== undefined && description !== null && description.length > DESCRIPTION_MAX_LENGTH) {
+  if (
+    description !== undefined &&
+    description !== null &&
+    description.length > DESCRIPTION_MAX_LENGTH
+  ) {
     res.status(400).json({
       error: `description is too long (max ${DESCRIPTION_MAX_LENGTH} characters).`,
     });
@@ -1469,7 +1463,12 @@ router.post("/ai/admin/kb/categories", async (req: Request, res: Response) => {
       return;
     }
     logger.info(
-      { id: created.id, slug: created.slug, parentId: created.parentId, createdBy: req.dbUser?.email },
+      {
+        id: created.id,
+        slug: created.slug,
+        parentId: created.parentId,
+        createdBy: req.dbUser?.email,
+      },
       "AI admin: created KB category",
     );
     res.status(201).json({ category: created });
@@ -1541,7 +1540,9 @@ router.put("/ai/admin/kb/categories/:id", async (req: Request, res: Response) =>
       return;
     }
     if (description.length > DESCRIPTION_MAX_LENGTH) {
-      res.status(400).json({ error: `description is too long (max ${DESCRIPTION_MAX_LENGTH} characters).` });
+      res
+        .status(400)
+        .json({ error: `description is too long (max ${DESCRIPTION_MAX_LENGTH} characters).` });
       return;
     }
     updates.description = description.trim() || null;
@@ -1559,7 +1560,9 @@ router.put("/ai/admin/kb/categories/:id", async (req: Request, res: Response) =>
 
   // Reject no-op updates (no fields to update).
   if (Object.keys(updates).length === 0) {
-    res.status(400).json({ error: "No fields to update. Provide name, slug, description, or isActive." });
+    res
+      .status(400)
+      .json({ error: "No fields to update. Provide name, slug, description, or isActive." });
     return;
   }
 
@@ -1578,10 +1581,7 @@ router.put("/ai/admin/kb/categories/:id", async (req: Request, res: Response) =>
       }
       return;
     }
-    logger.info(
-      { id, updates, updatedBy: req.dbUser?.email },
-      "AI admin: updated KB category",
-    );
+    logger.info({ id, updates, updatedBy: req.dbUser?.email }, "AI admin: updated KB category");
     res.json({ category: updated });
   } catch (err) {
     logger.error({ err, id, updates }, "AI admin: update KB category failed");
@@ -1744,7 +1744,9 @@ router.post("/ai/admin/kb/creators", async (req: Request, res: Response) => {
     return;
   }
   if (name.trim().length > CREATOR_NAME_MAX_LENGTH) {
-    res.status(400).json({ error: `name is too long (max ${CREATOR_NAME_MAX_LENGTH} characters).` });
+    res
+      .status(400)
+      .json({ error: `name is too long (max ${CREATOR_NAME_MAX_LENGTH} characters).` });
     return;
   }
   if (typeof slug !== "string" || slug.trim().length === 0) {
@@ -1763,7 +1765,11 @@ router.post("/ai/admin/kb/creators", async (req: Request, res: Response) => {
   }
   if (profileUrl !== undefined && profileUrl !== null) {
     if (typeof profileUrl !== "string" || profileUrl.length > CREATOR_PROFILE_URL_MAX_LENGTH) {
-      res.status(400).json({ error: `profileUrl is too long (max ${CREATOR_PROFILE_URL_MAX_LENGTH} characters).` });
+      res
+        .status(400)
+        .json({
+          error: `profileUrl is too long (max ${CREATOR_PROFILE_URL_MAX_LENGTH} characters).`,
+        });
       return;
     }
     try {
@@ -1784,7 +1790,10 @@ router.post("/ai/admin/kb/creators", async (req: Request, res: Response) => {
       res.status(409).json({ error: "Slug conflict or validation error." });
       return;
     }
-    logger.info({ id: created.id, slug: created.slug, createdBy: req.dbUser?.email }, "AI admin: created KB creator");
+    logger.info(
+      { id: created.id, slug: created.slug, createdBy: req.dbUser?.email },
+      "AI admin: created KB creator",
+    );
     res.status(201).json({ creator: created });
   } catch (err) {
     logger.error({ err, name, slug }, "AI admin: create KB creator failed");
@@ -1805,14 +1814,21 @@ router.put("/ai/admin/kb/creators/:id", async (req: Request, res: Response) => {
     isActive?: boolean;
     isFeatured?: boolean;
   };
-  const updates: { name?: string; profileUrl?: string | null; isActive?: boolean; isFeatured?: boolean } = {};
+  const updates: {
+    name?: string;
+    profileUrl?: string | null;
+    isActive?: boolean;
+    isFeatured?: boolean;
+  } = {};
   if (name !== undefined) {
     if (typeof name !== "string" || name.trim().length === 0) {
       res.status(400).json({ error: "name must be a non-empty string." });
       return;
     }
     if (name.trim().length > CREATOR_NAME_MAX_LENGTH) {
-      res.status(400).json({ error: `name is too long (max ${CREATOR_NAME_MAX_LENGTH} characters).` });
+      res
+        .status(400)
+        .json({ error: `name is too long (max ${CREATOR_NAME_MAX_LENGTH} characters).` });
       return;
     }
     updates.name = name.trim();
@@ -1820,7 +1836,11 @@ router.put("/ai/admin/kb/creators/:id", async (req: Request, res: Response) => {
   if (profileUrl !== undefined) {
     if (profileUrl !== null) {
       if (typeof profileUrl !== "string" || profileUrl.length > CREATOR_PROFILE_URL_MAX_LENGTH) {
-        res.status(400).json({ error: `profileUrl is too long (max ${CREATOR_PROFILE_URL_MAX_LENGTH} characters).` });
+        res
+          .status(400)
+          .json({
+            error: `profileUrl is too long (max ${CREATOR_PROFILE_URL_MAX_LENGTH} characters).`,
+          });
         return;
       }
       try {
@@ -1847,7 +1867,9 @@ router.put("/ai/admin/kb/creators/:id", async (req: Request, res: Response) => {
     updates.isFeatured = isFeatured;
   }
   if (Object.keys(updates).length === 0) {
-    res.status(400).json({ error: "No fields to update. Provide name, profileUrl, isActive, or isFeatured." });
+    res
+      .status(400)
+      .json({ error: "No fields to update. Provide name, profileUrl, isActive, or isFeatured." });
     return;
   }
   try {
@@ -1882,9 +1904,17 @@ router.delete("/ai/admin/kb/creators/:id", async (req: Request, res: Response) =
       if (result.reason === "not found") {
         res.status(404).json({ error: "KB creator not found." });
       } else if (result.reason === "protected") {
-        res.status(409).json({ error: "Cannot delete the 'Manual' creator (it's the default for admin-typed content)." });
+        res
+          .status(409)
+          .json({
+            error: "Cannot delete the 'Manual' creator (it's the default for admin-typed content).",
+          });
       } else if (result.reason === "has entries") {
-        res.status(409).json({ error: "Cannot delete a creator that has entries. Move or delete the entries first." });
+        res
+          .status(409)
+          .json({
+            error: "Cannot delete a creator that has entries. Move or delete the entries first.",
+          });
       } else {
         res.status(500).json({ error: "Failed to delete KB creator." });
       }
@@ -1907,7 +1937,8 @@ router.get("/ai/admin/kb/sources", async (req: Request, res: Response) => {
     const result = await listKbSources({
       creatorId: Number.isInteger(creatorId) ? creatorId : undefined,
       language: typeof req.query.language === "string" ? req.query.language : undefined,
-      processingStatus: typeof req.query.processingStatus === "string" ? req.query.processingStatus : undefined,
+      processingStatus:
+        typeof req.query.processingStatus === "string" ? req.query.processingStatus : undefined,
       limit: Number.isInteger(limit) ? limit : undefined,
       offset: Number.isInteger(offset) ? offset : undefined,
     });
@@ -1940,22 +1971,31 @@ router.get("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
 
 // ─── POST /ai/admin/kb/sources ───────────────────────────────────────────────
 router.post("/ai/admin/kb/sources", async (req: Request, res: Response) => {
-  const { creatorId, sourceType, sourceUrl, sourceTitle, sourceLanguage, sourcePublishedAt, rawText } =
-    (req.body ?? {}) as {
-      creatorId?: number | null;
-      sourceType?: string;
-      sourceUrl?: string | null;
-      sourceTitle?: string;
-      sourceLanguage?: string;
-      sourcePublishedAt?: string | null;
-      rawText?: string;
-    };
+  const {
+    creatorId,
+    sourceType,
+    sourceUrl,
+    sourceTitle,
+    sourceLanguage,
+    sourcePublishedAt,
+    rawText,
+  } = (req.body ?? {}) as {
+    creatorId?: number | null;
+    sourceType?: string;
+    sourceUrl?: string | null;
+    sourceTitle?: string;
+    sourceLanguage?: string;
+    sourcePublishedAt?: string | null;
+    rawText?: string;
+  };
   if (typeof sourceTitle !== "string" || sourceTitle.trim().length === 0) {
     res.status(400).json({ error: "sourceTitle is required (non-empty string)." });
     return;
   }
   if (sourceTitle.trim().length > SOURCE_TITLE_MAX_LENGTH) {
-    res.status(400).json({ error: `sourceTitle is too long (max ${SOURCE_TITLE_MAX_LENGTH} characters).` });
+    res
+      .status(400)
+      .json({ error: `sourceTitle is too long (max ${SOURCE_TITLE_MAX_LENGTH} characters).` });
     return;
   }
   if (typeof sourceType !== "string" || !VALID_SOURCE_TYPES.includes(sourceType as never)) {
@@ -1963,7 +2003,9 @@ router.post("/ai/admin/kb/sources", async (req: Request, res: Response) => {
     return;
   }
   if (typeof sourceLanguage !== "string" || !VALID_LANGUAGES.includes(sourceLanguage as never)) {
-    res.status(400).json({ error: `sourceLanguage must be one of: ${VALID_LANGUAGES.join(", ")}.` });
+    res
+      .status(400)
+      .json({ error: `sourceLanguage must be one of: ${VALID_LANGUAGES.join(", ")}.` });
     return;
   }
   if (typeof rawText !== "string" || rawText.trim().length === 0) {
@@ -1976,7 +2018,9 @@ router.post("/ai/admin/kb/sources", async (req: Request, res: Response) => {
   }
   if (sourceUrl !== undefined && sourceUrl !== null && sourceUrl !== "") {
     if (typeof sourceUrl !== "string" || sourceUrl.length > SOURCE_URL_MAX_LENGTH) {
-      res.status(400).json({ error: `sourceUrl is too long (max ${SOURCE_URL_MAX_LENGTH} characters).` });
+      res
+        .status(400)
+        .json({ error: `sourceUrl is too long (max ${SOURCE_URL_MAX_LENGTH} characters).` });
       return;
     }
     try {
@@ -2022,7 +2066,10 @@ router.post("/ai/admin/kb/sources", async (req: Request, res: Response) => {
       });
       return;
     }
-    logger.info({ id: created.id, title: created.sourceTitle, createdBy: req.dbUser?.email }, "AI admin: created KB source");
+    logger.info(
+      { id: created.id, title: created.sourceTitle, createdBy: req.dbUser?.email },
+      "AI admin: created KB source",
+    );
     res.status(201).json({ source: created });
   } catch (err) {
     logger.error({ err, sourceTitle }, "AI admin: create KB source failed");
@@ -2055,7 +2102,9 @@ router.put("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
       return;
     }
     if (sourceTitle.trim().length > SOURCE_TITLE_MAX_LENGTH) {
-      res.status(400).json({ error: `sourceTitle is too long (max ${SOURCE_TITLE_MAX_LENGTH} characters).` });
+      res
+        .status(400)
+        .json({ error: `sourceTitle is too long (max ${SOURCE_TITLE_MAX_LENGTH} characters).` });
       return;
     }
     updates.sourceTitle = sourceTitle.trim();
@@ -2063,7 +2112,9 @@ router.put("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
   if (sourceUrl !== undefined) {
     if (sourceUrl !== null && sourceUrl !== "") {
       if (typeof sourceUrl !== "string" || sourceUrl.length > SOURCE_URL_MAX_LENGTH) {
-        res.status(400).json({ error: `sourceUrl is too long (max ${SOURCE_URL_MAX_LENGTH} characters).` });
+        res
+          .status(400)
+          .json({ error: `sourceUrl is too long (max ${SOURCE_URL_MAX_LENGTH} characters).` });
         return;
       }
       try {
@@ -2202,7 +2253,7 @@ router.post("/ai/admin/kb/sources/:id/entries/batch", async (req: Request, res: 
     return;
   }
   const { entries, method } = (req.body ?? {}) as {
-    entries?: Array<{
+    entries?: {
       title: string;
       content: string;
       keywords?: string[];
@@ -2210,7 +2261,7 @@ router.post("/ai/admin/kb/sources/:id/entries/batch", async (req: Request, res: 
       productId?: number | null;
       priority?: number;
       chunkIndex?: number;
-    }>;
+    }[];
     method?: string; // 'ai' | 'manual' — defaults to 'manual' if not set
   };
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -2218,7 +2269,9 @@ router.post("/ai/admin/kb/sources/:id/entries/batch", async (req: Request, res: 
     return;
   }
   if (entries.length > 50) {
-    res.status(400).json({ error: "Too many entries in one batch (max 50). Split into smaller batches." });
+    res
+      .status(400)
+      .json({ error: "Too many entries in one batch (max 50). Split into smaller batches." });
     return;
   }
   try {
@@ -2230,16 +2283,15 @@ router.post("/ai/admin/kb/sources/:id/entries/batch", async (req: Request, res: 
     const createdBy = req.dbUser?.email ?? null;
     const createdIds = await createEntriesBatch(id, entries, createdBy);
     if (createdIds.length === 0) {
-      res.status(422).json({ error: "Failed to create entries (validation error or source not found)." });
+      res
+        .status(422)
+        .json({ error: "Failed to create entries (validation error or source not found)." });
       return;
     }
     // Record the chunking metadata (method = 'ai' if the admin used AI
     // chunking, 'manual' otherwise).
     await updateChunkingMetadata(id, method === "ai" ? "ai" : "manual", null);
-    logger.info(
-      { id, count: createdIds.length, createdBy },
-      "AI admin: batch-created KB entries",
-    );
+    logger.info({ id, count: createdIds.length, createdBy }, "AI admin: batch-created KB entries");
     res.status(201).json({ createdIds, count: createdIds.length });
   } catch (err) {
     logger.error({ err, id }, "AI admin: batch-create KB entries failed");
@@ -2255,9 +2307,7 @@ router.get("/ai/admin/kb/entries", async (req: Request, res: Response) => {
   const productId = req.query.productId !== undefined ? Number(req.query.productId) : undefined;
   const limit = req.query.limit !== undefined ? Number(req.query.limit) : 20;
   const offset = req.query.offset !== undefined ? Number(req.query.offset) : 0;
-  const isActive = req.query.isActive !== undefined
-    ? req.query.isActive === "true"
-    : undefined;
+  const isActive = req.query.isActive !== undefined ? req.query.isActive === "true" : undefined;
   try {
     const result = await listKbEntries({
       sourceId: Number.isInteger(sourceId) ? sourceId : undefined,
@@ -2265,7 +2315,8 @@ router.get("/ai/admin/kb/entries", async (req: Request, res: Response) => {
       creatorId: Number.isInteger(creatorId) ? creatorId : undefined,
       productId: Number.isInteger(productId) ? productId : undefined,
       isActive,
-      embeddingStatus: typeof req.query.embeddingStatus === "string" ? req.query.embeddingStatus : undefined,
+      embeddingStatus:
+        typeof req.query.embeddingStatus === "string" ? req.query.embeddingStatus : undefined,
       limit: Number.isInteger(limit) ? limit : undefined,
       offset: Number.isInteger(offset) ? offset : undefined,
     });
@@ -2320,7 +2371,9 @@ router.post("/ai/admin/kb/entries", async (req: Request, res: Response) => {
     return;
   }
   if (title.trim().length > ENTRY_TITLE_MAX_LENGTH) {
-    res.status(400).json({ error: `title is too long (max ${ENTRY_TITLE_MAX_LENGTH} characters).` });
+    res
+      .status(400)
+      .json({ error: `title is too long (max ${ENTRY_TITLE_MAX_LENGTH} characters).` });
     return;
   }
   if (typeof content !== "string" || content.trim().length === 0) {
@@ -2328,24 +2381,42 @@ router.post("/ai/admin/kb/entries", async (req: Request, res: Response) => {
     return;
   }
   if (content.length > ENTRY_CONTENT_MAX_LENGTH) {
-    res.status(400).json({ error: `content is too long (max ${ENTRY_CONTENT_MAX_LENGTH} characters).` });
+    res
+      .status(400)
+      .json({ error: `content is too long (max ${ENTRY_CONTENT_MAX_LENGTH} characters).` });
     return;
   }
   if (keywords !== undefined) {
     if (!Array.isArray(keywords) || keywords.length > ENTRY_KEYWORD_MAX_COUNT) {
-      res.status(400).json({ error: `keywords must be an array of at most ${ENTRY_KEYWORD_MAX_COUNT} strings.` });
+      res
+        .status(400)
+        .json({
+          error: `keywords must be an array of at most ${ENTRY_KEYWORD_MAX_COUNT} strings.`,
+        });
       return;
     }
     for (const k of keywords) {
       if (typeof k !== "string" || k.length > ENTRY_KEYWORD_MAX_LENGTH) {
-        res.status(400).json({ error: `Each keyword must be a string of at most ${ENTRY_KEYWORD_MAX_LENGTH} characters.` });
+        res
+          .status(400)
+          .json({
+            error: `Each keyword must be a string of at most ${ENTRY_KEYWORD_MAX_LENGTH} characters.`,
+          });
         return;
       }
     }
   }
   if (priority !== undefined) {
-    if (!Number.isInteger(priority) || priority < ENTRY_PRIORITY_MIN || priority > ENTRY_PRIORITY_MAX) {
-      res.status(400).json({ error: `priority must be an integer between ${ENTRY_PRIORITY_MIN} and ${ENTRY_PRIORITY_MAX}.` });
+    if (
+      !Number.isInteger(priority) ||
+      priority < ENTRY_PRIORITY_MIN ||
+      priority > ENTRY_PRIORITY_MAX
+    ) {
+      res
+        .status(400)
+        .json({
+          error: `priority must be an integer between ${ENTRY_PRIORITY_MIN} and ${ENTRY_PRIORITY_MAX}.`,
+        });
       return;
     }
   }
@@ -2362,10 +2433,15 @@ router.post("/ai/admin/kb/entries", async (req: Request, res: Response) => {
       createdBy: req.dbUser?.email ?? null,
     });
     if (!created) {
-      res.status(422).json({ error: "Failed to create entry (validation error or source not found)." });
+      res
+        .status(422)
+        .json({ error: "Failed to create entry (validation error or source not found)." });
       return;
     }
-    logger.info({ id: created.id, sourceId, createdBy: req.dbUser?.email }, "AI admin: created KB entry");
+    logger.info(
+      { id: created.id, sourceId, createdBy: req.dbUser?.email },
+      "AI admin: created KB entry",
+    );
     res.status(201).json({ entry: created });
   } catch (err) {
     logger.error({ err, sourceId, title }, "AI admin: create KB entry failed");
@@ -2404,7 +2480,9 @@ router.put("/ai/admin/kb/entries/:id", async (req: Request, res: Response) => {
       return;
     }
     if (title.trim().length > ENTRY_TITLE_MAX_LENGTH) {
-      res.status(400).json({ error: `title is too long (max ${ENTRY_TITLE_MAX_LENGTH} characters).` });
+      res
+        .status(400)
+        .json({ error: `title is too long (max ${ENTRY_TITLE_MAX_LENGTH} characters).` });
       return;
     }
     updates.title = title.trim();
@@ -2415,19 +2493,29 @@ router.put("/ai/admin/kb/entries/:id", async (req: Request, res: Response) => {
       return;
     }
     if (content.length > ENTRY_CONTENT_MAX_LENGTH) {
-      res.status(400).json({ error: `content is too long (max ${ENTRY_CONTENT_MAX_LENGTH} characters).` });
+      res
+        .status(400)
+        .json({ error: `content is too long (max ${ENTRY_CONTENT_MAX_LENGTH} characters).` });
       return;
     }
     updates.content = content;
   }
   if (keywords !== undefined) {
     if (!Array.isArray(keywords) || keywords.length > ENTRY_KEYWORD_MAX_COUNT) {
-      res.status(400).json({ error: `keywords must be an array of at most ${ENTRY_KEYWORD_MAX_COUNT} strings.` });
+      res
+        .status(400)
+        .json({
+          error: `keywords must be an array of at most ${ENTRY_KEYWORD_MAX_COUNT} strings.`,
+        });
       return;
     }
     for (const k of keywords) {
       if (typeof k !== "string" || k.length > ENTRY_KEYWORD_MAX_LENGTH) {
-        res.status(400).json({ error: `Each keyword must be a string of at most ${ENTRY_KEYWORD_MAX_LENGTH} characters.` });
+        res
+          .status(400)
+          .json({
+            error: `Each keyword must be a string of at most ${ENTRY_KEYWORD_MAX_LENGTH} characters.`,
+          });
         return;
       }
     }
@@ -2448,8 +2536,16 @@ router.put("/ai/admin/kb/entries/:id", async (req: Request, res: Response) => {
     updates.productId = productId;
   }
   if (priority !== undefined) {
-    if (!Number.isInteger(priority) || priority < ENTRY_PRIORITY_MIN || priority > ENTRY_PRIORITY_MAX) {
-      res.status(400).json({ error: `priority must be an integer between ${ENTRY_PRIORITY_MIN} and ${ENTRY_PRIORITY_MAX}.` });
+    if (
+      !Number.isInteger(priority) ||
+      priority < ENTRY_PRIORITY_MIN ||
+      priority > ENTRY_PRIORITY_MAX
+    ) {
+      res
+        .status(400)
+        .json({
+          error: `priority must be an integer between ${ENTRY_PRIORITY_MIN} and ${ENTRY_PRIORITY_MAX}.`,
+        });
       return;
     }
     updates.priority = priority;
@@ -2637,10 +2733,16 @@ router.post("/ai/admin/kb/search", async (req: Request, res: Response) => {
         score: Math.round(r.score * 100) / 100,
         breakdown: {
           semantic: Math.round(r.semanticSimilarity * 100) / 100,
-          keyword: Math.round(r.keywordOverlap * 100) / 100,
+          // v5.0: granular lexical scores
+          bm25: Math.round((r.bm25Score ?? 0) * 100) / 100,
+          keywordArray: Math.round((r.keywordArrayOverlap ?? 0) * 100) / 100,
+          keyword: Math.round(r.keywordOverlap * 100) / 100, // back-compat composite
           authority: Math.round(r.creatorAuthority * 100) / 100,
           priority: Math.round(r.priority * 100) / 100,
           recency: Math.round(r.recency * 100) / 100,
+          // v5.0: reranker info
+          rerankScore: r.rerankScore !== null ? Math.round(r.rerankScore * 100) / 100 : null,
+          rerankProvider: r.rerankProvider,
         },
         creator: r.creator?.name ?? null,
         category: r.category?.name ?? null,
@@ -2653,6 +2755,95 @@ router.post("/ai/admin/kb/search", async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "AI admin: KB search failed");
     res.status(500).json({ error: "Failed to search KB." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── v5.0: BM25 + Reranker health & config endpoints ────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//   GET  /ai/admin/kb/search/health            — BM25 + reranker config + status
+//   POST /ai/admin/kb/search/refresh-stats      — manually refresh BM25 IDF stats
+//   POST /ai/admin/kb/search/clear-reranker-cache — clear the reranker result cache
+//
+// These endpoints let admins inspect the search infrastructure + trigger
+// maintenance operations without restarting the server.
+
+// ─── GET /ai/admin/kb/search/health ──────────────────────────────────────────
+router.get("/ai/admin/kb/search/health", async (_req: Request, res: Response) => {
+  try {
+    // BM25 status (from the job module — single source of truth).
+    const { getBm25StatsStatus, areBm25StatsPopulated } = await import("../jobs/bm25StatsJob");
+    const [bm25Status, statsPopulated] = await Promise.all([
+      getBm25StatsStatus(),
+      areBm25StatsPopulated(),
+    ]);
+
+    // Reranker status (from the reranker module).
+    const { getRerankerStatus } = await import("../lib/reranker");
+    const rerankerStatus = await getRerankerStatus();
+
+    // Reranker cache stats.
+    const { getRerankerCacheStats } = await import("../lib/rerankerCache");
+    const cacheStats = await getRerankerCacheStats();
+
+    res.json({
+      bm25: {
+        available: statsPopulated,
+        lastRefreshAt:
+          bm25Status.lastRefreshAt > 0 ? new Date(bm25Status.lastRefreshAt).toISOString() : null,
+        uniqueTerms: bm25Status.uniqueTerms,
+        totalActiveDocs: bm25Status.totalActiveDocs,
+        avgDocLength: Math.round(bm25Status.avgDocLength * 10) / 10,
+        refreshIntervalHours: bm25Status.refreshIntervalMs / (60 * 60 * 1000),
+      },
+      reranker: {
+        ...rerankerStatus,
+        cache: cacheStats,
+      },
+      // Composite score weights (for admin observability — shows which
+      // signals contribute what to the first-pass score).
+      weights: {
+        semantic: 0.35,
+        bm25: 0.25,
+        keywordArray: 0.05,
+        authority: 0.15,
+        priority: 0.1,
+        recency: 0.1,
+      },
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: KB search health failed");
+    res.status(500).json({ error: "Failed to get search health." });
+  }
+});
+
+// ─── POST /ai/admin/kb/search/refresh-stats ─────────────────────────────────
+router.post("/ai/admin/kb/search/refresh-stats", async (_req: Request, res: Response) => {
+  try {
+    const { refreshBm25Stats } = await import("../jobs/bm25StatsJob");
+    const result = await refreshBm25Stats({ force: true });
+    res.json({
+      refreshed: result.refreshed,
+      uniqueTerms: result.uniqueTerms,
+      totalDocs: result.totalDocs,
+      durationMs: result.durationMs,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: BM25 stats refresh failed");
+    res.status(500).json({ error: "Failed to refresh BM25 stats." });
+  }
+});
+
+// ─── POST /ai/admin/kb/search/clear-reranker-cache ──────────────────────────
+router.post("/ai/admin/kb/search/clear-reranker-cache", async (_req: Request, res: Response) => {
+  try {
+    const { clearRerankerCache } = await import("../lib/reranker");
+    const cleared = await clearRerankerCache();
+    res.json({ cleared });
+  } catch (err) {
+    logger.error({ err }, "AI admin: reranker cache clear failed");
+    res.status(500).json({ error: "Failed to clear reranker cache." });
   }
 });
 
@@ -2710,25 +2901,28 @@ router.get("/ai/admin/kb/creators/:id/tone-profile", async (req: Request, res: R
 // ─── POST /ai/admin/kb/creators/:id/tone-profile/generate ────────────────────
 // Manually triggers tone profile generation (calls Gemini immediately). Returns
 // 422 on failure (below threshold, Gemini not configured, rate limit, parse error).
-router.post("/ai/admin/kb/creators/:id/tone-profile/generate", async (req: Request, res: Response) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) {
-    res.status(400).json({ error: "Invalid creator id." });
-    return;
-  }
-  try {
-    const result = await generateToneProfile(id);
-    if (!result.success) {
-      res.status(422).json({ error: result.reason ?? "Failed to generate tone profile." });
+router.post(
+  "/ai/admin/kb/creators/:id/tone-profile/generate",
+  async (req: Request, res: Response) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid creator id." });
       return;
     }
-    logger.info({ id, triggeredBy: req.dbUser?.email }, "AI admin: tone profile generated");
-    res.json({ ok: true, message: "Tone profile generated successfully." });
-  } catch (err) {
-    logger.error({ err, id }, "AI admin: generate tone profile failed");
-    res.status(500).json({ error: "Failed to generate tone profile." });
-  }
-});
+    try {
+      const result = await generateToneProfile(id);
+      if (!result.success) {
+        res.status(422).json({ error: result.reason ?? "Failed to generate tone profile." });
+        return;
+      }
+      logger.info({ id, triggeredBy: req.dbUser?.email }, "AI admin: tone profile generated");
+      res.json({ ok: true, message: "Tone profile generated successfully." });
+    } catch (err) {
+      logger.error({ err, id }, "AI admin: generate tone profile failed");
+      res.status(500).json({ error: "Failed to generate tone profile." });
+    }
+  },
+);
 
 // ─── PUT /ai/admin/kb/creators/:id/tone-percentage ───────────────────────────
 // Sets the per-creator tone match percentage (0-100). Pass null to reset to
@@ -2741,7 +2935,13 @@ router.put("/ai/admin/kb/creators/:id/tone-percentage", async (req: Request, res
     return;
   }
   // percentage: 0-100, or null (reset to global default).
-  if (percentage !== null && (typeof percentage !== "number" || percentage < 0 || percentage > 100 || !Number.isFinite(percentage))) {
+  if (
+    percentage !== null &&
+    (typeof percentage !== "number" ||
+      percentage < 0 ||
+      percentage > 100 ||
+      !Number.isFinite(percentage))
+  ) {
     res.status(400).json({ error: "percentage must be a number 0-100 or null." });
     return;
   }
@@ -2808,8 +3008,7 @@ router.get("/ai/admin/kb/tone-profiles/status", async (_req: Request, res: Respo
         lastGeneratedEntryCount: c.tone_profile_entry_count,
         lastGeneratedModel: c.tone_profile_model,
         needsRegeneration:
-          c.has_profile &&
-          c.entry_count - (c.tone_profile_entry_count ?? 0) >= REGENERATION_DELTA,
+          c.has_profile && c.entry_count - (c.tone_profile_entry_count ?? 0) >= REGENERATION_DELTA,
       })),
     });
   } catch (err) {
