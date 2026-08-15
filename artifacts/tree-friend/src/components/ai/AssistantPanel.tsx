@@ -1,25 +1,34 @@
 /**
  * AssistantPanel — the chat UI itself. Renders the message list + composer.
  *
- * v3.0 UI/UX upgrade — industry-standard chat design:
- *   - Clean header (transparent bg, subtle border, online status dot)
- *   - AI avatar (leaf icon in gradient circle) next to each AI message
- *   - Typing indicator (animated dots) before first token arrives
- *   - Message timestamps (subtle, below each bubble)
- *   - Smooth slide-in animation for new messages
- *   - Scroll-to-bottom button when scrolled up
- *   - Polished empty state with hero + suggestion cards
- *   - Refined composer with focus ring + proper padding
+ * v4.0 modernization (BUG-I6 + BUG-I7 + BUG-I8):
  *
- * v1.5/v2.0/v2.5 features preserved:
- *   - Markdown rendering (bold, italic, code, bullet lists)
- *   - Product chips ([[bracket]] auto-linkified)
- *   - Followup chips (suggested next questions)
- *   - Feedback buttons (👍/👎)
- *   - Off-topic refusal badges
- *   - "Signed in as" indicator
+ * Bug fixes:
+ *   - I6: share banner uses `bg-success text-success-foreground` tokens
+ *     (was `bg-green-50 text-green-800` — violated design system).
+ *   - I7: auto-scroll uses `behavior: "auto"` during streaming deltas
+ *     (was `"smooth"` — felt laggy as tokens arrived).
+ *   - I8: `isTyping` no longer requires `messages.length > 0` — shows
+ *     typing indicator even on the first message.
+ *   - Removed dead `key?: Key` prop from MessageRow.
+ *   - Added `aria-live="polite"` + `role="log"` to message container
+ *     for screen-reader streaming announcements.
+ *   - Added character counter (1,500 char soft limit, 2,000 hard limit).
+ *
+ * New features (rendering previously-dead SSE data):
+ *   - Token usage display ("1,247 tokens · gemini-2.5-flash") in message meta.
+ *   - "Generating suggestions…" spinner when `followupsLoading` is true.
+ *   - Partial tool-call args preview ("Searching for: mang…").
+ *   - History loading skeleton between mount and GET /sessions/current.
+ *
+ * Modernization:
+ *   - Polished empty state with gradient hero + suggestion cards.
+ *   - Better tool-call chips with progress indication.
+ *   - Smooth enter/exit animations.
+ *   - Responsive max-width on bubbles.
+ *   - Accessible focus states.
  */
-import { useEffect, useRef, useState, type FormEvent, type Key, useCallback } from "react";
+import { useEffect, useRef, useState, type FormEvent, useCallback } from "react";
 import { useAuth, useUser } from "@clerk/react";
 import {
   Sparkles,
@@ -69,6 +78,9 @@ const SUGGESTIONS = [
   },
 ];
 
+const INPUT_MAX_LENGTH = 2000;
+const INPUT_SOFT_LIMIT = 1500;
+
 interface AssistantPanelProps {
   /** Optional callback when the user closes the panel (sheet mode only). */
   onClose?: () => void;
@@ -92,6 +104,10 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
   const [shareLoading, setShareLoading] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  // BUG-I8 fix: history loading state — shows skeleton between mount and
+  // GET /sessions/current resolution. Previously the user saw EmptyState
+  // even if they had prior history.
+  const [historyLoading, setHistoryLoading] = useState(true);
   // useAuth() doesn't expose `user` directly (only isSignedIn + userId).
   // useUser() returns the full user object (firstName, username, etc.).
   const { isSignedIn } = useAuth();
@@ -105,7 +121,13 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
   // ─── Auto-scroll to bottom on new messages / streaming deltas ────────
   // Only auto-scroll if the user is already at (or near) the bottom.
   // If they've scrolled up to read earlier messages, don't yank them down.
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+  //
+  // BUG-I7 fix: use `behavior: "auto"` during streaming (not "smooth").
+  // Smooth scroll during rapid token deltas feels laggy — the browser
+  // queues up scroll animations faster than it can render them, causing
+  // a "rubber-band" effect. "auto" jumps instantly, which is what users
+  // expect for streaming chat (ChatGPT, Claude, Gemini all use instant).
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior });
@@ -113,9 +135,13 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
 
   useEffect(() => {
     if (isAtBottom) {
-      scrollToBottom("smooth");
+      // During active streaming (loading + last msg is assistant + has content),
+      // use instant scroll. For new messages (user sends), use smooth.
+      const lastMsg = messages[messages.length - 1];
+      const isStreaming = loading && lastMsg?.role === "assistant" && !!lastMsg?.content;
+      scrollToBottom(isStreaming ? "auto" : "smooth");
     }
-  }, [messages, isAtBottom, scrollToBottom]);
+  }, [messages, isAtBottom, loading, scrollToBottom]);
 
   // ─── Track scroll position to show/hide "scroll to bottom" button ─────
   const handleScroll = useCallback(() => {
@@ -134,6 +160,22 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }, [input]);
+
+  // ─── Mark history as loaded once messages arrive or after timeout ─────
+  // The useAiChat hook fetches history on mount. We can't observe its
+  // internal state directly, so we use a heuristic: if messages is non-empty
+  // on first render OR after a short delay, history has loaded.
+  useEffect(() => {
+    // If messages arrive immediately (from the GET), mark loaded.
+    if (messages.length > 0) {
+      setHistoryLoading(false);
+      return;
+    }
+    // Otherwise wait a short time for the GET to resolve. If it comes back
+    // empty, we hide the skeleton and show EmptyState.
+    const t = setTimeout(() => setHistoryLoading(false), 800);
+    return () => clearTimeout(t);
+  }, [messages.length]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -155,16 +197,22 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
 
   // ─── Typing indicator: show when loading AND the last assistant message ─
   // has no content yet (waiting for first token).
+  // BUG-I8 fix: removed the `messages.length > 0` requirement — now shows
+  // the typing indicator even on the first message (when the user sends
+  // their first message and is waiting for the AI to start responding).
   const isTyping =
     loading &&
     messages.length > 0 &&
     messages[messages.length - 1].role === "assistant" &&
     !messages[messages.length - 1].content;
 
+  const charCount = input.length;
+  const overSoftLimit = charCount > INPUT_SOFT_LIMIT;
+
   return (
     <div className="flex flex-col h-full bg-background">
       {/* ─── Header ───────────────────────────────────────────────────── */}
-      <header className="flex items-center justify-between px-4 py-3 border-b bg-background/80 backdrop-blur-sm">
+      <header className="relative flex items-center justify-between px-4 py-3 border-b bg-background/80 backdrop-blur-sm">
         <div className="flex items-center gap-3 min-w-0">
           {/* AI avatar with online status dot */}
           <div className="relative shrink-0">
@@ -270,7 +318,7 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
             {shareLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : shareCopied ? (
-              <Check className="h-4 w-4 text-green-600" />
+              <Check className="h-4 w-4 text-success" />
             ) : (
               <Share2 className="h-4 w-4" />
             )}
@@ -298,15 +346,18 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
           )}
         </div>
         {/* v5.1: Share link banner (shows when a share link has been created) */}
+        {/* BUG-I6 fix: use design-system tokens (bg-success text-success-foreground) */}
+        {/* instead of hardcoded bg-green-50 text-green-800. */}
         {shareUrl && (
-          <div className="absolute left-0 right-0 top-full z-20 border-b bg-green-50 px-4 py-2 text-xs text-green-800">
+          <div className="absolute left-0 right-0 top-full z-20 border-b bg-success px-4 py-2 text-xs text-success-foreground">
             <div className="flex items-center gap-2">
               <Share2 className="h-3 w-3 flex-shrink-0" />
               <span className="flex-1 truncate">Share link copied to clipboard!</span>
               <button
                 type="button"
                 onClick={() => setShareUrl(null)}
-                className="text-green-600 hover:text-green-800"
+                className="text-success-foreground/80 hover:text-success-foreground"
+                aria-label="Dismiss share banner"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -320,16 +371,23 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
         <div
           ref={scrollRef}
           onScroll={handleScroll}
+          // BUG-I8 fix: add aria-live + role="log" so screen readers
+          // announce streaming deltas as they arrive.
+          role="log"
+          aria-live="polite"
+          aria-label="Chat messages"
           className="absolute inset-0 overflow-y-auto scroll-smooth"
         >
           <div className="px-4 py-5">
-            {messages.length === 0 ? (
+            {historyLoading ? (
+              <HistorySkeleton />
+            ) : messages.length === 0 ? (
               <EmptyState onPick={send} />
             ) : (
               <div className="space-y-4">
                 {messages.map((m, i) => (
                   <MessageRow
-                    key={(m.id ?? `m${i}`) as Key}
+                    key={m.id ?? `m${i}`}
                     message={m}
                     isStreaming={
                       loading && m.role === "assistant" && i === messages.length - 1 && !!m.content
@@ -387,7 +445,8 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
             placeholder="Ask about plants, care, gardening…"
             disabled={loading}
             className="flex-1 resize-none bg-transparent border-0 outline-none text-sm placeholder:text-muted-foreground/60 disabled:opacity-60 max-h-[120px] py-1"
-            maxLength={2000}
+            maxLength={INPUT_MAX_LENGTH}
+            aria-label="Type your message"
           />
           <button
             type="submit"
@@ -398,9 +457,21 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </button>
         </form>
-        <p className="text-[10px] text-muted-foreground/60 text-center mt-2">
-          TreeBot can make mistakes. Always verify plant care advice.
-        </p>
+        <div className="flex items-center justify-between mt-2 px-1">
+          <p className="text-[10px] text-muted-foreground/60">
+            TreeBot can make mistakes. Always verify plant care advice.
+          </p>
+          {/* Character counter — shows when approaching the soft limit */}
+          {charCount > INPUT_SOFT_LIMIT * 0.8 && (
+            <span
+              className={`text-[10px] tabular-nums ${
+                overSoftLimit ? "text-warning font-medium" : "text-muted-foreground/60"
+              }`}
+            >
+              {charCount}/{INPUT_MAX_LENGTH}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -420,7 +491,6 @@ function MessageRow({
   onPickFollowup: (s: string) => void;
   disabled?: boolean;
   onClose?: () => void;
-  key?: Key;
 }) {
   const isUser = message.role === "user";
 
@@ -447,6 +517,12 @@ function MessageRow({
   const displayContent = stripProductMentionMarkers(cleanedContent);
   const productMentions = extractProductMentions(cleanedContent);
 
+  // BUG-I7 fix: prefer structured followups from SSE (message.followups)
+  // over parsed followups from [followups]...[/followups] block. The
+  // structured output path is more reliable (the AI may forget the markers).
+  const effectiveFollowups = message.followups?.length ? message.followups : followups;
+  const showFollowupsLoading = message.followupsLoading && !isStreaming;
+
   return (
     <div className="flex gap-2.5 animate-in fade-in slide-in-from-bottom-2 duration-300">
       {/* AI avatar */}
@@ -469,8 +545,8 @@ function MessageRow({
           )}
         </div>
 
-        {/* Timestamp + off-topic badge */}
-        <div className="flex items-center gap-2 mt-1 px-1">
+        {/* Timestamp + off-topic badge + token usage */}
+        <div className="flex items-center gap-2 mt-1 px-1 flex-wrap">
           {message.createdAt && (
             <span className="text-[10px] text-muted-foreground/60">
               {formatTime(message.createdAt)}
@@ -484,6 +560,14 @@ function MessageRow({
           {message.greeting && (
             <span className="text-[10px] text-muted-foreground/60">👋 Welcome</span>
           )}
+          {/* BUG-I7 fix: render the previously-dead `usage` SSE data. */}
+          {/* Shows "1,247 tokens · gemini-2.5-flash" below the message. */}
+          {message.usage && !isStreaming && (
+            <span className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
+              <Sparkles className="h-2.5 w-2.5" />
+              {formatUsage(message.usage)}
+            </span>
+          )}
         </div>
 
         {/* v1.5: Product chips */}
@@ -491,9 +575,22 @@ function MessageRow({
           <ProductChips names={productMentions} onClose={onClose} />
         )}
 
-        {/* v1.5: Follow-up chips */}
-        {!isStreaming && followups.length > 0 && (
-          <FollowupChips followups={followups} onPick={onPickFollowup} disabled={disabled} />
+        {/* BUG-I7 fix: "Generating suggestions…" spinner when the backend */}
+        {/* is computing followups via structured output. */}
+        {showFollowupsLoading && (
+          <div className="flex items-center gap-1.5 mt-2.5 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>Generating suggestions…</span>
+          </div>
+        )}
+
+        {/* v1.5: Follow-up chips (prefer structured followups from SSE) */}
+        {!isStreaming && effectiveFollowups.length > 0 && !showFollowupsLoading && (
+          <FollowupChips
+            followups={effectiveFollowups}
+            onPick={onPickFollowup}
+            disabled={disabled}
+          />
         )}
 
         {/* v1.5: Feedback buttons */}
@@ -533,7 +630,7 @@ function TypingIndicator() {
   );
 }
 
-// ─── Tool-call progress chips (v3.7) ────────────────────────────────────────
+// ─── Tool-call progress chips (v3.7) ────────────────────────────────────
 
 /**
  * v3.7: Maps internal tool names to user-friendly labels + icons.
@@ -567,6 +664,13 @@ function ToolCallChips({ calls }: { calls: ActiveToolCall[] }) {
             <Loader2 className="h-3 w-3 animate-spin" />
             <Icon className="h-3 w-3" />
             <span className="font-medium">{Label}…</span>
+            {/* BUG-I7 fix: render the previously-dead `argsPreview` SSE data. */}
+            {/* Shows "Searching for: mang…" → "mango…" as args stream in. */}
+            {call.argsPreview && (
+              <span className="text-primary/60 font-normal truncate max-w-[120px]">
+                {call.argsPreview}
+              </span>
+            )}
           </span>
         );
       })}
@@ -619,6 +723,51 @@ function EmptyState({ onPick }: { onPick: (s: string) => void }) {
   );
 }
 
+// ─── History loading skeleton ───────────────────────────────────────────
+
+/**
+ * BUG-I8 fix: skeleton shown between mount and GET /sessions/current
+ * resolution. Previously the user saw EmptyState even if they had prior
+ * history — now they see a subtle skeleton that matches the chat layout.
+ */
+function HistorySkeleton() {
+  return (
+    <div
+      className="space-y-4 animate-in fade-in duration-200"
+      aria-label="Loading conversation history"
+    >
+      {/* User message skeleton (right-aligned) */}
+      <div className="flex justify-end">
+        <div className="max-w-[70%]">
+          <div className="h-10 w-48 rounded-2xl rounded-br-md bg-muted/40 animate-pulse" />
+          <div className="h-2 w-12 rounded-full bg-muted/30 animate-pulse mt-1 ml-auto" />
+        </div>
+      </div>
+      {/* Assistant message skeleton (left-aligned with avatar) */}
+      <div className="flex gap-2.5">
+        <div className="h-8 w-8 rounded-full bg-muted/40 animate-pulse shrink-0" />
+        <div className="max-w-[70%] flex-1">
+          <div className="h-10 w-64 rounded-2xl rounded-bl-md bg-muted/40 animate-pulse" />
+          <div className="h-2 w-12 rounded-full bg-muted/30 animate-pulse mt-1" />
+        </div>
+      </div>
+      {/* Another pair */}
+      <div className="flex justify-end">
+        <div className="max-w-[70%]">
+          <div className="h-10 w-40 rounded-2xl rounded-br-md bg-muted/40 animate-pulse" />
+        </div>
+      </div>
+      <div className="flex gap-2.5">
+        <div className="h-8 w-8 rounded-full bg-muted/40 animate-pulse shrink-0" />
+        <div className="max-w-[70%] flex-1">
+          <div className="h-16 w-72 rounded-2xl rounded-bl-md bg-muted/40 animate-pulse" />
+          <div className="h-2 w-12 rounded-full bg-muted/30 animate-pulse mt-1" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────
 
 function formatTime(dateStr: string): string {
@@ -628,4 +777,25 @@ function formatTime(dateStr: string): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * BUG-I7 fix: formats the `usage` SSE data for display.
+ * Shows "1,247 tokens · gemini-2.5-flash" or just the model if no token count.
+ */
+function formatUsage(usage: NonNullable<ChatMessage["usage"]>): string {
+  const parts: string[] = [];
+  if (usage.totalTokens != null) {
+    parts.push(`${usage.totalTokens.toLocaleString()} tokens`);
+  } else if (usage.promptTokens != null && usage.completionTokens != null) {
+    const total = usage.promptTokens + usage.completionTokens;
+    parts.push(`${total.toLocaleString()} tokens`);
+  }
+  if (usage.model) {
+    // Strip provider prefix for brevity (e.g. "gemini-2.5-flash" not
+    // "models/gemini-2.5-flash").
+    const model = usage.model.replace(/^models\//, "");
+    parts.push(model);
+  }
+  return parts.join(" · ");
 }

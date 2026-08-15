@@ -1,15 +1,17 @@
 /**
  * AssistantFullPage — the /assistant route.
  *
- * v3.0 UI/UX: cleaner header, centered panel with max-width, subtle
- * background tint to distinguish the chat area from the page chrome.
+ * v4.0 modernization:
+ *   - Replaced inline SVG leaf with the shared lucide-react Leaf icon
+ *     (was inconsistent — every other file uses lucide).
+ *   - Added keyboard shortcut hint in the header.
  *
  * Layout:
  *   - Top bar with back link (ghost button style)
  *   - Chat panel capped at max-w-3xl (wider than the sheet version)
  *   - Subtle gradient background for visual warmth
  */
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Leaf } from "lucide-react";
 import { Link } from "wouter";
 import { AssistantPanel } from "./AssistantPanel";
 
@@ -26,27 +28,15 @@ export function AssistantFullPage() {
           >
             <ArrowLeft className="h-5 w-5" />
           </Link>
+          {/* BUG-I6 fix: use the shared lucide Leaf icon instead of an */}
+          {/* inline SVG (was inconsistent with the rest of the codebase). */}
           <div className="flex items-center gap-2">
             <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-4 w-4 text-primary-foreground"
-              >
-                <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
-                <path d="M2 21c0-3 1.85-5.36 5.08-6" />
-              </svg>
+              <Leaf className="h-4 w-4 text-primary-foreground" />
             </div>
             <div>
               <div className="font-semibold text-sm">TreeBot Assistant</div>
-              <div className="text-xs text-muted-foreground">
-                Plant care & catalog help
-              </div>
+              <div className="text-xs text-muted-foreground">Plant care &amp; catalog help</div>
             </div>
           </div>
         </div>

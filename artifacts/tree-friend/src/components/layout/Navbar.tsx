@@ -2,13 +2,47 @@ import { useState, useEffect } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import { Show, useUser, useClerk } from "@clerk/react";
 import {
-  ShoppingBag, User as UserIcon, Heart, Menu, LogOut,
-  Settings, Package, X, Home, Star, Share2, Search, ChevronRight, ChevronDown, TreeDeciduous, Store, BookOpen,
+  ShoppingBag,
+  User as UserIcon,
+  Heart,
+  Menu,
+  LogOut,
+  Settings,
+  Package,
+  X,
+  Home,
+  Star,
+  Share2,
+  Search,
+  ChevronRight,
+  ChevronDown,
+  TreeDeciduous,
+  Store,
+  BookOpen,
   MessageCircle,
-  TreePalm, Trees, Sprout, Flower, Flower2, Apple, Citrus, Leaf, Carrot, Wheat, Shrub, LayoutDashboard, Truck,
+  Sparkles,
+  TreePalm,
+  Trees,
+  Sprout,
+  Flower,
+  Flower2,
+  Apple,
+  Citrus,
+  Leaf,
+  Carrot,
+  Wheat,
+  Shrub,
+  LayoutDashboard,
+  Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useGetCart, getGetCartQueryKey, useListCategories, getListCategoriesQueryKey, useListProducts } from "@workspace/api-client-react";
+import {
+  useGetCart,
+  getGetCartQueryKey,
+  useListCategories,
+  getListCategoriesQueryKey,
+  useListProducts,
+} from "@workspace/api-client-react";
 import { useMe } from "@/hooks/useMe";
 import {
   DropdownMenu,
@@ -27,18 +61,18 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle";
 // botanical keywords and fall back to a generic tree icon. This gives each
 // category a distinct, semantically-appropriate standard lucide icon.
 const CATEGORY_ICON_RULES: { keywords: string[]; icon: React.ElementType }[] = [
-  { keywords: ["indoor", "house plant", "houseplant"],              icon: Sprout },
-  { keywords: ["outdoor", "garden", "patio", "balcony"],            icon: Trees },
-  { keywords: ["fruit", "orchard"],                                 icon: Apple },
-  { keywords: ["citrus", "lemon", "orange", "lime"],                icon: Citrus },
-  { keywords: ["flower", "flowering", "bloom", "blossom"],          icon: Flower2 },
-  { keywords: ["medicinal", "herb", "herbal"],                       icon: Leaf },
-  { keywords: ["vegetable", "veg", "veggie"],                        icon: Carrot },
-  { keywords: ["seed", "seedling", "sapling"],                       icon: Wheat },
-  { keywords: ["succulent", "cactus", "desert"],                     icon: Shrub },
-  { keywords: ["palm", "tropical"],                                 icon: TreePalm },
-  { keywords: ["bonsai"],                                          icon: TreeDeciduous },
-  { keywords: ["rose"],                                            icon: Flower },
+  { keywords: ["indoor", "house plant", "houseplant"], icon: Sprout },
+  { keywords: ["outdoor", "garden", "patio", "balcony"], icon: Trees },
+  { keywords: ["fruit", "orchard"], icon: Apple },
+  { keywords: ["citrus", "lemon", "orange", "lime"], icon: Citrus },
+  { keywords: ["flower", "flowering", "bloom", "blossom"], icon: Flower2 },
+  { keywords: ["medicinal", "herb", "herbal"], icon: Leaf },
+  { keywords: ["vegetable", "veg", "veggie"], icon: Carrot },
+  { keywords: ["seed", "seedling", "sapling"], icon: Wheat },
+  { keywords: ["succulent", "cactus", "desert"], icon: Shrub },
+  { keywords: ["palm", "tropical"], icon: TreePalm },
+  { keywords: ["bonsai"], icon: TreeDeciduous },
+  { keywords: ["rose"], icon: Flower },
 ];
 
 function getCategoryIcon(_slug: string, name?: string): React.ElementType {
@@ -61,7 +95,11 @@ function DrillCategoryProducts({ slug, onNavigate }: { slug: string; onNavigate:
     return (
       <div className="flex flex-col gap-2 px-2 py-2">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="h-12 rounded-lg animate-pulse" style={{ backgroundColor: "var(--tf-icon-bg)" }} />
+          <div
+            key={i}
+            className="h-12 rounded-lg animate-pulse"
+            style={{ backgroundColor: "var(--tf-icon-bg)" }}
+          />
         ))}
       </div>
     );
@@ -79,7 +117,11 @@ function DrillCategoryProducts({ slug, onNavigate }: { slug: string; onNavigate:
     <ul className="tf-category-list flex flex-col list-none">
       {products.map((p: any) => (
         <li key={p.id}>
-          <Link href={`/products/${p.id}`} onClick={onNavigate} className="tf-nav-item w-full text-left">
+          <Link
+            href={`/products/${p.id}`}
+            onClick={onNavigate}
+            className="tf-nav-item w-full text-left"
+          >
             <span className="flex items-center gap-3 min-w-0">
               <span className="tf-icon-box overflow-hidden shrink-0">
                 {p.images?.[0] ? (
@@ -143,7 +185,9 @@ export function Navbar() {
     } else {
       document.body.style.overflow = "";
     }
-    return () => { document.body.style.overflow = ""; };
+    return () => {
+      document.body.style.overflow = "";
+    };
   }, [mobileOpen]);
 
   useEffect(() => {
@@ -162,7 +206,12 @@ export function Navbar() {
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-6">
             <Link href="/" className="flex items-center gap-2">
-              <img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783743859/IMG_20260710_151144-removebg-preview_11zon_ck95ax.png" alt="Tree Friend" className="h-10 w-10 object-contain" /><span className="font-serif text-xl font-medium tracking-wide">Tree Friend</span>
+              <img
+                src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783743859/IMG_20260710_151144-removebg-preview_11zon_ck95ax.png"
+                alt="Tree Friend"
+                className="h-10 w-10 object-contain"
+              />
+              <span className="font-serif text-xl font-medium tracking-wide">Tree Friend</span>
             </Link>
 
             <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
@@ -181,8 +230,20 @@ export function Navbar() {
                   {cat.name}
                 </Link>
               ))}
-              <Link href="/track" className="transition-colors hover:text-primary text-muted-foreground">
+              <Link
+                href="/track"
+                className="transition-colors hover:text-primary text-muted-foreground"
+              >
                 Track Order
+              </Link>
+              {/* BUG-I6 fix: add nav entry for the AI assistant (discoverability). */}
+              {/* Previously the assistant was only accessible via the floating bubble. */}
+              <Link
+                href="/assistant"
+                className="transition-colors hover:text-primary text-muted-foreground flex items-center gap-1"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Ask AI
               </Link>
             </nav>
           </div>
@@ -213,7 +274,11 @@ export function Navbar() {
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" className="rounded-full hidden sm:flex">
                     {user?.imageUrl ? (
-                      <img src={user.imageUrl} alt="Profile" className="h-7 w-7 rounded-full object-cover" />
+                      <img
+                        src={user.imageUrl}
+                        alt="Profile"
+                        className="h-7 w-7 rounded-full object-cover"
+                      />
                     ) : (
                       <UserIcon className="h-5 w-5" />
                     )}
@@ -221,8 +286,12 @@ export function Navbar() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
                   <div className="flex flex-col space-y-1 leading-none px-2 py-2">
-                    <p className="font-medium text-sm">{user?.firstName} {user?.lastName}</p>
-                    <p className="text-xs text-muted-foreground truncate">{user?.emailAddresses[0]?.emailAddress}</p>
+                    <p className="font-medium text-sm">
+                      {user?.firstName} {user?.lastName}
+                    </p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {user?.emailAddresses[0]?.emailAddress}
+                    </p>
                   </div>
                   <DropdownMenuSeparator />
                   {isAdmin && (
@@ -286,7 +355,7 @@ export function Navbar() {
               variant="ghost"
               size="icon"
               className="sm:hidden"
-              onClick={() => setSearchOpen(v => !v)}
+              onClick={() => setSearchOpen((v) => !v)}
               aria-label="Search"
             >
               {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
@@ -308,7 +377,10 @@ export function Navbar() {
               variant="ghost"
               size="icon"
               className="md:hidden"
-              onClick={() => { setMobileOpen((v) => !v); setAccountExpanded(false); }}
+              onClick={() => {
+                setMobileOpen((v) => !v);
+                setAccountExpanded(false);
+              }}
               aria-label="Toggle menu"
             >
               {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -318,7 +390,9 @@ export function Navbar() {
       </header>
 
       {/* Mobile search bar - slides down below navbar */}
-      <div className={`sm:hidden border-b bg-background/95 backdrop-blur transition-all duration-300 ${searchOpen ? "py-2 px-4" : "max-h-0 overflow-hidden"}`}>
+      <div
+        className={`sm:hidden border-b bg-background/95 backdrop-blur transition-all duration-300 ${searchOpen ? "py-2 px-4" : "max-h-0 overflow-hidden"}`}
+      >
         <SearchAutocomplete onClose={() => setSearchOpen(false)} />
       </div>
 
@@ -416,13 +490,30 @@ export function Navbar() {
         <div className="flex-1 overflow-y-auto py-3 px-4 scrollbar-hide">
           {/* Brand header */}
           <div className="flex items-center justify-between mb-4">
-            <Link href="/" className="flex items-center gap-2.5" onClick={() => setMobileOpen(false)}>
-              <img src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783743859/IMG_20260710_151144-removebg-preview_11zon_ck95ax.png" alt="Tree Friend" className="h-9 w-9 object-contain" />
-              <span className="tf-brand-name text-[19px] font-semibold tracking-tight" style={{ color: "hsl(var(--primary))" }}>Tree Friend</span>
+            <Link
+              href="/"
+              className="flex items-center gap-2.5"
+              onClick={() => setMobileOpen(false)}
+            >
+              <img
+                src="https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783743859/IMG_20260710_151144-removebg-preview_11zon_ck95ax.png"
+                alt="Tree Friend"
+                className="h-9 w-9 object-contain"
+              />
+              <span
+                className="tf-brand-name text-[19px] font-semibold tracking-tight"
+                style={{ color: "hsl(var(--primary))" }}
+              >
+                Tree Friend
+              </span>
             </Link>
             <div className="flex items-center gap-1.5">
               <ThemeToggle className="h-8 w-8" align="start" />
-              <button className="tf-circle-btn" aria-label="Close menu" onClick={() => setMobileOpen(false)}>
+              <button
+                className="tf-circle-btn"
+                aria-label="Close menu"
+                onClick={() => setMobileOpen(false)}
+              >
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
@@ -431,28 +522,62 @@ export function Navbar() {
           {/* Primary links */}
           <ul className="flex flex-col gap-0.5 list-none">
             <li>
-              <Link href="/" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/" ? "active" : ""}`}>
+              <Link
+                href="/"
+                onClick={() => setMobileOpen(false)}
+                className={`tf-nav-item ${location === "/" ? "active" : ""}`}
+              >
                 <span className="flex items-center gap-3">
-                  <span className="tf-icon-box"><Home className="h-3.5 w-3.5" /></span>
+                  <span className="tf-icon-box">
+                    <Home className="h-3.5 w-3.5" />
+                  </span>
                   Home
                 </span>
                 <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
               </Link>
             </li>
             <li>
-              <Link href="/products" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/products" ? "active" : ""}`}>
+              <Link
+                href="/products"
+                onClick={() => setMobileOpen(false)}
+                className={`tf-nav-item ${location === "/products" ? "active" : ""}`}
+              >
                 <span className="flex items-center gap-3">
-                  <span className="tf-icon-box"><Store className="h-3.5 w-3.5" /></span>
+                  <span className="tf-icon-box">
+                    <Store className="h-3.5 w-3.5" />
+                  </span>
                   Shop All
                 </span>
                 <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
               </Link>
             </li>
             <li>
-              <Link href="/blog" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/blog" ? "active" : ""}`}>
+              <Link
+                href="/blog"
+                onClick={() => setMobileOpen(false)}
+                className={`tf-nav-item ${location === "/blog" ? "active" : ""}`}
+              >
                 <span className="flex items-center gap-3">
-                  <span className="tf-icon-box"><BookOpen className="h-3.5 w-3.5" /></span>
+                  <span className="tf-icon-box">
+                    <BookOpen className="h-3.5 w-3.5" />
+                  </span>
                   Plant Care Blog
+                </span>
+                <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
+              </Link>
+            </li>
+            {/* BUG-I6 fix: add mobile nav entry for the AI assistant. */}
+            <li>
+              <Link
+                href="/assistant"
+                onClick={() => setMobileOpen(false)}
+                className={`tf-nav-item ${location === "/assistant" ? "active" : ""}`}
+              >
+                <span className="flex items-center gap-3">
+                  <span className="tf-icon-box">
+                    <Sparkles className="h-3.5 w-3.5" />
+                  </span>
+                  Ask AI Assistant
                 </span>
                 <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
               </Link>
@@ -471,12 +596,23 @@ export function Navbar() {
                 onClick={() => setDrillCategory(null)}
                 className="tf-nav-item w-full text-left mb-1"
               >
-                <span className="flex items-center gap-2 text-[13px]" style={{ color: "var(--tf-text-muted)" }}>
+                <span
+                  className="flex items-center gap-2 text-[13px]"
+                  style={{ color: "var(--tf-text-muted)" }}
+                >
                   <ChevronRight className="h-3.5 w-3.5 rotate-180" /> Back
                 </span>
               </button>
-              <div className="px-2 py-2 mb-1 rounded-lg" style={{ backgroundColor: "var(--tf-icon-bg)" }}>
-                <p className="text-[15px] font-semibold" style={{ fontFamily: "var(--tf-font-serif)" }}>{drillCategory.name}</p>
+              <div
+                className="px-2 py-2 mb-1 rounded-lg"
+                style={{ backgroundColor: "var(--tf-icon-bg)" }}
+              >
+                <p
+                  className="text-[15px] font-semibold"
+                  style={{ fontFamily: "var(--tf-font-serif)" }}
+                >
+                  {drillCategory.name}
+                </p>
               </div>
               {(() => {
                 const subs = categories.filter((cat: any) => cat.parentId === drillCategory.id);
@@ -485,14 +621,25 @@ export function Navbar() {
                     <ul className="tf-category-list flex flex-col list-none">
                       {subs.map((sub: any) => (
                         <li key={sub.slug}>
-                          <button onClick={() => handleMobileCategory(sub.slug)} className="tf-nav-item w-full text-left">
+                          <button
+                            onClick={() => handleMobileCategory(sub.slug)}
+                            className="tf-nav-item w-full text-left"
+                          >
                             <span className="flex items-center gap-3">
                               {sub.iconImage ? (
-                                <span className="tf-icon-box overflow-hidden"><img src={sub.iconImage} alt="" className="h-5 w-5 object-contain" /></span>
+                                <span className="tf-icon-box overflow-hidden">
+                                  <img
+                                    src={sub.iconImage}
+                                    alt=""
+                                    className="h-5 w-5 object-contain"
+                                  />
+                                </span>
                               ) : sub.icon ? (
                                 <span className="tf-icon-box text-base">{sub.icon}</span>
                               ) : (
-                                <span className="tf-icon-box"><TreeDeciduous className="h-3.5 w-3.5" /></span>
+                                <span className="tf-icon-box">
+                                  <TreeDeciduous className="h-3.5 w-3.5" />
+                                </span>
                               )}
                               {sub.name}
                             </span>
@@ -504,7 +651,15 @@ export function Navbar() {
                 }
                 // Leaf category (no subcategories) -- list its products directly,
                 // e.g. "Medicinal Plants" with no subcategories, just products.
-                return <DrillCategoryProducts slug={drillCategory.slug} onNavigate={() => { setMobileOpen(false); setDrillCategory(null); }} />;
+                return (
+                  <DrillCategoryProducts
+                    slug={drillCategory.slug}
+                    onNavigate={() => {
+                      setMobileOpen(false);
+                      setDrillCategory(null);
+                    }}
+                  />
+                );
               })()}
             </>
           ) : (
@@ -518,7 +673,7 @@ export function Navbar() {
                       className="tf-nav-item w-full text-left"
                     >
                       <span className="flex items-center gap-3">
-                          <span className="tf-icon-box overflow-hidden">
+                        <span className="tf-icon-box overflow-hidden">
                           {cat.iconImage ? (
                             <img src={cat.iconImage} alt="" className="h-5 w-5 object-contain" />
                           ) : cat.icon ? (
@@ -544,9 +699,15 @@ export function Navbar() {
           </div>
           <ul className="flex flex-col gap-0.5 list-none">
             <li>
-              <Link href="/track" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/track" ? "active" : ""}`}>
+              <Link
+                href="/track"
+                onClick={() => setMobileOpen(false)}
+                className={`tf-nav-item ${location === "/track" ? "active" : ""}`}
+              >
                 <span className="flex items-center gap-3">
-                  <span className="tf-icon-box"><Truck className="h-3.5 w-3.5" /></span>
+                  <span className="tf-icon-box">
+                    <Truck className="h-3.5 w-3.5" />
+                  </span>
                   Track Order
                 </span>
                 <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
@@ -555,27 +716,45 @@ export function Navbar() {
             {!user && (
               <>
                 <li>
-                  <Link href="/orders" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/orders" ? "active" : ""}`}>
+                  <Link
+                    href="/orders"
+                    onClick={() => setMobileOpen(false)}
+                    className={`tf-nav-item ${location === "/orders" ? "active" : ""}`}
+                  >
                     <span className="flex items-center gap-3">
-                      <span className="tf-icon-box"><Package className="h-3.5 w-3.5" /></span>
+                      <span className="tf-icon-box">
+                        <Package className="h-3.5 w-3.5" />
+                      </span>
                       My Orders
                     </span>
                     <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
                   </Link>
                 </li>
                 <li>
-                  <Link href="/messages" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location.startsWith("/messages") ? "active" : ""}`}>
+                  <Link
+                    href="/messages"
+                    onClick={() => setMobileOpen(false)}
+                    className={`tf-nav-item ${location.startsWith("/messages") ? "active" : ""}`}
+                  >
                     <span className="flex items-center gap-3">
-                      <span className="tf-icon-box"><MessageCircle className="h-3.5 w-3.5" /></span>
+                      <span className="tf-icon-box">
+                        <MessageCircle className="h-3.5 w-3.5" />
+                      </span>
                       Messages
                     </span>
                     <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
                   </Link>
                 </li>
                 <li>
-                  <Link href="/wishlist" onClick={() => setMobileOpen(false)} className={`tf-nav-item ${location === "/wishlist" ? "active" : ""}`}>
+                  <Link
+                    href="/wishlist"
+                    onClick={() => setMobileOpen(false)}
+                    className={`tf-nav-item ${location === "/wishlist" ? "active" : ""}`}
+                  >
                     <span className="flex items-center gap-3">
-                      <span className="tf-icon-box"><Heart className="h-3.5 w-3.5" /></span>
+                      <span className="tf-icon-box">
+                        <Heart className="h-3.5 w-3.5" />
+                      </span>
                       Wishlist
                     </span>
                     <TreeDeciduous className="tf-hover-leaf h-5 w-5" />
@@ -590,24 +769,38 @@ export function Navbar() {
         <div className="tf-sb-bottom shrink-0 px-4 py-3">
           <Show when="signed-out">
             <Link href="/sign-in" onClick={() => setMobileOpen(false)}>
-              <Button className="w-full rounded-full" size="sm">Sign In</Button>
+              <Button className="w-full rounded-full" size="sm">
+                Sign In
+              </Button>
             </Link>
           </Show>
           <Show when="signed-in">
             <button
               className="w-full flex items-center justify-between gap-3 py-1.5"
-              onClick={() => setAccountExpanded(v => !v)}
+              onClick={() => setAccountExpanded((v) => !v)}
               aria-expanded={accountExpanded}
             >
               <span className="flex items-center gap-2.5 min-w-0">
                 {user?.imageUrl ? (
                   <img src={user.imageUrl} alt="Profile" className="tf-user-avatar object-cover" />
                 ) : (
-                  <span className="tf-user-avatar"><UserIcon className="h-4 w-4" /></span>
+                  <span className="tf-user-avatar">
+                    <UserIcon className="h-4 w-4" />
+                  </span>
                 )}
                 <span className="min-w-0 text-left">
-                  <span className="block text-[13.5px] font-semibold truncate" style={{ color: "var(--tf-text-main)" }}>{user?.firstName} {user?.lastName}</span>
-                  <span className="block text-[10.5px] truncate" style={{ color: "var(--tf-text-muted)" }}>{user?.emailAddresses[0]?.emailAddress}</span>
+                  <span
+                    className="block text-[13.5px] font-semibold truncate"
+                    style={{ color: "var(--tf-text-main)" }}
+                  >
+                    {user?.firstName} {user?.lastName}
+                  </span>
+                  <span
+                    className="block text-[10.5px] truncate"
+                    style={{ color: "var(--tf-text-muted)" }}
+                  >
+                    {user?.emailAddresses[0]?.emailAddress}
+                  </span>
                 </span>
               </span>
               <span className={`tf-expand-btn ${accountExpanded ? "expanded" : ""}`}>
@@ -618,39 +811,98 @@ export function Navbar() {
             {accountExpanded && (
               <ul className="flex flex-col gap-0.5 list-none mt-2 pt-2 border-t border-border">
                 <li>
-                  <Link href="/profile" onClick={() => setMobileOpen(false)} className="tf-nav-item">
-                    <span className="flex items-center gap-3"><span className="tf-icon-box"><UserIcon className="h-3.5 w-3.5" /></span>Profile</span>
+                  <Link
+                    href="/profile"
+                    onClick={() => setMobileOpen(false)}
+                    className="tf-nav-item"
+                  >
+                    <span className="flex items-center gap-3">
+                      <span className="tf-icon-box">
+                        <UserIcon className="h-3.5 w-3.5" />
+                      </span>
+                      Profile
+                    </span>
                   </Link>
                 </li>
                 <li>
                   <Link href="/orders" onClick={() => setMobileOpen(false)} className="tf-nav-item">
-                    <span className="flex items-center gap-3"><span className="tf-icon-box"><Package className="h-3.5 w-3.5" /></span>My Orders</span>
+                    <span className="flex items-center gap-3">
+                      <span className="tf-icon-box">
+                        <Package className="h-3.5 w-3.5" />
+                      </span>
+                      My Orders
+                    </span>
                   </Link>
                 </li>
                 <li>
-                  <Link href="/messages" onClick={() => setMobileOpen(false)} className="tf-nav-item">
-                    <span className="flex items-center gap-3"><span className="tf-icon-box"><MessageCircle className="h-3.5 w-3.5" /></span>Messages</span>
+                  <Link
+                    href="/messages"
+                    onClick={() => setMobileOpen(false)}
+                    className="tf-nav-item"
+                  >
+                    <span className="flex items-center gap-3">
+                      <span className="tf-icon-box">
+                        <MessageCircle className="h-3.5 w-3.5" />
+                      </span>
+                      Messages
+                    </span>
                   </Link>
                 </li>
                 <li>
-                  <Link href="/loyalty" onClick={() => setMobileOpen(false)} className="tf-nav-item">
-                    <span className="flex items-center gap-3"><span className="tf-icon-box"><Star className="h-3.5 w-3.5" /></span>Loyalty Points</span>
+                  <Link
+                    href="/loyalty"
+                    onClick={() => setMobileOpen(false)}
+                    className="tf-nav-item"
+                  >
+                    <span className="flex items-center gap-3">
+                      <span className="tf-icon-box">
+                        <Star className="h-3.5 w-3.5" />
+                      </span>
+                      Loyalty Points
+                    </span>
                   </Link>
                 </li>
                 <li>
-                  <Link href="/referral" onClick={() => setMobileOpen(false)} className="tf-nav-item">
-                    <span className="flex items-center gap-3"><span className="tf-icon-box"><Share2 className="h-3.5 w-3.5" /></span>Refer a Friend</span>
+                  <Link
+                    href="/referral"
+                    onClick={() => setMobileOpen(false)}
+                    className="tf-nav-item"
+                  >
+                    <span className="flex items-center gap-3">
+                      <span className="tf-icon-box">
+                        <Share2 className="h-3.5 w-3.5" />
+                      </span>
+                      Refer a Friend
+                    </span>
                   </Link>
                 </li>
                 <li>
-                  <Link href="/wishlist" onClick={() => setMobileOpen(false)} className="tf-nav-item">
-                    <span className="flex items-center gap-3"><span className="tf-icon-box"><Heart className="h-3.5 w-3.5" /></span>Wishlist</span>
+                  <Link
+                    href="/wishlist"
+                    onClick={() => setMobileOpen(false)}
+                    className="tf-nav-item"
+                  >
+                    <span className="flex items-center gap-3">
+                      <span className="tf-icon-box">
+                        <Heart className="h-3.5 w-3.5" />
+                      </span>
+                      Wishlist
+                    </span>
                   </Link>
                 </li>
                 {isAdmin && (
                   <li>
-                    <Link href="/admin" onClick={() => setMobileOpen(false)} className="tf-nav-item">
-                      <span className="flex items-center gap-3"><span className="tf-icon-box"><LayoutDashboard className="h-3.5 w-3.5" /></span>Admin Dashboard</span>
+                    <Link
+                      href="/admin"
+                      onClick={() => setMobileOpen(false)}
+                      className="tf-nav-item"
+                    >
+                      <span className="flex items-center gap-3">
+                        <span className="tf-icon-box">
+                          <LayoutDashboard className="h-3.5 w-3.5" />
+                        </span>
+                        Admin Dashboard
+                      </span>
                     </Link>
                   </li>
                 )}
@@ -659,11 +911,16 @@ export function Navbar() {
 
             <div className="mt-1.5 pt-1.5 border-t border-border">
               <button
-                onClick={() => { signOut(); setMobileOpen(false); }}
+                onClick={() => {
+                  signOut();
+                  setMobileOpen(false);
+                }}
                 className="tf-nav-item w-full text-left text-destructive"
               >
                 <span className="flex items-center gap-3">
-                  <span className="tf-icon-box" style={{ backgroundColor: "transparent" }}><LogOut className="h-3.5 w-3.5" /></span>
+                  <span className="tf-icon-box" style={{ backgroundColor: "transparent" }}>
+                    <LogOut className="h-3.5 w-3.5" />
+                  </span>
                   Log out
                 </span>
               </button>
