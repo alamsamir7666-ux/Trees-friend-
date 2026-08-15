@@ -64,6 +64,7 @@ import { describeError } from "../lib/describeError";
 import { redactPii } from "../lib/piiRedaction";
 import { calculateCost } from "../lib/costTracker";
 import { detectPromptInjection } from "../lib/promptInjection";
+import { classifyTopic } from "../lib/topicClassifier";
 import { getCachedResponse, setCachedResponse } from "../lib/semanticCache";
 import { getSemanticCachedResponse, setSemanticCachedResponse } from "../lib/embeddingCache";
 import { getActivePrompt } from "../lib/promptVersioning";
@@ -866,38 +867,78 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     }).catch(() => {}); // event logging is best-effort
   }
 
-  // ─── 4. Hard topic gate ───
-  // If the message has zero botanical keywords, refuse WITHOUT calling
-  // Gemini. Saves quota and prevents off-topic abuse.
-  // NOTE: we run the gate on the REDACTED message. PII placeholders like
-  // [PHONE] don't contain botanical keywords, so they don't affect the gate.
+  // ─── 4. Topic gate (v5.3: soft LLM-based, not hard keyword block) ───
+  // Industry standard: modern chatbots (ChatGPT, Claude, Gemini) do NOT use
+  // hard keyword gates — they rely on the system prompt + LLM judgment.
+  //
+  // The old hard gate (`hasBotanicalKeyword`) blocked legitimate questions
+  // like "কলার কোন জাত ভালো" (which banana variety is good?) because the
+  // Bengali keyword list was incomplete. This caused real user harm.
+  //
+  // New approach (two-tier):
+  //   1. Fast path: hasBotanicalKeyword() — instant. Catches obvious English
+  //      keywords + common Bengali words. Returns true → allow (no LLM call).
+  //   2. Smart path: if keyword gate fails, run classifyTopic() — uses the
+  //      LLM to check if the message is plant-related. Catches Bengali,
+  //      Banglish, paraphrased questions the keyword list misses.
+  //      - LLM says on-topic → allow (proceed to LLM chat)
+  //      - LLM says off-topic → refuse politely
+  //      - LLM unavailable → fail-OPEN (allow). Better to answer an off-topic
+  //        question than to block a legitimate plant question.
+  //
+  // Cost: $0 (uses existing free-tier Groq/Gemini quotas). The LLM topic
+  // check only runs when the keyword gate fails (~20-30% of messages).
+  // Results are cached 24h.
   if (!hasBotanicalKeyword(safeMessage)) {
-    // We still need to send back a sessionToken so the client can store it.
-    // Persist the user message + refusal so the conversation is consistent.
-    try {
-      const session = await findOrCreateSession(resolved.sid, safeMessage, resolved.uid);
-      await persistMessage(session.id, "user", safeMessage, {
-        piiRedacted: piiResult.hadPii,
-      });
-      const refusal =
-        "I'm TreeFriend's plant assistant and can only help with trees, plants, and gardening. " +
-        "Feel free to ask me about plant care or browse our catalog at /browse.";
-      const assistantMsgId = await persistMessage(session.id, "assistant", refusal, {
-        offTopic: true,
-        responseMs: Date.now() - requestStartTime,
-      });
+    // Keyword gate failed — run the LLM topic classifier.
+    const topicCheck = await classifyTopic(safeMessage);
+    if (!topicCheck.isOnTopic) {
+      logger.info(
+        {
+          sid: resolved.sid,
+          provider: topicCheck.provider,
+          confidence: topicCheck.confidence,
+          messagePreview: safeMessage.slice(0, 80),
+        },
+        "AI: off-topic message refused (via LLM classifier)",
+      );
+      try {
+        const session = await findOrCreateSession(resolved.sid, safeMessage, resolved.uid);
+        await persistMessage(session.id, "user", safeMessage, {
+          piiRedacted: piiResult.hadPii,
+        });
+        const refusal =
+          "I'm TreeFriend's plant assistant and can only help with trees, plants, and gardening. " +
+          "Feel free to ask me about plant care or browse our catalog at /browse.";
+        const assistantMsgId = await persistMessage(session.id, "assistant", refusal, {
+          offTopic: true,
+          responseMs: Date.now() - requestStartTime,
+        });
 
-      res.json({
-        sessionToken: resolved.token,
-        message: refusal,
-        messageId: assistantMsgId,
-        offTopic: true,
-      });
-    } catch (err) {
-      logger.error({ err }, "AI: hard-gate persist failed");
-      res.status(500).json({ error: "Failed to process request." });
+        // Log the off-topic refusal for admin observability.
+        await logAiEvent(session.id, "off_topic_refused", {
+          provider: topicCheck.provider,
+          confidence: topicCheck.confidence,
+          messagePreview: safeMessage.slice(0, 100),
+        }).catch(() => {});
+
+        res.json({
+          sessionToken: resolved.token,
+          message: refusal,
+          messageId: assistantMsgId,
+          offTopic: true,
+        });
+      } catch (err) {
+        logger.error({ err }, "AI: topic-gate persist failed");
+        res.status(500).json({ error: "Failed to process request." });
+      }
+      return;
     }
-    return;
+    // LLM says on-topic → proceed to the LLM chat call
+    logger.info(
+      { provider: topicCheck.provider, confidence: topicCheck.confidence },
+      "AI: keyword gate failed but LLM classifier allowed message",
+    );
   }
 
   // ─── 4b. Pure greeting shortcut ───
