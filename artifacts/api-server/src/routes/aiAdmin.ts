@@ -3282,4 +3282,61 @@ router.get("/ai/admin/topic/metrics", async (req: Request, res: Response) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── v5.5: Output Safety endpoints ──────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//   GET  /api/ai/admin/output-safety/health       — config + status
+//   GET  /api/ai/admin/output-safety/log           — recent PII + safety events
+
+// ─── GET /api/ai/admin/output-safety/health ─────────────────────────────────
+router.get("/ai/admin/output-safety/health", async (_req: Request, res: Response) => {
+  try {
+    const { getOutputSafetyStatus } = await import("../lib/outputSafety");
+    res.json(getOutputSafetyStatus());
+  } catch (err) {
+    logger.error({ err }, "AI admin: output safety health failed");
+    res.status(500).json({ error: "Failed to get output safety status." });
+  }
+});
+
+// ─── GET /api/ai/admin/output-safety/log ────────────────────────────────────
+// Returns recent output safety events (PII redacted + unsafe blocked).
+// Query: ?limit=50 (default 50, max 200) ?hours=24 (default 24)
+router.get("/ai/admin/output-safety/log", async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+    const hours = Math.min(Math.max(Number(req.query.hours ?? 24), 1), 720);
+    const result = await pool.query<{
+      id: number;
+      session_id: number;
+      type: string;
+      payload: string | null;
+      created_at: Date;
+    }>(
+      `SELECT id, session_id, type, payload, created_at
+       FROM ai_chat_events
+       WHERE type IN ('output_pii_redacted', 'output_unsafe_blocked')
+         AND created_at > NOW() - INTERVAL '${hours} hours'
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json({
+      events: result.rows.map((r) => ({
+        id: r.id,
+        sessionId: r.session_id,
+        type: r.type,
+        payload: r.payload ? JSON.parse(r.payload) : null,
+        createdAt: r.created_at.toISOString(),
+      })),
+      count: result.rows.length,
+      hours,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: output safety log failed");
+    res.status(500).json({ error: "Failed to load output safety log." });
+  }
+});
+
 export default router;

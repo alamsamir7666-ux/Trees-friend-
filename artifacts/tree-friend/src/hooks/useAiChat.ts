@@ -496,6 +496,14 @@ export function useAiChat(): UseAiChatResult {
                   : m,
               ),
             );
+          } else if (payload.type === "response_replaced" && payload.text) {
+            // v5.5: The backend's output safety check modified the response
+            // (PII redacted or Constitutional AI flagged it as unsafe).
+            // Replace the displayed message with the sanitized version.
+            received = payload.text;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: received } : m)),
+            );
           } else if (payload.type === "error") {
             setError(payload.message ?? "Stream failed.");
             // Replace the empty assistant bubble with an error message.

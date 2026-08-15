@@ -65,6 +65,7 @@ import { redactPii } from "../lib/piiRedaction";
 import { calculateCost } from "../lib/costTracker";
 import { detectPromptInjection } from "../lib/promptInjection";
 import { classifyTopic } from "../lib/topicClassifier";
+import { checkOutputSafety } from "../lib/outputSafety";
 import { getCachedResponse, setCachedResponse } from "../lib/semanticCache";
 import { getSemanticCachedResponse, setSemanticCachedResponse } from "../lib/embeddingCache";
 import { getActivePrompt } from "../lib/promptVersioning";
@@ -1561,6 +1562,62 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
         } catch (err) {
           logger.warn({ err }, "AI: structured followup generation failed (non-fatal)");
         }
+      }
+    }
+
+    // ─── v5.5: Output safety check (PII redaction + Constitutional AI) ───
+    // Industry standard: Anthropic Constitutional AI, Cloudflare Prompt Shield,
+    // AWS Bedrock Guardrails — all check BOTH input AND output.
+    //
+    // Previously PII redaction only ran on USER INPUT. But PII can also leak
+    // in the OUTPUT direction (model training data, KB content, jailbreak
+    // compliance). This check:
+    //   1. Runs redactPii() on the full AI response → catches leaked PII
+    //   2. Runs Constitutional AI check → catches harmful advice, jailbreak
+    //      compliance, system prompt leakage, off-topic compliance
+    //
+    // If PII is found, the redacted version replaces the streamed response.
+    // If the Constitutional AI check flags the response as unsafe, a safe
+    // fallback replaces it.
+    //
+    // The client is notified via a `response_replaced` SSE event so it can
+    // update the displayed message (the original was already streamed via
+    // deltas, so we need to tell the client to replace it).
+    if (fullResponse && fullResponse.trim()) {
+      const outputSafety = await checkOutputSafety(safeMessage, fullResponse);
+      if (outputSafety.sanitizedResponse !== fullResponse) {
+        // The response was modified (PII redacted or safety fallback).
+        // Notify the client to replace the displayed response.
+        try {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "response_replaced",
+              text: outputSafety.sanitizedResponse,
+              reason: outputSafety.wasUnsafe
+                ? "safety"
+                : outputSafety.hadOutputPii
+                  ? "pii_redacted"
+                  : "unknown",
+            })}\n\n`,
+          );
+        } catch {
+          // best-effort — client may have disconnected
+        }
+        fullResponse = outputSafety.sanitizedResponse;
+      }
+
+      // Log output safety events for observability.
+      if (outputSafety.hadOutputPii) {
+        await logAiEvent(session.id, "output_pii_redacted", {
+          types: outputSafety.piiResult?.detectedTypes ?? [],
+          count: outputSafety.piiResult?.count ?? 0,
+        }).catch(() => {});
+      }
+      if (outputSafety.wasUnsafe) {
+        await logAiEvent(session.id, "output_unsafe_blocked", {
+          violationType: outputSafety.violationType,
+          explanation: outputSafety.safetyExplanation,
+        }).catch(() => {});
       }
     }
 
