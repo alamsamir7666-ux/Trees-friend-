@@ -38,6 +38,7 @@
 import { Type } from "@google/genai";
 import type { FunctionDeclaration } from "@google/genai";
 import { pool } from "@workspace/db";
+import { checkToolRateLimit } from "./toolRateLimiter";
 import { logger } from "./logger";
 import { searchKnowledgeBase } from "./kbSearch";
 
@@ -221,6 +222,16 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
  * Executes a tool call by name. Returns a JSON-serializable result object
  * that gets sent back to Gemini.
  *
+ * v5.6: per-tool rate limiting is enforced BEFORE execution. Each tool
+ * has its own limit tier:
+ *   - SENSITIVE (get_user_orders, get_order_details): 10 calls/hour
+ *     — private user data, very tight
+ *   - CATALOG (search_catalog, get_product_care, search_knowledge_base):
+ *     60 calls/hour — public data, moderate
+ *
+ * When a tool exceeds its limit, a friendly error is returned (not the
+ * actual data) — the AI can relay this to the user.
+ *
  * @param name - The function name (matches AI_TOOL_DECLARATIONS[].name)
  * @param args - The arguments object Gemini provided
  * @param userId - The signed-in user's Clerk ID (null for anonymous).
@@ -231,6 +242,32 @@ export async function executeTool(
   args: Record<string, unknown>,
   userId: string | null,
 ): Promise<unknown> {
+  // v5.6: per-tool rate limit check (before execution)
+  // The IP is not available in this context (executeTool is called from
+  // the streaming generator, not an Express middleware). We use userId
+  // as the primary key, falling back to "anon" for anonymous users.
+  // This is slightly less precise than IP-based limiting (multiple
+  // anonymous users behind one NAT share the "anon" key), but it's
+  // the best we can do without threading the request IP through the
+  // streaming pipeline. The global chat rate limiter (30 req/hour/IP)
+  // already provides IP-level protection.
+  const identity = userId ?? "anon";
+  const rateLimit = await checkToolRateLimit(name, userId, identity);
+  if (!rateLimit.allowed) {
+    logger.warn(
+      { name, tier: rateLimit.tier, limit: rateLimit.limit },
+      "AI tool: rate limited — returning friendly error",
+    );
+    return {
+      error:
+        `This action (${name}) has been called too many times. ` +
+        `Please try again in ${Math.ceil(rateLimit.retryAfterSeconds / 60)} minutes. ` +
+        `Limit: ${rateLimit.limit} calls per hour.`,
+      rateLimited: true,
+      retryAfterSeconds: rateLimit.retryAfterSeconds,
+    };
+  }
+
   try {
     switch (name) {
       case "search_catalog":
@@ -303,7 +340,7 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
     params.push(`%${t}%`);
     tokenPlaceholders.push(`$${params.length}`);
   }
-  let ilikeWhere = tokenPlaceholders
+  const ilikeWhere = tokenPlaceholders
     .map((p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`)
     .join(" OR ");
 
@@ -485,7 +522,9 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
         ilikeParams.push(maxPrice as number);
       }
       let ilikeOnlyWhere = fbTokenPlaceholders
-        .map((p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`)
+        .map(
+          (p) => `(p.name ILIKE ${p} OR p.scientific_name ILIKE ${p} OR p.description ILIKE ${p})`,
+        )
         .join(" OR ");
       if (sunlight) {
         ilikeOnlyWhere += ` AND p.sunlight = $${fbTokenPlaceholders.length + 1}`;

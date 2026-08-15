@@ -3339,4 +3339,16 @@ router.get("/ai/admin/output-safety/log", async (req: Request, res: Response) =>
   }
 });
 
+// ─── GET /api/ai/admin/tool-rate-limits/health ──────────────────────────────
+// v5.6: Returns the per-tool rate limit configuration + status.
+router.get("/ai/admin/tool-rate-limits/health", async (_req: Request, res: Response) => {
+  try {
+    const { getToolRateLimitStatus } = await import("../lib/toolRateLimiter");
+    res.json(getToolRateLimitStatus());
+  } catch (err) {
+    logger.error({ err }, "AI admin: tool rate limit health failed");
+    res.status(500).json({ error: "Failed to get tool rate limit status." });
+  }
+});
+
 export default router;
