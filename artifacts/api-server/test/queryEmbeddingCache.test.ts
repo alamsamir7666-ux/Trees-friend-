@@ -91,9 +91,14 @@ import {
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
 
-const MODEL = "text-embedding-004";
+// BUG-E1 fix: updated from "text-embedding-004" (shut down by Google Jan 2026)
+// to "gemini-embedding-001" (the current model). The cache is model-agnostic —
+// it just uses the model name as part of the cache key. The actual model name
+// doesn't matter for these tests; what matters is that the same name produces
+// the same cache key + a different name invalidates the cache.
+const MODEL = "gemini-embedding-001";
 
-/** A fake embedding vector — 768 floats (matching Gemini text-embedding-004). */
+/** A fake embedding vector — 768 floats (matching Gemini gemini-embedding-001 at 768 dims). */
 function makeFakeVector(seed: number = 1): number[] {
   const v = new Array(768);
   for (let i = 0; i < 768; i++) v[i] = ((seed * 31 + i * 7) % 1000) / 1000;
@@ -247,9 +252,9 @@ describe("queryEmbeddingCache: L2 (Redis shared cache)", () => {
     const gen = makeCountingGenerator();
     await getOrCreateQueryEmbedding("test query", MODEL, gen.generator);
 
-    // The L2 store should now have an entry under `ai:qemb:text-embedding-004:<hash>`.
+    // The L2 store should now have an entry under `ai:qemb:gemini-embedding-001:<hash>`.
     const keys = Array.from(_fakeRedisStore.keys());
-    expect(keys.some((k) => k.startsWith("ai:qemb:text-embedding-004:"))).toBe(true);
+    expect(keys.some((k) => k.startsWith("ai:qemb:gemini-embedding-001:"))).toBe(true);
 
     // The stored value should be a JSON array of 768 floats.
     const stored = Array.from(_fakeRedisStore.values())[0];
@@ -414,7 +419,8 @@ describe("queryEmbeddingCache: cache key design", () => {
   it("includes the model name in the key (model upgrade auto-invalidates)", async () => {
     const gen = makeCountingGenerator();
 
-    await getOrCreateQueryEmbedding("same query", "text-embedding-004", gen.generator);
+    // BUG-E1 fix: updated model names to reflect the current models.
+    await getOrCreateQueryEmbedding("same query", "gemini-embedding-001", gen.generator);
     await getOrCreateQueryEmbedding("same query", "text-embedding-005", gen.generator);
 
     // Different model = different cache key = 2 generator calls.
@@ -423,7 +429,7 @@ describe("queryEmbeddingCache: cache key design", () => {
     // L2 should have 2 entries (one per model).
     const keys = Array.from(_fakeRedisStore.keys()).filter((k) => k.startsWith("ai:qemb:"));
     expect(keys).toHaveLength(2);
-    expect(keys.some((k) => k.includes("text-embedding-004"))).toBe(true);
+    expect(keys.some((k) => k.includes("gemini-embedding-001"))).toBe(true);
     expect(keys.some((k) => k.includes("text-embedding-005"))).toBe(true);
   });
 

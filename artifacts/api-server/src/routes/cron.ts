@@ -240,8 +240,9 @@ router.post("/cron/ai-session-cleanup", async (req, res) => {
 
 /**
  * POST /api/cron/kb-embeddings
- * Every 5 minutes. Generates Gemini text-embedding-004 vectors for KB
- * entries with `embedding_status = 'pending'`. Processes up to 10 entries
+ * Every 5 minutes. Generates Gemini gemini-embedding-001 vectors (BUG-E1
+ * fix, was text-embedding-004) for KB entries with
+ * `embedding_status = 'pending'`. Processes up to 10 entries
  * per run (configurable via the `limit` query param, max 50). Stops
  * early if Gemini returns 429 (rate limit) — the next run will retry.
  *

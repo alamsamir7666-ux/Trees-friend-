@@ -6,7 +6,7 @@
  * should hit the cache — they're asking the same thing.
  *
  * How it works:
- *   1. Generate an embedding of the user's message (Gemini text-embedding-004)
+ *   1. Generate an embedding of the user's message (Gemini EMBEDDING_MODEL)
  *   2. Query the ai_response_cache table for entries with cosine similarity > 0.92
  *   3. If found: return the cached response (zero API cost)
  *   4. If not found: call the AI, then store the response + its embedding
@@ -18,9 +18,11 @@
  *   EXISTS vector).
  *
  * Embedding model:
- *   Gemini text-embedding-004 (768 dimensions, free tier)
+ *   Gemini EMBEDDING_MODEL from embeddingConfig.ts (defaults to
+ *   gemini-embedding-001, env-configurable via GEMINI_EMBEDDING_MODEL).
  *   - Free tier: 1500 RPD (same as Gemini chat)
  *   - Falls back to exact-match cache (semanticCache.ts) if embeddings fail
+ *   - BUG-E1 fix: previously hardcoded text-embedding-004 (shut down Jan 2026)
  *
  * Cache invalidation:
  *   - TTL-based: entries expire after AI_CACHE_TTL_SECONDS (default 1h)
@@ -78,6 +80,13 @@
 import { GoogleGenAI } from "@google/genai";
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
+// BUG-E1 fix: use the shared embedding config (model + dimensions + task type).
+import {
+  EMBEDDING_MODEL,
+  EMBEDDING_DIMENSIONS,
+  TASK_TYPE_QUERY,
+  MAX_EMBEDDING_INPUT_CHARS,
+} from "./embeddingConfig";
 
 const SIMILARITY_THRESHOLD = Number(process.env.AI_SEMANTIC_SIMILARITY ?? 0.92);
 const CACHE_TTL_SECONDS = Number(process.env.AI_CACHE_TTL_SECONDS ?? 3600);
@@ -85,7 +94,6 @@ const CACHE_TTL_SECONDS = Number(process.env.AI_CACHE_TTL_SECONDS ?? 3600);
 // Default 5 min. Set to 0 to disable caching tool-call responses entirely.
 const TOOL_CACHE_TTL_SECONDS = Number(process.env.AI_TOOL_CACHE_TTL_SECONDS ?? 300);
 const MIN_MESSAGE_LENGTH = 10;
-const EMBEDDING_MODEL = "text-embedding-004";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -110,8 +118,13 @@ function getEmbeddingClient(): GoogleGenAI | null {
 }
 
 /**
- * Generates an embedding for a text using Gemini text-embedding-004.
- * Returns a 768-dimensional float array, or null on failure.
+ * Generates an embedding for a text using the shared EMBEDDING_MODEL.
+ * Returns a 768-dimensional float array (by default), or null on failure.
+ *
+ * BUG-E1 fix: previously hardcoded text-embedding-004 (shut down Jan 2026).
+ * Now uses the shared config from embeddingConfig.ts. Also passes
+ * `outputDimensionality` explicitly so gemini-embedding-001 produces
+ * 768-dim vectors (backward compat with the vector(768) pgvector column).
  *
  * We embed the user's message ONLY (not the full conversation history)
  * because:
@@ -120,6 +133,13 @@ function getEmbeddingClient(): GoogleGenAI | null {
  *     history = different embedding = no hit)
  *   - For follow-up questions, the message alone is enough to find similar
  *     past questions
+ *
+ * Task type: RETRIEVAL_QUERY on BOTH the cache-write side (storing the
+ * user message's embedding) AND the cache-read side (embedding the new
+ * user message to find a match). This is correct — both sides embed the
+ * SAME text (the user message), so they must use the SAME task type.
+ * The RETRIEVAL_DOCUMENT task type is only for the KB entries
+ * (kbEmbeddings.ts) which are longer content indexed for retrieval.
  */
 async function generateEmbedding(text: string): Promise<number[] | null> {
   const client = getEmbeddingClient();
@@ -128,20 +148,30 @@ async function generateEmbedding(text: string): Promise<number[] | null> {
   try {
     const result = await client.models.embedContent({
       model: EMBEDDING_MODEL,
-      contents: text.slice(0, 2000), // truncate to avoid token limits
+      contents: text.slice(0, MAX_EMBEDDING_INPUT_CHARS), // truncate to avoid token limits
       config: {
-        taskType: "RETRIEVAL_QUERY" as any, // optimized for finding similar queries
+        taskType: TASK_TYPE_QUERY as any, // optimized for finding similar queries
+        // BUG-E1 fix: explicitly request 768-dim output. gemini-embedding-001
+        // supports up to 3072 dims by default — without this, the API would
+        // return 3072-dim vectors which don't fit the existing `vector(768)`
+        // pgvector column (INSERT would fail with "vector dimension mismatch").
+        outputDimensionality: EMBEDDING_DIMENSIONS,
       },
     });
 
     const values = (result as any)?.embeddings?.[0]?.values;
     if (!Array.isArray(values) || values.length === 0) {
-      logger.warn("Semantic cache: embedding returned empty values");
+      logger.warn({ model: EMBEDDING_MODEL }, "Semantic cache: embedding returned empty values");
       return null;
     }
     return values as number[];
   } catch (err) {
-    logger.debug({ err: (err as any)?.message }, "Semantic cache: embedding generation failed");
+    // BUG-E1 fix: include the model name in the error log so operators
+    // can diagnose model-deprecation issues.
+    logger.debug(
+      { model: EMBEDDING_MODEL, err: (err as any)?.message },
+      "Semantic cache: embedding generation failed",
+    );
     return null;
   }
 }

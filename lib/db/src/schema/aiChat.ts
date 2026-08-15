@@ -547,9 +547,12 @@ export const aiKbEntriesTable = pgTable(
 
     // ─── Phase 2: embedding columns ─────────────────────────────────────
     // The embedding column stores a 768-dim float vector (Gemini
-    // text-embedding-004). Drizzle doesn't have a native vector type, so
-    // we declare it as text — the actual SQL column is vector(768)
-    // (created by the Phase 2 migration in ensureAiTables.ts). The
+    // gemini-embedding-001 — BUG-E1 fix, was text-embedding-004). Drizzle
+    // doesn't have a native vector type, so we declare it as text — the
+    // actual SQL column is vector(768) (created by the Phase 2 migration
+    // in ensureAiTables.ts). The model + dimensions are configurable via
+    // embeddingConfig.ts (GEMINI_EMBEDDING_MODEL + GEMINI_EMBEDDING_DIMENSIONS
+    // env vars).
     // route code constructs the embedding string `[0.1, 0.2, ...]` and
     // casts it with `$1::vector` on INSERT/UPDATE.
     embedding: text("embedding"),

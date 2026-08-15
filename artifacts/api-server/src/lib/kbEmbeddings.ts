@@ -1,13 +1,20 @@
 /**
  * KB entry embedding generation (Phase 2).
  *
- * Generates Gemini text-embedding-004 vectors (768 dims) for KB entries,
+ * Generates Gemini embedding vectors (768 dims by default) for KB entries,
  * stored in the `embedding` column on `ai_kb_entries`. Phase 3's
  * `search_knowledge_base` tool will use these for semantic search
  * (cosine similarity via pgvector's `<=>` operator).
  *
+ * BUG-E1 fix: previously hardcoded `text-embedding-004` (shut down by
+ * Google on Jan 14, 2026). Now uses the shared `EMBEDDING_MODEL` from
+ * `embeddingConfig.ts` (defaults to `gemini-embedding-001`, env-configurable
+ * via `GEMINI_EMBEDDING_MODEL`). Also passes `outputDimensionality: 768`
+ * explicitly so the new model produces 768-dim vectors (backward compat
+ * with the existing `vector(768)` pgvector column).
+ *
  * Pattern: same as embeddingCache.ts (the existing semantic-cache
- * embeddings) — lazy `GoogleGenAI` client, `text-embedding-004` model,
+ * embeddings) — lazy `GoogleGenAI` client, shared model config,
  * 2000-char truncation, `RETRIEVAL_DOCUMENT` task type.
  *
  * ─── Task type choice ────────────────────────────────────────────────────────
@@ -45,12 +52,19 @@ import { GoogleGenAI } from "@google/genai";
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
 import { markSourceReadyIfAllEntriesEmbedded } from "./kbSources";
+// BUG-E1 fix: use the shared embedding config (model + dimensions + task type).
+import {
+  EMBEDDING_MODEL,
+  EMBEDDING_DIMENSIONS,
+  TASK_TYPE_DOCUMENT,
+  MAX_EMBEDDING_INPUT_CHARS,
+} from "./embeddingConfig";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const EMBEDDING_MODEL = "text-embedding-004";
-const EMBEDDING_DIMENSIONS = 768; // Gemini text-embedding-004 output size
-const MAX_CONTENT_CHARS = 2000; // Gemini's embedding token limit (~2K chars)
+// BUG-E1 fix: model + dimensions now come from the shared config (env-configurable).
+// Kept as locals for backward compat with the rest of this file's references.
+const MAX_CONTENT_CHARS = MAX_EMBEDDING_INPUT_CHARS;
 
 // ─── Lazy-initialized client ─────────────────────────────────────────────────
 
@@ -116,28 +130,56 @@ export async function generateEntryEmbedding(entry: {
         // being searched (not the queries). Phase 3's query embeddings
         // will use RETRIEVAL_QUERY. Gemini is trained to match the two
         // task types asymmetrically.
-        taskType: "RETRIEVAL_DOCUMENT" as never,
+        taskType: TASK_TYPE_DOCUMENT as never,
+        // BUG-E1 fix: explicitly request 768-dim output. gemini-embedding-001
+        // supports up to 3072 dims by default — without this, the API would
+        // return 3072-dim vectors which don't fit the existing `vector(768)`
+        // pgvector column (INSERT would fail with "vector dimension mismatch").
+        // Pinning to 768 maintains backward compat with the existing schema.
+        outputDimensionality: EMBEDDING_DIMENSIONS,
       },
     });
 
-    const values = (result as { embeddings?: Array<{ values?: number[] }> })?.embeddings?.[0]?.values;
+    const values = (result as { embeddings?: { values?: number[] }[] })?.embeddings?.[0]?.values;
     if (!Array.isArray(values) || values.length === 0) {
-      logger.warn({ entryId: entry.id }, "KB embeddings: empty values returned");
+      logger.warn(
+        { entryId: entry.id, model: EMBEDDING_MODEL },
+        "KB embeddings: empty values returned",
+      );
       return null;
     }
     if (values.length !== EMBEDDING_DIMENSIONS) {
       logger.warn(
-        { entryId: entry.id, expected: EMBEDDING_DIMENSIONS, got: values.length },
+        {
+          entryId: entry.id,
+          expected: EMBEDDING_DIMENSIONS,
+          got: values.length,
+          model: EMBEDDING_MODEL,
+        },
         "KB embeddings: unexpected dimension count (using anyway)",
       );
     }
     return { embedding: values, model: EMBEDDING_MODEL };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("429") || msg.toLowerCase().includes("quota") || msg.toLowerCase().includes("rate limit")) {
-      logger.warn({ entryId: entry.id }, "KB embeddings: Gemini rate limit hit");
+    if (
+      msg.includes("429") ||
+      msg.toLowerCase().includes("quota") ||
+      msg.toLowerCase().includes("rate limit")
+    ) {
+      logger.warn(
+        { entryId: entry.id, model: EMBEDDING_MODEL },
+        "KB embeddings: Gemini rate limit hit",
+      );
     } else {
-      logger.warn({ entryId: entry.id, err: msg }, "KB embeddings: generation failed");
+      // BUG-E1 fix: include the model name in the error log so operators
+      // can diagnose model-deprecation issues (the old text-embedding-004
+      // shutdown produced a cryptic "model not found" error with no
+      // indication of WHICH model was being called).
+      logger.warn(
+        { entryId: entry.id, model: EMBEDDING_MODEL, err: msg },
+        "KB embeddings: generation failed",
+      );
     }
     return null;
   }
@@ -148,7 +190,7 @@ export async function generateEntryEmbedding(entry: {
  * Processes up to `limit` entries with `embedding_status = 'pending'`.
  *
  * For each entry:
- *   1. Generate the embedding (Gemini text-embedding-004).
+ *   1. Generate the embedding (Gemini EMBEDDING_MODEL from embeddingConfig.ts).
  *   2. On success: UPDATE the row with the embedding (cast as `::vector`),
  *      set `embedding_status = 'generated'`, set `embedding_generated_at = NOW()`,
  *      clear `embedding_error`.

@@ -79,8 +79,15 @@ describe("Phase 3: kbSearch.ts lib module", () => {
     expect(source).toContain("WEIGHT_KEYWORD = 0.20");
   });
 
-  it("uses Gemini text-embedding-004 for query embeddings", () => {
-    expect(source).toContain("text-embedding-004");
+  it("BUG-E1 fix: uses the shared EMBEDDING_MODEL from embeddingConfig.ts (not hardcoded text-embedding-004)", () => {
+    expect(source).toContain("EMBEDDING_MODEL");
+    expect(source).toContain('from "./embeddingConfig"');
+    expect(source).not.toContain('"text-embedding-004"');
+  });
+
+  it("BUG-E1 fix: passes outputDimensionality for query embeddings (matches document dims)", () => {
+    expect(source).toContain("outputDimensionality");
+    expect(source).toContain("EMBEDDING_DIMENSIONS");
   });
 
   it("uses RETRIEVAL_QUERY task type (asymmetric to entries' RETRIEVAL_DOCUMENT)", () => {

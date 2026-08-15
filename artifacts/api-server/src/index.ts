@@ -53,9 +53,10 @@ app.listen(port, (err) => {
   scheduleAiSessionCleanup();
 
   // KB embedding generation — runs every 30 seconds, generates Gemini
-  // text-embedding-004 vectors for KB entries with embedding_status =
-  // 'pending'. Phase 2 background job. On Vercel (serverless), this
-  // runs via POST /api/cron/kb-embeddings instead.
+  // gemini-embedding-001 vectors (BUG-E1 fix, was text-embedding-004)
+  // for KB entries with embedding_status = 'pending'. Phase 2 background
+  // job. On Vercel (serverless), this runs via POST /api/cron/kb-embeddings
+  // instead.
   scheduleKbEmbeddingJob();
 
   // KB tone profile generation — runs every 5 minutes, generates +
@@ -176,8 +177,9 @@ function scheduleAiSessionCleanup() {
 
 /**
  * KB embedding generation scheduler (Render long-lived process).
- * Runs every 30 seconds — generates Gemini text-embedding-004 vectors
- * for KB entries with `embedding_status = 'pending'` (up to 10 per run).
+ * Runs every 30 seconds — generates Gemini gemini-embedding-001 vectors
+ * (BUG-E1 fix, was text-embedding-004) for KB entries with
+ * `embedding_status = 'pending'` (up to 10 per run).
  *
  * On Vercel (serverless), this runs via POST /api/cron/kb-embeddings
  * instead (see routes/cron.ts + vercel.json).

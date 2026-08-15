@@ -80,11 +80,19 @@ import { pool } from "@workspace/db";
 import { logger } from "./logger";
 import { getOrCreateQueryEmbedding } from "./queryEmbeddingCache";
 import { rerank, getRerankerStatus, type RerankDocument } from "./reranker";
+// BUG-E1 fix: use the shared embedding config (model + dimensions + task type).
+import {
+  EMBEDDING_MODEL,
+  EMBEDDING_DIMENSIONS,
+  TASK_TYPE_QUERY,
+  MAX_EMBEDDING_INPUT_CHARS,
+} from "./embeddingConfig";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const EMBEDDING_MODEL = "text-embedding-004";
-const MAX_QUERY_CHARS = 2000; // Gemini's embedding token limit
+// BUG-E1 fix: model + dimensions now come from the shared config (env-configurable).
+// Kept as a local for backward compat with the rest of this file's references.
+const MAX_QUERY_CHARS = MAX_EMBEDDING_INPUT_CHARS;
 
 // ─── BUG-I1 fix: Unified KB retrieval configuration ─────────────────────────
 //
@@ -285,13 +293,19 @@ async function generateQueryEmbeddingUncached(normalizedQuery: string): Promise<
         // RETRIEVAL_QUERY — optimized for finding matching documents.
         // The entries were embedded with RETRIEVAL_DOCUMENT (Phase 2).
         // Mixing these up would degrade search quality significantly.
-        taskType: "RETRIEVAL_QUERY" as never,
+        taskType: TASK_TYPE_QUERY as never,
+        // BUG-E1 fix: explicitly request 768-dim output to match the
+        // document embeddings (kbEmbeddings.ts uses the same config).
+        // Without this, gemini-embedding-001 would return 3072-dim
+        // vectors which can't be compared against 768-dim document
+        // embeddings (pgvector cosine similarity requires same dims).
+        outputDimensionality: EMBEDDING_DIMENSIONS,
       },
     });
 
     const values = (result as { embeddings?: { values?: number[] }[] })?.embeddings?.[0]?.values;
     if (!Array.isArray(values) || values.length === 0) {
-      logger.warn("KB search: query embedding returned empty values");
+      logger.warn({ model: EMBEDDING_MODEL }, "KB search: query embedding returned empty values");
       return null;
     }
     return values as number[];
@@ -302,9 +316,17 @@ async function generateQueryEmbeddingUncached(normalizedQuery: string): Promise<
       msg.toLowerCase().includes("quota") ||
       msg.toLowerCase().includes("rate limit")
     ) {
-      logger.warn("KB search: query embedding rate-limited (falling back to keyword-only)");
+      logger.warn(
+        { model: EMBEDDING_MODEL },
+        "KB search: query embedding rate-limited (falling back to keyword-only)",
+      );
     } else {
-      logger.warn({ err: msg }, "KB search: query embedding failed (falling back to keyword-only)");
+      // BUG-E1 fix: include the model name in the error log so operators
+      // can diagnose model-deprecation issues.
+      logger.warn(
+        { model: EMBEDDING_MODEL, err: msg },
+        "KB search: query embedding failed (falling back to keyword-only)",
+      );
     }
     return null;
   }

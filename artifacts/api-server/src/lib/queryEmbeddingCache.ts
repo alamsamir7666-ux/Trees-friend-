@@ -1,6 +1,12 @@
 /**
- * Query-embedding cache — multi-tier cache for Gemini text-embedding-004
- * query embeddings used by kbSearch.searchKnowledgeBase.
+ * Query-embedding cache — multi-tier cache for Gemini embedding query
+ * embeddings used by kbSearch.searchKnowledgeBase.
+ *
+ * BUG-E1 fix: the model name is now passed in by the caller (kbSearch.ts),
+ * which sources it from embeddingConfig.ts (defaults to gemini-embedding-001,
+ * env-configurable via GEMINI_EMBEDDING_MODEL). This module is model-agnostic
+ * — it just caches whatever the generator produces, keyed by the model name
+ * so changing models automatically invalidates stale cache entries.
  *
  * ─── Why this file exists ────────────────────────────────────────────────────
  *
@@ -51,7 +57,7 @@
  *   `clearAiCache()` doesn't nuke query embeddings (different lifetimes,
  *   different invalidation triggers).
  * - `<modelName>` — embedding model is part of the key, so upgrading
- *   `text-embedding-004` → `text-embedding-005` automatically invalidates
+ *   `gemini-embedding-001` → a future model automatically invalidates
  *   all stale entries (different model = different vector space).
  * - `<sha256>` first 16 hex chars = 64 bits — collision-safe for cache keys
  *   (birthday bound: ~4 billion entries before 50% collision chance).
@@ -308,7 +314,7 @@ function normalizeQuery(query: string): string {
  * Format: `ai:qemb:<modelName>:<sha256(normalized).slice(0,16)>`
  *
  * The model name is included so upgrading the embedding model (e.g.,
- * text-embedding-004 → text-embedding-005) automatically invalidates all
+ * text-embedding-004 → gemini-embedding-001) automatically invalidates all
  * stale entries — different model = different vector space.
  */
 function buildCacheKey(normalizedQuery: string, modelName: string): string {

@@ -513,7 +513,7 @@ CREATE TABLE IF NOT EXISTS ai_response_cache (
   id SERIAL PRIMARY KEY,
   query_text TEXT NOT NULL,
   response TEXT NOT NULL,
-  embedding vector(768),  -- Gemini text-embedding-004 = 768 dimensions
+  embedding vector(768),  -- Gemini gemini-embedding-001 at 768 dims (BUG-E1 fix)
   model TEXT,
   provider TEXT,
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -779,7 +779,7 @@ CREATE INDEX IF NOT EXISTS ai_kb_entries_keywords_idx ON ai_kb_entries USING gin
 --   2. The system chunks it (AI-assisted for English, manual for others).
 --   3. Each chunk becomes an ai_kb_entries row with is_active=false (admin
 --      reviews before activation).
---   4. A background job generates embeddings (Gemini text-embedding-004,
+--   4. A background job generates embeddings (Gemini gemini-embedding-001,
 --      768 dims) for each entry, storing them in the new embedding column.
 --   5. Phase 3 will use these embeddings for semantic search in the
 --      AI chat route.
@@ -788,7 +788,9 @@ CREATE INDEX IF NOT EXISTS ai_kb_entries_keywords_idx ON ai_kb_entries USING gin
 -- IF NOT EXISTS) so this block is safe to re-run on every cold start.
 
 -- Phase 2: add embedding column for semantic search.
--- Gemini text-embedding-004 = 768 dimensions (same as ai_response_cache).
+-- Gemini gemini-embedding-001 = 768 dimensions (BUG-E1 fix, was text-embedding-004).
+-- The model + dimensions are configurable via embeddingConfig.ts
+-- (GEMINI_EMBEDDING_MODEL + GEMINI_EMBEDDING_DIMENSIONS env vars).
 ALTER TABLE ai_kb_entries
   ADD COLUMN IF NOT EXISTS embedding vector(768);
 

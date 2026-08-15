@@ -3,7 +3,9 @@
  *
  * Verifies:
  *   - `kbEmbeddings.ts` exports `generateEntryEmbedding` + `generateEmbeddingsForPendingEntries`.
- *   - Uses `text-embedding-004` model (768 dims).
+ *   - Uses the shared `EMBEDDING_MODEL` from `embeddingConfig.ts` (BUG-E1 fix:
+ *     defaults to `gemini-embedding-001`, env-configurable). 768 dims.
+ *   - Passes `outputDimensionality` explicitly (backward compat with vector(768)).
  *   - Truncates content to 2000 chars.
  *   - Uses `RETRIEVAL_DOCUMENT` task type (asymmetric to query embeddings).
  *   - Updates `embedding_status` on success/failure.
@@ -40,9 +42,28 @@ describe("Phase 2: kbEmbeddings.ts lib module", () => {
     expect(source).toContain("export interface BatchEmbeddingResult");
   });
 
-  it("uses the text-embedding-004 model (Gemini, 768 dims)", () => {
-    expect(source).toContain("text-embedding-004");
+  it("BUG-E1 fix: uses the shared EMBEDDING_MODEL from embeddingConfig.ts (not hardcoded text-embedding-004)", () => {
+    // The old code hardcoded "text-embedding-004" (shut down by Google Jan 2026).
+    // The new code imports EMBEDDING_MODEL from embeddingConfig.ts (defaults
+    // to "gemini-embedding-001", env-configurable via GEMINI_EMBEDDING_MODEL).
+    expect(source).toContain("EMBEDDING_MODEL");
+    expect(source).toContain('from "./embeddingConfig"');
+    expect(source).not.toContain('"text-embedding-004"');
     expect(source).toContain("768");
+  });
+
+  it("BUG-E1 fix: passes outputDimensionality explicitly (backward compat with vector(768))", () => {
+    // gemini-embedding-001 defaults to 3072 dims. We must explicitly request
+    // 768 to match the existing pgvector column.
+    expect(source).toContain("outputDimensionality");
+    expect(source).toContain("EMBEDDING_DIMENSIONS");
+  });
+
+  it("BUG-E1 fix: includes the model name in error logs (for diagnosing deprecations)", () => {
+    // The old code logged errors without the model name — operators couldn't
+    // tell which model was failing. The new code includes `model: EMBEDDING_MODEL`
+    // in the log context.
+    expect(source).toMatch(/model:\s*EMBEDDING_MODEL/);
   });
 
   it("truncates content to 2000 chars (Gemini's embedding token limit)", () => {
@@ -62,7 +83,7 @@ describe("Phase 2: kbEmbeddings.ts lib module", () => {
   });
 
   it("stores embeddings in pgvector format ([0.1, 0.2, ...] string with ::vector cast)", () => {
-    expect(source).toContain("[${result.embedding.join(\",\")}]");
+    expect(source).toContain('[${result.embedding.join(",")}]');
     expect(source).toContain("$1::vector");
   });
 
