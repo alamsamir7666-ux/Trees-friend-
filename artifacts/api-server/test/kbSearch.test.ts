@@ -112,15 +112,28 @@ describe("Phase 3: kbSearch.ts lib module", () => {
   });
 
   it("default minScore is 0.3 (tool threshold)", () => {
-    expect(source).toContain("MIN_SCORE_DEFAULT = 0.3");
+    // BUG-I1 fix: MIN_SCORE_DEFAULT is now a deprecated alias for
+    // UNIFIED_MIN_SCORE (also 0.3). Both paths use the same threshold now.
+    expect(source).toContain("MIN_SCORE_DEFAULT = UNIFIED_MIN_SCORE");
+    expect(source).toContain("UNIFIED_MIN_SCORE = 0.3");
   });
 
-  it("getTopKbEntriesForPrompt uses minScore = 0.5 (higher threshold for auto-injection)", () => {
-    expect(source).toContain("MIN_SCORE_AUTO_INJECT = 0.5");
+  it("BUG-I1 fix: getTopKbEntriesForPrompt uses UNIFIED_MIN_SCORE (was 0.5)", () => {
+    // The old MIN_SCORE_AUTO_INJECT = 0.5 constant is removed; the
+    // auto-inject path now uses the same UNIFIED_MIN_SCORE = 0.3 as the
+    // tool path. This eliminates the "two-source RAG inconsistency"
+    // anti-pattern where the LLM saw different entries depending on
+    // which path ran.
+    expect(source).not.toContain("MIN_SCORE_AUTO_INJECT");
+    expect(source).toContain("UNIFIED_MIN_SCORE = 0.3");
   });
 
-  it("getTopKbEntriesForPrompt defaults to 3 entries (keeps prompt reasonable)", () => {
-    expect(source).toContain("MAX_AUTO_INJECT_ENTRIES = 3");
+  it("BUG-I1 fix: getTopKbEntriesForPrompt defaults to UNIFIED_MAX_RESULTS (5, was 3)", () => {
+    // The old MAX_AUTO_INJECT_ENTRIES = 3 constant is removed; the
+    // auto-inject path now uses UNIFIED_MAX_RESULTS = 5 (same as the
+    // tool path).
+    expect(source).not.toContain("MAX_AUTO_INJECT_ENTRIES");
+    expect(source).toContain("UNIFIED_MAX_RESULTS = 5");
   });
 
   it("formatKbContextForPrompt includes 'KNOWLEDGE BASE CONTEXT' header", () => {
@@ -280,8 +293,16 @@ describe("Phase 3: aiTools.ts search_knowledge_base tool", () => {
     expect(source).toContain("SELECT id FROM ai_kb_categories WHERE slug = $1");
   });
 
-  it("the searchKb implementation uses minScore = 0.3 (tool threshold)", () => {
-    expect(source).toContain("minScore: 0.3");
+  it("BUG-I1 fix: the searchKb implementation uses UNIFIED_MIN_SCORE (was hardcoded 0.3)", () => {
+    // The hardcoded `minScore: 0.3` literal is replaced with the shared
+    // UNIFIED_MIN_SCORE constant so both paths use the same threshold.
+    expect(source).toContain("minScore: UNIFIED_MIN_SCORE");
+    // The old hardcoded literal should NOT remain in executable code.
+    const codeOnly = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/minScore:\s*0\.3/);
   });
 
   it("the searchKb implementation caps max_results at 10", () => {

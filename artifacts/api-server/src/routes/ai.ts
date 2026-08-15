@@ -1155,11 +1155,16 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
 
   // ─── Phase 3: Build Knowledge Base context ────────────────────────────────
   // Pre-search the KB for the user's message. If high-confidence matches
-  // are found (score > 0.5), inject the top 3 into the system prompt as
+  // are found (score > UNIFIED_MIN_SCORE = 0.3), inject the top entries
+  // (up to UNIFIED_MAX_RESULTS = 5) into the system prompt as
   // "KNOWLEDGE BASE CONTEXT". The AI uses this as its primary source.
-  // If no high-confidence matches, the AI can still call the
-  // search_knowledge_base tool on-demand (declared in aiTools.ts).
-  const kbContext = await getTopKbEntriesForPrompt(safeMessage, 3);
+  //
+  // BUG-I1 fix: previously this called getTopKbEntriesForPrompt(safeMessage, 3)
+  // with an explicit `3` (the auto-inject cap, diverging from the tool's 5).
+  // The unified config now uses 5 for both paths — no need for the explicit
+  // arg. The tool declaration's max_results description tells the LLM that
+  // the auto-injected block also returns up to 5 entries.
+  const kbContext = await getTopKbEntriesForPrompt(safeMessage);
   const knowledgeBlock = kbContext.injected ? formatKbContextForPrompt(kbContext.entries) : "";
   if (kbContext.injected) {
     logger.info(

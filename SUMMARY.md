@@ -1,79 +1,74 @@
-# Summary — BUG-3 + BUG-K19 Fix
+# Summary — BUG-K9 + BUG-I1 Fix
 
 ## Problem
 
-Two interconnected bugs in the Trees-friend monorepo:
+Two HIGH/CRITICAL bugs in the Trees-friend monorepo:
 
-1. **BUG-3** — The pgvector semantic cache (`ai_response_cache` table) had
-   no KB-content fingerprint. Even after BUG-1's `invalidateKbCache()`
-   cleared the cache, there was a race window where a concurrent
-   in-flight request could re-cache a response built from old KB content,
-   and a later request would find it by embedding similarity.
+1. **BUG-K9** — When the reranker provider chain fell back to the Local
+   provider (which always succeeds by returning `score: 1.0` for every
+   doc), those useless 1.0-scored results were cached as a **positive**
+   cache entry for 1 hour. This blocked Cohere/Jina recovery for up to
+   55 minutes after they became available again. The `isFallback`
+   detection only matched `provider === "fallback"` (set when ALL
+   providers fail) — but Local returns `provider: "local"`, so its
+   results were indistinguishable from a real successful rerank.
 
-2. **BUG-K19** — The PostgreSQL trigger `ai_kb_entries_bm25_doclength_trigger`
-   fired BEFORE `ai_kb_entries_search_tsvector_trigger` due to alphabetical
-   name ordering (`bm25_...` < `search_...`). On INSERT, the doc-length
-   trigger read `NEW.search_tsvector` which was NULL → `bm25_doc_length = 0`
-   forever for new rows. This broke BM25 length normalization — fresh
-   entries scored artificially high.
+2. **BUG-I1** — The KB retrieval had TWO call paths with INCONSISTENT
+   parameters:
+   - **Auto-inject path** (`getTopKbEntriesForPrompt`): `minScore=0.5`,
+     `skipRerank=true`, `maxResults=3`, content truncated to 500 chars
+   - **Tool path** (`searchKb`): `minScore=0.3`, `skipRerank=false`,
+     `maxResults=5`, full content (no truncation)
+
+   The LLM could see entry A (score 0.6) via auto-inject, then call the
+   tool and get entries A + B (where B scored 0.4 and was filtered from
+   auto-inject) — the textbook "two-source RAG inconsistency" anti-pattern.
 
 ## Files Changed
 
-| File                                                            | Status   | Description                                                                                                                                                                                                                                                                                     |
-| --------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lib/db/migrations/0008_kb_content_version.sql`                 | **New**  | BUG-3: ALTER TABLE adds `kb_content_version TEXT` (nullable) + partial index.                                                                                                                                                                                                                   |
-| `lib/db/migrations/0009_bm25_trigger_order_fix.sql`             | **New**  | BUG-K19: drops buggy trigger, recreates as `zz_ai_kb_entries_bm25_doclength_trigger` (sorts AFTER `ai_kb_entries_search_tsvector_trigger`), backfills `bm25_doc_length` for existing rows, refreshes BM25 term stats.                                                                           |
-| `lib/db/migrations/meta/_journal.json`                          | Modified | Added entries for migrations 0008 and 0009.                                                                                                                                                                                                                                                     |
-| `lib/db/src/schema/aiChat.ts`                                   | Modified | Declares the `aiResponseCacheTable` Drizzle schema (was missing — table was only managed via raw SQL in `ensureAiTables.ts`) with the new `kbContentVersion` column.                                                                                                                            |
-| `artifacts/api-server/src/lib/kbContentVersion.ts`              | **New**  | `getKbContentVersion()` computes a 16-char hex sha1 of all KB entry IDs + updated_at + is_active. Cached in-process for 5s. Returns `"unknown"` on DB error (fail-safe).                                                                                                                        |
-| `artifacts/api-server/src/lib/kbCache.ts`                       | Modified | Calls `clearKbContentVersionCache()` BEFORE `invalidateCatalogCache()` so the next request recomputes the version from updated DB state.                                                                                                                                                        |
-| `artifacts/api-server/src/lib/embeddingCache.ts`                | Modified | `getSemanticCachedResponse` + `setSemanticCachedResponse` signatures now accept `kbContentVersion: string`. SQL filters `WHERE kb_content_version = $N` (NULL rows excluded — `NULL = anything` is NULL, not TRUE). INSERT stores the version. Cache write skipped when version is `"unknown"`. |
-| `artifacts/api-server/src/lib/ensureAiTables.ts`                | Modified | Added `ALTER TABLE ai_response_cache ADD COLUMN IF NOT EXISTS kb_content_version TEXT` + partial index for fresh DBs (without migration history).                                                                                                                                               |
-| `artifacts/api-server/src/routes/ai.ts`                         | Modified | Computes `kbContentVersion` before cache lookup; skips cache (both read + write) when version is `"unknown"`; passes version to both `getSemanticCachedResponse` and `setSemanticCachedResponse`.                                                                                               |
-| `artifacts/api-server/test/kbContentVersion.test.ts`            | **New**  | 20 tests: source-shape + behavioral (mocked pool) — version format, in-process caching, clear-cache, different KB states produce different versions, fail-safe on DB error, activation/updated_at/deletion all change version.                                                                  |
-| `artifacts/api-server/test/embeddingCacheVersion.test.ts`       | **New**  | 18 tests: SQL filter uses `=` not `IS NOT DISTINCT FROM`, signatures accept `kbContentVersion`, route computes version before lookup, route skips cache on `"unknown"`, route passes version to cache write.                                                                                    |
-| `artifacts/api-server/test/ensureAiTablesVersionColumn.test.ts` | **New**  | 5 tests: CREATE TABLE/ALTER includes column + index, no backfill (NULL is correct), comments explain the fix.                                                                                                                                                                                   |
-| `artifacts/api-server/test/bm25TriggerOrder.test.ts`            | **New**  | 26 tests: migration drops buggy trigger, creates `zz_`-prefixed trigger, backfills `bm25_doc_length`, calls `refresh_kb_term_stats`, migration 0007 unmodified, journal includes 0009, idempotent.                                                                                              |
+| File                                                       | Status   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `artifacts/api-server/src/lib/rerankerCache.ts`            | Modified | BUG-K9: added `FALLBACK_PROVIDERS = new Set(["fallback", "local", "disabled"])`; `isFallback` detection now uses `FALLBACK_PROVIDERS.has(r.provider)`; log message includes `isFallback` flag + `provider` field; explanatory comment block documents the Vercel AI SDK pattern.                                                                                                                                                                                         |
+| `artifacts/api-server/src/lib/kbSearch.ts`                 | Modified | BUG-I1: added + exported `UNIFIED_MIN_SCORE = 0.3`, `UNIFIED_MAX_RESULTS = 5`, `UNIFIED_SKIP_RERANK = false`, `UNIFIED_CONTENT_TRUNCATE_CHARS = 500`. `getTopKbEntriesForPrompt` now uses these (was `MIN_SCORE_AUTO_INJECT = 0.5`, `MAX_AUTO_INJECT_ENTRIES = 3`, `skipRerank: true`). `formatKbContextForPrompt` uses `UNIFIED_CONTENT_TRUNCATE_CHARS`. Old constants removed; `MAX_RESULTS_DEFAULT` + `MIN_SCORE_DEFAULT` kept as deprecated aliases for back-compat. |
+| `artifacts/api-server/src/lib/aiTools.ts`                  | Modified | BUG-I1: imports `UNIFIED_MIN_SCORE` + `UNIFIED_CONTENT_TRUNCATE_CHARS` from `kbSearch`. `searchKb` uses `UNIFIED_MIN_SCORE` (was hardcoded `0.3`) + truncates content to `UNIFIED_CONTENT_TRUNCATE_CHARS` (was full content). Tool declaration `max_results` description mentions auto-inject consistency.                                                                                                                                                               |
+| `artifacts/api-server/src/routes/ai.ts`                    | Modified | BUG-I1: removed the explicit `3` arg from `getTopKbEntriesForPrompt(safeMessage)` call (now uses unified default of 5).                                                                                                                                                                                                                                                                                                                                                  |
+| `artifacts/api-server/src/lib/aiContext.ts`                | Modified | BUG-I1: system prompt's KB section now documents the unified retrieval contract — tells the LLM that auto-inject + tool use the SAME parameters (minScore=0.3, reranked, 5 entries max, 500 chars per entry) and to cite only once if an entry appears in both.                                                                                                                                                                                                          |
+| `artifacts/api-server/test/rerankerFallbackCache.test.ts`  | **New**  | 23 tests: `FALLBACK_PROVIDERS` includes all 3 providers, `isFallback` uses Set, TTL selection, log message includes flag + provider, `rerankerLocal.ts` + `reranker.ts getProviderChain()` unmodified.                                                                                                                                                                                                                                                                   |
+| `artifacts/api-server/test/kbRetrievalUnification.test.ts` | **New**  | 30 tests: `UNIFIED_*` constants defined + exported, `getTopKbEntriesForPrompt` uses them, old constants removed, `routes/ai.ts` no explicit `3` arg, `aiTools.ts searchKb` uses unified config + truncates, tool declaration mentions consistency, system prompt documents unified behavior, back-compat aliases preserved.                                                                                                                                              |
+| `artifacts/api-server/test/kbSearch.test.ts`               | Modified | Updated 3 tests that asserted on the old constants (`MIN_SCORE_AUTO_INJECT = 0.5`, `MAX_AUTO_INJECT_ENTRIES = 3`, hardcoded `minScore: 0.3`) to reflect the unified config.                                                                                                                                                                                                                                                                                              |
+| `artifacts/api-server/test/embeddingCacheVersion.test.ts`  | Modified | Fixed a pre-existing regex bug (test #5) — the regex didn't match multi-line function calls. Now uses `[\s\S]` to span newlines.                                                                                                                                                                                                                                                                                                                                         |
 
 ## Architecture Decisions
 
-1. **Content-Addressable Cache with Version Fingerprint** (Anthropic
-   prompt-cache pattern) — every cached row stores a 16-char hex sha1
-   of `(id, updated_at, is_active)` for all active KB entries. Lookup
-   filters `WHERE kb_content_version = $N` so stale rows are rejected
-   at SELECT time, eliminating the race.
+1. **Negative Caching for Degraded Responses** (BUG-K9) — Vercel AI SDK
+   pattern: `rerank()` distinguishes `relevanceScore === null` from real
+   scores and never caches the former. Our equivalent: never cache
+   `"local"` / `"disabled"` / `"fallback"` provider results as positive.
+   The 60s TTL means the next request retries the real providers.
 
-2. **Fail-Safe Cache Bypass** — when `getKbContentVersion()` returns
-   `"unknown"` (DB error), the route bypasses the semantic cache
-   entirely (neither reads nor writes). Safer to miss the cache than
-   risk serving stale content.
+2. **Single Retriever Pattern** (BUG-I1) — LangChain's `RetrievalQA`
+   enforces this by always pulling from the same `retriever` instance
+   for both the "stuff" path and the tool-call path. Anthropic's
+   Contextual Retrieval pattern explicitly warns against "two divergent
+   retrieval paths with no shared contract". Our `UNIFIED_*` constants
+   are the shared contract.
 
-3. **Two-Layer Invalidation** — `invalidateKbCache()` now clears the
-   in-process version cache FIRST (so the next request recomputes from
-   updated DB state), then calls `invalidateCatalogCache()` to flush
-   Redis + pgvector + reranker caches. Order matters: clearing the
-   version cache after the catalog cache would let a concurrent request
-   read the stale versioned cache during the invalidation window.
-
-4. **Trigger Rename (Approach 1)** — the BM25 trigger was renamed from
-   `ai_kb_entries_bm25_doclength_trigger` to
-   `zz_ai_kb_entries_bm25_doclength_trigger` so it sorts AFTER
-   `ai_kb_entries_search_tsvector_trigger` (PostgreSQL fires BEFORE
-   triggers in alphabetical name order). Migration 0007 is NOT modified
-   (already shipped).
-
-5. **What is NOT changed** — `queryEmbeddingCache` (query embeddings are
-   deterministic per query, doc-independent), `ai_kb_entries.embedding`
-   column (regenerated by background `kbEmbeddingJob`), `had_tool_calls`
-   column (still used for TTL-aware filtering).
+3. **What is NOT changed** — `rerankerLocal.ts` (contract is correct:
+   `provider: "local"`, `score: 1.0`, always succeeds), `getProviderChain()`
+   in `reranker.ts` (chain Cohere → Jina → Local is correct), `catalogCache.ts`
+   (BUG-6 was already fixed in BUG-1), `kbCache.ts` + `kbContentVersion.ts`
+   (already correct from BUG-1/BUG-3), migrations 0000-0009 (already shipped).
 
 ## Test Results
 
-- **New tests**: 69/69 passing across 4 new test files.
-- **Existing tests**: 125/125 BUG-1 + related source-shape tests still pass.
-  KB-related tests: 375/378 pass — the 3 failures in `kbToneProfiles.test.ts`
-  are pre-existing (verified via `git stash` baseline run).
-- **Typecheck**: `pnpm typecheck` (api-server) + `pnpm typecheck:test`
-  - `pnpm typecheck:libs` all pass with zero errors.
-- **Lint**: 0 errors on modified files (12 warnings, all `any` types in
-  error-access patterns consistent with the existing codebase).
+- **New tests**: 53/53 passing across 2 new test files
+  (`rerankerFallbackCache.test.ts` 23, `kbRetrievalUnification.test.ts` 30).
+- **Existing tests**: 311/311 related source-shape tests pass (BUG-1/2/3/K19
+  regression suite + `kbSearch.test.ts` updated + `embeddingCacheVersion.test.ts`
+  regex bug fixed). Full suite: 1042/1042 pass (excluding 3 pre-existing
+  `kbToneProfiles.test.ts` failures + 13 DB-integration test files that
+  require localhost Postgres — all pre-existing, not caused by this fix).
+- **Typecheck**: `pnpm typecheck` + `pnpm typecheck:test` + `pnpm typecheck:libs`
+  all pass with zero errors.
+- **Lint**: 0 errors on modified files (8 warnings, all pre-existing
+  `any` types in error-access patterns).

@@ -627,6 +627,9 @@ Rules for KB usage:
 - Always call the search_knowledge_base tool if the user asks a specific botanical question and no KB context was injected. The tool returns more detailed results than the pre-injected context.
 - NEVER invent content that isn't in the KB or your training data. If you don't know, say so.
 
+BUG-I1 fix — UNIFIED RETRIEVAL CONTRACT:
+The KNOWLEDGE BASE CONTEXT block above and the search_knowledge_base tool use the SAME retrieval parameters (minScore=0.3, reranked, 5 entries max, 500 chars per entry). If an entry appears in both, they are the same source — cite it only once. If you want more entries, call the tool with max_results=10.
+
 FORMATTING — STRICTLY FOLLOW:
 After your main answer, ALWAYS append a follow-up suggestions block in this EXACT format (the frontend parses it to render clickable chips):
 

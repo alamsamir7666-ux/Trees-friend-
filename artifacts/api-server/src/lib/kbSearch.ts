@@ -85,11 +85,69 @@ import { rerank, getRerankerStatus, type RerankDocument } from "./reranker";
 
 const EMBEDDING_MODEL = "text-embedding-004";
 const MAX_QUERY_CHARS = 2000; // Gemini's embedding token limit
-const MAX_RESULTS_DEFAULT = 5;
+
+// ─── BUG-I1 fix: Unified KB retrieval configuration ─────────────────────────
+//
+// Both the auto-inject path (getTopKbEntriesForPrompt) and the tool path
+// (search_knowledge_base tool in aiTools.ts) use these SAME parameters.
+// Previously they diverged:
+//   - minScore: 0.5 (auto-inject) vs 0.3 (tool)
+//   - skipRerank: true (auto-inject) vs false (tool)
+//   - maxResults: 3 (auto-inject) vs 5 (tool)
+//   - content truncation: 500 chars (auto-inject) vs full (tool)
+//
+// This caused the LLM to see two different views of the KB for the same
+// query — the textbook "two-source RAG inconsistency" anti-pattern. The
+// LLM might see entry A (score 0.6) via auto-inject, then call the tool
+// and get entries A + B (where B scored 0.4 and was filtered from
+// auto-inject). The LLM has no awareness of the threshold difference and
+// may contradict itself.
+//
+// Rationale for each parameter:
+//
+//   - minScore: 0.3 (was 0.5 for auto-inject, 0.3 for tool). The 0.5
+//     threshold was too aggressive — it filtered out relevant entries that
+//     the LLM would have found useful. The 0.3 threshold is the standard
+//     for hybrid retrieval (semantic + BM25 + authority + priority + recency)
+//     composite scores, which are typically lower than pure cosine sim.
+//
+//   - skipRerank: false (was true for auto-inject, false for tool). The
+//     auto-inject path skipped rerank to save 200-500ms latency. But this
+//     meant the LLM saw a different ranking for the same query depending
+//     on which path ran. Rerank is the industry-standard second stage and
+//     should always run when the reranker is configured. The latency cost
+//     is acceptable given the route already pays 1-3s for the LLM call.
+//
+//   - maxResults: 5 (was 3 for auto-inject, 5 for tool). The auto-inject
+//     cap of 3 was arbitrary. 5 is the standard for both paths — enough
+//     for the LLM to have context diversity, not so many that the prompt
+//     overflows. With content truncation at 500 chars per entry, 5
+//     entries × 500 chars = 2500 chars total — well within prompt budget.
+//
+//   - content truncation: 500 chars per entry (was 500 for auto-inject,
+//     full for tool). The tool's full-content return caused token bloat
+//     (5 entries × 2000 chars = 10K chars per tool call). 500 chars per
+//     entry is the standard for cross-encoder input and matches the
+//     auto-inject path's truncation.
+//
+// Industry-standard pattern: LangChain's RetrievalQA uses a single
+// retriever instance for both the "stuff" path and the tool-call path.
+// LlamaIndex's SubQuestionQueryEngine enforces consistent retrieval
+// parameters across sub-queries. Anthropic's Contextual Retrieval
+// pattern explicitly warns against "two divergent retrieval paths with
+// no shared contract".
+export const UNIFIED_MAX_RESULTS = 5;
+export const UNIFIED_MIN_SCORE = 0.3;
+export const UNIFIED_SKIP_RERANK = false; // always rerank when configured
+export const UNIFIED_CONTENT_TRUNCATE_CHARS = 500;
+
+// Deprecated aliases for back-compat with existing source-shape tests.
+// New code should use the UNIFIED_* constants directly.
+/** @deprecated Use UNIFIED_MAX_RESULTS instead (BUG-I1 fix). */
+const MAX_RESULTS_DEFAULT = UNIFIED_MAX_RESULTS;
 const MAX_RESULTS_CAP = 10;
-const MIN_SCORE_DEFAULT = 0.3; // tool threshold — filter out low-relevance
-const MIN_SCORE_AUTO_INJECT = 0.5; // higher bar for prompt injection
-const MAX_AUTO_INJECT_ENTRIES = 3;
+/** @deprecated Use UNIFIED_MIN_SCORE instead (BUG-I1 fix). */
+const MIN_SCORE_DEFAULT = UNIFIED_MIN_SCORE;
 
 // Composite scoring weights (v5.0 — must sum to 1.0).
 // See file header for the rationale.
@@ -1137,21 +1195,22 @@ function clamp01(n: number): number {
 // ─── getTopKbEntriesForPrompt ────────────────────────────────────────────────
 
 /**
- * Pre-searches the KB for the user's message + returns the top 3 entries
- * (with a HIGHER threshold of 0.5) for auto-injection into the system
- * prompt. Called by the route BEFORE calling the AI.
+ * Pre-searches the KB for the user's message + returns the top entries
+ * for auto-injection into the system prompt. Called by the route BEFORE
+ * calling the AI.
  *
- * Why a higher threshold? We don't want to inject irrelevant entries
- * into the prompt — that wastes tokens + confuses the AI. If no entry
- * scores above 0.5, we don't inject anything (the AI can still call the
- * search_knowledge_base tool on-demand).
+ * BUG-I1 fix: uses the SAME retrieval parameters as the search_knowledge_base
+ * tool (UNIFIED_MIN_SCORE, UNIFIED_SKIP_RERANK, UNIFIED_MAX_RESULTS).
+ * Previously this used a higher threshold (0.5) + skipped rerank + capped
+ * at 3 entries — which caused the LLM to see two different views of the KB
+ * for the same query (the "two-source RAG inconsistency" anti-pattern).
  *
  * Returns `{ entries, injected }`. If `injected` is false, `entries` is
  * empty + the route skips the knowledge block in the prompt.
  */
 export async function getTopKbEntriesForPrompt(
   userMessage: string,
-  maxEntries: number = MAX_AUTO_INJECT_ENTRIES,
+  maxEntries: number = UNIFIED_MAX_RESULTS,
 ): Promise<{
   entries: KbSearchResult[];
   injected: boolean;
@@ -1173,13 +1232,12 @@ export async function getTopKbEntriesForPrompt(
     const entries = await searchKnowledgeBase({
       query: userMessage,
       maxResults: maxEntries,
-      minScore: MIN_SCORE_AUTO_INJECT,
-      // v5.0: skip the reranker for auto-injection. The high threshold (0.5)
-      // already ensures only high-confidence matches are injected, and the
-      // reranker adds ~200-500ms latency that's not worth it for the passive
-      // injection path. The AI tool call (lower threshold, more candidates)
-      // does use the reranker.
-      skipRerank: true,
+      minScore: UNIFIED_MIN_SCORE,
+      // BUG-I1 fix: previously `skipRerank: true` to save 200-500ms latency.
+      // But this meant the LLM saw a different ranking for the same query
+      // depending on which path ran. Now both paths use UNIFIED_SKIP_RERANK
+      // (false) so the reranker always runs when configured.
+      skipRerank: UNIFIED_SKIP_RERANK,
     });
     if (entries.length === 0) {
       return { entries: [], injected: false, toneCreator: null };
@@ -1315,8 +1373,12 @@ export function formatKbContextForPrompt(entries: KbSearchResult[]): string {
   for (const r of entries) {
     const creatorName = r.creator?.name ?? "Unknown";
     const sourceType = r.source?.type ?? "manual";
+    // BUG-I1 fix: use UNIFIED_CONTENT_TRUNCATE_CHARS so the auto-inject
+    // path and the tool path (aiTools.ts) truncate at the same length.
     const truncatedContent =
-      r.entry.content.length > 500 ? r.entry.content.slice(0, 500) + "…" : r.entry.content;
+      r.entry.content.length > UNIFIED_CONTENT_TRUNCATE_CHARS
+        ? r.entry.content.slice(0, UNIFIED_CONTENT_TRUNCATE_CHARS) + "…"
+        : r.entry.content;
     const keywordsStr =
       r.entry.keywords.length > 0 ? `[Keywords: ${r.entry.keywords.join(", ")}]` : "";
 

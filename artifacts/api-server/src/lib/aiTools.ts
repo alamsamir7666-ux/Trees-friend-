@@ -40,7 +40,12 @@ import type { FunctionDeclaration } from "@google/genai";
 import { pool } from "@workspace/db";
 import { checkToolRateLimit } from "./toolRateLimiter";
 import { logger } from "./logger";
-import { searchKnowledgeBase } from "./kbSearch";
+// BUG-I1 fix: import the unified retrieval config so the search_knowledge_base
+// tool uses the SAME minScore + content truncation as the auto-inject path
+// (getTopKbEntriesForPrompt in kbSearch.ts). Previously the tool used a
+// hardcoded minScore: 0.3 + returned full content (no truncation), causing
+// the LLM to see two different views of the KB for the same query.
+import { searchKnowledgeBase, UNIFIED_MIN_SCORE, UNIFIED_CONTENT_TRUNCATE_CHARS } from "./kbSearch";
 
 // ─── Tool declarations (sent to Gemini) ──────────────────────────────────────
 
@@ -208,7 +213,10 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
         },
         max_results: {
           type: Type.NUMBER,
-          description: "Maximum results to return (default 5, max 10).",
+          description:
+            "Maximum results to return (default 5, max 10). The system " +
+            "prompt's auto-injected KB block also returns up to 5 entries — if an " +
+            "entry appears in both, treat them as the same source (cite once).",
         },
       },
       required: ["query"],
@@ -788,13 +796,26 @@ async function searchKb(args: Record<string, unknown>): Promise<{
     categoryId,
     productSlug: productSlug ?? undefined,
     maxResults,
-    minScore: 0.3, // tool threshold — slightly lower than auto-injection (0.5)
+    // BUG-I1 fix: use the unified minScore (0.3) — same as the auto-inject
+    // path (getTopKbEntriesForPrompt). Previously this was a hardcoded
+    // `0.3` literal, but the auto-inject path used 0.5, causing the LLM to
+    // see two different views of the KB. Now both paths use UNIFIED_MIN_SCORE.
+    minScore: UNIFIED_MIN_SCORE,
+    // skipRerank defaults to false (same as auto-inject path now).
   });
 
   return {
     results: results.map((r) => ({
       title: r.entry.title,
-      content: r.entry.content,
+      // BUG-I1 fix: truncate content to UNIFIED_CONTENT_TRUNCATE_CHARS (500)
+      // to match the auto-inject path. Previously the tool returned FULL
+      // content (up to 50K chars per entry), causing token bloat and giving
+      // the LLM two different views of the same entry (truncated in the
+      // system prompt, full in the tool result).
+      content:
+        r.entry.content.length > UNIFIED_CONTENT_TRUNCATE_CHARS
+          ? r.entry.content.slice(0, UNIFIED_CONTENT_TRUNCATE_CHARS) + "…"
+          : r.entry.content,
       keywords: r.entry.keywords,
       category: r.category?.name ?? null,
       product: r.entry.productId ? `product_id:${r.entry.productId}` : null,

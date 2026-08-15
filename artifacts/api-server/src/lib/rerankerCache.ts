@@ -62,6 +62,28 @@
  * Sentinel: we store the literal string `"__fallback__"` to distinguish
  * "cached fallback" from "cached successful rerank with score 1.0".
  *
+ * ─── BUG-K9 fix: Local provider results are also negative-cached ────────────
+ *
+ * The LocalRerankerProvider (`rerankerLocal.ts`) ALWAYS succeeds by
+ * returning `score: 1.0` for every doc (no actual reranking). It
+ * identifies itself as `provider: "local"` (NOT `"fallback"` — that
+ * sentinel is only set when ALL providers fail, which can't happen
+ * because Local is the always-succeeds last resort).
+ *
+ * Without the BUG-K9 fix, Local's useless 1.0-scored results were
+ * cached as POSITIVE entries (1h TTL). If Cohere recovered 5 minutes
+ * later, the cache still served the useless 1.0-scored results for
+ * the next 55 minutes — blocking Cohere recovery.
+ *
+ * The fix: `FALLBACK_PROVIDERS` Set includes "local" and "disabled"
+ * in addition to "fallback". Any result whose provider is in this set
+ * is treated as a fallback (60s TTL) so the next request retries the
+ * real providers (Cohere/Jina).
+ *
+ * This is the Vercel AI SDK pattern: `rerank()` distinguishes
+ * `relevanceScore === null` from real scores and never caches the
+ * former. Our equivalent: never cache "local" results as positive.
+ *
  * ─── TTLs ────────────────────────────────────────────────────────────────────
  *
  * - Positive (successful rerank): 1h default (RERANKER_CACHE_TTL_SECONDS).
@@ -90,6 +112,21 @@ import type { RerankDocument, RerankResult } from "./reranker";
 const CACHE_TTL_SECONDS = Number(process.env.RERANKER_CACHE_TTL_SECONDS ?? 3600); // 1h
 const NEGATIVE_TTL_SECONDS = Number(process.env.RERANKER_CACHE_NEGATIVE_TTL_SECONDS ?? 60); // 60s
 const L1_MAX_ENTRIES = Number(process.env.RERANKER_CACHE_L1_MAX ?? 128);
+
+// ─── BUG-K9 fix: providers that should be negative-cached ───────────────────
+//
+// "fallback"  — set by reranker.ts when ALL providers fail (shouldn't happen
+//               in practice because Local always succeeds, but the sentinel
+//               is kept for defensive coding).
+// "local"     — the LocalRerankerProvider. Always succeeds but returns
+//               score=1.0 for every doc (no actual reranking). Caching
+//               these as positive would block Cohere/Jina recovery for
+//               up to 55 minutes after they become available again.
+// "disabled"  — set when RERANKER_ENABLED=false. Same rationale as "local".
+//
+// Any result whose provider is in this set is cached with the SHORT TTL
+// (60s default) so the next request retries the real providers.
+const FALLBACK_PROVIDERS = new Set(["fallback", "local", "disabled"]);
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -265,8 +302,19 @@ export async function setCachedRerank(
 
   const key = buildCacheKey(query, documents, topN);
 
-  // Detect if this is a fallback (all providers failed).
-  const isFallback = results.length > 0 && results.every((r) => r.provider === "fallback");
+  // BUG-K9 fix: detect fallback results that should be negative-cached.
+  //
+  // Previously this only matched `provider === "fallback"` (set when ALL
+  // providers fail). But the LocalRerankerProvider returns
+  // `provider: "local"` and always succeeds — so its useless 1.0-scored
+  // results were cached as POSITIVE (1h TTL), blocking Cohere/Jina
+  // recovery for up to 55 minutes after they became available again.
+  //
+  // Now we treat "local" and "disabled" as fallback too. The 60s TTL
+  // means the next request retries the real providers (Cohere/Jina) and
+  // re-caches with real scores if they've recovered.
+  const isFallback =
+    results.length > 0 && results.every((r) => FALLBACK_PROVIDERS.has(r.provider ?? ""));
   const ttl = ttlSeconds ?? (isFallback ? NEGATIVE_TTL_SECONDS : CACHE_TTL_SECONDS);
 
   const entry: CacheEntry = {
@@ -285,9 +333,22 @@ export async function setCachedRerank(
 
   try {
     await redis.set(key, JSON.stringify(entry), { ex: ttl });
+    // BUG-K9 fix: log the isFallback flag + provider so operators can see
+    // when a fallback cache entry was written (and the short TTL chosen).
+    // This is critical for debugging "why is the cache serving 1.0 scores?"
+    // — the answer is almost always "Local fallback was cached, check the
+    // logs for the 60s TTL entry."
     logger.debug(
-      { key: key.slice(0, 24), ttl, isFallback, resultCount: results.length },
-      "Reranker cache: SET",
+      {
+        key: key.slice(0, 24),
+        ttl,
+        isFallback,
+        resultCount: results.length,
+        provider: results[0]?.provider,
+      },
+      isFallback
+        ? "Reranker cache: SET (fallback — short TTL, will retry real provider on next request)"
+        : "Reranker cache: SET",
     );
   } catch (err) {
     logger.debug({ err }, "Reranker cache: L2 set failed (non-fatal)");

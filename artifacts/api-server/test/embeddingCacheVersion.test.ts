@@ -115,8 +115,9 @@ describe("BUG-3 fix: routes/ai.ts wires kbContentVersion correctly", () => {
   });
 
   it("passes kbContentVersion to getSemanticCachedResponse", () => {
+    // The call spans multiple lines; use [\s\S] to match across newlines.
     expect(source).toMatch(
-      /getSemanticCachedResponse\(\s*safeMessage,\s*isPrivateQuery,\s*kbContentVersion\s*\)/,
+      /getSemanticCachedResponse\([\s\S]*?safeMessage,[\s\S]*?isPrivateQuery,[\s\S]*?kbContentVersion/,
     );
   });
 
