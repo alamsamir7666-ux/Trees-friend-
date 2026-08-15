@@ -339,11 +339,15 @@ describe("Phase 4: aiAdmin.ts tone management endpoints", () => {
   });
 
   it("registers POST /ai/admin/kb/creators/:id/tone-profile/generate", () => {
-    expect(source).toMatch(/router\.post\(\s*["']\/ai\/admin\/kb\/creators\/:id\/tone-profile\/generate["']/);
+    expect(source).toMatch(
+      /router\.post\(\s*["']\/ai\/admin\/kb\/creators\/:id\/tone-profile\/generate["']/,
+    );
   });
 
   it("registers PUT /ai/admin/kb/creators/:id/tone-percentage", () => {
-    expect(source).toMatch(/router\.put\(\s*["']\/ai\/admin\/kb\/creators\/:id\/tone-percentage["']/);
+    expect(source).toMatch(
+      /router\.put\(\s*["']\/ai\/admin\/kb\/creators\/:id\/tone-percentage["']/,
+    );
   });
 
   it("registers GET /ai/admin/kb/tone-profiles/status", () => {
@@ -351,7 +355,8 @@ describe("Phase 4: aiAdmin.ts tone management endpoints", () => {
   });
 
   it("NO tone route uses the double /api/ prefix", () => {
-    const brokenPattern = /router\.(get|post|put|delete|patch)\(\s*["']\/api\/ai\/admin\/kb\/(creators\/[^"']+\/tone|tone-profiles)/;
+    const brokenPattern =
+      /router\.(get|post|put|delete|patch)\(\s*["']\/api\/ai\/admin\/kb\/(creators\/[^"']+\/tone|tone-profiles)/;
     expect(brokenPattern.test(source)).toBe(false);
   });
 
@@ -492,7 +497,9 @@ describe("Phase 4: frontend wiring", () => {
   });
 
   it("KbToneProfileModal.tsx exists + shows profile + has regenerate button", () => {
-    const source = readSource("artifacts/tree-friend/src/components/admin/modals/KbToneProfileModal.tsx");
+    const source = readSource(
+      "artifacts/tree-friend/src/components/admin/modals/KbToneProfileModal.tsx",
+    );
     expect(source).toContain("KbToneProfileModal");
     expect(source).toContain("fetchToneProfile");
     expect(source).toContain("generateToneProfile");

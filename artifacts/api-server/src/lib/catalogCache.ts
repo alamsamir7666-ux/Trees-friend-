@@ -173,9 +173,7 @@ async function invalidateRedisCatalogCache(): Promise<number> {
  */
 async function invalidateSemanticCatalogCache(): Promise<number> {
   try {
-    const result = await pool.query(
-      `DELETE FROM ai_response_cache WHERE had_tool_calls = TRUE`,
-    );
+    const result = await pool.query(`DELETE FROM ai_response_cache WHERE had_tool_calls = TRUE`);
     return result.rowCount ?? 0;
   } catch (err) {
     // Common causes:
@@ -184,11 +182,7 @@ async function invalidateSemanticCatalogCache(): Promise<number> {
     //   - had_tool_calls column missing (older schema)
     // All are non-fatal — the TTL will expire stale entries.
     const msg = (err as any)?.message ?? String(err);
-    if (
-      msg.includes("does not exist") ||
-      msg.includes("column") ||
-      msg.includes("relation")
-    ) {
+    if (msg.includes("does not exist") || msg.includes("column") || msg.includes("relation")) {
       // Expected on legacy DBs — silent.
       return 0;
     }

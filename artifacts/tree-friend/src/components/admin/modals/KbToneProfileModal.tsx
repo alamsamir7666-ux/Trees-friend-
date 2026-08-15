@@ -10,11 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { RefreshCw, AlertCircle } from "lucide-react";
 import { useApiFetch } from "@/lib/useApiFetch";
-import {
-  fetchToneProfile,
-  generateToneProfile,
-  type KbToneProfileResponse,
-} from "@/lib/kbApi";
+import { fetchToneProfile, generateToneProfile, type KbToneProfileResponse } from "@/lib/kbApi";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
@@ -77,9 +73,7 @@ export function KbToneProfileModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            Tone Profile: {creatorName}
-          </DialogTitle>
+          <DialogTitle className="flex items-center gap-2">Tone Profile: {creatorName}</DialogTitle>
         </DialogHeader>
 
         {loading ? (
@@ -101,9 +95,13 @@ export function KbToneProfileModal({
                 {profile.hasProfile ? "✓ Profile Generated" : "Pending"}
               </Badge>
               {profile.entryCount >= profile.threshold ? (
-                <Badge variant="outline">Eligible ({profile.entryCount} ≥ {profile.threshold})</Badge>
+                <Badge variant="outline">
+                  Eligible ({profile.entryCount} ≥ {profile.threshold})
+                </Badge>
               ) : (
-                <Badge variant="outline">Below threshold ({profile.entryCount}/{profile.threshold})</Badge>
+                <Badge variant="outline">
+                  Below threshold ({profile.entryCount}/{profile.threshold})
+                </Badge>
               )}
               {profile.needsRegeneration && (
                 <Badge variant="destructive">⚠ Needs regeneration</Badge>
@@ -117,7 +115,8 @@ export function KbToneProfileModal({
               </p>
               <p className="text-2xl font-bold">{profile.toneMatchPercentage}%</p>
               <p className="text-[11px] text-muted-foreground/70 mt-1">
-                The AI adopts this percentage of the creator's tone in responses using their content.
+                The AI adopts this percentage of the creator's tone in responses using their
+                content.
               </p>
             </div>
 
@@ -132,7 +131,9 @@ export function KbToneProfileModal({
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {profile.profile.adjectives.map((a) => (
-                        <Badge key={a} variant="secondary">{a}</Badge>
+                        <Badge key={a} variant="secondary">
+                          {a}
+                        </Badge>
                       ))}
                     </div>
                   </div>
@@ -218,7 +219,7 @@ export function KbToneProfileModal({
               <div className="rounded-xl border p-6 text-center text-sm text-muted-foreground">
                 No profile generated yet.{" "}
                 {profile.entryCount >= profile.threshold
-                  ? "Click \"Regenerate\" to generate one now."
+                  ? 'Click "Regenerate" to generate one now.'
                   : `This creator has ${profile.entryCount} entries (threshold: ${profile.threshold}). Add more entries to enable tone matching.`}
               </div>
             )}

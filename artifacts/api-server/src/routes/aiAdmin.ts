@@ -1765,11 +1765,9 @@ router.post("/ai/admin/kb/creators", async (req: Request, res: Response) => {
   }
   if (profileUrl !== undefined && profileUrl !== null) {
     if (typeof profileUrl !== "string" || profileUrl.length > CREATOR_PROFILE_URL_MAX_LENGTH) {
-      res
-        .status(400)
-        .json({
-          error: `profileUrl is too long (max ${CREATOR_PROFILE_URL_MAX_LENGTH} characters).`,
-        });
+      res.status(400).json({
+        error: `profileUrl is too long (max ${CREATOR_PROFILE_URL_MAX_LENGTH} characters).`,
+      });
       return;
     }
     try {
@@ -1836,11 +1834,9 @@ router.put("/ai/admin/kb/creators/:id", async (req: Request, res: Response) => {
   if (profileUrl !== undefined) {
     if (profileUrl !== null) {
       if (typeof profileUrl !== "string" || profileUrl.length > CREATOR_PROFILE_URL_MAX_LENGTH) {
-        res
-          .status(400)
-          .json({
-            error: `profileUrl is too long (max ${CREATOR_PROFILE_URL_MAX_LENGTH} characters).`,
-          });
+        res.status(400).json({
+          error: `profileUrl is too long (max ${CREATOR_PROFILE_URL_MAX_LENGTH} characters).`,
+        });
         return;
       }
       try {
@@ -1904,17 +1900,13 @@ router.delete("/ai/admin/kb/creators/:id", async (req: Request, res: Response) =
       if (result.reason === "not found") {
         res.status(404).json({ error: "KB creator not found." });
       } else if (result.reason === "protected") {
-        res
-          .status(409)
-          .json({
-            error: "Cannot delete the 'Manual' creator (it's the default for admin-typed content).",
-          });
+        res.status(409).json({
+          error: "Cannot delete the 'Manual' creator (it's the default for admin-typed content).",
+        });
       } else if (result.reason === "has entries") {
-        res
-          .status(409)
-          .json({
-            error: "Cannot delete a creator that has entries. Move or delete the entries first.",
-          });
+        res.status(409).json({
+          error: "Cannot delete a creator that has entries. Move or delete the entries first.",
+        });
       } else {
         res.status(500).json({ error: "Failed to delete KB creator." });
       }
@@ -2388,20 +2380,16 @@ router.post("/ai/admin/kb/entries", async (req: Request, res: Response) => {
   }
   if (keywords !== undefined) {
     if (!Array.isArray(keywords) || keywords.length > ENTRY_KEYWORD_MAX_COUNT) {
-      res
-        .status(400)
-        .json({
-          error: `keywords must be an array of at most ${ENTRY_KEYWORD_MAX_COUNT} strings.`,
-        });
+      res.status(400).json({
+        error: `keywords must be an array of at most ${ENTRY_KEYWORD_MAX_COUNT} strings.`,
+      });
       return;
     }
     for (const k of keywords) {
       if (typeof k !== "string" || k.length > ENTRY_KEYWORD_MAX_LENGTH) {
-        res
-          .status(400)
-          .json({
-            error: `Each keyword must be a string of at most ${ENTRY_KEYWORD_MAX_LENGTH} characters.`,
-          });
+        res.status(400).json({
+          error: `Each keyword must be a string of at most ${ENTRY_KEYWORD_MAX_LENGTH} characters.`,
+        });
         return;
       }
     }
@@ -2412,11 +2400,9 @@ router.post("/ai/admin/kb/entries", async (req: Request, res: Response) => {
       priority < ENTRY_PRIORITY_MIN ||
       priority > ENTRY_PRIORITY_MAX
     ) {
-      res
-        .status(400)
-        .json({
-          error: `priority must be an integer between ${ENTRY_PRIORITY_MIN} and ${ENTRY_PRIORITY_MAX}.`,
-        });
+      res.status(400).json({
+        error: `priority must be an integer between ${ENTRY_PRIORITY_MIN} and ${ENTRY_PRIORITY_MAX}.`,
+      });
       return;
     }
   }
@@ -2502,20 +2488,16 @@ router.put("/ai/admin/kb/entries/:id", async (req: Request, res: Response) => {
   }
   if (keywords !== undefined) {
     if (!Array.isArray(keywords) || keywords.length > ENTRY_KEYWORD_MAX_COUNT) {
-      res
-        .status(400)
-        .json({
-          error: `keywords must be an array of at most ${ENTRY_KEYWORD_MAX_COUNT} strings.`,
-        });
+      res.status(400).json({
+        error: `keywords must be an array of at most ${ENTRY_KEYWORD_MAX_COUNT} strings.`,
+      });
       return;
     }
     for (const k of keywords) {
       if (typeof k !== "string" || k.length > ENTRY_KEYWORD_MAX_LENGTH) {
-        res
-          .status(400)
-          .json({
-            error: `Each keyword must be a string of at most ${ENTRY_KEYWORD_MAX_LENGTH} characters.`,
-          });
+        res.status(400).json({
+          error: `Each keyword must be a string of at most ${ENTRY_KEYWORD_MAX_LENGTH} characters.`,
+        });
         return;
       }
     }
@@ -2541,11 +2523,9 @@ router.put("/ai/admin/kb/entries/:id", async (req: Request, res: Response) => {
       priority < ENTRY_PRIORITY_MIN ||
       priority > ENTRY_PRIORITY_MAX
     ) {
-      res
-        .status(400)
-        .json({
-          error: `priority must be an integer between ${ENTRY_PRIORITY_MIN} and ${ENTRY_PRIORITY_MAX}.`,
-        });
+      res.status(400).json({
+        error: `priority must be an integer between ${ENTRY_PRIORITY_MIN} and ${ENTRY_PRIORITY_MAX}.`,
+      });
       return;
     }
     updates.priority = priority;
@@ -3014,6 +2994,91 @@ router.get("/ai/admin/kb/tone-profiles/status", async (_req: Request, res: Respo
   } catch (err) {
     logger.error({ err }, "AI admin: tone profile status failed");
     res.status(500).json({ error: "Failed to load tone profile status." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── v5.2: Security / Prompt-Injection endpoints ────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//   GET  /api/ai/admin/security/health         — config + provider status
+//   POST /api/ai/admin/security/test           — test a message against the classifier
+//   GET  /api/ai/admin/security/attack-log     — recent blocked attempts
+
+// ─── GET /api/ai/admin/security/health ───────────────────────────────────────
+router.get("/ai/admin/security/health", async (_req: Request, res: Response) => {
+  try {
+    const { getPromptInjectionStatus } = await import("../lib/promptInjection");
+    const status = await getPromptInjectionStatus();
+    res.json(status);
+  } catch (err) {
+    logger.error({ err }, "AI admin: security health failed");
+    res.status(500).json({ error: "Failed to get security status." });
+  }
+});
+
+// ─── POST /api/ai/admin/security/test ────────────────────────────────────────
+// Tests a message against the prompt-injection classifier. Admins can use
+// this to verify the classifier is working + see what score a message gets.
+//
+// Body: { message: string }
+// Returns: { detected, score, attackType, provider, explanation }
+router.post("/ai/admin/security/test", async (req: Request, res: Response) => {
+  try {
+    const { message } = (req.body ?? {}) as { message?: string };
+    if (typeof message !== "string" || !message.trim()) {
+      res.status(400).json({ error: "message is required (non-empty string)." });
+      return;
+    }
+    const { detectPromptInjection } = await import("../lib/promptInjection");
+    const result = await detectPromptInjection(message);
+    res.json({
+      detected: result.detected,
+      score: result.score,
+      attackType: result.attackType ?? null,
+      provider: result.provider,
+      explanation: result.explanation ?? null,
+      latencyMs: result.latencyMs,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: security test failed");
+    res.status(500).json({ error: "Failed to test message." });
+  }
+});
+
+// ─── GET /api/ai/admin/security/attack-log ───────────────────────────────────
+// Returns recent prompt-injection attempts (from ai_chat_events).
+// Query: ?limit=50 (default 50, max 200)
+router.get("/ai/admin/security/attack-log", async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+    const result = await pool.query<{
+      id: number;
+      session_id: number;
+      type: string;
+      payload: string | null;
+      created_at: Date;
+    }>(
+      `SELECT id, session_id, type, payload, created_at
+       FROM ai_chat_events
+       WHERE type = 'prompt_injection_blocked'
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json({
+      attacks: result.rows.map((r) => ({
+        id: r.id,
+        sessionId: r.session_id,
+        type: r.type,
+        payload: r.payload ? JSON.parse(r.payload) : null,
+        createdAt: r.created_at.toISOString(),
+      })),
+      count: result.rows.length,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: attack log failed");
+    res.status(500).json({ error: "Failed to load attack log." });
   }
 });
 

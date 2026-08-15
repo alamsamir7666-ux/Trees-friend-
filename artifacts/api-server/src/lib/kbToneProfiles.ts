@@ -102,9 +102,7 @@ export interface ToneProfile {
 
 // ─── Prompt builder ──────────────────────────────────────────────────────────
 
-function buildTonePrompt(
-  entries: Array<{ title: string; content: string }>,
-): string {
+function buildTonePrompt(entries: { title: string; content: string }[]): string {
   const entriesText = entries
     .map((e, i) => `Entry ${i + 1}: ${e.title}\n${e.content}`)
     .join("\n\n---\n\n");
@@ -169,13 +167,19 @@ function parseToneResponse(text: string): ToneProfile | null {
 
   return {
     adjectives: Array.isArray(obj.adjectives)
-      ? obj.adjectives.filter((a): a is string => typeof a === "string").map((a) => a.trim()).filter(Boolean)
+      ? obj.adjectives
+          .filter((a): a is string => typeof a === "string")
+          .map((a) => a.trim())
+          .filter(Boolean)
       : [],
     sentenceStyle: typeof obj.sentence_style === "string" ? obj.sentence_style.trim() : "",
     vocabularyLevel: typeof obj.vocabulary_level === "string" ? obj.vocabulary_level.trim() : "",
     greetingStyle: typeof obj.greeting_style === "string" ? obj.greeting_style.trim() : "",
     examplePhrases: Array.isArray(obj.example_phrases)
-      ? obj.example_phrases.filter((p): p is string => typeof p === "string").map((p) => p.trim()).filter(Boolean)
+      ? obj.example_phrases
+          .filter((p): p is string => typeof p === "string")
+          .map((p) => p.trim())
+          .filter(Boolean)
       : [],
     toneSummary,
   };
@@ -230,10 +234,11 @@ export async function generateToneProfile(
 
     // Check threshold (use the creator's denormalized entry_count for the
     // threshold check — it's the total, not just the 15 we fetched).
-    const creatorResult = await pool.query<{ entry_count: number; is_active: boolean; name: string }>(
-      "SELECT entry_count, is_active, name FROM ai_kb_creators WHERE id = $1",
-      [creatorId],
-    );
+    const creatorResult = await pool.query<{
+      entry_count: number;
+      is_active: boolean;
+      name: string;
+    }>("SELECT entry_count, is_active, name FROM ai_kb_creators WHERE id = $1", [creatorId]);
     if (creatorResult.rows.length === 0) {
       return { success: false, reason: "Creator not found" };
     }
@@ -253,7 +258,10 @@ export async function generateToneProfile(
     try {
       client = getClient();
     } catch (err) {
-      return { success: false, reason: err instanceof Error ? err.message : "Gemini client unavailable" };
+      return {
+        success: false,
+        reason: err instanceof Error ? err.message : "Gemini client unavailable",
+      };
     }
 
     let response: unknown;
@@ -261,7 +269,9 @@ export async function generateToneProfile(
       response = await callWithFallback((modelName) =>
         client.models.generateContent({
           model: modelName,
-          contents: [{ role: "user" as const, parts: [{ text: buildTonePrompt(entriesResult.rows) }] }],
+          contents: [
+            { role: "user" as const, parts: [{ text: buildTonePrompt(entriesResult.rows) }] },
+          ],
           config: {
             responseMimeType: "application/json",
             temperature: TONE_ANALYSIS_TEMPERATURE,
@@ -271,7 +281,11 @@ export async function generateToneProfile(
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("429") || msg.toLowerCase().includes("quota") || msg.toLowerCase().includes("rate limit")) {
+      if (
+        msg.includes("429") ||
+        msg.toLowerCase().includes("quota") ||
+        msg.toLowerCase().includes("rate limit")
+      ) {
         return { success: false, reason: "Gemini rate limit hit" };
       }
       logger.error({ err: msg, creatorId }, "KB tone: Gemini call failed");
@@ -304,7 +318,12 @@ export async function generateToneProfile(
     );
 
     logger.info(
-      { creatorId, creatorName: creator.name, entryCount: entriesResult.rows.length, model: usedModel },
+      {
+        creatorId,
+        creatorName: creator.name,
+        entryCount: entriesResult.rows.length,
+        model: usedModel,
+      },
       "KB tone: profile generated",
     );
     return { success: true };
@@ -447,7 +466,7 @@ export async function needsToneProfileRegeneration(
  * they benefit most from tone matching).
  */
 export async function getCreatorsNeedingToneProfiles(): Promise<
-  Array<{ id: number; name: string; entryCount: number; reason: string }>
+  { id: number; name: string; entryCount: number; reason: string }[]
 > {
   try {
     const result = await pool.query<{
@@ -539,17 +558,17 @@ export function formatToneBlockForPrompt(
   lines.push("- Capture the SPIRIT of their tone, don't copy their phrases verbatim.");
   lines.push("- Use 1-2 of their example phrases naturally if they fit (don't force it).");
   const remainingPct = 100 - matchPercentage;
-  lines.push(`- Keep ${remainingPct}% of your standard helpful, clear tone — the creator's tone is an accent, not a mask.`);
+  lines.push(
+    `- Keep ${remainingPct}% of your standard helpful, clear tone — the creator's tone is an accent, not a mask.`,
+  );
   lines.push("- If the user asks a factual question, prioritize accuracy over tone.");
-  lines.push("- Respond in the same language as the user's message (the creator's tone should adapt to the user's language).");
+  lines.push(
+    "- Respond in the same language as the user's message (the creator's tone should adapt to the user's language).",
+  );
 
   return lines.join("\n");
 }
 
 // ─── Exported constants (for tests + admin endpoints) ─────────────────────────
 
-export {
-  TONE_MATCH_THRESHOLD,
-  DEFAULT_TONE_MATCH_PERCENTAGE,
-  REGENERATION_DELTA,
-};
+export { TONE_MATCH_THRESHOLD, DEFAULT_TONE_MATCH_PERCENTAGE, REGENERATION_DELTA };

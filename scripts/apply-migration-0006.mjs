@@ -19,7 +19,14 @@ if (!dbUrl) {
   process.exit(1);
 }
 
-const migrationPath = join(__dirname, "..", "lib", "db", "migrations", "0006_tsvector_fulltext_search.sql");
+const migrationPath = join(
+  __dirname,
+  "..",
+  "lib",
+  "db",
+  "migrations",
+  "0006_tsvector_fulltext_search.sql",
+);
 const sql = readFileSync(migrationPath, "utf8");
 
 // Split on semicolons followed by newlines, but preserve $$ blocks.
