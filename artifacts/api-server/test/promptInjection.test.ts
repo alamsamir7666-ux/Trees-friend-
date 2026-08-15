@@ -31,11 +31,39 @@ describe("Prompt-injection: source-shape tests", () => {
     expect(source).toContain("export async function getPromptInjectionStatus");
   });
 
-  it("promptInjectionLakera.ts implements LakeraGuardProvider", () => {
+  it("promptInjectionLakera.ts implements LakeraGuardProvider (optional, paid)", () => {
     const source = readSource("artifacts/api-server/src/lib/promptInjectionLakera.ts");
     expect(source).toContain("export class LakeraGuardProvider");
     expect(source).toContain("https://api.lakera.ai/v1/guard");
     expect(source).toContain("x-api-key");
+  });
+
+  it("promptInjectionLLM.ts implements the free-tier LLM classifier", () => {
+    const source = readSource("artifacts/api-server/src/lib/promptInjectionLLM.ts");
+    expect(source).toContain("export async function classifyWithLLM");
+    expect(source).toContain("export function isLLMClassifierConfigured");
+    expect(source).toContain("llama-3.1-8b-instant"); // Groq free-tier model
+    expect(source).toContain("json_schema"); // structured output
+  });
+
+  it("promptInjectionCache.ts implements the multi-tier cache", () => {
+    const source = readSource("artifacts/api-server/src/lib/promptInjectionCache.ts");
+    expect(source).toContain("export async function getCachedClassification");
+    expect(source).toContain("export async function setCachedClassification");
+    expect(source).toContain("export async function clearAllInjectionCache");
+    expect(source).toContain("L1Cache");
+    expect(source).toContain("getRedis");
+  });
+
+  it("promptInjection.ts uses tiered approach (local-fast -> llm -> local-fallback)", () => {
+    const source = readSource("artifacts/api-server/src/lib/promptInjection.ts");
+    expect(source).toContain("tiered");
+    expect(source).toContain("local-fast");
+    expect(source).toContain("local-fallback");
+    expect(source).toContain("LLM_SKIP_THRESHOLD");
+    expect(source).toContain("detectWithLLM");
+    expect(source).toContain("classifyWithLLM");
+    expect(source).toContain("isLLMClassifierConfigured");
   });
 
   it("promptInjectionLocal.ts implements LocalInjectionProvider", () => {
@@ -114,11 +142,14 @@ describe("Prompt-injection: behavior tests", () => {
     expect(result.provider).toBe("skip");
   });
 
-  it("detectPromptInjection uses local provider when no Lakera key", async () => {
+  it("detectPromptInjection uses local-fast path when no LLM key + no Lakera key", async () => {
+    // With no API keys, the tiered mode runs local heuristic first.
+    // For a safe message (score=0), it returns via "local-fast" path.
     process.env.PROMPT_INJECTION_PROVIDER = "auto";
     const { detectPromptInjection } = await import("../src/lib/promptInjection");
     const result = await detectPromptInjection("How often should I water a mango tree?");
-    expect(result.provider).toBe("local");
+    // Safe messages (score=0) return via local-fast (no LLM needed)
+    expect(result.provider).toBe("local-fast");
     expect(result.detected).toBe(false);
   });
 });
@@ -247,9 +278,15 @@ describe("Prompt-injection: config", () => {
     expect(status).toHaveProperty("enabled");
     expect(status).toHaveProperty("provider");
     expect(status).toHaveProperty("blockThreshold");
-    expect(status).toHaveProperty("timeoutMs");
+    expect(status).toHaveProperty("llmSkipThreshold");
+    expect(status).toHaveProperty("llmConfigured");
+    expect(status).toHaveProperty("lakeraConfigured");
+    expect(status).toHaveProperty("cacheStats");
     expect(status).toHaveProperty("providers");
     expect(Array.isArray(status.providers)).toBe(true);
+    // Local is always configured
     expect(status.providers.find((p) => p.name === "local")?.configured).toBe(true);
+    // Each provider has a cost field (for admin UI display)
+    expect(status.providers[0]).toHaveProperty("cost");
   });
 });
