@@ -38,16 +38,21 @@
  * entries derived from product/seller-listing data. When that data
  * mutates, we invalidate the tag.
  *
- * Concretely:
- *   - Redis (exact-match): delete all keys matching `ai:cache:*:t:1`
- *     (the tool-call entries — the only ones that contain live catalog data;
- *     non-tool entries don't reference the catalog so they're safe to keep).
- *   - Postgres (semantic): delete rows from `ai_response_cache` where
- *     `had_tool_calls = TRUE` (same rationale).
+ * Concretely (BUG-1 fix):
+ *   - Redis (exact-match): delete ALL keys matching `ai:cache:*`.
+ *     Every response (tool or non-tool) embeds dynamic blocks
+ *     (`{{knowledge}}`, `{{catalog}}`, `{{tone}}`) that are derived from
+ *     the catalog and KB. Keeping non-tool entries would serve stale
+ *     answers whenever an admin edits a product or KB entry.
+ *   - Postgres (semantic): DELETE FROM ai_response_cache (all rows).
+ *     Same rationale.
+ *   - Reranker cache (L1 LRU + L2 Redis): cleared via
+ *     `clearAllRerankCache()` — rerank scores depend on doc text hashes
+ *     which change when KB content changes.
  *
- * We do NOT clear non-tool cache entries because they contain general
- * botanical knowledge ("how often to water mango") that doesn't depend
- * on the catalog. Clearing them would force unnecessary re-computation.
+ * We do NOT clear `queryEmbeddingCache` — query embeddings are
+ * deterministic per query (doc-independent); clearing them just wastes
+ * an LLM call on the next request.
  *
  * ─── Best-effort, non-blocking ───────────────────────────────────────────────
  *
@@ -59,15 +64,7 @@
 import { getRedis } from "./redisClient";
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
-
-/**
- * The Redis key suffix used by semanticCache.ts to mark tool-call entries
- * (the ones that contain live catalog data). Kept in sync here so we can
- * target them for invalidation without depending on the internal format.
- *
- * If semanticCache.ts changes this suffix, update it here too.
- */
-const TOOL_CALL_KEY_SUFFIX = ":t:1";
+import { clearAllRerankCache } from "./rerankerCache";
 
 /**
  * Scan batch size for Redis SCAN. Larger = fewer round-trips but more
@@ -89,18 +86,31 @@ const REDIS_SCAN_BATCH = 100;
  *   - PUT /admin/seller-listings/:id/approve (goes live)
  *   - PUT /admin/seller-listings/:id/reject (no longer live)
  *
- * @param reason - Short label for the log (e.g. "product.update", "seller_listing.create").
- *                 Not used for filtering — all catalog entries are invalidated.
+ * BUG-1 fix: also called by `invalidateKbCache()` after every KB mutation
+ * (entries / creators / sources / categories). The system prompt's
+ * `{{knowledge}}` block is auto-injected from the KB on every chat, so a
+ * stale KB entry would otherwise produce a stale cached response for up
+ * to 1 hour.
+ *
+ * Flushes three layers, each best-effort in its own try/catch:
+ *   1. Redis exact-match cache (all `ai:cache:*` keys)
+ *   2. Postgres pgvector semantic cache (all `ai_response_cache` rows)
+ *   3. Reranker cache (L1 LRU + L2 Redis via `clearAllRerankCache`)
+ *
+ * @param reason - Short label for the log (e.g. "product.update", "kb.entry.update").
+ *                 Not used for filtering — all entries are invalidated.
  */
 export async function invalidateCatalogCache(reason: string = "catalog.mutation"): Promise<void> {
-  // Fire both invalidations in parallel — they target independent stores.
-  const [redisDeleted, pgDeleted] = await Promise.allSettled([
+  // Fire all three invalidations in parallel — they target independent stores.
+  const [redisDeleted, pgDeleted, rerankDeleted] = await Promise.allSettled([
     invalidateRedisCatalogCache(),
     invalidateSemanticCatalogCache(),
+    clearAllRerankCache(),
   ]);
 
   const redisCount = redisDeleted.status === "fulfilled" ? redisDeleted.value : 0;
   const pgCount = pgDeleted.status === "fulfilled" ? pgDeleted.value : 0;
+  const rerankCount = rerankDeleted.status === "fulfilled" ? rerankDeleted.value : 0;
 
   if (redisDeleted.status === "rejected") {
     logger.debug(
@@ -114,24 +124,31 @@ export async function invalidateCatalogCache(reason: string = "catalog.mutation"
       "catalogCache: Semantic cache invalidation failed (non-fatal — TTL will expire stale entries)",
     );
   }
+  if (rerankDeleted.status === "rejected") {
+    logger.debug(
+      { err: (rerankDeleted.reason as any)?.message ?? String(rerankDeleted.reason), reason },
+      "catalogCache: Reranker cache invalidation failed (non-fatal)",
+    );
+  }
 
   // Only log at INFO level if we actually invalidated something — keeps the
   // logs clean when Redis isn't configured (dev) or pgvector isn't available.
-  if (redisCount > 0 || pgCount > 0) {
+  if (redisCount > 0 || pgCount > 0 || rerankCount > 0) {
     logger.info(
-      { reason, redisDeleted: redisCount, semanticDeleted: pgCount },
+      { reason, redisDeleted: redisCount, semanticDeleted: pgCount, rerankDeleted: rerankCount },
       "catalogCache: invalidated catalog-derived AI cache entries",
     );
   }
 }
 
 /**
- * Deletes all Redis exact-match cache entries that contain tool-call
- * responses (the `:t:1` suffix). These are the entries that embed live
- * catalog data (search_catalog results, get_product_care results).
+ * Deletes ALL Redis exact-match cache entries (every key matching
+ * `ai:cache:*`).
  *
- * Non-tool entries (no `:t:1` suffix) are NOT deleted — they contain
- * general botanical knowledge that doesn't depend on the catalog.
+ * BUG-1 fix: previously this only cleared tool-call entries (those ending
+ * in `:t:1`). That was wrong — non-tool responses also embed `{{catalog}}`,
+ * `{{knowledge}}`, and `{{tone}}` blocks via auto-injection, so they go
+ * stale on any catalog or KB mutation. We now clear everything.
  *
  * Returns the number of keys deleted.
  */
@@ -142,19 +159,14 @@ async function invalidateRedisCatalogCache(): Promise<number> {
   let cursor = "0";
   let deleted = 0;
   do {
-    // SCAN for all AI cache keys (we'll filter by suffix below — Redis SCAN
-    // MATCH doesn't support suffix matching directly, only glob patterns).
     const [next, keys] = await redis.scan(cursor, {
       match: "ai:cache:*",
       count: REDIS_SCAN_BATCH,
     });
     cursor = next;
-
-    // Filter to only tool-call entries (the ones with the `:t:1` suffix).
-    const toolKeys = keys.filter((k) => k.endsWith(TOOL_CALL_KEY_SUFFIX));
-    if (toolKeys.length > 0) {
-      await redis.del(...toolKeys);
-      deleted += toolKeys.length;
+    if (keys.length > 0) {
+      await redis.del(...keys);
+      deleted += keys.length;
     }
   } while (cursor !== "0");
 
@@ -162,27 +174,29 @@ async function invalidateRedisCatalogCache(): Promise<number> {
 }
 
 /**
- * Deletes semantic cache entries (Postgres `ai_response_cache` rows) that
- * contain tool-call responses — the ones with `had_tool_calls = TRUE`.
+ * Deletes ALL semantic cache entries (every row in `ai_response_cache`).
  *
- * Non-tool entries (had_tool_calls = FALSE or NULL) are NOT deleted —
- * they contain general botanical knowledge that doesn't depend on the
- * catalog.
+ * BUG-1 fix: previously this only cleared rows with `had_tool_calls = TRUE`.
+ * That was wrong — non-tool responses also embed catalog/KB/tone blocks
+ * via auto-injection and go stale on any mutation. We now clear all rows.
+ *
+ * The `had_tool_calls` column is preserved (still useful for analytics and
+ * for the TTL-aware SELECT in `embeddingCache.ts`); we just no longer
+ * filter on it during invalidation.
  *
  * Returns the number of rows deleted.
  */
 async function invalidateSemanticCatalogCache(): Promise<number> {
   try {
-    const result = await pool.query(`DELETE FROM ai_response_cache WHERE had_tool_calls = TRUE`);
+    const result = await pool.query(`DELETE FROM ai_response_cache`);
     return result.rowCount ?? 0;
   } catch (err) {
     // Common causes:
     //   - Table doesn't exist (ensureAiTables migration hasn't run yet)
     //   - pgvector extension missing (no semantic cache at all)
-    //   - had_tool_calls column missing (older schema)
     // All are non-fatal — the TTL will expire stale entries.
     const msg = (err as any)?.message ?? String(err);
-    if (msg.includes("does not exist") || msg.includes("column") || msg.includes("relation")) {
+    if (msg.includes("does not exist") || msg.includes("relation")) {
       // Expected on legacy DBs — silent.
       return 0;
     }

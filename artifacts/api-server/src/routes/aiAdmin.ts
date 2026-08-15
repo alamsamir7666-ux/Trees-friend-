@@ -112,6 +112,9 @@ import {
   DEFAULT_TONE_MATCH_PERCENTAGE,
   REGENERATION_DELTA,
 } from "../lib/kbToneProfiles";
+// BUG-1 fix: KB mutations must invalidate the AI chat caches so users see
+// updated content on their next request, not the cached stale answer.
+import { invalidateKbCache } from "../lib/kbCache";
 
 const router = Router();
 
@@ -1471,6 +1474,12 @@ router.post("/ai/admin/kb/categories", async (req: Request, res: Response) => {
       },
       "AI admin: created KB category",
     );
+    // BUG-1 fix: invalidate chat caches so the new category is reflected on
+    // the next chat request (the system prompt's {{knowledge}} block may
+    // surface entries that now belong to this new category).
+    invalidateKbCache("category.create").catch((err) =>
+      logger.error({ err, id: created.id }, "KB cache: invalidation failed after category create"),
+    );
     res.status(201).json({ category: created });
   } catch (err) {
     logger.error({ err, name, slug, parentId }, "AI admin: create KB category failed");
@@ -1582,6 +1591,11 @@ router.put("/ai/admin/kb/categories/:id", async (req: Request, res: Response) =>
       return;
     }
     logger.info({ id, updates, updatedBy: req.dbUser?.email }, "AI admin: updated KB category");
+    // BUG-1 fix: invalidate chat caches — category rename/isActive changes
+    // affect which entries are surfaced in the {{knowledge}} block.
+    invalidateKbCache("category.update").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after category update"),
+    );
     res.json({ category: updated });
   } catch (err) {
     logger.error({ err, id, updates }, "AI admin: update KB category failed");
@@ -1649,6 +1663,11 @@ router.post("/ai/admin/kb/categories/:id/move", async (req: Request, res: Respon
       { id, newParentId: normalizedParentId, movedBy: req.dbUser?.email },
       "AI admin: moved KB category",
     );
+    // BUG-1 fix: invalidate chat caches — moving a category may change which
+    // entries are reachable via the category tree walk in KB search.
+    invalidateKbCache("category.move").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after category move"),
+    );
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err, id, parentId }, "AI admin: move KB category failed");
@@ -1682,6 +1701,12 @@ router.delete("/ai/admin/kb/categories/:id", async (req: Request, res: Response)
       return;
     }
     logger.info({ id, deletedBy: req.dbUser?.email }, "AI admin: deleted KB category");
+    // BUG-1 fix: invalidate chat caches — deleting a category cascades to
+    // descendant categories + their entries, so the {{knowledge}} block
+    // would otherwise still surface now-deleted entries from cache.
+    invalidateKbCache("category.delete").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after category delete"),
+    );
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err, id }, "AI admin: delete KB category failed");
@@ -1792,6 +1817,11 @@ router.post("/ai/admin/kb/creators", async (req: Request, res: Response) => {
       { id: created.id, slug: created.slug, createdBy: req.dbUser?.email },
       "AI admin: created KB creator",
     );
+    // BUG-1 fix: invalidate chat caches — a new creator affects tone-profile
+    // eligibility and may change the {{tone}} block on the next chat.
+    invalidateKbCache("creator.create").catch((err) =>
+      logger.error({ err, id: created.id }, "KB cache: invalidation failed after creator create"),
+    );
     res.status(201).json({ creator: created });
   } catch (err) {
     logger.error({ err, name, slug }, "AI admin: create KB creator failed");
@@ -1880,6 +1910,11 @@ router.put("/ai/admin/kb/creators/:id", async (req: Request, res: Response) => {
       return;
     }
     logger.info({ id, updates, updatedBy: req.dbUser?.email }, "AI admin: updated KB creator");
+    // BUG-1 fix: invalidate chat caches — creator isActive/isFeatured changes
+    // affect entry authority scoring and the {{tone}} block.
+    invalidateKbCache("creator.update").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after creator update"),
+    );
     res.json({ creator: updated });
   } catch (err) {
     logger.error({ err, id, updates }, "AI admin: update KB creator failed");
@@ -1913,6 +1948,11 @@ router.delete("/ai/admin/kb/creators/:id", async (req: Request, res: Response) =
       return;
     }
     logger.info({ id, deletedBy: req.dbUser?.email }, "AI admin: deleted KB creator");
+    // BUG-1 fix: invalidate chat caches — creator deletion (only allowed when
+    // the creator has no entries) still changes the creators list + tone state.
+    invalidateKbCache("creator.delete").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after creator delete"),
+    );
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err, id }, "AI admin: delete KB creator failed");
@@ -2062,6 +2102,11 @@ router.post("/ai/admin/kb/sources", async (req: Request, res: Response) => {
       { id: created.id, title: created.sourceTitle, createdBy: req.dbUser?.email },
       "AI admin: created KB source",
     );
+    // BUG-1 fix: invalidate chat caches — a new source (even with no entries
+    // yet) affects the KB stats surfaced in the {{summary}} block.
+    invalidateKbCache("source.create").catch((err) =>
+      logger.error({ err, id: created.id }, "KB cache: invalidation failed after source create"),
+    );
     res.status(201).json({ source: created });
   } catch (err) {
     logger.error({ err, sourceTitle }, "AI admin: create KB source failed");
@@ -2160,6 +2205,11 @@ router.put("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
       return;
     }
     logger.info({ id, updatedBy: req.dbUser?.email }, "AI admin: updated KB source");
+    // BUG-1 fix: invalidate chat caches — source metadata changes (title, url,
+    // creator reassignment) can affect entry attribution in the {{knowledge}} block.
+    invalidateKbCache("source.update").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after source update"),
+    );
     res.json({ source: updated });
   } catch (err) {
     logger.error({ err, id }, "AI admin: update KB source failed");
@@ -2181,6 +2231,12 @@ router.delete("/ai/admin/kb/sources/:id", async (req: Request, res: Response) =>
       return;
     }
     logger.info({ id, deletedBy: req.dbUser?.email }, "AI admin: deleted KB source");
+    // BUG-1 fix: invalidate chat caches — deleting a source cascades to its
+    // entries, so the {{knowledge}} block would otherwise surface now-deleted
+    // entries from cache for up to 1 hour.
+    invalidateKbCache("source.delete").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after source delete"),
+    );
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err, id }, "AI admin: delete KB source failed");
@@ -2227,6 +2283,11 @@ router.post("/ai/admin/kb/sources/:id/chunk", async (req: Request, res: Response
     logger.info(
       { id, chunkCount: result.chunks.length, model: result.model, chunkedBy: req.dbUser?.email },
       "AI admin: AI-chunked KB source",
+    );
+    // BUG-1 fix: invalidate chat caches — chunking updates the source's
+    // processing_status + chunking metadata, which feeds the {{summary}} block.
+    invalidateKbCache("source.chunk").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after source chunk"),
     );
     res.json({ chunks: result.chunks, model: result.model, count: result.chunks.length });
   } catch (err) {
@@ -2284,6 +2345,13 @@ router.post("/ai/admin/kb/sources/:id/entries/batch", async (req: Request, res: 
     // chunking, 'manual' otherwise).
     await updateChunkingMetadata(id, method === "ai" ? "ai" : "manual", null);
     logger.info({ id, count: createdIds.length, createdBy }, "AI admin: batch-created KB entries");
+    // BUG-1 fix: invalidate chat caches — batch entry creation (up to 50 at
+    // once) materially changes the {{knowledge}} block. ONE call per request
+    // (not per-entry) — the entries are all committed in the same DB
+    // transaction, so a single flush covers them all.
+    invalidateKbCache("source.batch-entries").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after batch entry create"),
+    );
     res.status(201).json({ createdIds, count: createdIds.length });
   } catch (err) {
     logger.error({ err, id }, "AI admin: batch-create KB entries failed");
@@ -2428,6 +2496,11 @@ router.post("/ai/admin/kb/entries", async (req: Request, res: Response) => {
       { id: created.id, sourceId, createdBy: req.dbUser?.email },
       "AI admin: created KB entry",
     );
+    // BUG-1 fix: invalidate chat caches — a new active entry may be surfaced
+    // in the {{knowledge}} block on the next chat request.
+    invalidateKbCache("entry.create").catch((err) =>
+      logger.error({ err, id: created.id }, "KB cache: invalidation failed after entry create"),
+    );
     res.status(201).json({ entry: created });
   } catch (err) {
     logger.error({ err, sourceId, title }, "AI admin: create KB entry failed");
@@ -2546,6 +2619,11 @@ router.put("/ai/admin/kb/entries/:id", async (req: Request, res: Response) => {
       return;
     }
     logger.info({ id, updatedBy: req.dbUser?.email }, "AI admin: updated KB entry");
+    // BUG-1 fix: invalidate chat caches — entry content/title/keyword changes
+    // directly affect the {{knowledge}} block (auto-injected KB context).
+    invalidateKbCache("entry.update").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after entry update"),
+    );
     res.json({ entry: updated });
   } catch (err) {
     logger.error({ err, id }, "AI admin: update KB entry failed");
@@ -2567,6 +2645,11 @@ router.post("/ai/admin/kb/entries/:id/activate", async (req: Request, res: Respo
       return;
     }
     logger.info({ id, activatedBy: req.dbUser?.email }, "AI admin: activated KB entry");
+    // BUG-1 fix: invalidate chat caches — activating an entry makes it
+    // eligible for the {{knowledge}} block on the next chat request.
+    invalidateKbCache("entry.activate").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after entry activate"),
+    );
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err, id }, "AI admin: activate KB entry failed");
@@ -2588,6 +2671,11 @@ router.post("/ai/admin/kb/entries/:id/deactivate", async (req: Request, res: Res
       return;
     }
     logger.info({ id, deactivatedBy: req.dbUser?.email }, "AI admin: deactivated KB entry");
+    // BUG-1 fix: invalidate chat caches — deactivating an entry removes it
+    // from the {{knowledge}} block on the next chat request.
+    invalidateKbCache("entry.deactivate").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after entry deactivate"),
+    );
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err, id }, "AI admin: deactivate KB entry failed");
@@ -2609,6 +2697,11 @@ router.delete("/ai/admin/kb/entries/:id", async (req: Request, res: Response) =>
       return;
     }
     logger.info({ id, deletedBy: req.dbUser?.email }, "AI admin: deleted KB entry");
+    // BUG-1 fix: invalidate chat caches — deleting an entry removes it from
+    // the {{knowledge}} block on the next chat request.
+    invalidateKbCache("entry.delete").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after entry delete"),
+    );
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err, id }, "AI admin: delete KB entry failed");
@@ -2896,6 +2989,11 @@ router.post(
         return;
       }
       logger.info({ id, triggeredBy: req.dbUser?.email }, "AI admin: tone profile generated");
+      // BUG-1 fix: invalidate chat caches — regenerating the tone_profile
+      // changes the {{tone}} block on the next chat request.
+      invalidateKbCache("creator.tone.regen").catch((err) =>
+        logger.error({ err, id }, "KB cache: invalidation failed after tone profile regen"),
+      );
       res.json({ ok: true, message: "Tone profile generated successfully." });
     } catch (err) {
       logger.error({ err, id }, "AI admin: generate tone profile failed");
@@ -2931,6 +3029,11 @@ router.put("/ai/admin/kb/creators/:id/tone-percentage", async (req: Request, res
       [percentage, id],
     );
     logger.info({ id, percentage, setBy: req.dbUser?.email }, "AI admin: tone percentage set");
+    // BUG-1 fix: invalidate chat caches — changing the per-creator
+    // tone_match_percentage affects the {{tone}} block on the next chat.
+    invalidateKbCache("creator.tone-percentage").catch((err) =>
+      logger.error({ err, id }, "KB cache: invalidation failed after tone percentage set"),
+    );
     res.json({
       ok: true,
       toneMatchPercentage: percentage,

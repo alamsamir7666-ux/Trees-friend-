@@ -90,20 +90,19 @@ function generateCacheKey(
   // Normalize the user message: trim, lowercase, collapse whitespace
   const normalizedMessage = userMessage.trim().toLowerCase().replace(/\s+/g, " ");
 
-  // Hash the system prompt (only first 500 chars — the prompt is long but
-  // the version-specific part is usually at the top)
-  const promptHash = createHash("sha256")
-    .update(systemPrompt.slice(0, 500))
-    .digest("hex")
-    .slice(0, 16);
+  // Hash the FULL system prompt. The prompt includes dynamic blocks
+  // ({{summary}}, {{knowledge}}, {{catalog}}, {{tone}}) that are appended
+  // AFTER the static persona header — so the hash must cover the entire
+  // prompt to invalidate correctly when any dynamic block changes.
+  //
+  // SHA-256 on a 10KB string is <1ms — the slice(0, 500) was a premature
+  // optimization that broke cache invalidation correctness (BUG-2 fix).
+  const promptHash = createHash("sha256").update(systemPrompt).digest("hex").slice(0, 16);
 
   // Hash the last 3 history messages (recent context affects the response)
   const recentHistory = history.slice(-3);
   const historyStr = recentHistory.map((h) => `${h.role}:${h.text.slice(0, 200)}`).join("|");
-  const historyHash = createHash("sha256")
-    .update(historyStr)
-    .digest("hex")
-    .slice(0, 16);
+  const historyHash = createHash("sha256").update(historyStr).digest("hex").slice(0, 16);
 
   // Bug #4 fix: add a `t:1` segment for tool-call responses so they're
   // stored separately from non-tool responses (different TTLs).
@@ -177,7 +176,10 @@ export async function getCachedResponse(
     entry.hitCount++;
     redis.set(key, JSON.stringify(entry), { ex: CACHE_TTL_SECONDS }).catch(() => {});
 
-    logger.debug({ key, model: entry.model, hitCount: entry.hitCount, hadToolCalls: !!toolRaw }, "AI cache: HIT");
+    logger.debug(
+      { key, model: entry.model, hitCount: entry.hitCount, hadToolCalls: !!toolRaw },
+      "AI cache: HIT",
+    );
     return entry;
   } catch (err) {
     logger.debug({ err }, "AI cache: get failed (non-fatal)");
