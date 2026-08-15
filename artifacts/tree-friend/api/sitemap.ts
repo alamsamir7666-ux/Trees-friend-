@@ -1,4 +1,4 @@
-const API_BASE = "https://treefriend-api.onrender.com";
+const API_BASE = "https://trees-friend-tt53.onrender.com";
 const SITE_BASE = "https://treefriend.com";
 
 interface Product {

@@ -17,6 +17,10 @@
       "dest": "/api/og-blog"
     },
     {
+      "src": "/api/(?!sitemap|og-product|og-blog)(.*)",
+      "dest": "https://trees-friend-tt53.onrender.com/api/$1"
+    },
+    {
       "src": "/(.*)",
       "dest": "/index.html"
     }

@@ -1,5 +1,5 @@
 export const SITE_BASE = "https://treefriend.com";
-export const API_BASE = "https://treefriend-api.onrender.com";
+export const API_BASE = "https://trees-friend-tt53.onrender.com";
 export const SITE_NAME = "Tree Friend";
 
 const BOT_UA_PATTERN =
