@@ -53,11 +53,6 @@ export interface ChatMessage {
    * The message's ID. Numeric for persisted messages (from the DB's
    * SERIAL primary key). String (`"pending-${Date.now()}"`) for
    * ephemeral optimistic placeholders that haven't been persisted yet.
-   *
-   * Bug #19 fix: widened from `number` to `number | string` so we don't
-   * need the `as any` cast when creating the optimistic placeholder.
-   * The string form always starts with `"pending-"` so consumers can
-   * distinguish ephemeral from persisted messages.
    */
   id?: number | string;
   role: "user" | "assistant";
@@ -67,6 +62,29 @@ export interface ChatMessage {
   offTopic?: boolean;
   /** v2.0: true if this message was a pure-greeting shortcut response. */
   greeting?: boolean;
+  /**
+   * v5.1: Live token/cost usage (streamed via `usage` SSE event).
+   * Present when the provider sends usage metadata. The UI can render
+   * "1,247 tokens · gemini-2.5-flash" below the message.
+   */
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    model?: string;
+    provider?: string;
+  };
+  /**
+   * v5.1: True when the backend is generating followups via structured
+   * output (the `followups_loading` SSE event fired). The UI shows a
+   * "Generating suggestions..." spinner.
+   */
+  followupsLoading?: boolean;
+  /**
+   * v5.1: Followup suggestions from the `followups_delta` SSE event
+   * (structured output fallback). Rendered as chips by FollowupChips.
+   */
+  followups?: string[];
 }
 
 /**
@@ -81,6 +99,13 @@ export interface ActiveToolCall {
   id: string;
   /** The tool name (e.g. `search_catalog`, `get_user_orders`). */
   name: string;
+  /**
+   * v5.1: Partial tool-call args as they stream in (Groq only).
+   * Accumulated from `tool_call_delta` SSE events. The UI can render
+   * "Searching for: mang..." → "mango..." as args arrive.
+   * NULL/empty when the provider doesn't stream args (Gemini).
+   */
+  argsPreview?: string;
 }
 
 interface UseAiChatResult {
@@ -94,6 +119,13 @@ interface UseAiChatResult {
    * flight. Render these as progress chips below the assistant bubble.
    */
   activeToolCalls: ActiveToolCall[];
+  /** v5.1: Export the conversation as JSON or Markdown (triggers download). */
+  exportConversation: (format?: "json" | "markdown") => Promise<void>;
+  /** v5.1: Create a read-only share link for the conversation. */
+  shareConversation: (opts?: {
+    title?: string;
+    expiresHours?: number;
+  }) => Promise<{ shareToken: string; shareUrl: string; expiresAt: string | null }>;
 }
 
 /**
@@ -382,6 +414,42 @@ export function useAiChat(): UseAiChatResult {
             const counter = ++toolCallCounterRef.current;
             const toolId = `${payload.name}-${counter}`;
             setActiveToolCalls((prev) => [...prev, { id: toolId, name: payload.name }]);
+          } else if (payload.type === "tool_call_delta") {
+            // v5.1: Streaming tool-call args (Groq only). The model is
+            // generating tool-call arguments token-by-token. We accumulate
+            // the partial args + update the active tool call so the UI can
+            // render "Searching for: mang..." → "mango...".
+            //
+            // The `toolCallId` from the server maps to the tool call we're
+            // tracking. We try to find a matching active call (by name if
+            // present, or by the first unnamed active call) + append the
+            // argsDelta to its `argsPreview` field.
+            if (payload.argsDelta) {
+              setActiveToolCalls((prev) => {
+                // If a name was provided, find the first active call with
+                // that name + no argsPreview yet (the newest matching one).
+                let targetIdx = -1;
+                if (payload.name) {
+                  // Find the LAST active call with this name (most recent)
+                  for (let i = prev.length - 1; i >= 0; i--) {
+                    if (prev[i].name === payload.name) {
+                      targetIdx = i;
+                      break;
+                    }
+                  }
+                }
+                if (targetIdx === -1 && prev.length > 0) {
+                  targetIdx = prev.length - 1;
+                }
+                if (targetIdx === -1) return prev;
+                const target = prev[targetIdx];
+                const updated: ActiveToolCall = {
+                  ...target,
+                  argsPreview: (target.argsPreview ?? "") + payload.argsDelta,
+                };
+                return [...prev.slice(0, targetIdx), updated, ...prev.slice(targetIdx + 1)];
+              });
+            }
           } else if (payload.type === "tool_result" && typeof payload.name === "string") {
             // v3.7: A tool finished executing. Remove it from activeToolCalls.
             // We remove the FIRST matching entry (oldest) — if the same tool
@@ -392,6 +460,42 @@ export function useAiChat(): UseAiChatResult {
               if (idx === -1) return prev;
               return [...prev.slice(0, idx), ...prev.slice(idx + 1)];
             });
+          } else if (payload.type === "usage") {
+            // v5.1: Live token/cost display. The provider sent usage metadata
+            // (prompt + completion tokens). We store it on the assistant
+            // message so the UI can render "1,247 tokens · GPT-4" live.
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsg.id
+                  ? {
+                      ...m,
+                      usage: {
+                        promptTokens: payload.promptTokens,
+                        completionTokens: payload.completionTokens,
+                        totalTokens: payload.totalTokens,
+                        model: payload.model,
+                        provider: payload.provider,
+                      },
+                    }
+                  : m,
+              ),
+            );
+          } else if (payload.type === "followups_loading") {
+            // v5.1: The backend is generating followups via structured output.
+            // Show a loading state on the assistant message.
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantMsg.id ? { ...m, followupsLoading: true } : m)),
+            );
+          } else if (payload.type === "followups_delta" && Array.isArray(payload.followups)) {
+            // v5.1: Followups arrived via structured output fallback.
+            // Store them on the message for immediate rendering.
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsg.id
+                  ? { ...m, followupsLoading: false, followups: payload.followups }
+                  : m,
+              ),
+            );
           } else if (payload.type === "error") {
             setError(payload.message ?? "Stream failed.");
             // Replace the empty assistant bubble with an error message.
@@ -484,7 +588,78 @@ export function useAiChat(): UseAiChatResult {
     setError(null);
   }, []);
 
-  return { messages, loading, error, send, clear, activeToolCalls };
+  // ─── v5.1: Export conversation ──────────────────────────────────────────
+  // Downloads the conversation as JSON or Markdown. Returns a blob URL
+  // the caller can use to trigger a download (or open in a new tab).
+  const exportConversation = useCallback(
+    async (format: "json" | "markdown" = "json"): Promise<void> => {
+      const authHeader = await buildAuthHeader();
+      const res = await fetch(`${BASE_URL}/api/ai/sessions/current/export?format=${format}`, {
+        credentials: "include",
+        headers: { ...authHeader },
+      });
+      if (!res.ok) {
+        throw new Error(`Export failed: ${res.status}`);
+      }
+      const blob = await res.blob();
+      // Trigger a download via a temporary <a> element.
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      // Extract filename from Content-Disposition header, or use a default.
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const filenameMatch = disposition.match(/filename="?([^"]+)"?/);
+      a.download = filenameMatch?.[1] ?? `treebot-export.${format === "markdown" ? "md" : "json"}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Revoke the blob URL after a short delay (download needs it to stay
+      // alive briefly).
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    },
+    [],
+  );
+
+  // ─── v5.1: Share conversation ───────────────────────────────────────────
+  // Creates a read-only share link for the current conversation. Returns
+  // the share URL the user can copy + send to someone else.
+  const shareConversation = useCallback(
+    async (opts?: {
+      title?: string;
+      expiresHours?: number;
+    }): Promise<{
+      shareToken: string;
+      shareUrl: string;
+      expiresAt: string | null;
+    }> => {
+      const authHeader = await buildAuthHeader();
+      const res = await fetch(`${BASE_URL}/api/ai/sessions/current/share`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...authHeader },
+        body: JSON.stringify({
+          ...(opts?.title ? { title: opts.title } : {}),
+          ...(opts?.expiresHours ? { expiresHours: opts.expiresHours } : {}),
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Share failed: ${res.status}`);
+      }
+      return res.json();
+    },
+    [],
+  );
+
+  return {
+    messages,
+    loading,
+    error,
+    send,
+    clear,
+    activeToolCalls,
+    exportConversation,
+    shareConversation,
+  };
 }
 
 async function buildAuthHeader(): Promise<Record<string, string>> {

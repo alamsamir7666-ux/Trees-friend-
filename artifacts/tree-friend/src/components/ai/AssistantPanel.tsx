@@ -35,6 +35,9 @@ import {
   FileText,
   BookOpen,
   HelpCircle,
+  Download,
+  Share2,
+  Check,
 } from "lucide-react";
 import { useAiChat, type ChatMessage, type ActiveToolCall } from "@/hooks/useAiChat";
 import { MarkdownText } from "./MarkdownText";
@@ -74,7 +77,21 @@ interface AssistantPanelProps {
 }
 
 export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps) {
-  const { messages, loading, error, send, clear, activeToolCalls } = useAiChat();
+  const {
+    messages,
+    loading,
+    error,
+    send,
+    clear,
+    activeToolCalls,
+    exportConversation,
+    shareConversation,
+  } = useAiChat();
+  // v5.1: share dialog state
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
   // useAuth() doesn't expose `user` directly (only isSignedIn + userId).
   // useUser() returns the full user object (firstName, username, etc.).
   const { isSignedIn } = useAuth();
@@ -187,6 +204,77 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
               Expand
             </button>
           )}
+          {/* v5.1: Export button (JSON/Markdown download) */}
+          <button
+            type="button"
+            onClick={async () => {
+              if (exportLoading || messages.length === 0) return;
+              setExportLoading(true);
+              try {
+                await exportConversation("markdown");
+              } catch {
+                // best-effort — the hook handles errors
+              } finally {
+                setExportLoading(false);
+              }
+            }}
+            disabled={loading || messages.length === 0 || exportLoading}
+            className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            title="Export conversation"
+            aria-label="Export conversation"
+          >
+            {exportLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+          </button>
+          {/* v5.1: Share button (creates a read-only share link) */}
+          <button
+            type="button"
+            onClick={async () => {
+              if (shareLoading || messages.length === 0) return;
+              if (shareUrl) {
+                // Already shared — copy to clipboard
+                try {
+                  await navigator.clipboard.writeText(shareUrl);
+                  setShareCopied(true);
+                  setTimeout(() => setShareCopied(false), 2000);
+                } catch {
+                  // clipboard API not available
+                }
+                return;
+              }
+              setShareLoading(true);
+              try {
+                const result = await shareConversation();
+                setShareUrl(result.shareUrl);
+                try {
+                  await navigator.clipboard.writeText(result.shareUrl);
+                  setShareCopied(true);
+                  setTimeout(() => setShareCopied(false), 2000);
+                } catch {
+                  // clipboard API not available — user can copy manually
+                }
+              } catch {
+                // best-effort
+              } finally {
+                setShareLoading(false);
+              }
+            }}
+            disabled={loading || messages.length === 0 || shareLoading}
+            className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            title={shareUrl ? "Copy share link" : "Share conversation"}
+            aria-label={shareUrl ? "Copy share link" : "Share conversation"}
+          >
+            {shareLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : shareCopied ? (
+              <Check className="h-4 w-4 text-green-600" />
+            ) : (
+              <Share2 className="h-4 w-4" />
+            )}
+          </button>
           <button
             type="button"
             onClick={handleClear}
@@ -209,6 +297,22 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
             </button>
           )}
         </div>
+        {/* v5.1: Share link banner (shows when a share link has been created) */}
+        {shareUrl && (
+          <div className="absolute left-0 right-0 top-full z-20 border-b bg-green-50 px-4 py-2 text-xs text-green-800">
+            <div className="flex items-center gap-2">
+              <Share2 className="h-3 w-3 flex-shrink-0" />
+              <span className="flex-1 truncate">Share link copied to clipboard!</span>
+              <button
+                type="button"
+                onClick={() => setShareUrl(null)}
+                className="text-green-600 hover:text-green-800"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* ─── Messages ─────────────────────────────────────────────────── */}

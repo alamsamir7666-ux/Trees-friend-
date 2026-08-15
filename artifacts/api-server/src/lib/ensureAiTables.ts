@@ -415,6 +415,33 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS ai_kb_entries_active_partial_idx
   ON ai_kb_entries (id)
   WHERE is_active = true;
 
+-- ─── v5.1: Conversation sharing ───────────────────────────────────────────
+-- Stores read-only share links for AI chat sessions. Users can generate a
+-- share link to send their conversation to someone else (e.g. for support,
+-- or to share plant care advice). The link is read-only + can optionally
+-- expire.
+--
+-- Industry standard: ChatGPT shared links, Claude artifacts.
+-- Design:
+--   - share_token is a random 32-char hex string (128 bits of entropy)
+--   - expires_at is optional (NULL = never expires)
+--   - view_count is incremented on each view (for analytics + abuse detection)
+--   - CASCADE on session_id so deleting the session removes its share links
+CREATE TABLE IF NOT EXISTS ai_chat_shared_links (
+  id SERIAL PRIMARY KEY,
+  session_id INTEGER NOT NULL
+    REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+  share_token TEXT NOT NULL UNIQUE,
+  title TEXT,  -- optional title for the shared link (defaults to session title)
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMP,  -- NULL = never expires
+  view_count INTEGER NOT NULL DEFAULT 0,
+  last_viewed_at TIMESTAMP,
+  created_by TEXT  -- clerk user id (if authenticated) or NULL
+);
+CREATE INDEX IF NOT EXISTS ai_chat_shared_links_session_idx ON ai_chat_shared_links (session_id);
+CREATE INDEX IF NOT EXISTS ai_chat_shared_links_token_idx ON ai_chat_shared_links (share_token);
+
 -- ─── v3.2: Prompt versioning ────────────────────────────────────────────────
 -- Stores versioned system prompts so admins can A/B test + roll back
 -- without a code deploy. The "active" version is controlled by the

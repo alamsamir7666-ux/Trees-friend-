@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { ClerkProvider, Show, useClerk, useAuth, useSession } from '@clerk/react';
-import { setAuthTokenGetter } from '@workspace/api-client-react';
-import { setTokenGetter as setLocalApiTokenGetter } from '@/lib/getToken';
-import { shadcn } from '@clerk/themes';
-import { Switch, Route, useLocation, Router as WouterRouter, Redirect, Link } from 'wouter';
+import { ClerkProvider, Show, useClerk, useAuth } from "@clerk/react";
+import { setAuthTokenGetter } from "@workspace/api-client-react";
+import { setTokenGetter as setLocalApiTokenGetter } from "@/lib/getToken";
+import { shadcn } from "@clerk/themes";
+import { Switch, Route, useLocation, Router as WouterRouter, Redirect, Link } from "wouter";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { GuestCartProvider } from "@/contexts/GuestCartContext";
 import { useGuestWishlist } from "@/hooks/useGuestWishlist";
-import { useAddToWishlist, useAddSellerListingVariantToWishlist } from "@workspace/api-client-react";
+import {
+  useAddToWishlist,
+  useAddSellerListingVariantToWishlist,
+} from "@workspace/api-client-react";
 import { GuestWishlistProvider } from "@/contexts/GuestWishlistContext";
 import { WishlistProvider } from "@/contexts/WishlistContext";
 import { PageProvider, usePageContext } from "@/contexts/PageContext";
@@ -17,17 +20,37 @@ import { PageProvider, usePageContext } from "@/contexts/PageContext";
 import { Navbar } from "./components/layout/Navbar";
 import { Footer } from "./components/layout/Footer";
 import { lazy, Suspense } from "react";
-const AddressesPage = lazy(() => import("@/pages/AddressesPage").then(m => ({ default: m.AddressesPage })));
-const BecomeSellerPage = lazy(() => import("@/pages/BecomeSellerPage").then(m => ({ default: m.BecomeSellerPage })));
-const SellerDashboardPage = lazy(() => import("@/pages/SellerDashboardPage").then(m => ({ default: m.SellerDashboardPage })));
-const SignInPage = lazy(() => import("@/pages/SignInPage").then(m => ({ default: m.SignInPage })));
-const SignUpPage = lazy(() => import("@/pages/SignUpPage").then(m => ({ default: m.SignUpPage })));
-const BlogPage = lazy(() => import("@/pages/BlogPage").then(m => ({ default: m.BlogPage })));
-const BlogArticlePage = lazy(() => import("@/pages/BlogArticlePage").then(m => ({ default: m.BlogArticlePage })));
-const SellerStorePage = lazy(() => import("@/pages/SellerStorePage").then(m => ({ default: m.SellerStorePage })));
-const BrowseAllTreesPage = lazy(() => import("@/pages/BrowseAllTreesPage").then(m => ({ default: m.BrowseAllTreesPage })));
-const CategoryProductsPage = lazy(() => import("@/pages/CategoryProductsPage").then(m => ({ default: m.CategoryProductsPage })));
-const CategoryListingsPage = lazy(() => import("@/pages/CategoryListingsPage").then(m => ({ default: m.CategoryListingsPage })));
+const AddressesPage = lazy(() =>
+  import("@/pages/AddressesPage").then((m) => ({ default: m.AddressesPage })),
+);
+const BecomeSellerPage = lazy(() =>
+  import("@/pages/BecomeSellerPage").then((m) => ({ default: m.BecomeSellerPage })),
+);
+const SellerDashboardPage = lazy(() =>
+  import("@/pages/SellerDashboardPage").then((m) => ({ default: m.SellerDashboardPage })),
+);
+const SignInPage = lazy(() =>
+  import("@/pages/SignInPage").then((m) => ({ default: m.SignInPage })),
+);
+const SignUpPage = lazy(() =>
+  import("@/pages/SignUpPage").then((m) => ({ default: m.SignUpPage })),
+);
+const BlogPage = lazy(() => import("@/pages/BlogPage").then((m) => ({ default: m.BlogPage })));
+const BlogArticlePage = lazy(() =>
+  import("@/pages/BlogArticlePage").then((m) => ({ default: m.BlogArticlePage })),
+);
+const SellerStorePage = lazy(() =>
+  import("@/pages/SellerStorePage").then((m) => ({ default: m.SellerStorePage })),
+);
+const BrowseAllTreesPage = lazy(() =>
+  import("@/pages/BrowseAllTreesPage").then((m) => ({ default: m.BrowseAllTreesPage })),
+);
+const CategoryProductsPage = lazy(() =>
+  import("@/pages/CategoryProductsPage").then((m) => ({ default: m.CategoryProductsPage })),
+);
+const CategoryListingsPage = lazy(() =>
+  import("@/pages/CategoryListingsPage").then((m) => ({ default: m.CategoryListingsPage })),
+);
 import { ThemeProvider } from "next-themes";
 import { CurrencyProvider } from "@/lib/currency";
 import { FloatingCartIcon } from "./components/ui/FloatingCartIcon";
@@ -39,32 +62,72 @@ import { ProfileSync } from "./components/auth/ProfileSync";
 // OrdersPage, etc. forced every visitor to download the entire app's code
 // even if they only landed on one page. Lazy-loading splits each page into
 // its own chunk, loaded on demand.
-const HomePage = lazy(() => import("@/pages/HomePage").then(m => ({ default: m.HomePage })));
-const ProductsPage = lazy(() => import("@/pages/ProductsPage").then(m => ({ default: m.ProductsPage })));
-const ProductDetailPage = lazy(() => import("@/pages/ProductDetailPage").then(m => ({ default: m.ProductDetailPage })));
-const ProductSellerListingsPage = lazy(() => import("@/pages/ProductSellerListingsPage").then(m => ({ default: m.ProductSellerListingsPage })));
-const SellerListingDetailPage = lazy(() => import("@/pages/SellerListingDetailPage").then(m => ({ default: m.SellerListingDetailPage })));
-const CartPage = lazy(() => import("@/pages/CartPage").then(m => ({ default: m.CartPage })));
-const CheckoutPage = lazy(() => import("@/pages/CheckoutPage").then(m => ({ default: m.CheckoutPage })));
-const PreOrderCheckoutPage = lazy(() => import("@/pages/PreOrderCheckoutPage").then(m => ({ default: m.PreOrderCheckoutPage })));
-const OrdersPage = lazy(() => import("@/pages/OrdersPage").then(m => ({ default: m.OrdersPage })));
-const OrderDetailPage = lazy(() => import("@/pages/OrderDetailPage").then(m => ({ default: m.OrderDetailPage })));
-const PreOrderDetailPage = lazy(() => import("@/pages/PreOrderDetailPage").then(m => ({ default: m.PreOrderDetailPage })));
-const WishlistPage = lazy(() => import("@/pages/WishlistPage").then(m => ({ default: m.WishlistPage })));
-const ProfilePage = lazy(() => import("@/pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
-const TrackOrderPage = lazy(() => import("@/pages/TrackOrderPage").then(m => ({ default: m.TrackOrderPage })));
-const MessagesPage = lazy(() => import("@/pages/MessagesPage").then(m => ({ default: m.MessagesPage })));
-const ChatPage = lazy(() => import("@/pages/ChatPage").then(m => ({ default: m.ChatPage })));
-const AdminPage = lazy(() => import("./pages/AdminPage").then(m => ({ default: m.AdminPage })));
-const SubscriptionsPage = lazy(() => import("@/pages/SubscriptionsPage").then(m => ({ default: m.SubscriptionsPage })));
-const GiftCardsPage = lazy(() => import("@/pages/GiftCardsPage").then(m => ({ default: m.GiftCardsPage })));
-const EmailPreferencesPage = lazy(() => import("@/pages/EmailPreferencesPage").then(m => ({ default: m.EmailPreferencesPage })));
+const HomePage = lazy(() => import("@/pages/HomePage").then((m) => ({ default: m.HomePage })));
+const ProductsPage = lazy(() =>
+  import("@/pages/ProductsPage").then((m) => ({ default: m.ProductsPage })),
+);
+const ProductDetailPage = lazy(() =>
+  import("@/pages/ProductDetailPage").then((m) => ({ default: m.ProductDetailPage })),
+);
+const ProductSellerListingsPage = lazy(() =>
+  import("@/pages/ProductSellerListingsPage").then((m) => ({
+    default: m.ProductSellerListingsPage,
+  })),
+);
+const SellerListingDetailPage = lazy(() =>
+  import("@/pages/SellerListingDetailPage").then((m) => ({ default: m.SellerListingDetailPage })),
+);
+const CartPage = lazy(() => import("@/pages/CartPage").then((m) => ({ default: m.CartPage })));
+const CheckoutPage = lazy(() =>
+  import("@/pages/CheckoutPage").then((m) => ({ default: m.CheckoutPage })),
+);
+const PreOrderCheckoutPage = lazy(() =>
+  import("@/pages/PreOrderCheckoutPage").then((m) => ({ default: m.PreOrderCheckoutPage })),
+);
+const OrdersPage = lazy(() =>
+  import("@/pages/OrdersPage").then((m) => ({ default: m.OrdersPage })),
+);
+const OrderDetailPage = lazy(() =>
+  import("@/pages/OrderDetailPage").then((m) => ({ default: m.OrderDetailPage })),
+);
+const PreOrderDetailPage = lazy(() =>
+  import("@/pages/PreOrderDetailPage").then((m) => ({ default: m.PreOrderDetailPage })),
+);
+const WishlistPage = lazy(() =>
+  import("@/pages/WishlistPage").then((m) => ({ default: m.WishlistPage })),
+);
+const ProfilePage = lazy(() =>
+  import("@/pages/ProfilePage").then((m) => ({ default: m.ProfilePage })),
+);
+const TrackOrderPage = lazy(() =>
+  import("@/pages/TrackOrderPage").then((m) => ({ default: m.TrackOrderPage })),
+);
+const MessagesPage = lazy(() =>
+  import("@/pages/MessagesPage").then((m) => ({ default: m.MessagesPage })),
+);
+const ChatPage = lazy(() => import("@/pages/ChatPage").then((m) => ({ default: m.ChatPage })));
+const AdminPage = lazy(() => import("./pages/AdminPage").then((m) => ({ default: m.AdminPage })));
+const SubscriptionsPage = lazy(() =>
+  import("@/pages/SubscriptionsPage").then((m) => ({ default: m.SubscriptionsPage })),
+);
+const GiftCardsPage = lazy(() =>
+  import("@/pages/GiftCardsPage").then((m) => ({ default: m.GiftCardsPage })),
+);
+const EmailPreferencesPage = lazy(() =>
+  import("@/pages/EmailPreferencesPage").then((m) => ({ default: m.EmailPreferencesPage })),
+);
 const LoyaltyPage = lazy(() => import("@/pages/LoyaltyPage"));
 const ReferralPage = lazy(() => import("@/pages/ReferralPage"));
 const ComparePage = lazy(() => import("@/pages/ComparePage"));
 const AssistantFullPage = lazy(() =>
   import("@/components/ai/AssistantFullPage").then((m) => ({
     default: m.AssistantFullPage,
+  })),
+);
+// v5.1: Shared conversation view (public, no auth)
+const SharedConversationPage = lazy(() =>
+  import("@/pages/SharedConversationPage").then((m) => ({
+    default: m.SharedConversationPage,
   })),
 );
 import { useMe } from "@/hooks/useMe";
@@ -117,9 +180,7 @@ const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL as string | undefined
 const basePath = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
 
 function stripBase(path: string): string {
-  return basePath && path.startsWith(basePath)
-    ? path.slice(basePath.length) || "/"
-    : path;
+  return basePath && path.startsWith(basePath) ? path.slice(basePath.length) || "/" : path;
 }
 
 const clerkAppearance = {
@@ -128,7 +189,8 @@ const clerkAppearance = {
   options: {
     logoPlacement: "inside" as const,
     logoLinkUrl: basePath || "/",
-    logoImageUrl: 'https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783743859/IMG_20260710_151144-removebg-preview_11zon_ck95ax.png',
+    logoImageUrl:
+      "https://res.cloudinary.com/dcfbtdp6r/image/upload/v1783743859/IMG_20260710_151144-removebg-preview_11zon_ck95ax.png",
   },
   variables: {
     // Use CSS variables so the Clerk auth forms automatically follow the
@@ -147,7 +209,8 @@ const clerkAppearance = {
   },
   elements: {
     rootBox: "w-full flex justify-center",
-    cardBox: "bg-card rounded-xl w-[440px] max-w-full overflow-hidden border border-border shadow-lg",
+    cardBox:
+      "bg-card rounded-xl w-[440px] max-w-full overflow-hidden border border-border shadow-lg",
     card: "!shadow-none !border-0 !bg-transparent",
     footer: "!shadow-none !border-0 !bg-transparent",
     headerTitle: "font-serif text-2xl font-medium",
@@ -162,8 +225,10 @@ const clerkAppearance = {
     alertText: "text-destructive",
     logoBox: "flex justify-center mb-2",
     logoImage: "h-12 w-12 rounded-full object-cover object-center",
-    socialButtonsBlockButton: "border border-border hover:bg-muted/50 rounded-full h-11 font-medium transition-all",
-    formButtonPrimary: "bg-primary text-primary-foreground hover:bg-primary/90 font-medium rounded-full h-11 tracking-wide",
+    socialButtonsBlockButton:
+      "border border-border hover:bg-muted/50 rounded-full h-11 font-medium transition-all",
+    formButtonPrimary:
+      "bg-primary text-primary-foreground hover:bg-primary/90 font-medium rounded-full h-11 tracking-wide",
     footerAction: "bg-muted/30 pb-6 pt-4",
     dividerLine: "bg-border",
     alert: "bg-destructive/10 border-destructive/20 text-destructive",
@@ -203,14 +268,18 @@ const SCROLL_KEY = (path: string) => `__scroll__${path}`;
 function saveScrollPosition(path: string) {
   try {
     sessionStorage.setItem(SCROLL_KEY(path), String(Math.round(window.scrollY)));
-  } catch (_) {}
+  } catch {
+    /* sessionStorage may be unavailable (private browsing) */
+  }
 }
 
 function readScrollPosition(path: string): number {
   try {
     const v = sessionStorage.getItem(SCROLL_KEY(path));
     return v ? parseInt(v, 10) : 0;
-  } catch (_) { return 0; }
+  } catch (_) {
+    return 0;
+  }
 }
 
 // Fixed ScrollManager - handles async/data-fetching pages correctly.
@@ -224,9 +293,8 @@ function ScrollManager() {
   // Use full URL (pathname + search) as the scroll key so back/forward
   // across filter/search state (?q=, ?category=) is correctly restored.
   const [location] = useLocation();
-  const fullHref = typeof window !== "undefined"
-    ? window.location.pathname + window.location.search
-    : location;
+  const fullHref =
+    typeof window !== "undefined" ? window.location.pathname + window.location.search : location;
   const prevPathRef = useRef(fullHref);
   const isPopStateRef = useRef(false);
   const pendingScrollRef = useRef<number | null>(null);
@@ -244,7 +312,9 @@ function ScrollManager() {
       // Save using the last known scrollY, not window.scrollY (which may be 0 already)
       try {
         sessionStorage.setItem(SCROLL_KEY(fullHref), String(Math.round(lastScrollYRef.current)));
-      } catch (_) {}
+      } catch {
+        /* sessionStorage may be unavailable */
+      }
       window.removeEventListener("scroll", save);
       window.removeEventListener("pagehide", save);
     };
@@ -330,8 +400,12 @@ function ScrollManager() {
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   return (
     <>
-      <Show when="signed-in"><Component /></Show>
-      <Show when="signed-out"><Redirect to="/sign-in" /></Show>
+      <Show when="signed-in">
+        <Component />
+      </Show>
+      <Show when="signed-out">
+        <Redirect to="/sign-in" />
+      </Show>
     </>
   );
 }
@@ -348,11 +422,20 @@ function AdminRoute() {
   }, [isLoading, dbUser, clerkUser]);
 
   if (verifiedAdmin) {
-    return <Suspense fallback={<div className="min-h-[60vh]" />}><AdminPage /></Suspense>;
+    return (
+      <Suspense fallback={<div className="min-h-[60vh]" />}>
+        <AdminPage />
+      </Suspense>
+    );
   }
   if (isLoading) return null;
-  if (dbUser?.role !== "admin" && clerkUser?.publicMetadata?.role !== "admin") return <Redirect to="/" />;
-  return <Suspense fallback={<div className="min-h-[60vh]" />}><AdminPage /></Suspense>;
+  if (dbUser?.role !== "admin" && clerkUser?.publicMetadata?.role !== "admin")
+    return <Redirect to="/" />;
+  return (
+    <Suspense fallback={<div className="min-h-[60vh]" />}>
+      <AdminPage />
+    </Suspense>
+  );
 }
 
 function AppLayout({ children }: { children: React.ReactNode }) {
@@ -378,9 +461,7 @@ function AppLayout({ children }: { children: React.ReactNode }) {
       <ThemeColorSync />
       <div className="min-h-[100dvh] flex flex-col">
         <Navbar />
-        <main className="flex-1">
-          {children}
-        </main>
+        <main className="flex-1">{children}</main>
         {pageReady && !isConversationRoute && <Footer />}
       </div>
       {/* FloatingCartIcon also hidden inside an active conversation —
@@ -403,8 +484,15 @@ function ClerkProviderWithRoutes() {
       signInUrl={`${basePath}/sign-in`}
       signUpUrl={`${basePath}/sign-up`}
       localization={{
-        signIn: { start: { title: "Welcome back", subtitle: "Sign in to your Tree Friend account" } },
-        signUp: { start: { title: "Join Tree Friend", subtitle: "Create your account to start your ritual" } },
+        signIn: {
+          start: { title: "Welcome back", subtitle: "Sign in to your Tree Friend account" },
+        },
+        signUp: {
+          start: {
+            title: "Join Tree Friend",
+            subtitle: "Create your account to start your ritual",
+          },
+        },
       }}
       routerPush={(to) => setLocation(stripBase(to))}
       routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
@@ -413,94 +501,115 @@ function ClerkProviderWithRoutes() {
         <TokenSync />
         <PresenceHeartbeat />
         <GuestCartProvider>
-        <GuestWishlistProvider>
-          <WishlistProvider>
-          <PageProvider>
-            <ClerkQueryClientCacheInvalidator />
-            <ProfileSync />
-            <WishlistMergeSync />
-            <ScrollManager />
-            <AppLayout>
-              <Suspense fallback={<div className="min-h-[60vh]" />}>
-              <PageTransition>
-              <Switch>
-                <Route path="/" component={HomePage} />
-                <Route path="/browse" component={BrowseAllTreesPage} />
-                <Route path="/category/:slug/listings" component={CategoryListingsPage} />
-                <Route path="/category/:slug" component={CategoryProductsPage} />
-                <Route path="/products" component={ProductsPage} />
-                <Route path="/products/:productId/listings/:listingId" component={SellerListingDetailPage} />
-                <Route path="/products/:id/seller-listings" component={ProductSellerListingsPage} />
-                <Route path="/store/:sellerId" component={SellerStorePage} />
-                <Route path="/products/:id" component={ProductDetailPage} />
-                <Route path="/cart" component={CartPage} />
-                <Route path="/checkout" component={CheckoutPage} />
-        <Route path="/pre-order-checkout" component={PreOrderCheckoutPage} />
-                <Route path="/orders" component={OrdersPage} />
-                <Route path="/orders/:id" component={OrderDetailPage} />
-                <Route path="/pre-orders/:id" component={PreOrderDetailPage} />
-                <Route path="/wishlist" component={WishlistPage} />
-                <Route path="/profile">
-                  {() => <ProtectedRoute component={ProfilePage} />}
-                </Route>
-                <Route path="/subscriptions">
-                  {() => <ProtectedRoute component={SubscriptionsPage} />}
-                </Route>
-                <Route path="/gift-cards" component={GiftCardsPage} />
-                <Route path="/email-preferences">
-                  {() => <ProtectedRoute component={EmailPreferencesPage} />}
-                </Route>
-                <Route path="/loyalty">
-                  {() => <ProtectedRoute component={LoyaltyPage} />}
-                </Route>
-                <Route path="/referral">
-                  {() => <ProtectedRoute component={ReferralPage} />}
-                </Route>
-                <Route path="/compare" component={ComparePage} />
-                <Route path="/assistant" component={AssistantFullPage} />
-                <Route path="/track" component={TrackOrderPage} />
-                <Route path="/track/:trackingId" component={TrackOrderPage} />
-                <Route path="/messages">
-                  {() => <ProtectedRoute component={MessagesPage} />}
-                </Route>
-                <Route path="/messages/:conversationId">
-                  {() => <ProtectedRoute component={ChatPage as any} />}
-                </Route>
-                <Route path="/addresses" component={AddressesPage} />
-                <Route path="/become-seller">
-                  {() => <ProtectedRoute component={BecomeSellerPage} />}
-                </Route>
-                <Route path="/seller/dashboard">
-                  {() => <ProtectedRoute component={SellerDashboardPage} />}
-                </Route>
-                <Route path="/blog" component={BlogPage} />
-                <Route path="/blog/:slug" component={BlogArticlePage} />
-                <Route path="/admin">
-                  {() => (
-                    <>
-                      <Show when="signed-in"><AdminRoute /></Show>
-                      <Show when="signed-out"><Redirect to="/sign-in" /></Show>
-                    </>
-                  )}
-                </Route>
-                <Route path="/sign-in/*?" component={SignInPage} />
-                <Route path="/sign-up/*?" component={SignUpPage} />
-                <Route path="/:rest*">
-                  <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4">
-                    <h1 className="font-serif text-6xl font-medium mb-4 text-muted-foreground/30">404</h1>
-                    <h2 className="font-serif text-2xl font-medium mb-2">Page not found</h2>
-                    <p className="text-muted-foreground mb-8">The page you're looking for doesn't exist.</p>
-                    <Link href="/" className="text-sm text-accent underline underline-offset-4">Return home</Link>
-                  </div>
-                </Route>
-              </Switch>
-              </PageTransition>
-              </Suspense>
-            </AppLayout>
-            <Toaster />
-          </PageProvider>
-          </WishlistProvider>
-        </GuestWishlistProvider>
+          <GuestWishlistProvider>
+            <WishlistProvider>
+              <PageProvider>
+                <ClerkQueryClientCacheInvalidator />
+                <ProfileSync />
+                <WishlistMergeSync />
+                <ScrollManager />
+                <AppLayout>
+                  <Suspense fallback={<div className="min-h-[60vh]" />}>
+                    <PageTransition>
+                      <Switch>
+                        <Route path="/" component={HomePage} />
+                        <Route path="/browse" component={BrowseAllTreesPage} />
+                        <Route path="/category/:slug/listings" component={CategoryListingsPage} />
+                        <Route path="/category/:slug" component={CategoryProductsPage} />
+                        <Route path="/products" component={ProductsPage} />
+                        <Route
+                          path="/products/:productId/listings/:listingId"
+                          component={SellerListingDetailPage}
+                        />
+                        <Route
+                          path="/products/:id/seller-listings"
+                          component={ProductSellerListingsPage}
+                        />
+                        <Route path="/store/:sellerId" component={SellerStorePage} />
+                        <Route path="/products/:id" component={ProductDetailPage} />
+                        <Route path="/cart" component={CartPage} />
+                        <Route path="/checkout" component={CheckoutPage} />
+                        <Route path="/pre-order-checkout" component={PreOrderCheckoutPage} />
+                        <Route path="/orders" component={OrdersPage} />
+                        <Route path="/orders/:id" component={OrderDetailPage} />
+                        <Route path="/pre-orders/:id" component={PreOrderDetailPage} />
+                        <Route path="/wishlist" component={WishlistPage} />
+                        <Route path="/profile">
+                          {() => <ProtectedRoute component={ProfilePage} />}
+                        </Route>
+                        <Route path="/subscriptions">
+                          {() => <ProtectedRoute component={SubscriptionsPage} />}
+                        </Route>
+                        <Route path="/gift-cards" component={GiftCardsPage} />
+                        <Route path="/email-preferences">
+                          {() => <ProtectedRoute component={EmailPreferencesPage} />}
+                        </Route>
+                        <Route path="/loyalty">
+                          {() => <ProtectedRoute component={LoyaltyPage} />}
+                        </Route>
+                        <Route path="/referral">
+                          {() => <ProtectedRoute component={ReferralPage} />}
+                        </Route>
+                        <Route path="/compare" component={ComparePage} />
+                        <Route path="/assistant" component={AssistantFullPage} />
+                        <Route path="/track" component={TrackOrderPage} />
+                        <Route path="/track/:trackingId" component={TrackOrderPage} />
+                        <Route path="/messages">
+                          {() => <ProtectedRoute component={MessagesPage} />}
+                        </Route>
+                        <Route path="/messages/:conversationId">
+                          {() => <ProtectedRoute component={ChatPage as any} />}
+                        </Route>
+                        <Route path="/addresses" component={AddressesPage} />
+                        <Route path="/become-seller">
+                          {() => <ProtectedRoute component={BecomeSellerPage} />}
+                        </Route>
+                        <Route path="/seller/dashboard">
+                          {() => <ProtectedRoute component={SellerDashboardPage} />}
+                        </Route>
+                        <Route path="/blog" component={BlogPage} />
+                        <Route path="/blog/:slug" component={BlogArticlePage} />
+                        <Route path="/admin">
+                          {() => (
+                            <>
+                              <Show when="signed-in">
+                                <AdminRoute />
+                              </Show>
+                              <Show when="signed-out">
+                                <Redirect to="/sign-in" />
+                              </Show>
+                            </>
+                          )}
+                        </Route>
+                        <Route path="/sign-in/*?" component={SignInPage} />
+                        <Route path="/sign-up/*?" component={SignUpPage} />
+                        {/* v5.1: Shared conversation view (public, no auth required) */}
+                        <Route path="/shared/:shareToken" component={SharedConversationPage} />
+                        <Route path="/:rest*">
+                          <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4">
+                            <h1 className="font-serif text-6xl font-medium mb-4 text-muted-foreground/30">
+                              404
+                            </h1>
+                            <h2 className="font-serif text-2xl font-medium mb-2">Page not found</h2>
+                            <p className="text-muted-foreground mb-8">
+                              The page you're looking for doesn't exist.
+                            </p>
+                            <Link
+                              href="/"
+                              className="text-sm text-accent underline underline-offset-4"
+                            >
+                              Return home
+                            </Link>
+                          </div>
+                        </Route>
+                      </Switch>
+                    </PageTransition>
+                  </Suspense>
+                </AppLayout>
+                <Toaster />
+              </PageProvider>
+            </WishlistProvider>
+          </GuestWishlistProvider>
         </GuestCartProvider>
       </QueryClientProvider>
     </ClerkProvider>
@@ -509,7 +618,12 @@ function ClerkProviderWithRoutes() {
 
 function App() {
   return (
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem={true} disableTransitionOnChange>
+    <ThemeProvider
+      attribute="class"
+      defaultTheme="system"
+      enableSystem={true}
+      disableTransitionOnChange
+    >
       <CurrencyProvider>
         <WouterRouter base={basePath}>
           <ClerkProviderWithRoutes />
@@ -540,10 +654,12 @@ function WishlistMergeSync() {
     merged.current = true;
     Promise.all([
       ...guestWishlist.items.map((item) =>
-        addToWishlist.mutateAsync({ productId: item.productId }).catch(() => {})
+        addToWishlist.mutateAsync({ productId: item.productId }).catch(() => {}),
       ),
       ...guestWishlist.sellerListingItems.map((item) =>
-        addSellerListingVariantToWishlist.mutateAsync({ variantId: item.sellerListingVariantId }).catch(() => {})
+        addSellerListingVariantToWishlist
+          .mutateAsync({ variantId: item.sellerListingVariantId })
+          .catch(() => {}),
       ),
     ]).then(() => {
       guestWishlist.clearWishlist();

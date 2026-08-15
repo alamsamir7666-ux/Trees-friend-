@@ -332,6 +332,24 @@ async function* streamGroqCompletion(
   model: string,
   messages: GroqMessage[],
   tools?: GroqTool[],
+  /**
+   * v5.1: Optional callback fired as tool-call args accumulate in the
+   * stream. Groq (OpenAI-compatible) streams tool_calls as deltas:
+   *   chunk 1: { tool_calls: [{ index: 0, id: "call_abc", function: { name: "search_catalog", arguments: "" } }] }
+   *   chunk 2: { tool_calls: [{ index: 0, function: { arguments: '{"qu' } }] }
+   *   chunk 3: { tool_calls: [{ index: 0, function: { arguments: 'ery":"mang' } }] }
+   *   chunk 4: { tool_calls: [{ index: 0, function: { arguments: 'o"}' } }] }
+   *
+   * The frontend accumulates these deltas to render "Searching for: mang..."
+   * → "mango..." as the model generates the args. This is the industry-
+   * standard pattern (Vercel AI SDK `tool-input-delta`, OpenAI streaming
+   * tool_calls).
+   *
+   * NOTE: Gemini's SDK does NOT stream tool-call args (it delivers complete
+   * functionCall parts), so this callback is only invoked by Groq. The route
+   * handles the absence of deltas gracefully.
+   */
+  onToolCallDelta?: (event: { toolCallId: string; name?: string; argsDelta: string }) => void,
 ): AsyncGenerator<string, StreamResult, unknown> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
@@ -445,17 +463,32 @@ async function* streamGroqCompletion(
               // Append to existing tool call
               if (tc.function?.name) existing.function.name = tc.function.name;
               if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
-              if (tc.id) existing.id = tc.id;
+              // v5.1: fire delta callback for the args accumulation
+              if (onToolCallDelta && tc.function?.arguments) {
+                onToolCallDelta({
+                  toolCallId: existing.id,
+                  argsDelta: tc.function.arguments,
+                });
+              }
             } else {
               // New tool call
+              const newId = tc.id ?? `call_${idx}`;
               toolCallAccumulator.set(idx, {
-                id: tc.id ?? `call_${idx}`,
+                id: newId,
                 type: "function",
                 function: {
                   name: tc.function?.name ?? "",
                   arguments: tc.function?.arguments ?? "",
                 },
               });
+              // v5.1: fire delta callback with the tool name (first delta)
+              if (onToolCallDelta) {
+                onToolCallDelta({
+                  toolCallId: newId,
+                  name: tc.function?.name,
+                  argsDelta: tc.function?.arguments ?? "",
+                });
+              }
             }
           }
         }
@@ -674,8 +707,26 @@ export async function* streamGroqChat(
         // this to `undefined` below.
         const toolsForRound = groqTools;
 
-        // Streaming call — yields text as it arrives, accumulates tool_calls
-        const stream = streamGroqCompletion(modelName, messagesForRound, toolsForRound);
+        // Streaming call — yields text as it arrives, accumulates tool_calls.
+        // v5.1: pass onToolCallDelta so the frontend can stream tool args.
+        // We bridge onToolEvent (the route's callback) to onToolCallDelta
+        // (the streaming-internal callback) by converting the delta event
+        // to a ToolStreamEvent + firing it via onToolEvent.
+        const stream = streamGroqCompletion(
+          modelName,
+          messagesForRound,
+          toolsForRound,
+          onToolEvent
+            ? (delta) => {
+                onToolEvent({
+                  type: "tool_call_delta",
+                  toolCallId: delta.toolCallId,
+                  name: delta.name,
+                  argsDelta: delta.argsDelta,
+                });
+              }
+            : undefined,
+        );
 
         let result: StreamResult | undefined;
         while (true) {
@@ -871,10 +922,19 @@ export async function* streamGroqChat(
           // Track the finish reason across continue calls.
           let currentFinishReason: string | null = result.finishReason;
 
-          while (currentFinishReason === "length" && continueCount < maxAutoContinues && !budget.hadStuckLoop) {
+          while (
+            currentFinishReason === "length" &&
+            continueCount < maxAutoContinues &&
+            !budget.hadStuckLoop
+          ) {
             continueCount++;
             logger.info(
-              { continueCount, maxAutoContinues, model: modelName, maxOutputTokens: getMaxOutputTokens() },
+              {
+                continueCount,
+                maxAutoContinues,
+                model: modelName,
+                maxOutputTokens: getMaxOutputTokens(),
+              },
               "Groq: auto-continuing truncated response (finish_reason=length)",
             );
 
@@ -893,7 +953,8 @@ export async function* streamGroqChat(
             });
             messages.push({
               role: "user",
-              content: "Continue your previous response exactly from where it was cut off. Do not repeat what you already said — just complete the remaining content.",
+              content:
+                "Continue your previous response exactly from where it was cut off. Do not repeat what you already said — just complete the remaining content.",
             });
 
             // Run one more streaming call (no tools — we're continuing
@@ -920,7 +981,12 @@ export async function* streamGroqChat(
 
           if (currentFinishReason === "length") {
             logger.warn(
-              { finishReason: currentFinishReason, model: modelName, maxOutputTokens: getMaxOutputTokens(), continueCount },
+              {
+                finishReason: currentFinishReason,
+                model: modelName,
+                maxOutputTokens: getMaxOutputTokens(),
+                continueCount,
+              },
               "Groq: response still truncated after auto-continue limit. Consider raising AI_MAX_TOKENS or AI_MAX_AUTO_CONTINUES.",
             );
           }

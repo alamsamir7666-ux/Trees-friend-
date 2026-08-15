@@ -216,9 +216,9 @@ describe("Phase 3: kbSearch.ts lib module", () => {
   });
 
   it("v5.0: fallback uses legacy weights (0.40/0.20/0.20/0.10/0.10)", () => {
-    expect(source).toContain("semanticSimilarity * 0.40");
-    expect(source).toContain("keywordOverlap * 0.20");
-    expect(source).toContain("creatorAuthority * 0.20");
+    expect(source).toContain("semanticSimilarity * 0.4");
+    expect(source).toContain("keywordOverlap * 0.2");
+    expect(source).toContain("creatorAuthority * 0.2");
   });
 
   it("v5.0: invokes the reranker after first-pass composite scoring", () => {

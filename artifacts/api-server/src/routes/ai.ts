@@ -41,6 +41,7 @@
  *   The frontend rehydrates by calling GET /sessions/:token on mount.
  */
 import { Router, type Request, type Response } from "express";
+import { randomBytes } from "node:crypto";
 import { pool } from "@workspace/db";
 import { eq, asc, desc } from "drizzle-orm";
 import { aiChatSessionsTable, aiChatMessagesTable, aiChatFeedbackTable } from "@workspace/db";
@@ -181,6 +182,7 @@ interface SessionRow {
   session_token: string;
   title: string | null;
   user_id: string | null;
+  created_at: Date;
 }
 
 /**
@@ -1241,6 +1243,25 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
               ...(event.ok ? {} : { error: event.error }),
             })}\n\n`,
           );
+        } else if (event.type === "tool_call_delta") {
+          // v5.1: stream tool-call args deltas so the frontend can render
+          // "Searching for: mang..." → "mango..." as the model generates
+          // the args. Only fired by Groq (Gemini's SDK doesn't stream
+          // tool-call args). The frontend accumulates `argsDelta` strings
+          // into the full args JSON + renders partial args.
+          //
+          // Security: argsDelta is the MODEL's generated text (partial JSON
+          // like `{"query":"mang`), NOT user input. It's safe to stream
+          // to the client — it's the same content that would arrive in the
+          // `tool_call` event's `args` field once complete, just earlier.
+          res.write(
+            `data: ${JSON.stringify({
+              type: "tool_call_delta",
+              toolCallId: event.toolCallId,
+              ...(event.name ? { name: event.name } : {}),
+              argsDelta: event.argsDelta,
+            })}\n\n`,
+          );
         }
       } catch (writeErr) {
         // Best-effort — if the response is closed (client disconnected),
@@ -1266,8 +1287,41 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       // info so we can persist it on the assistant message row.
       // v3.1: the router adds `provider` to the metadata so we know which
       // provider actually generated the response.
+      // v5.1: also stream a `usage` SSE event so the frontend can show
+      // live token/cost counts (industry standard — Vercel AI SDK
+      // `onStepFinish`, OpenAI streaming usage). Previously usage was only
+      // available post-hoc on the persisted message. Now the UI can render
+      // "1,247 tokens · $0.003" as the response streams.
       (meta) => {
         metaHolder.value = meta;
+        // v5.1: stream usage to the client as it arrives.
+        // We send the raw usage object + provider + model so the frontend
+        // can compute cost display (using the same PRICING table as the
+        // backend, or just show raw token counts).
+        try {
+          if (meta.usage) {
+            const usage = meta.usage as {
+              promptTokenCount?: number;
+              candidatesTokenCount?: number;
+              totalTokenCount?: number;
+            };
+            res.write(
+              `data: ${JSON.stringify({
+                type: "usage",
+                model: meta.model,
+                provider: meta.provider,
+                promptTokens: usage.promptTokenCount,
+                completionTokens: usage.candidatesTokenCount,
+                totalTokens: usage.totalTokenCount,
+              })}\n\n`,
+            );
+          }
+        } catch (writeErr) {
+          logger.debug(
+            { err: (writeErr as any)?.message ?? String(writeErr) },
+            "AI: usage SSE write failed (non-fatal)",
+          );
+        }
       },
       onToolEvent,
     );
@@ -1357,11 +1411,24 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       const { found } = extractFollowups(fullResponse);
       if (!found) {
         logger.info("AI: [followups] block missing, generating via structured output");
+        // v5.1: notify the frontend that followups are being generated
+        try {
+          res.write(`data: ${JSON.stringify({ type: "followups_loading" })}\n\n`);
+        } catch {
+          // Best-effort — client may have disconnected
+        }
         try {
           const structuredFollowups = await generateFollowupsStructured(safeMessage, fullResponse);
           if (structuredFollowups.length > 0) {
             const followupsBlock = formatFollowupsBlock(structuredFollowups);
             fullResponse += followupsBlock;
+            // v5.1: send as a dedicated `followups_delta` event so the
+            // frontend can render suggestion chips immediately without
+            // re-parsing the text response.
+            res.write(
+              `data: ${JSON.stringify({ type: "followups_delta", followups: structuredFollowups })}\n\n`,
+            );
+            // Also send as a delta so the persisted response includes the block
             res.write(`data: ${JSON.stringify({ type: "delta", text: followupsBlock })}\n\n`);
           }
         } catch (err) {
@@ -2118,6 +2185,305 @@ router.delete(
     }
   },
 );
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── v5.1: Conversation export + sharing ────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Industry standard: ChatGPT shared links + data export, Claude artifacts.
+// Required for GDPR/BD data portability compliance.
+//
+//   GET  /api/ai/sessions/:token/export?format=json|markdown
+//   POST /api/ai/sessions/:token/share
+//   GET  /api/ai/shared/:shareToken                (public, no auth)
+
+// ─── GET /api/ai/sessions/:token/export ─────────────────────────────────────
+// Exports the conversation as JSON or Markdown. The user can download this
+// for backup, data portability (GDPR/BD compliance), or sharing manually.
+//
+// Query params:
+//   format — "json" (default) or "markdown"
+//
+// JSON format:
+//   { session: { id, title, createdAt }, messages: [{ role, content, createdAt }] }
+//
+// Markdown format:
+//   # TreeBot Conversation
+//   > Title: <title>
+//   > Created: <date>
+//
+//   ## 👤 User
+//   <message>
+//
+//   ## 🌳 TreeBot
+//   <message>
+router.get(
+  "/ai/sessions/:token/export",
+  aiSessionReadLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const access = await verifySessionAccess(req, res);
+      if (!access) {
+        if (!res.headersSent) {
+          res.status(401).json({ error: "Invalid or expired session token." });
+        }
+        return;
+      }
+      if (!access.session) {
+        res.status(404).json({ error: "Session not found." });
+        return;
+      }
+
+      // Fetch all messages oldest-first.
+      const msgs = await pool.query<{
+        id: number;
+        role: string;
+        content: string;
+        created_at: Date;
+        model: string | null;
+        token_count: number | null;
+      }>(
+        `SELECT id, role, content, created_at, model, token_count
+         FROM ai_chat_messages
+         WHERE session_id = $1
+         ORDER BY created_at ASC, id ASC`,
+        [access.session.id],
+      );
+
+      const format = (req.query.format as string) ?? "json";
+
+      if (format === "markdown") {
+        const lines: string[] = [
+          "# TreeBot Conversation",
+          `> Title: ${access.session.title ?? "Untitled"}`,
+          `> Created: ${access.session.created_at.toISOString()}`,
+          `> Messages: ${msgs.rows.length}`,
+          "",
+          "---",
+          "",
+        ];
+        for (const m of msgs.rows) {
+          const isUser = m.role === "user";
+          const header = isUser ? "## 👤 You" : "## 🌳 TreeBot";
+          const meta: string[] = [`_${m.created_at.toISOString()}_`];
+          if (!isUser && m.model) meta.push(`model: \`${m.model}\``);
+          if (m.token_count) meta.push(`tokens: ${m.token_count}`);
+          lines.push(header);
+          lines.push(`> ${meta.join(" · ")}`);
+          lines.push("");
+          lines.push(m.content);
+          lines.push("");
+          lines.push("---");
+          lines.push("");
+        }
+        const markdown = lines.join("\n");
+        res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="treebot-${access.sid.slice(0, 8)}.md"`,
+        );
+        res.send(markdown);
+        return;
+      }
+
+      // Default: JSON
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="treebot-${access.sid.slice(0, 8)}.json"`,
+      );
+      res.json({
+        session: {
+          id: access.session.id,
+          title: access.session.title,
+          createdAt: access.session.created_at,
+        },
+        messages: msgs.rows.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          createdAt: m.created_at,
+          ...(m.model ? { model: m.model } : {}),
+          ...(m.token_count ? { tokenCount: m.token_count } : {}),
+        })),
+        exportedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      logger.error({ err }, "AI: export failed");
+      res.status(500).json({ error: "Failed to export conversation." });
+    }
+  },
+);
+
+// ─── POST /api/ai/sessions/:token/share ─────────────────────────────────────
+// Creates a read-only share link for the conversation. Returns the share URL
+// the user can copy + send to someone else.
+//
+// Body (optional):
+//   title — custom title for the shared link (defaults to session title)
+//   expiresHours — link expires after N hours (default: never)
+//
+// Returns:
+//   { shareToken, shareUrl, expiresAt }
+router.post(
+  "/ai/sessions/:token/share",
+  aiSessionReadLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const access = await verifySessionAccess(req, res);
+      if (!access) {
+        if (!res.headersSent) {
+          res.status(401).json({ error: "Invalid or expired session token." });
+        }
+        return;
+      }
+      if (!access.session) {
+        res.status(404).json({ error: "Session not found." });
+        return;
+      }
+
+      const { title, expiresHours } = (req.body ?? {}) as {
+        title?: string;
+        expiresHours?: number;
+      };
+
+      // Generate a 32-char hex share token (128 bits of entropy).
+      const shareToken = randomBytes(16).toString("hex");
+
+      // Compute expiration (if requested). Cap at 720 hours (30 days) to
+      // prevent abuse — users who want longer can re-share.
+      let expiresAt: Date | null = null;
+      if (typeof expiresHours === "number" && expiresHours > 0) {
+        const hours = Math.min(expiresHours, 720);
+        expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000);
+      }
+
+      const result = await pool.query<{ id: number }>(
+        `INSERT INTO ai_chat_shared_links
+           (session_id, share_token, title, expires_at, created_by)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id`,
+        [
+          access.session.id,
+          shareToken,
+          title ?? access.session.title ?? null,
+          expiresAt,
+          access.uid,
+        ],
+      );
+
+      // Build the share URL from the request origin (works for both Render
+      // and Vercel — the frontend serves the shared view at /shared/:token).
+      const origin = req.headers.origin ?? req.headers.referer ?? "";
+      const baseUrl = origin ? origin.replace(/\/$/, "") : `https://${req.headers.host}`;
+      const shareUrl = `${baseUrl}/shared/${shareToken}`;
+
+      logger.info(
+        { sessionId: access.session.id, shareLinkId: result.rows[0].id, expiresAt },
+        "AI: share link created",
+      );
+
+      res.json({
+        shareToken,
+        shareUrl,
+        expiresAt: expiresAt?.toISOString() ?? null,
+      });
+    } catch (err) {
+      logger.error({ err }, "AI: share failed");
+      res.status(500).json({ error: "Failed to create share link." });
+    }
+  },
+);
+
+// ─── GET /api/ai/shared/:shareToken ─────────────────────────────────────────
+// Public endpoint — returns the shared conversation. No auth required (the
+// share token IS the auth — 128 bits of entropy, unguessable).
+//
+// Increments view_count + updates last_viewed_at (best-effort, non-blocking).
+// Returns 404 if the share link doesn't exist, has expired, or the session
+// was deleted (CASCADE).
+router.get("/ai/shared/:shareToken", async (req: Request, res: Response) => {
+  try {
+    const shareToken = String(req.params.shareToken ?? "");
+    if (!shareToken || !/^[0-9a-f]{32}$/i.test(shareToken)) {
+      res.status(404).json({ error: "Shared conversation not found." });
+      return;
+    }
+
+    const linkResult = await pool.query<{
+      id: number;
+      session_id: number;
+      title: string | null;
+      created_at: Date;
+      expires_at: Date | null;
+    }>(
+      `SELECT id, session_id, title, created_at, expires_at
+       FROM ai_chat_shared_links
+       WHERE share_token = $1
+       LIMIT 1`,
+      [shareToken],
+    );
+
+    if (linkResult.rows.length === 0) {
+      res.status(404).json({ error: "Shared conversation not found." });
+      return;
+    }
+
+    const link = linkResult.rows[0];
+
+    // Check expiration
+    if (link.expires_at && new Date() > link.expires_at) {
+      res.status(410).json({ error: "This share link has expired." });
+      return;
+    }
+
+    // Fetch the session + messages.
+    const [sessionResult, msgsResult] = await Promise.all([
+      pool.query<{ title: string | null; created_at: Date }>(
+        `SELECT title, created_at FROM ai_chat_sessions WHERE id = $1`,
+        [link.session_id],
+      ),
+      pool.query<{ role: string; content: string; created_at: Date }>(
+        `SELECT role, content, created_at
+         FROM ai_chat_messages
+         WHERE session_id = $1
+         ORDER BY created_at ASC, id ASC`,
+        [link.session_id],
+      ),
+    ]);
+
+    if (sessionResult.rows.length === 0) {
+      // Session was deleted (CASCADE should have removed the link, but
+      // defensive — return 404).
+      res.status(404).json({ error: "Shared conversation not found." });
+      return;
+    }
+
+    // Increment view count (fire-and-forget).
+    pool
+      .query(
+        `UPDATE ai_chat_shared_links
+         SET view_count = view_count + 1, last_viewed_at = NOW()
+         WHERE id = $1`,
+        [link.id],
+      )
+      .catch(() => {});
+
+    res.json({
+      title: link.title ?? sessionResult.rows[0].title ?? "Shared Conversation",
+      createdAt: link.created_at.toISOString(),
+      sessionCreatedAt: sessionResult.rows[0].created_at.toISOString(),
+      messages: msgsResult.rows.map((m) => ({
+        role: m.role,
+        content: m.content,
+        createdAt: m.created_at.toISOString(),
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI: shared view failed");
+    res.status(500).json({ error: "Failed to load shared conversation." });
+  }
+});
 
 // Touch the imports so unused-imports lint doesn't complain (these are
 // used via the type system and the table objects exported by @workspace/db

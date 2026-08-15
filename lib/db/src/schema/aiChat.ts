@@ -295,6 +295,45 @@ export const aiChatFeedbackTable = pgTable(
 
 export type AiChatFeedback = typeof aiChatFeedbackTable.$inferSelect;
 
+// ─── v5.1: Conversation sharing ─────────────────────────────────────────────
+/**
+ * Read-only share links for AI chat sessions.
+ *
+ * Users can generate a share link to send their conversation to someone
+ * else (e.g. for support, or to share plant care advice). The link is
+ * read-only + can optionally expire.
+ *
+ * Industry standard: ChatGPT shared links, Claude artifacts.
+ *
+ *   - `shareToken` is a random 32-char hex string (128 bits of entropy),
+ *     generated server-side via `crypto.randomBytes(16).toString("hex")`.
+ *   - `expiresAt` is optional (NULL = never expires).
+ *   - `viewCount` is incremented on each view (analytics + abuse detection).
+ *   - CASCADE on `sessionId` so deleting the session removes its share links.
+ */
+export const aiChatSharedLinksTable = pgTable(
+  "ai_chat_shared_links",
+  {
+    id: serial("id").primaryKey(),
+    sessionId: integer("session_id")
+      .notNull()
+      .references(() => aiChatSessionsTable.id, { onDelete: "cascade" }),
+    shareToken: text("share_token").notNull().unique(),
+    title: text("title"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    expiresAt: timestamp("expires_at"),
+    viewCount: integer("view_count").default(0).notNull(),
+    lastViewedAt: timestamp("last_viewed_at"),
+    createdBy: text("created_by"),
+  },
+  (table) => [
+    index("ai_chat_shared_links_session_idx").on(table.sessionId),
+    index("ai_chat_shared_links_token_idx").on(table.shareToken),
+  ],
+);
+
+export type AiChatSharedLink = typeof aiChatSharedLinksTable.$inferSelect;
+
 // Mark the module as side-effectful for the schema barrel — drizzle needs
 // the table objects to be imported so they're included in the schema bag.
 export const __aiChatSchemaMarker = sql`-- ai_chat schema loaded`;

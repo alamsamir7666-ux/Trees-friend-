@@ -117,29 +117,27 @@ export function getMaxToolRounds(): number {
   return parsed;
 }
 
-// ─── Tool-call progress events (v3.7) ────────────────────────────────────────
+// ─── Tool-call progress events (v3.7, v5.1) ────────────────────────────────
 
 /**
  * v3.7: Discriminated union for tool-call lifecycle events that stream
  * to the client DURING the multi-round tool loop.
  *
- * Why this exists:
- *   The v3.6 fix made text deltas stream during tool rounds, but when the
- *   model actually calls a tool, the user saw NOTHING while the tool
- *   executed (100ms-2s for DB queries, KB searches, etc.). Industry
- *   standard (Vercel AI SDK `tool-call`/`tool-result`, OpenAI Assistants
- *   `tool_call` step events, Anthropic `input_json` deltas) all surface
- *   tool-call progress so the UI can show "Looking up your order...".
+ * v5.1: added `tool_call_delta` — fires as tool-call args accumulate
+ * during streaming (Groq/OpenAI-style). The UI can render
+ * "Searching for: mang..." → "mango..." as args arrive.
  *
- * These events are fired by the provider (gemini.ts/groq.ts) via the
- * `onToolEvent` callback, forwarded by aiRouter.ts, and written as SSE
- * events by routes/ai.ts. The frontend (useAiChat.ts) tracks active tool
- * calls and renders them as chips in AssistantPanel.tsx.
+ * NOTE: Gemini's SDK delivers `functionCall` parts COMPLETE (not as
+ * deltas), so `tool_call_delta` is only fired by Groq. The route handles
+ * this gracefully — if no deltas arrive, the UI just shows the tool name
+ * immediately when `tool_call` fires (same as v3.7 behavior).
  *
- * NOTE: `args` is included in `tool_call` for server-side logging but
+ * `args` is included in `tool_call` for server-side logging but
  * the route handler does NOT forward it to the client (could contain
  * sensitive data like order IDs or email addresses). Only `name` is
- * sent over SSE.
+ * sent over SSE. The `tool_call_delta` event sends only the `argsDelta`
+ * string (partial JSON), which the frontend accumulates — this is safe
+ * because it's the model's generated text, not user input.
  */
 export type ToolStreamEvent =
   | { type: "tool_call"; name: string; args: unknown }
@@ -150,6 +148,16 @@ export type ToolStreamEvent =
       ok: false;
       error: string;
       durationMs: number;
+    }
+  // v5.1: streaming tool-call args delta. Fires as the model generates
+  // tool-call arguments token-by-token (Groq/OpenAI only). The frontend
+  // accumulates `argsDelta` strings into the full args JSON, rendering
+  // partial args as they arrive.
+  | {
+      type: "tool_call_delta";
+      toolCallId: string;
+      name?: string; // present on the first delta (when the tool name is known)
+      argsDelta: string; // partial JSON string to append
     };
 
 /**
