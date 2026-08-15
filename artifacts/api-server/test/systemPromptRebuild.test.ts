@@ -78,8 +78,9 @@ describe("BUG-I5 fix: aiContext.ts exports clearKbBlockFromPrompt", () => {
 
   it("clearKbBlockFromPrompt does NOT touch the TONE MATCHING block", () => {
     // The replacement regex must match only the KB header, not the tone header.
-    // Verify the KB header pattern is specific (doesn't match TONE MATCHING).
-    expect(source).toMatch(/KNOWLEDGE BASE CONTEXT \(use as PRIMARY source — cite the creator\):/);
+    // Privacy: the header pattern matches BOTH the old header (with "cite the
+    // creator") and the new header (without it) for backward compat.
+    expect(source).toMatch(/KNOWLEDGE BASE CONTEXT \(use as PRIMARY source/);
     // The next-section pattern should include TONE MATCHING as a BOUNDARY
     // (we clear up to TONE MATCHING, not INTO it).
     expect(source).toMatch(/TONE MATCHING/);
@@ -220,9 +221,14 @@ describe("BUG-I5 fix: clearKbBlockFromPrompt behavioral test", () => {
   /**
    * Replicates the clearKbBlockFromPrompt logic from aiContext.ts.
    * Used to verify the regex/replace logic is correct.
+   *
+   * Privacy: the header pattern matches BOTH the old header (with
+   * "cite the creator") and the new header (without it) for backward
+   * compat with cached prompts.
    */
   function clearKbBlockFromPrompt(systemPrompt: string): string {
-    const HEADER_PATTERN = /KNOWLEDGE BASE CONTEXT \(use as PRIMARY source — cite the creator\):/;
+    const HEADER_PATTERN =
+      /KNOWLEDGE BASE CONTEXT \(use as PRIMARY source(?: — cite the creator)?\):/;
     const REPLACEMENT =
       "KNOWLEDGE BASE CONTEXT: (cleared — see search_knowledge_base tool " +
       "results above for the current KB context)";
@@ -247,11 +253,11 @@ describe("BUG-I5 fix: clearKbBlockFromPrompt behavioral test", () => {
     return systemPrompt.slice(0, match.index) + REPLACEMENT + systemPrompt.slice(blockEnd);
   }
 
-  it("clears the KB block when followed by CATALOG CONTEXT", () => {
+  it("clears the KB block when followed by CATALOG CONTEXT (new header without creator)", () => {
     const prompt =
       "You are TreeBot.\n\n" +
-      "KNOWLEDGE BASE CONTEXT (use as PRIMARY source — cite the creator):\n" +
-      '- "Mango care" (Green Garden BD — YouTube)\n' +
+      "KNOWLEDGE BASE CONTEXT (use as PRIMARY source):\n" +
+      '- "Mango care"\n' +
       "  Water mango trees every 7-10 days in summer.\n" +
       "\n" +
       "CATALOG CONTEXT (use when relevant; cite exact product names):\n" +
@@ -264,19 +270,33 @@ describe("BUG-I5 fix: clearKbBlockFromPrompt behavioral test", () => {
     expect(cleared).toContain("[[Alphonso Mango]]");
   });
 
-  it("clears the KB block when followed by TONE MATCHING", () => {
+  it("clears the KB block when followed by TONE MATCHING (new header)", () => {
     const prompt =
-      "KNOWLEDGE BASE CONTEXT (use as PRIMARY source — cite the creator):\n" +
-      '- "Mango care" (Green Garden BD — YouTube)\n' +
+      "KNOWLEDGE BASE CONTEXT (use as PRIMARY source):\n" +
+      '- "Mango care"\n' +
       "  Water mango trees every 7-10 days.\n" +
       "\n" +
       "TONE MATCHING (Phase 4):\n" +
-      'The primary knowledge source above is from "Green Garden BD".\n';
+      "The primary knowledge source above has a distinctive writing style.\n";
     const cleared = clearKbBlockFromPrompt(prompt);
     expect(cleared).toContain("cleared — see search_knowledge_base tool results above");
     // The TONE MATCHING block must be preserved.
     expect(cleared).toContain("TONE MATCHING (Phase 4):");
-    expect(cleared).toContain("Green Garden BD");
+    expect(cleared).toContain("distinctive writing style");
+  });
+
+  it("also matches the OLD header (backward compat with cached prompts)", () => {
+    // The old header had " — cite the creator" — the regex should still
+    // match it so prompts cached before the privacy fix are cleared correctly.
+    const prompt =
+      "KNOWLEDGE BASE CONTEXT (use as PRIMARY source — cite the creator):\n" +
+      '- "Mango care"\n' +
+      "  Water mango trees every 7-10 days.\n" +
+      "\n" +
+      "CATALOG CONTEXT:\n";
+    const cleared = clearKbBlockFromPrompt(prompt);
+    expect(cleared).toContain("cleared — see search_knowledge_base tool results above");
+    expect(cleared).not.toContain("Water mango trees");
   });
 
   it("returns the prompt unchanged when no KB block is present", () => {
@@ -287,8 +307,8 @@ describe("BUG-I5 fix: clearKbBlockFromPrompt behavioral test", () => {
 
   it("clears to the end when no next section is found", () => {
     const prompt =
-      "KNOWLEDGE BASE CONTEXT (use as PRIMARY source — cite the creator):\n" +
-      '- "Mango care" (Green Garden BD — YouTube)\n' +
+      "KNOWLEDGE BASE CONTEXT (use as PRIMARY source):\n" +
+      '- "Mango care"\n' +
       "  Water mango trees every 7-10 days.";
     const cleared = clearKbBlockFromPrompt(prompt);
     expect(cleared).toContain("cleared — see search_knowledge_base tool results above");

@@ -145,7 +145,8 @@ describe("Phase 3: kbSearch.ts lib module", () => {
 
   it("formatKbContextForPrompt includes 'KNOWLEDGE BASE CONTEXT' header", () => {
     expect(source).toContain("KNOWLEDGE BASE CONTEXT");
-    expect(source).toContain("cite the creator");
+    // Privacy: creator names are NOT included in the prompt.
+    expect(source).not.toContain("cite the creator");
   });
 
   it("formatKbContextForPrompt truncates content to 500 chars", () => {
@@ -269,7 +270,8 @@ describe("Phase 3: aiTools.ts search_knowledge_base tool", () => {
 
   it("the tool description mentions it's the PRIMARY source", () => {
     expect(source).toContain("PRIMARY source");
-    expect(source).toContain("cite the creator");
+    // Privacy: creator names are NOT in the tool description.
+    expect(source).not.toContain("cite the creator");
   });
 
   it("the tool has the required 'query' parameter", () => {
@@ -336,7 +338,19 @@ describe("Phase 3: aiContext.ts {{knowledge}} placeholder + rules", () => {
 
   it("SYSTEM_PROMPT_TEMPLATE_V1 has a KNOWLEDGE BASE rules section", () => {
     expect(source).toContain("KNOWLEDGE BASE");
-    expect(source).toContain("cite the creator");
+    // Privacy: system prompt no longer tells the LLM to cite creators.
+    // Check only executable lines (strip comments + regex patterns that
+    // mention "cite the creator" for backward-compat with cached prompts).
+    const codeOnly = source
+      .split("\n")
+      .filter(
+        (line) =>
+          !line.trim().startsWith("//") &&
+          !line.trim().startsWith("*") &&
+          !line.includes("HEADER_PATTERN"),
+      )
+      .join("\n");
+    expect(codeOnly).not.toContain("cite the creator");
     expect(source).toContain("search_knowledge_base tool");
   });
 

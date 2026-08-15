@@ -1374,29 +1374,33 @@ function selectToneCreator(entries: KbSearchResult[]): {
  * `{{knowledge}}` placeholder. The format is:
  *
  * ```
- * KNOWLEDGE BASE CONTEXT (use as PRIMARY source — cite the creator):
- * - "Mango tree watering in summer" (Green Garden BD — YouTube)
+ * KNOWLEDGE BASE CONTEXT (use as PRIMARY source):
+ * - "Mango tree watering in summer"
  *   During summer (March-June), water mature mango trees once every 7-10 days...
  *   [Keywords: mango, watering, summer]
  *
- * - "Mango pest control guide" (Plant Care BD — Blog)
+ * - "Mango pest control guide"
  *   Common mango pests include hoppers, mealybugs, and fruit flies...
  *   [Keywords: mango, pests, mealybug]
  * ```
  *
  * Each entry is truncated to 500 chars (to keep the prompt reasonable).
  * If no entries, returns "" (the route treats empty as "no KB context").
+ *
+ * Privacy: creator names are NOT included in the prompt (the LLM should
+ * not attribute content to specific creators in its responses). The
+ * creator info is used internally for tone matching + authority scoring
+ * but is never surfaced to the LLM.
  */
 export function formatKbContextForPrompt(entries: KbSearchResult[]): string {
   if (!entries || entries.length === 0) return "";
 
-  const lines: string[] = ["KNOWLEDGE BASE CONTEXT (use as PRIMARY source — cite the creator):"];
+  const lines: string[] = ["KNOWLEDGE BASE CONTEXT (use as PRIMARY source):"];
 
   for (const r of entries) {
-    const creatorName = r.creator?.name ?? "Unknown";
-    const sourceType = r.source?.type ?? "manual";
-    // BUG-I1 fix: use UNIFIED_CONTENT_TRUNCATE_CHARS so the auto-inject
-    // path and the tool path (aiTools.ts) truncate at the same length.
+    // Privacy: do NOT include the creator name in the prompt.
+    // The LLM should present KB content as authoritative plant-care
+    // advice without attributing it to specific creators.
     const truncatedContent =
       r.entry.content.length > UNIFIED_CONTENT_TRUNCATE_CHARS
         ? r.entry.content.slice(0, UNIFIED_CONTENT_TRUNCATE_CHARS) + "…"
@@ -1404,7 +1408,7 @@ export function formatKbContextForPrompt(entries: KbSearchResult[]): string {
     const keywordsStr =
       r.entry.keywords.length > 0 ? `[Keywords: ${r.entry.keywords.join(", ")}]` : "";
 
-    lines.push(`- "${r.entry.title}" (${creatorName} — ${sourceType})`, `  ${truncatedContent}`);
+    lines.push(`- "${r.entry.title}"`, `  ${truncatedContent}`);
     if (keywordsStr) lines.push(`  ${keywordsStr}`);
     lines.push(""); // blank line between entries
   }

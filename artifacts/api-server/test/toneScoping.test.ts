@@ -1,12 +1,12 @@
 /**
- * BUG-I4 fix: tone profile scoping tests.
+ * BUG-I4 fix + Privacy fix: tone profile scoping tests.
  *
- * Verifies that the tone block is scoped to the auto-inject entries and
- * that tool results include `tone_locked_creator` so the LLM can detect
- * creator mismatches and use neutral tone for off-creator citations.
- *
- * Uses source-shape inspection (same pattern as `kbRetrievalUnification.test.ts`,
- * `rerankerFallbackCache.test.ts`).
+ * Verifies that:
+ *   - The tone block is scoped to auto-injected entries (BUG-I4).
+ *   - Creator names are NOT leaked to the LLM (Privacy fix).
+ *   - ToolContext + ChatTools + executeTool plumbing still exists (internal).
+ *   - The searchKb tool result does NOT include `creator` or
+ *     `tone_locked_creator` fields (Privacy fix).
  *
  * Run: cd artifacts/api-server && pnpm vitest run test/toneScoping.test.ts
  */
@@ -19,43 +19,47 @@ function readSource(rel: string): string {
   return fs.readFileSync(`${REPO_ROOT}/${rel}`, "utf8");
 }
 
-describe("BUG-I4 fix: formatToneBlockForPrompt scopes tone to auto-inject", () => {
+describe("Privacy fix: formatToneBlockForPrompt does NOT leak creator name", () => {
   const source = readSource("artifacts/api-server/src/lib/kbToneProfiles.ts");
 
-  it("tone block mentions the tone applies ONLY to auto-injected entries", () => {
-    // The new rule must tell the LLM the tone is scoped — not global.
-    expect(source).toMatch(/applies ONLY/i);
-    expect(source).toMatch(/auto-injected/i);
+  it("tone block does NOT include the creator name in the prompt text", () => {
+    // The old code said: `The primary knowledge source above is from "${creatorName}".`
+    // The new code says: `The primary knowledge source above has a distinctive writing style.`
+    expect(source).toContain("distinctive writing style");
+    // The creatorName parameter is accepted but prefixed with _ (unused).
+    expect(source).toMatch(/_creatorName/);
   });
 
-  it("tone block mentions NEUTRAL tone for different creators", () => {
-    // The LLM must be told to use neutral tone when tool results come
-    // from a different creator than the tone-locked one.
-    expect(source).toMatch(/NEUTRAL tone/i);
-    expect(source).toMatch(/DIFFERENT creator/i);
+  it("tone block does NOT reference tone_locked_creator field", () => {
+    // Strip comments before checking — the source has comments explaining
+    // the history of the BUG-I4 fix that mention tone_locked_creator.
+    const codeOnly = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/tone_locked_creator/);
   });
 
-  it("tone block references the tone_locked_creator field", () => {
-    // The LLM needs to know the field name to compare against.
-    expect(source).toMatch(/tone_locked_creator/);
+  it("tone block does NOT reference the search_knowledge_base tool by name", () => {
+    // The old rule said "If you call the search_knowledge_base tool..."
+    // The new rule just says "Present KB content as authoritative..."
+    expect(source).not.toMatch(/search_knowledge_base/);
   });
 
-  it("tone block references the search_knowledge_base tool", () => {
-    // The rule must mention the tool by name so the LLM associates it.
-    expect(source).toMatch(/search_knowledge_base/);
+  it("tone block tells the LLM NOT to attribute content to specific sources", () => {
+    expect(source).toMatch(/do not attribute/i);
   });
 
-  it("tone block does NOT change the function signature", () => {
-    // The signature must remain (profile, creatorName, matchPercentage) —
-    // the scoping is via prompt text, not new parameters. Use [\s\S] to
-    // match across newlines (signature spans multiple lines).
+  it("tone block does NOT change the function signature (still accepts creatorName)", () => {
+    // The signature must remain (profile, creatorName, matchPercentage) for
+    // backward-compat with callers. Use [\s\S] to match across newlines.
     expect(source).toMatch(
-      /export function formatToneBlockForPrompt\([\s\S]*?profile:\s*ToneProfile,[\s\S]*?creatorName:\s*string,[\s\S]*?matchPercentage:\s*number[\s\S]*?\)/,
+      /export function formatToneBlockForPrompt\([\s\S]*?profile:\s*ToneProfile,[\s\S]*?([_]?creatorName):\s*string,[\s\S]*?matchPercentage:\s*number[\s\S]*?\)/,
     );
   });
 });
 
-describe("BUG-I4 fix: ToolContext interface is defined in aiTools.ts", () => {
+describe("BUG-I4 fix: ToolContext interface is defined in aiTools.ts (internal)", () => {
   const source = readSource("artifacts/api-server/src/lib/aiTools.ts");
 
   it("defines the ToolContext interface", () => {
@@ -83,7 +87,6 @@ describe("BUG-I4 fix: ChatTools.execute accepts context?: ToolContext", () => {
   });
 
   it("ChatTools.execute still accepts the 3 original params (name, args, userId)", () => {
-    // Backward compat — existing callers that don't pass context still work.
     expect(source).toMatch(
       /name:\s*string,\s*args:\s*Record<string,\s*unknown>,\s*userId:\s*string\s*\|\s*null/,
     );
@@ -106,29 +109,34 @@ describe("BUG-I4 fix: executeTool accepts + passes context", () => {
   });
 });
 
-describe("BUG-I4 fix: searchKb returns tone_locked_creator", () => {
+describe("Privacy fix: searchKb does NOT return creator or tone_locked_creator", () => {
   const source = readSource("artifacts/api-server/src/lib/aiTools.ts");
 
   it("searchKb signature accepts context?: ToolContext as the 3rd param", () => {
     expect(source).toMatch(/async\s+function\s+searchKb[\s\S]*?context\?\s*:\s*ToolContext/);
   });
 
-  it("searchKb returns tone_locked_creator: context?.toneLockedCreatorName ?? null", () => {
-    expect(source).toMatch(/tone_locked_creator:\s*context\?\.toneLockedCreatorName\s*\?\?\s*null/);
+  it("searchKb does NOT return `creator` field in results", () => {
+    // Privacy: creator name is NOT surfaced to the LLM.
+    // Check the executable code (strip comments) to avoid false positives
+    // from comment lines mentioning "creator".
+    const codeOnly = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/creator:\s*r\.creator\?\.name/);
   });
 
-  it("searchKb includes tone_locked_creator in BOTH the success path and the empty-query early return", () => {
-    // The empty-query early return (line ~848) and the success return
-    // (line ~920) both need the field — count occurrences.
-    const matches = source.match(
-      /tone_locked_creator:\s*context\?\.toneLockedCreatorName\s*\?\?\s*null/g,
-    );
-    expect(matches).not.toBeNull();
-    expect(matches!.length).toBeGreaterThanOrEqual(2);
+  it("searchKb does NOT return `tone_locked_creator` field", () => {
+    const codeOnly = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/tone_locked_creator:/);
   });
 });
 
-describe("BUG-I4 fix: routes/ai.ts passes tone context into tools closure", () => {
+describe("BUG-I4 fix: routes/ai.ts passes tone context into tools closure (internal)", () => {
   const source = readSource("artifacts/api-server/src/routes/ai.ts");
 
   it("captures toneLockedCreatorId from kbContext.toneCreator", () => {
@@ -144,33 +152,39 @@ describe("BUG-I4 fix: routes/ai.ts passes tone context into tools closure", () =
   });
 
   it("wraps executeTool in a closure that adds the context as the 4th arg", () => {
-    // The closure pattern: (name, args, uid) => executeTool(name, args, uid, {...})
     expect(source).toMatch(
       /execute:\s*\(name,\s*args,\s*uid\)\s*=>\s*executeTool\(name,\s*args,\s*uid,\s*\{/,
     );
   });
 });
 
-describe("BUG-I4 fix: search_knowledge_base tool description mentions tone", () => {
+describe("Privacy fix: tool description does NOT mention creator or tone_locked_creator", () => {
   const source = readSource("artifacts/api-server/src/lib/aiTools.ts");
 
-  it("tool description mentions tone_locked_creator field", () => {
-    expect(source).toMatch(/tone_locked_creator/);
+  it("tool description does NOT mention tone_locked_creator", () => {
+    // Strip comments before checking — comments in aiTools.ts mention
+    // tone_locked_creator for historical context (BUG-I4 fix).
+    const codeOnly = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/tone_locked_creator/);
   });
 
-  it("tool description mentions neutral tone for mismatched creators", () => {
-    expect(source).toMatch(/neutral tone/i);
+  it("tool description does NOT tell the LLM to cite creators", () => {
+    const codeOnly = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/cite the creator/i);
   });
 
-  it("tool description tells the LLM to compare creator !== tone_locked_creator", () => {
-    expect(source).toMatch(/creator.*tone_locked_creator|tone_locked_creator.*creator/i);
+  it("tool description tells the LLM NOT to attribute to specific sources", () => {
+    expect(source).toMatch(/without attributing/i);
   });
 });
 
 describe("BUG-I4 fix: gemini.ts + groq.ts do NOT need changes (closure approach)", () => {
-  // The closure approach in routes/ai.ts means gemini.ts/groq.ts still
-  // call tools.execute(name, args, userId) with 3 args — the 4th (context)
-  // is added by the closure. Verify both files still use the 3-arg call.
   const geminiSource = readSource("artifacts/api-server/src/lib/gemini.ts");
   const groqSource = readSource("artifacts/api-server/src/lib/groq.ts");
 

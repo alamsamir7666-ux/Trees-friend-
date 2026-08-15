@@ -524,13 +524,16 @@ export async function getCreatorsNeedingToneProfiles(): Promise<
  */
 export function formatToneBlockForPrompt(
   profile: ToneProfile,
-  creatorName: string,
+  // Privacy: creatorName is accepted for backward-compat with existing
+  // callers (routes/ai.ts passes it) but is NOT included in the prompt
+  // text. The LLM should adopt the tone without knowing WHO the creator is.
+  _creatorName: string,
   matchPercentage: number,
 ): string {
   const lines: string[] = [
     "TONE MATCHING (Phase 4):",
-    `The primary knowledge source above is from "${creatorName}".`,
-    `Adopt approximately ${matchPercentage}% of this creator's tone in your response:`,
+    `The primary knowledge source above has a distinctive writing style.`,
+    `Adopt approximately ${matchPercentage}% of this style in your response:`,
   ];
 
   if (profile.adjectives.length > 0) {
@@ -555,29 +558,22 @@ export function formatToneBlockForPrompt(
 
   lines.push("");
   lines.push("Rules:");
-  lines.push("- Capture the SPIRIT of their tone, don't copy their phrases verbatim.");
-  lines.push("- Use 1-2 of their example phrases naturally if they fit (don't force it).");
+  lines.push("- Capture the SPIRIT of this style, don't copy phrases verbatim.");
+  lines.push("- Use 1-2 of the example phrases naturally if they fit (don't force it).");
   const remainingPct = 100 - matchPercentage;
   lines.push(
-    `- Keep ${remainingPct}% of your standard helpful, clear tone — the creator's tone is an accent, not a mask.`,
+    `- Keep ${remainingPct}% of your standard helpful, clear tone — this style is an accent, not a mask.`,
   );
   lines.push("- If the user asks a factual question, prioritize accuracy over tone.");
   lines.push(
-    "- Respond in the same language as the user's message (the creator's tone should adapt to the user's language).",
+    "- Respond in the same language as the user's message (the style should adapt to the user's language).",
   );
-  // BUG-I4 fix: scope the tone to the auto-injected entries. If the LLM
-  // calls search_knowledge_base and gets entries from a DIFFERENT creator,
-  // it must use neutral tone for those citations — don't apply this
-  // creator's tone to another creator's content (mismatched attribution).
-  // The tool result envelope includes a `tone_locked_creator` field so
-  // the LLM can detect mismatches: when results[].creator !== tone_locked_creator,
-  // use neutral tone for those citations.
-  lines.push(`- IMPORTANT: This tone applies ONLY to the auto-injected KNOWLEDGE BASE`);
-  lines.push(`  CONTEXT block above (entries from "${creatorName}"). If you call the`);
-  lines.push(`  search_knowledge_base tool and receive entries from a DIFFERENT creator`);
-  lines.push(`  (check the \`creator\` field on each tool result against the response's`);
-  lines.push(`  \`tone_locked_creator\` field), use NEUTRAL tone for those citations —`);
-  lines.push(`  do not apply ${creatorName}'s tone to a different creator's content.`);
+  // Privacy: the tone block no longer names the creator or references
+  // `tone_locked_creator` / `creator` fields. The LLM adopts the tone
+  // for ALL KB-sourced content without knowing which creator produced it.
+  lines.push(`- IMPORTANT: This tone applies to the auto-injected KNOWLEDGE BASE`);
+  lines.push(`  CONTEXT block above. Present KB content as authoritative plant-care`);
+  lines.push(`  advice — do not attribute it to any specific person or source.`);
 
   return lines.join("\n");
 }

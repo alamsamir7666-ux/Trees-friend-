@@ -621,9 +621,9 @@ KNOWLEDGE BASE (v3.0 — Phase 3):
 When a KNOWLEDGE BASE CONTEXT block is present, use it as your PRIMARY source for factual information. The KB contains vetted content from plant care experts and content creators — it's more accurate and up-to-date than your training data.
 
 Rules for KB usage:
-- If the KB context answers the user's question, use the KB content and cite the creator (e.g. "According to Green Garden BD's YouTube video...").
+- If the KB context answers the user's question, use the KB content as authoritative plant-care advice. Do not attribute it to any specific person or source.
 - If the KB context partially answers the question, use what's relevant + supplement with your training data for missing details.
-- If the KB context doesn't answer the question, fall back to your training data (no citation needed).
+- If the KB context doesn't answer the question, fall back to your training data.
 - Always call the search_knowledge_base tool if the user asks a specific botanical question and no KB context was injected. The tool returns more detailed results than the pre-injected context.
 - NEVER invent content that isn't in the KB or your training data. If you don't know, say so.
 
@@ -795,7 +795,11 @@ export function buildSystemPrompt(
  */
 export function clearKbBlockFromPrompt(systemPrompt: string): string {
   // The exact header emitted by formatKbContextForPrompt in kbSearch.ts.
-  const HEADER_PATTERN = /KNOWLEDGE BASE CONTEXT \(use as PRIMARY source — cite the creator\):/;
+  // Privacy: header no longer says "cite the creator" (creator names are
+  // not surfaced to the LLM). The regex matches both the old header (for
+  // backward-compat with cached prompts) and the new one.
+  const HEADER_PATTERN =
+    /KNOWLEDGE BASE CONTEXT \(use as PRIMARY source(?: — cite the creator)?\):/;
   const REPLACEMENT =
     "KNOWLEDGE BASE CONTEXT: (cleared — see search_knowledge_base tool " +
     "results above for the current KB context)";

@@ -249,19 +249,12 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
     name: "search_knowledge_base",
     description:
       "Search the TreeFriend Knowledge Base for curated plant care guides, " +
-      "care tips, and expert advice from content creators. Returns the most " +
-      "relevant entries with their source attribution (creator name + source type). " +
+      "care tips, and expert advice. Returns the most " +
+      "relevant entries with their content. " +
       "Use this as your PRIMARY source for botanical questions — the content is " +
       "vetted by admins and more accurate than your training data. " +
-      "Always cite the creator when using KB content (e.g. 'According to Green Garden BD...'). " +
-      // BUG-I4 fix: tell the LLM about the tone_locked_creator field so it
-      // can detect creator mismatches and use neutral tone for off-creator
-      // citations (per the rule in the system prompt's TONE MATCHING block).
-      "Each result includes a `creator` field. If the response includes a " +
-      "`tone_locked_creator` field at the top level, that's the creator whose " +
-      "tone is currently active in the system prompt. For results where " +
-      "`creator` !== `tone_locked_creator`, use neutral tone in your citation " +
-      "— do not apply the tone-locked creator's style to a different creator's content.",
+      "Present KB content as authoritative plant-care advice without attributing " +
+      "it to any specific person or source.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -827,11 +820,12 @@ async function getOrderDetails(
  */
 async function searchKb(
   args: Record<string, unknown>,
-  userId: string | null,
-  // BUG-I4 fix: carries the tone-locked creator info so we can surface
-  // `tone_locked_creator` in the response envelope. The LLM compares
-  // each result's `creator` field to this value to detect mismatches.
-  context?: ToolContext,
+  _userId: string | null,
+  // BUG-I4 fix: carries the tone-locked creator info. Privacy: the
+  // creator name is NOT surfaced in the response — it's used internally
+  // for tone matching only. Kept for backward-compat with callers that
+  // pass the context via the executeTool closure.
+  _context?: ToolContext,
 ): Promise<{
   results: {
     title: string;
@@ -839,16 +833,10 @@ async function searchKb(
     keywords: string[];
     category: string | null;
     product: string | null;
-    creator: string | null;
     source: { type: string; title: string; url: string | null } | null;
     relevance_score: number;
   }[];
   count: number;
-  // BUG-I4 fix: the creator whose tone is currently active in the system
-  // prompt's {{tone}} block. Null when no tone is active. The LLM uses
-  // this to detect creator mismatches: when results[].creator !==
-  // tone_locked_creator, the LLM uses neutral tone for those citations.
-  tone_locked_creator: string | null;
   message?: string;
 }> {
   const query = String(args.query ?? "").trim();
@@ -857,9 +845,6 @@ async function searchKb(
       results: [],
       count: 0,
       message: "Query is required.",
-      // BUG-I4 fix: still surface the tone-locked creator even on the
-      // empty-query early return so the LLM has consistent metadata.
-      tone_locked_creator: context?.toneLockedCreatorName ?? null,
     };
   }
 
@@ -915,7 +900,9 @@ async function searchKb(
       keywords: r.entry.keywords,
       category: r.category?.name ?? null,
       product: r.entry.productId ? `product_id:${r.entry.productId}` : null,
-      creator: r.creator?.name ?? null,
+      // Privacy: creator name is NOT included in the tool result.
+      // The LLM should present KB content as authoritative advice
+      // without attributing it to specific creators.
       source: r.source
         ? {
             type: r.source.type,
@@ -926,10 +913,5 @@ async function searchKb(
       relevance_score: Math.round(r.score * 100) / 100,
     })),
     count: results.length,
-    // BUG-I4 fix: surface the tone-locked creator so the LLM can detect
-    // mismatches between the auto-injected tone and the tool-returned
-    // entries' creators. When results[].creator !== tone_locked_creator,
-    // the LLM should use neutral tone for those citations.
-    tone_locked_creator: context?.toneLockedCreatorName ?? null,
   };
 }
