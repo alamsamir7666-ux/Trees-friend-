@@ -25,6 +25,16 @@ import {
   ChevronRight,
   ExternalLink,
   X,
+  Shield,
+  ShieldCheck,
+  ShieldAlert,
+  Search,
+  Brain,
+  Zap,
+  Database,
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -95,6 +105,97 @@ interface FeedbackItem {
   userQuestion: string | null;
 }
 
+// ─── v5.4: New types for security + topic + search health ───────────────────
+
+interface SecurityHealth {
+  enabled: boolean;
+  provider: string;
+  blockThreshold: number;
+  llmSkipThreshold: number;
+  llmConfigured: boolean;
+  lakeraConfigured: boolean;
+  cacheStats: {
+    enabled: boolean;
+    l1Entries: number;
+    l1MaxEntries: number;
+    l2Entries: number;
+    ttlSeconds: number;
+  };
+  providers: { name: string; configured: boolean; cost: string }[];
+}
+
+interface TopicHealth {
+  enabled: boolean;
+  llmConfigured: boolean;
+  groqConfigured: boolean;
+  geminiConfigured: boolean;
+  cache: {
+    enabled: boolean;
+    l1Entries: number;
+    l1MaxEntries: number;
+    l2Entries: number;
+    ttlSeconds: number;
+    negativeTtlSeconds: number;
+  };
+}
+
+interface TopicMetrics {
+  hours: number;
+  allowedViaLLM: number;
+  refusedOffTopic: number;
+  totalLLMClassifierCalls: number;
+}
+
+interface SearchHealth {
+  bm25: {
+    available: boolean;
+    lastRefreshAt: string | null;
+    uniqueTerms: number;
+    totalActiveDocs: number;
+    avgDocLength: number;
+    refreshIntervalHours: number;
+  };
+  reranker: {
+    enabled: boolean;
+    provider: string;
+    topK: number;
+    topN: number;
+    timeoutMs: number;
+    minScore: number;
+    cacheTtlSeconds: number;
+    providers: { name: string; configured: boolean }[];
+    cache: {
+      enabled: boolean;
+      l1Entries: number;
+      l1MaxEntries: number;
+      l2Entries: number;
+      ttlSeconds: number;
+      negativeTtlSeconds: number;
+    };
+  };
+  weights: {
+    semantic: number;
+    bm25: number;
+    keywordArray: number;
+    authority: number;
+    priority: number;
+    recency: number;
+  };
+}
+
+interface AttackLogItem {
+  id: number;
+  sessionId: number;
+  type: string;
+  payload: {
+    score: number;
+    attackType: string;
+    provider: string;
+    explanation?: string;
+  } | null;
+  createdAt: string;
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export function AiInsightsTab() {
@@ -110,12 +211,23 @@ export function AiInsightsTab() {
   const [refreshing, setRefreshing] = useState(false);
   const chart = useChartColors();
 
+  // v5.4: New state for security + topic + search health
+  const [securityHealth, setSecurityHealth] = useState<SecurityHealth | null>(null);
+  const [topicHealth, setTopicHealth] = useState<TopicHealth | null>(null);
+  const [topicMetrics, setTopicMetrics] = useState<TopicMetrics | null>(null);
+  const [searchHealth, setSearchHealth] = useState<SearchHealth | null>(null);
+  const [recentAttacks, setRecentAttacks] = useState<AttackLogItem[]>([]);
+  const [expandedSection, setExpandedSection] = useState<string | null>(null);
+
   const PAGE_SIZE = 10;
 
   const fetchAll = useCallback(async () => {
     const token = await getToken();
     const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
+    // Fetch all data in parallel — the new endpoints are included best-effort
+    // (if they fail, the section just shows "unavailable" instead of breaking
+    // the whole tab).
     const [ov, ts, kw, pr, fb] = await Promise.all([
       fetch(`${API}/api/ai/admin/overview`, { headers }).then((r) => r.json()),
       fetch(`${API}/api/ai/admin/timeseries?days=30`, { headers }).then((r) => r.json()),
@@ -133,6 +245,32 @@ export function AiInsightsTab() {
     setFeedback(fb.items ?? []);
     setFeedbackTotal(fb.total ?? 0);
     setFeedbackOffset(0);
+
+    // v5.4: Fetch new health/metrics endpoints (best-effort — don't fail
+    // the whole tab if these endpoints are unavailable on older deployments).
+    const safeFetch = async <T,>(url: string): Promise<T | null> => {
+      try {
+        const res = await fetch(`${API}${url}`, { headers });
+        if (!res.ok) return null;
+        return (await res.json()) as T;
+      } catch {
+        return null;
+      }
+    };
+
+    const [secHealth, topHealth, topMetrics, search, attacks] = await Promise.all([
+      safeFetch<SecurityHealth>("/api/ai/admin/security/health"),
+      safeFetch<TopicHealth>("/api/ai/admin/topic/health"),
+      safeFetch<TopicMetrics>("/api/ai/admin/topic/metrics?hours=24"),
+      safeFetch<SearchHealth>("/api/ai/admin/kb/search/health"),
+      safeFetch<{ attacks: AttackLogItem[] }>("/api/ai/admin/security/attack-log?limit=5"),
+    ]);
+
+    setSecurityHealth(secHealth);
+    setTopicHealth(topHealth);
+    setTopicMetrics(topMetrics);
+    setSearchHealth(search);
+    setRecentAttacks(attacks?.attacks ?? []);
   }, [getToken]);
 
   useEffect(() => {
@@ -423,6 +561,290 @@ export function AiInsightsTab() {
         )}
       </div>
 
+      {/* ─── v5.4: Security & Topic Classifier Section ──────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Prompt-Injection Defense */}
+        <CollapsibleSection
+          id="security"
+          title="Prompt-Injection Defense"
+          icon={<Shield className="h-4 w-4 text-muted-foreground" />}
+          expanded={expandedSection === "security"}
+          onToggle={() => setExpandedSection(expandedSection === "security" ? null : "security")}
+        >
+          {!securityHealth ? (
+            <EmptyList text="Security health unavailable (deploy v5.2+)." />
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                {securityHealth.enabled ? (
+                  <Badge variant="outline" className="text-success border-success/30">
+                    <ShieldCheck className="h-3 w-3 mr-1" /> Enabled
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-destructive border-destructive/30">
+                    <ShieldAlert className="h-3 w-3 mr-1" /> Disabled
+                  </Badge>
+                )}
+                <span className="text-xs text-muted-foreground">
+                  Provider: <span className="font-medium">{securityHealth.provider}</span>
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-muted/50 rounded p-2">
+                  <div className="text-muted-foreground">Block threshold</div>
+                  <div className="font-semibold">{securityHealth.blockThreshold}</div>
+                </div>
+                <div className="bg-muted/50 rounded p-2">
+                  <div className="text-muted-foreground">LLM skip threshold</div>
+                  <div className="font-semibold">{securityHealth.llmSkipThreshold}</div>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">Providers</div>
+                <div className="space-y-1">
+                  {securityHealth.providers.map((p) => (
+                    <div key={p.name} className="flex items-center justify-between text-xs">
+                      <span className="flex items-center gap-1.5">
+                        {p.configured ? (
+                          <CheckCircle2 className="h-3 w-3 text-success" />
+                        ) : (
+                          <div className="h-3 w-3 rounded-full border border-muted-foreground/30" />
+                        )}
+                        {p.name}
+                      </span>
+                      <span className="text-muted-foreground">{p.cost}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {recentAttacks.length > 0 && (
+                <div>
+                  <div className="text-xs text-muted-foreground mb-1">
+                    Recent blocked attacks ({recentAttacks.length})
+                  </div>
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {recentAttacks.map((a) => (
+                      <div
+                        key={a.id}
+                        className="text-xs bg-destructive/5 border border-destructive/20 rounded p-2"
+                      >
+                        <div className="flex items-center justify-between mb-0.5">
+                          <Badge
+                            variant="outline"
+                            className="text-[9px] py-0 h-4 text-destructive border-destructive/30"
+                          >
+                            {a.payload?.attackType ?? "unknown"}
+                          </Badge>
+                          <span className="text-[10px] text-muted-foreground">
+                            score: {a.payload?.score ?? 0}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-muted-foreground truncate">
+                          {a.payload?.explanation ?? "No details"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </CollapsibleSection>
+
+        {/* Topic Classifier */}
+        <CollapsibleSection
+          id="topic"
+          title="Topic Classifier (24h)"
+          icon={<Brain className="h-4 w-4 text-muted-foreground" />}
+          expanded={expandedSection === "topic"}
+          onToggle={() => setExpandedSection(expandedSection === "topic" ? null : "topic")}
+        >
+          {!topicHealth || !topicMetrics ? (
+            <EmptyList text="Topic classifier unavailable (deploy v5.3+)." />
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                {topicHealth.enabled ? (
+                  <Badge variant="outline" className="text-success border-success/30">
+                    <CheckCircle2 className="h-3 w-3 mr-1" /> Active
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-destructive border-destructive/30">
+                    Disabled
+                  </Badge>
+                )}
+                <span className="text-xs text-muted-foreground">
+                  LLM: {topicHealth.llmConfigured ? "configured" : "not configured"}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="bg-muted/50 rounded p-2 text-center">
+                  <div className="text-muted-foreground text-[10px]">Allowed via LLM</div>
+                  <div className="font-semibold text-success">{topicMetrics.allowedViaLLM}</div>
+                </div>
+                <div className="bg-muted/50 rounded p-2 text-center">
+                  <div className="text-muted-foreground text-[10px]">Refused (off-topic)</div>
+                  <div className="font-semibold text-destructive">
+                    {topicMetrics.refusedOffTopic}
+                  </div>
+                </div>
+                <div className="bg-muted/50 rounded p-2 text-center">
+                  <div className="text-muted-foreground text-[10px]">Total LLM calls</div>
+                  <div className="font-semibold">{topicMetrics.totalLLMClassifierCalls}</div>
+                </div>
+              </div>
+
+              <div className="text-xs text-muted-foreground">
+                <Zap className="h-3 w-3 inline mr-1" />
+                {topicHealth.groqConfigured
+                  ? "Groq"
+                  : topicHealth.geminiConfigured
+                    ? "Gemini"
+                    : "No LLM"}{" "}
+                · Cache: L1 {topicHealth.cache.l1Entries}/{topicHealth.cache.l1MaxEntries}, L2{" "}
+                {topicHealth.cache.l2Entries}
+              </div>
+
+              {topicMetrics.allowedViaLLM > 10 && (
+                <div className="text-xs bg-warning/5 border border-warning/20 rounded p-2 flex items-start gap-1.5">
+                  <AlertTriangle className="h-3 w-3 text-warning flex-shrink-0 mt-0.5" />
+                  <span>
+                    {topicMetrics.allowedViaLLM} messages needed LLM classification in 24h. Consider
+                    adding more keywords to the fast-path list to save LLM quota.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </CollapsibleSection>
+      </div>
+
+      {/* ─── v5.4: Search Health (BM25 + Reranker) ─────────────────────── */}
+      <CollapsibleSection
+        id="search"
+        title="KB Search Health (BM25 + Reranker)"
+        icon={<Search className="h-4 w-4 text-muted-foreground" />}
+        expanded={expandedSection === "search"}
+        onToggle={() => setExpandedSection(expandedSection === "search" ? null : "search")}
+      >
+        {!searchHealth ? (
+          <EmptyList text="Search health unavailable (deploy v5.0+)." />
+        ) : (
+          (() => {
+            const sh = searchHealth;
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* BM25 */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Database className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">BM25</span>
+                    {sh.bm25.available ? (
+                      <Badge
+                        variant="outline"
+                        className="text-success border-success/30 text-[9px] py-0 h-4"
+                      >
+                        Active
+                      </Badge>
+                    ) : (
+                      <Badge
+                        variant="outline"
+                        className="text-warning border-warning/30 text-[9px] py-0 h-4"
+                      >
+                        Stats empty
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-muted/50 rounded p-2">
+                      <div className="text-muted-foreground">Unique terms</div>
+                      <div className="font-semibold">{sh.bm25.uniqueTerms.toLocaleString()}</div>
+                    </div>
+                    <div className="bg-muted/50 rounded p-2">
+                      <div className="text-muted-foreground">Active docs</div>
+                      <div className="font-semibold">{sh.bm25.totalActiveDocs}</div>
+                    </div>
+                    <div className="bg-muted/50 rounded p-2">
+                      <div className="text-muted-foreground">Avg doc length</div>
+                      <div className="font-semibold">{sh.bm25.avgDocLength.toFixed(1)}</div>
+                    </div>
+                    <div className="bg-muted/50 rounded p-2">
+                      <div className="text-muted-foreground">Refresh interval</div>
+                      <div className="font-semibold">{sh.bm25.refreshIntervalHours}h</div>
+                    </div>
+                  </div>
+                  {sh.bm25.lastRefreshAt && (
+                    <div className="text-[10px] text-muted-foreground">
+                      Last refresh: {new Date(sh.bm25.lastRefreshAt).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+
+                {/* Reranker */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Zap className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">Reranker</span>
+                    {sh.reranker.enabled ? (
+                      <Badge
+                        variant="outline"
+                        className="text-success border-success/30 text-[9px] py-0 h-4"
+                      >
+                        Enabled
+                      </Badge>
+                    ) : (
+                      <Badge
+                        variant="outline"
+                        className="text-muted-foreground text-[9px] py-0 h-4"
+                      >
+                        Disabled
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-muted/50 rounded p-2">
+                      <div className="text-muted-foreground">Provider</div>
+                      <div className="font-semibold">{sh.reranker.provider}</div>
+                    </div>
+                    <div className="bg-muted/50 rounded p-2">
+                      <div className="text-muted-foreground">Top-K → Top-N</div>
+                      <div className="font-semibold">
+                        {sh.reranker.topK} → {sh.reranker.topN}
+                      </div>
+                    </div>
+                    <div className="bg-muted/50 rounded p-2">
+                      <div className="text-muted-foreground">Timeout</div>
+                      <div className="font-semibold">{sh.reranker.timeoutMs}ms</div>
+                    </div>
+                    <div className="bg-muted/50 rounded p-2">
+                      <div className="text-muted-foreground">Cache TTL</div>
+                      <div className="font-semibold">{sh.reranker.cacheTtlSeconds}s</div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    {sh.reranker.providers.map((p: { name: string; configured: boolean }) => (
+                      <Badge
+                        key={p.name}
+                        variant="outline"
+                        className={`text-[9px] py-0 h-4 ${
+                          p.configured ? "text-success border-success/30" : "text-muted-foreground"
+                        }`}
+                      >
+                        {p.name}: {p.configured ? "on" : "off"}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })()
+        )}
+      </CollapsibleSection>
+
       {/* ─── Conversations browser (v2.5) ──────────────────────────────── */}
       <ConversationsSection />
     </div>
@@ -521,6 +943,49 @@ function EmptyChart() {
 
 function EmptyList({ text }: { text: string }) {
   return <div className="text-sm text-muted-foreground py-8 text-center">{text}</div>;
+}
+
+// ─── v5.4: CollapsibleSection for the new health/metrics sections ───────────
+
+function CollapsibleSection({
+  id,
+  title,
+  icon,
+  expanded,
+  onToggle,
+  children,
+}: {
+  id: string;
+  title: string;
+  icon: React.ReactNode;
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="bg-card rounded-xl border">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/50 transition-colors"
+        aria-expanded={expanded}
+        aria-controls={`section-${id}`}
+      >
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          {icon}
+          {title}
+        </h3>
+        <ChevronDown
+          className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`}
+        />
+      </button>
+      {expanded && (
+        <div id={`section-${id}`} className="px-4 pb-4">
+          {children}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Conversations browser (v2.5) ───────────────────────────────────────
