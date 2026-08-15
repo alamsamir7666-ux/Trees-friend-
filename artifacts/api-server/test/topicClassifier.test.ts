@@ -204,4 +204,38 @@ describe("Topic classifier: admin endpoints (v5.3.1)", () => {
     expect(source).toContain('"/ai/admin/topic/clear-cache"');
     expect(source).toContain("clearAllTopicCache");
   });
+
+  it("aiAdmin.ts exposes GET /ai/admin/topic/allowed-log (v5.3.2)", () => {
+    const source = readSource("artifacts/api-server/src/routes/aiAdmin.ts");
+    expect(source).toContain('"/ai/admin/topic/allowed-log"');
+    expect(source).toContain("topic_allowed_via_llm");
+    expect(source).toContain("allowedViaLLM");
+  });
+
+  it("aiAdmin.ts exposes GET /ai/admin/topic/refused-log (v5.3.2)", () => {
+    const source = readSource("artifacts/api-server/src/routes/aiAdmin.ts");
+    expect(source).toContain('"/ai/admin/topic/refused-log"');
+    expect(source).toContain("off_topic_refused");
+    expect(source).toContain("refusedOffTopic");
+  });
+
+  it("aiAdmin.ts exposes GET /ai/admin/topic/metrics (aggregated dashboard)", () => {
+    const source = readSource("artifacts/api-server/src/routes/aiAdmin.ts");
+    expect(source).toContain('"/ai/admin/topic/metrics"');
+    expect(source).toContain("totalLLMClassifierCalls");
+    expect(source).toContain("allowedViaLLM");
+    expect(source).toContain("refusedOffTopic");
+  });
+
+  it("allowed-log + refused-log support time window (?hours=24)", () => {
+    const source = readSource("artifacts/api-server/src/routes/aiAdmin.ts");
+    expect(source).toContain("req.query.hours");
+    expect(source).toContain("INTERVAL");
+  });
+
+  it("allowed-log + refused-log support limit (?limit=50, max 200)", () => {
+    const source = readSource("artifacts/api-server/src/routes/aiAdmin.ts");
+    expect(source).toContain("req.query.limit");
+    expect(source).toContain("Math.min(Math.max(Number(req.query.limit");
+  });
 });

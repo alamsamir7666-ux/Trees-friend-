@@ -3157,4 +3157,129 @@ router.post("/ai/admin/topic/clear-cache", async (_req: Request, res: Response) 
   }
 });
 
+// ─── GET /ai/admin/topic/allowed-log ───────────────────────────────────────────
+// Returns recent messages that the keyword gate BLOCKED but the LLM classifier
+// ALLOWED. This is the key observability metric for the topic gate — it tells
+// admins how many messages the keyword list missed (and the LLM caught).
+//
+// Use case: if this count is high, add the missed keywords to the fast-path
+// list (aiContext.ts BOTANICAL_KEYWORDS) to skip the LLM call for those
+// messages (saves quota).
+//
+// Query: ?limit=50 (default 50, max 200) ?hours=24 (default 24, time window)
+router.get("/ai/admin/topic/allowed-log", async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+    const hours = Math.min(Math.max(Number(req.query.hours ?? 24), 1), 720); // cap 30 days
+    const result = await pool.query<{
+      id: number;
+      session_id: number;
+      payload: string | null;
+      created_at: Date;
+    }>(
+      `SELECT id, session_id, payload, created_at
+       FROM ai_chat_events
+       WHERE type = 'topic_allowed_via_llm'
+         AND created_at > NOW() - INTERVAL '${hours} hours'
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json({
+      allowedViaLLM: result.rows.map((r) => ({
+        id: r.id,
+        sessionId: r.session_id,
+        payload: r.payload ? JSON.parse(r.payload) : null,
+        createdAt: r.created_at.toISOString(),
+      })),
+      count: result.rows.length,
+      hours,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: topic allowed-log failed");
+    res.status(500).json({ error: "Failed to load allowed-via-LLM log." });
+  }
+});
+
+// ─── GET /api/ai/admin/topic/refused-log ───────────────────────────────────────
+// Returns recent messages that were REFUSED as off-topic (by the LLM classifier).
+// Complements the allowed-log — together they show the full topic-gate picture.
+//
+// Query: ?limit=50 (default 50, max 200) ?hours=24 (default 24, time window)
+router.get("/ai/admin/topic/refused-log", async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+    const hours = Math.min(Math.max(Number(req.query.hours ?? 24), 1), 720);
+    const result = await pool.query<{
+      id: number;
+      session_id: number;
+      payload: string | null;
+      created_at: Date;
+    }>(
+      `SELECT id, session_id, payload, created_at
+       FROM ai_chat_events
+       WHERE type = 'off_topic_refused'
+         AND created_at > NOW() - INTERVAL '${hours} hours'
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json({
+      refusedOffTopic: result.rows.map((r) => ({
+        id: r.id,
+        sessionId: r.session_id,
+        payload: r.payload ? JSON.parse(r.payload) : null,
+        createdAt: r.created_at.toISOString(),
+      })),
+      count: result.rows.length,
+      hours,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: topic refused-log failed");
+    res.status(500).json({ error: "Failed to load refused log." });
+  }
+});
+
+// ─── GET /api/ai/admin/topic/metrics ───────────────────────────────────────────
+// Aggregated metrics for the topic classifier over a time window.
+// Returns counts of: allowed-via-keyword (fast path), allowed-via-LLM,
+// refused-off-topic. Useful for dashboards + alerting.
+//
+// Query: ?hours=24 (default 24, time window)
+router.get("/ai/admin/topic/metrics", async (req: Request, res: Response) => {
+  try {
+    const hours = Math.min(Math.max(Number(req.query.hours ?? 24), 1), 720);
+    const result = await pool.query<{
+      type: string;
+      cnt: string;
+    }>(
+      `SELECT type, COUNT(*)::bigint AS cnt
+       FROM ai_chat_events
+       WHERE type IN ('topic_allowed_via_llm', 'off_topic_refused')
+         AND created_at > NOW() - INTERVAL '${hours} hours'
+       GROUP BY type`,
+    );
+
+    const metrics: Record<string, number> = {
+      topic_allowed_via_llm: 0,
+      off_topic_refused: 0,
+    };
+    for (const row of result.rows) {
+      metrics[row.type] = Number(row.cnt) || 0;
+    }
+
+    res.json({
+      hours,
+      allowedViaLLM: metrics.topic_allowed_via_llm,
+      refusedOffTopic: metrics.off_topic_refused,
+      // The total LLM classifier calls = allowed + refused
+      // (keyword-gate-passed messages don't call the LLM)
+      totalLLMClassifierCalls: metrics.topic_allowed_via_llm + metrics.off_topic_refused,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: topic metrics failed");
+    res.status(500).json({ error: "Failed to load topic metrics." });
+  }
+});
+
 export default router;
