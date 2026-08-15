@@ -1019,9 +1019,17 @@ export interface UserProfile {
 }
 
 export interface UpdateProfileBody {
-  firstName?: string;
-  lastName?: string;
-  phone?: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  phone?: string | null;
+  /**
+   * Optional email override. The backend ignores emails ending in
+   * "@clerk.user" (Clerk's synthetic identifier for OAuth-only
+   * accounts) and only persists a real email address. Frontend
+   * ProfileSync always sends the current Clerk primary email here so
+   * the DB row stays in sync.
+   */
+  email?: string | null;
 }
 
 export interface Address {

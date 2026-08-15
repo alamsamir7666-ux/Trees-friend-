@@ -68,12 +68,47 @@ import { logger } from "./logger";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const GROQ_CLASSIFIER_MODEL = "llama-3.1-8b-instant"; // fastest + cheapest
+const GROQ_CLASSIFIER_MODEL = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant"; // fastest + cheapest
 const GROQ_CLASSIFIER_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GEMINI_CLASSIFIER_MODEL = "gemini-2.5-flash"; // fallback if Groq is down
+// Gemini fallback model resolved lazily via getModelChain() — see comment
+// where it's used below. Hardcoded `gemini-2.5-flash` returns 404 on new GCP
+// projects (deprecated for new users).
 const MAX_MESSAGE_CHARS = 2000; // truncate long messages (saves tokens)
 const CLASSIFIER_TEMPERATURE = 0.1; // low — consistent classifications
 const CLASSIFIER_MAX_TOKENS = 100; // JSON response is small
+
+// Same set as structuredOutput.ts / outputSafety.ts / topicClassifier.ts.
+const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "llama3-70b-8192",
+  "llama3-8b-8192",
+]);
+
+function supportsGroqJsonSchema(model: string): boolean {
+  return GROQ_MODELS_WITH_JSON_SCHEMA.has(model.split("@")[0]);
+}
+
+/**
+ * Runtime validator for the prompt-injection classifier response.
+ * Used as a guard on both the json_schema and json_object paths.
+ */
+function validateInjectionResult(parsed: unknown): {
+  isInjection: boolean;
+  confidence: number;
+  attackType: string;
+} | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.isInjection !== "boolean") return null;
+  if (typeof obj.confidence !== "number") return null;
+  if (typeof obj.attackType !== "string") return null;
+  return {
+    isInjection: obj.isInjection,
+    confidence: obj.confidence,
+    attackType: obj.attackType,
+  };
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -137,8 +172,36 @@ ${message.slice(0, MAX_MESSAGE_CHARS)}
 
 /**
  * Classifies a message using Groq's structured-output API.
- * Uses json_schema response_format for guaranteed valid JSON.
+ *
+ * Industry-standard robustness pattern (same as structuredOutput.ts and
+ * topicClassifier.ts): try `json_schema` first (guaranteed schema
+ * compliance), fall back to `json_object` + runtime validation (works on
+ * every Groq model). The previous implementation hard-required json_schema
+ * and crashed with HTTP 400 on models that don't support it.
  */
+const INJECTION_SCHEMA = {
+  type: "object",
+  properties: {
+    isInjection: { type: "boolean" },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    attackType: {
+      type: "string",
+      enum: [
+        "instruction_override",
+        "jailbreak",
+        "role_hijack",
+        "prompt_extraction",
+        "role_spoof",
+        "secret_extraction",
+        "encoding_attack",
+        "none",
+      ],
+    },
+  },
+  required: ["isInjection", "confidence", "attackType"],
+  additionalProperties: false,
+};
+
 async function classifyWithGroq(message: string): Promise<LLMClassificationResult> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY is not set");
@@ -146,6 +209,58 @@ async function classifyWithGroq(message: string): Promise<LLMClassificationResul
   const startTime = Date.now();
   const prompt = buildClassifierPrompt(message);
 
+  // ─── Path 1: json_schema (only on models known to support it) ───
+  if (supportsGroqJsonSchema(GROQ_CLASSIFIER_MODEL)) {
+    const response = await fetch(GROQ_CLASSIFIER_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_CLASSIFIER_MODEL,
+        messages: [{ role: "user", content: prompt }],
+        temperature: CLASSIFIER_TEMPERATURE,
+        max_tokens: CLASSIFIER_MAX_TOKENS,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "injection_classification",
+            schema: INJECTION_SCHEMA,
+            strict: true,
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (response.ok) {
+      const data = (await response.json()) as {
+        choices: { message: { content: string } }[];
+      };
+      const content = data.choices?.[0]?.message?.content;
+      if (content) {
+        const validated = validateInjectionResult(JSON.parse(content));
+        if (validated) {
+          return {
+            isInjection: validated.isInjection,
+            confidence: validated.confidence,
+            attackType: validated.attackType,
+            provider: "groq",
+            latencyMs: Date.now() - startTime,
+          };
+        }
+      }
+    } else {
+      const errBody = await response.text().catch(() => "");
+      if (!/does not support response format/i.test(errBody)) {
+        throw new Error(`Groq classifier failed: ${response.status} — ${errBody.slice(0, 200)}`);
+      }
+      // Fall through to json_object mode.
+    }
+  }
+
+  // ─── Path 2: json_object + runtime validation (universal) ───
   const response = await fetch(GROQ_CLASSIFIER_URL, {
     method: "POST",
     headers: {
@@ -157,35 +272,7 @@ async function classifyWithGroq(message: string): Promise<LLMClassificationResul
       messages: [{ role: "user", content: prompt }],
       temperature: CLASSIFIER_TEMPERATURE,
       max_tokens: CLASSIFIER_MAX_TOKENS,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "injection_classification",
-          schema: {
-            type: "object",
-            properties: {
-              isInjection: { type: "boolean" },
-              confidence: { type: "number", minimum: 0, maximum: 1 },
-              attackType: {
-                type: "string",
-                enum: [
-                  "instruction_override",
-                  "jailbreak",
-                  "role_hijack",
-                  "prompt_extraction",
-                  "role_spoof",
-                  "secret_extraction",
-                  "encoding_attack",
-                  "none",
-                ],
-              },
-            },
-            required: ["isInjection", "confidence", "attackType"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
+      response_format: { type: "json_object" },
     }),
     signal: AbortSignal.timeout(5000),
   });
@@ -202,16 +289,13 @@ async function classifyWithGroq(message: string): Promise<LLMClassificationResul
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error("Groq classifier: empty response");
 
-  const parsed = JSON.parse(content) as {
-    isInjection: boolean;
-    confidence: number;
-    attackType: string;
-  };
+  const validated = validateInjectionResult(JSON.parse(content));
+  if (!validated) throw new Error("Groq classifier: invalid response schema");
 
   return {
-    isInjection: parsed.isInjection,
-    confidence: parsed.confidence,
-    attackType: parsed.attackType,
+    isInjection: validated.isInjection,
+    confidence: validated.confidence,
+    attackType: validated.attackType,
     provider: "groq",
     latencyMs: Date.now() - startTime,
   };
@@ -221,8 +305,11 @@ async function classifyWithGroq(message: string): Promise<LLMClassificationResul
 
 /**
  * Fallback classifier using Gemini. Used when Groq is down or rate-limited.
- * Gemini doesn't support json_schema as strictly as Groq, so we parse the
- * JSON from the response text (with a try/catch).
+ *
+ * Resolves the model lazily via getModelChain() — the hardcoded
+ * `gemini-2.5-flash` returned 404 on new GCP projects (deprecated for
+ * new users). Response is JSON (via responseMimeType: application/json)
+ * and validated at runtime by validateInjectionResult().
  */
 async function classifyWithGemini(message: string): Promise<LLMClassificationResult> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -231,8 +318,13 @@ async function classifyWithGemini(message: string): Promise<LLMClassificationRes
   const startTime = Date.now();
   const prompt = buildClassifierPrompt(message);
 
+  // Resolve the Gemini model via the chat path's discovery chain.
+  const { getModelChain } = await import("./gemini");
+  const chain = await getModelChain();
+  const geminiModel = chain[0] ?? "gemini-flash-latest";
+
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_CLASSIFIER_MODEL}:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -260,16 +352,13 @@ async function classifyWithGemini(message: string): Promise<LLMClassificationRes
   const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!content) throw new Error("Gemini classifier: empty response");
 
-  const parsed = JSON.parse(content) as {
-    isInjection: boolean;
-    confidence: number;
-    attackType: string;
-  };
+  const validated = validateInjectionResult(JSON.parse(content));
+  if (!validated) throw new Error("Gemini classifier: invalid response schema");
 
   return {
-    isInjection: parsed.isInjection,
-    confidence: parsed.confidence,
-    attackType: parsed.attackType,
+    isInjection: validated.isInjection,
+    confidence: validated.confidence,
+    attackType: validated.attackType,
     provider: "gemini",
     latencyMs: Date.now() - startTime,
   };

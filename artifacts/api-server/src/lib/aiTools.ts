@@ -393,6 +393,25 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
   const maxPrice = typeof args.max_price === "number" ? args.max_price : null;
   const sunlight = typeof args.sunlight === "string" ? args.sunlight : null;
 
+  // Active-listing filter — must match the canonical buyer-facing gate used
+  // in routes/sellerListings.ts (visibility = 'public' AND approval_status =
+  // 'approved'). The seller_listings table has NO `is_active` column —
+  // previous revisions of this SQL referenced `sl.is_active` which caused
+  // PostgreSQL error 42703 ("column sl.is_active does not exist") on every
+  // search_catalog tool call, breaking the AI assistant's product search.
+  //
+  // Soft-delete filter (`deleted_at IS NULL`) is applied on the listing row
+  // here; the variant row (seller_listing_variants) does NOT have a
+  // deleted_at column in the schema, so we must NOT filter on it.
+  const ACTIVE_LISTING_FILTER =
+    "sl.visibility = 'public' AND sl.approval_status = 'approved' AND sl.deleted_at IS NULL";
+
+  // The price subquery joins seller_listings → seller_listing_variants to
+  // find the lowest variant price per product. Only listings that pass the
+  // active-listing filter contribute prices (so the AI never quotes a price
+  // from a hidden or rejected listing).
+  const priceJoin = `LEFT JOIN (SELECT product_id, MIN(price) AS min_price FROM seller_listings sl JOIN seller_listing_variants slv ON slv.seller_listing_id = sl.id WHERE ${ACTIVE_LISTING_FILTER} GROUP BY product_id) AS prices ON prices.product_id = p.id`;
+
   // v3.10: Industry-standard hybrid search — tsvector (stemming) PRIMARY,
   // trigram (typo tolerance) FALLBACK, ILIKE (substring) for compound names.
   //
@@ -456,9 +475,8 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
 
   // Always join to prices so we can return min_price in the result (useful
   // for the AI to mention a price range even when the user didn't filter on it).
-  // We only filter on it when maxPrice is provided.
-  const priceJoin =
-    "LEFT JOIN (SELECT product_id, MIN(price) AS min_price FROM seller_listings sl JOIN seller_listing_variants slv ON slv.seller_listing_id = sl.id WHERE sl.is_active = true AND sl.deleted_at IS NULL GROUP BY product_id) AS prices ON prices.product_id = p.id";
+  // We only filter on it when maxPrice is provided. The priceJoin itself is
+  // declared at the top of searchCatalog (it gates on the active-listing filter).
 
   let priceWhere = "";
   if (maxPrice != null) {

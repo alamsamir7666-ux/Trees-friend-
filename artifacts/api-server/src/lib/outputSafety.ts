@@ -108,12 +108,47 @@ AI's response to evaluate:
 """`;
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "llama-3.1-8b-instant";
-const GEMINI_MODEL = "gemini-2.5-flash";
+// Use GROQ_MODEL env var if set, otherwise default to the same model the chat
+// path uses. Both llama-3.3-70b-versatile and llama-3.1-8b-instant support
+// json_schema per Groq's docs, but we still implement a json_object fallback
+// below for forward-compat with future Groq model changes.
+const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
 const MAX_RESPONSE_CHARS = 2000;
 const MAX_QUESTION_CHARS = 500;
 const AI_TEMPERATURE = 0.1;
 const AI_MAX_TOKENS = 50;
+
+// Same set of models known to support json_schema on Groq. Kept in sync with
+// structuredOutput.ts. If GROQ_MODEL isn't in this set, we skip the
+// json_schema attempt and go straight to json_object + runtime validation.
+const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "llama3-70b-8192",
+  "llama3-8b-8192",
+]);
+
+function supportsGroqJsonSchema(model: string): boolean {
+  return GROQ_MODELS_WITH_JSON_SCHEMA.has(model.split("@")[0]);
+}
+
+/**
+ * Runtime validator for the safety-check response. Used by the
+ * json_object fallback path. Returns null on shape mismatch so the caller
+ * can treat the response as "no safety signal" (rather than crashing).
+ */
+function validateSafetyResult(parsed: unknown): ConstitutionalAIResult | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.isUnsafe !== "boolean") return null;
+  if (typeof obj.confidence !== "number") return null;
+  if (typeof obj.violationType !== "string") return null;
+  return {
+    isUnsafe: obj.isUnsafe,
+    confidence: obj.confidence,
+    violationType: obj.violationType,
+  };
+}
 
 // ─── Constitutional AI check (LLM-based) ─────────────────────────────────────
 
@@ -132,9 +167,86 @@ async function checkConstitutionalAI(
     userQuestion.slice(0, MAX_QUESTION_CHARS),
   ).replace("{RESPONSE}", aiResponse.slice(0, MAX_RESPONSE_CHARS));
 
+  // JSON schema for the safety-check response — used by both the Groq
+  // json_schema path and the runtime validator on the json_object path.
+  const SAFETY_SCHEMA = {
+    type: "object",
+    properties: {
+      isUnsafe: { type: "boolean" },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+      violationType: {
+        type: "string",
+        enum: ["harmful_advice", "jailbreak_compliance", "data_leakage", "off_topic", "none"],
+      },
+    },
+    required: ["isUnsafe", "confidence", "violationType"],
+    additionalProperties: false,
+  };
+
   // Try Groq first (fastest, most free quota)
   if (process.env.GROQ_API_KEY) {
     try {
+      // ─── Path 1: json_schema (best — guaranteed schema compliance) ───
+      // Only attempt if we KNOW the model supports it. Otherwise the 400
+      // round-trip wastes ~150ms before we even get to the json_object path.
+      if (supportsGroqJsonSchema(GROQ_MODEL)) {
+        const response = await fetch(GROQ_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: GROQ_MODEL,
+            messages: [{ role: "user", content: prompt }],
+            temperature: AI_TEMPERATURE,
+            max_tokens: AI_MAX_TOKENS,
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: "safety_check",
+                schema: SAFETY_SCHEMA,
+                strict: true,
+              },
+            },
+          }),
+          signal: AbortSignal.timeout(4000),
+        });
+
+        if (response.ok) {
+          const data = (await response.json()) as {
+            choices: { message: { content: string } }[];
+          };
+          const content = data.choices?.[0]?.message?.content;
+          if (content) {
+            const validated = validateSafetyResult(JSON.parse(content));
+            if (validated) return validated;
+          }
+        } else {
+          // If the error is "doesn't support json_schema", fall through to
+          // the json_object path. Otherwise rethrow.
+          const errText = await response.text().catch(() => "");
+          if (!/does not support response format/i.test(errText)) {
+            throw new Error(
+              `Groq safety check failed: ${response.status} ${errText.slice(0, 200)}`,
+            );
+          }
+          // Fall through to json_object mode.
+        }
+      }
+
+      // ─── Path 2: json_object + runtime validation (universal) ───
+      // Works on every Groq model. We embed the schema description in the
+      // prompt so the model knows what shape to produce, then validate.
+      const promptWithSchema = `${prompt}
+
+Respond with JSON matching this exact shape:
+{
+  "isUnsafe": boolean,
+  "confidence": number (0-1),
+  "violationType": "harmful_advice" | "jailbreak_compliance" | "data_leakage" | "off_topic" | "none"
+}`;
+
       const response = await fetch(GROQ_URL, {
         method: "POST",
         headers: {
@@ -143,35 +255,10 @@ async function checkConstitutionalAI(
         },
         body: JSON.stringify({
           model: GROQ_MODEL,
-          messages: [{ role: "user", content: prompt }],
+          messages: [{ role: "user", content: promptWithSchema }],
           temperature: AI_TEMPERATURE,
           max_tokens: AI_MAX_TOKENS,
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "safety_check",
-              schema: {
-                type: "object",
-                properties: {
-                  isUnsafe: { type: "boolean" },
-                  confidence: { type: "number", minimum: 0, maximum: 1 },
-                  violationType: {
-                    type: "string",
-                    enum: [
-                      "harmful_advice",
-                      "jailbreak_compliance",
-                      "data_leakage",
-                      "off_topic",
-                      "none",
-                    ],
-                  },
-                },
-                required: ["isUnsafe", "confidence", "violationType"],
-                additionalProperties: false,
-              },
-              strict: true,
-            },
-          },
+          response_format: { type: "json_object" },
         }),
         signal: AbortSignal.timeout(4000),
       });
@@ -184,7 +271,9 @@ async function checkConstitutionalAI(
       const content = data.choices?.[0]?.message?.content;
       if (!content) throw new Error("Empty response");
 
-      return JSON.parse(content) as ConstitutionalAIResult;
+      const validated = validateSafetyResult(JSON.parse(content));
+      if (!validated) throw new Error("Groq json_object response did not match schema");
+      return validated;
     } catch (err) {
       logger.warn(
         { err: (err as Error).message.slice(0, 100) },
@@ -193,11 +282,19 @@ async function checkConstitutionalAI(
     }
   }
 
-  // Fall back to Gemini
+  // Fall back to Gemini — use the discovered working model from the chat path.
+  // The previous hardcoded `gemini-2.5-flash` returns 404 on new GCP projects
+  // (the model is deprecated for new users), so we resolve the model via the
+  // same getModelChain() used by the chat path. AI_MODEL env var takes
+  // precedence; otherwise we use the first model from the discovered chain.
   if (process.env.GEMINI_API_KEY) {
     try {
+      const { getModelChain } = await import("./gemini");
+      const chain = await getModelChain();
+      const geminiModel = chain[0] ?? "gemini-flash-latest";
+
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${process.env.GEMINI_API_KEY}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -221,7 +318,9 @@ async function checkConstitutionalAI(
       const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!content) throw new Error("Empty response");
 
-      return JSON.parse(content) as ConstitutionalAIResult;
+      const validated = validateSafetyResult(JSON.parse(content));
+      if (!validated) throw new Error("Gemini json response did not match schema");
+      return validated;
     } catch (err) {
       logger.warn(
         { err: (err as Error).message.slice(0, 100) },

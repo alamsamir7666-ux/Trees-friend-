@@ -1417,9 +1417,10 @@ export const GetMeResponse = zod.object({
  * @summary Update current user profile
  */
 export const UpdateMeBody = zod.object({
-  "firstName": zod.string().optional(),
-  "lastName": zod.string().optional(),
-  "phone": zod.string().optional()
+  "firstName": zod.string().nullable().optional(),
+  "lastName": zod.string().nullable().optional(),
+  "phone": zod.string().nullable().optional(),
+  "email": zod.string().email().nullable().optional()
 })
 
 export const UpdateMeResponse = zod.object({

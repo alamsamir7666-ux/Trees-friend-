@@ -1586,11 +1586,11 @@ paths:
       responses:
         "200":
           description: >-
-              Masked courier config, or null if not set up yet (manual
-              fallback). Returning 200/null instead of 404 lets the frontend
-              cache the "not configured" state like any other successful
-              response, instead of treating it as an error that gets
-              retried/refetched on every token refresh.
+            Masked courier config, or null if not set up yet (manual
+            fallback). Returning 200/null instead of 404 lets the frontend
+            cache the "not configured" state like any other successful
+            response, instead of treating it as an error that gets
+            retried/refetched on every token refresh.
           content:
             application/json:
               schema:
@@ -1636,11 +1636,11 @@ paths:
       responses:
         "200":
           description: >-
-              Masked payment config, or null if not set up yet (COD-only).
-              Returning 200/null instead of 404 lets the frontend cache the
-              "not configured" state like any other successful response,
-              instead of treating it as an error that gets retried/refetched
-              on every token refresh.
+            Masked payment config, or null if not set up yet (COD-only).
+            Returning 200/null instead of 404 lets the frontend cache the
+            "not configured" state like any other successful response,
+            instead of treating it as an error that gets retried/refetched
+            on every token refresh.
           content:
             application/json:
               schema:
@@ -1773,11 +1773,11 @@ paths:
       responses:
         "200":
           description: >-
-              Payout account, or null if not set up yet. Returning 200/null
-              instead of 404 lets the frontend cache the "not configured"
-              state like any other successful response, instead of treating
-              it as an error that gets retried/refetched on every token
-              refresh.
+            Payout account, or null if not set up yet. Returning 200/null
+            instead of 404 lets the frontend cache the "not configured"
+            state like any other successful response, instead of treating
+            it as an error that gets retried/refetched on every token
+            refresh.
           content:
             application/json:
               schema:
@@ -4450,10 +4450,31 @@ components:
       properties:
         firstName:
           type: string
+          nullable: true
+          description: |
+            User's first name. Nullable so clients can clear it
+            (e.g. Clerk sign-ups without a first name).
         lastName:
           type: string
+          nullable: true
+          description: |
+            User's last name. Nullable so clients can clear it.
         phone:
           type: string
+          nullable: true
+          description: |
+            Bangladeshi mobile number in local format (01XXXXXXXXX).
+            Validated server-side against isValidBdPhone().
+        email:
+          type: string
+          nullable: true
+          format: email
+          description: |
+            Optional email override. The backend ignores emails ending
+            in "@clerk.user" (Clerk's synthetic identifier for
+            OAuth-only accounts) and only persists a real email address.
+            Frontend `ProfileSync` always sends the current Clerk
+            primary email here so the DB row stays in sync.
 
     AddressBody:
       type: object
@@ -5467,4 +5488,3 @@ components:
           type: string
       required:
         - content
-

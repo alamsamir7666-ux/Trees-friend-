@@ -100,7 +100,7 @@ export function ProfileSync() {
           firstName: latest.firstName || undefined,
           lastName: latest.lastName || undefined,
           email: latest.email || undefined,
-        } as any,
+        },
       });
       lastSyncedProfileRef.current = { ...latest };
     }, PROFILE_SYNC_DEBOUNCE_MS);

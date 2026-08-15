@@ -32,6 +32,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { logger } from "./logger";
 import { getProviderChain } from "./aiRouter";
+import { getModelChain } from "./gemini";
 
 // ─── Schema definition ──────────────────────────────────────────────────────
 
@@ -72,6 +73,49 @@ export interface StructuredFollowups {
 
 // ─── Groq implementation ────────────────────────────────────────────────────
 
+/**
+ * Models that support `response_format: { type: "json_schema" }` on Groq.
+ * Per https://console.groq.com/docs/structured-outputs#supported-models
+ * (Nov 2024): llama-3.3-70b-versatile, llama-3.1-8b-instant, and the
+ * older llama3-{8b,70b}-8192 variants. If GROQ_MODEL is set to one of
+ * these we can use strict json_schema; otherwise we fall back to the
+ * universally-supported `json_object` mode + runtime schema validation.
+ *
+ * `mixtral-8x7b-32768`, `gemma2-9b-it`, and several others do NOT support
+ * json_schema — they reject with HTTP 400 if you try.
+ */
+const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "llama3-70b-8192",
+  "llama3-8b-8192",
+]);
+
+function supportsGroqJsonSchema(model: string): boolean {
+  // Match exact names AND the same name with a date-suffix variant
+  // (e.g. "llama-3.3-70b-versatile@2025-01-01"). Groq occasionally ships
+  // dated snapshots; the json_schema capability follows the base model.
+  const base = model.split("@")[0];
+  return GROQ_MODELS_WITH_JSON_SCHEMA.has(base);
+}
+
+/**
+ * Validate a parsed followups object against our expected shape.
+ * Used as the runtime guard for the `json_object` fallback path (where
+ * Groq only guarantees valid JSON, not schema compliance).
+ */
+function validateFollowups(parsed: unknown): string[] | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  const raw = obj.followups;
+  if (!Array.isArray(raw)) return null;
+  return raw
+    .filter((f): f is string => typeof f === "string")
+    .map((f) => f.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
 async function generateFollowupsGroq(
   question: string,
   answer: string,
@@ -91,6 +135,93 @@ Rules:
 - Make them relevant to the Q&A topic
 - Return exactly 3 questions`;
 
+  // ─── Strategy: try json_schema first (best, guaranteed schema compliance).
+  // If the model doesn't support json_schema (HTTP 400 with the specific
+  // "does not support response format json_schema" error), fall back to
+  // json_object mode + runtime validation. This is the industry-standard
+  // robustness pattern for Groq structured output across mixed model fleets.
+  //
+  // Why both? json_schema guarantees the response matches our schema exactly
+  // (no parsing needed). json_object only guarantees valid JSON — the model
+  // might omit fields or return a different shape — but it works on EVERY
+  // Groq model. The runtime validation catches malformed shapes so we never
+  // surface garbage to the user.
+  //
+  // We also short-circuit: if we KNOW the model doesn't support json_schema
+  // (per the static set above), skip the 400 round-trip and go straight to
+  // json_object. This saves ~250ms of latency per request on models that
+  // would otherwise 400 first.
+
+  if (supportsGroqJsonSchema(model)) {
+    try {
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.4,
+          max_tokens: 200,
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "followups",
+              schema: FOLLOWUPS_SCHEMA_OPENAI,
+              strict: true,
+            },
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const data = (await response.json()) as {
+          choices: { message: { content: string } }[];
+        };
+        const content = data.choices?.[0]?.message?.content;
+        if (content) {
+          const parsed = JSON.parse(content) as StructuredFollowups;
+          if (Array.isArray(parsed.followups)) {
+            return parsed.followups
+              .slice(0, 5)
+              .map((f) => f.trim())
+              .filter(Boolean);
+          }
+        }
+      } else {
+        // If the error is "doesn't support json_schema", fall through to
+        // the json_object path. Otherwise rethrow.
+        const errText = await response.text().catch(() => "");
+        if (!/does not support response format/i.test(errText)) {
+          throw new Error(
+            `Groq structured output error ${response.status}: ${errText.slice(0, 300)}`,
+          );
+        }
+        // Fall through to json_object mode.
+      }
+    } catch (err) {
+      // Network/parse error — fall through to json_object as a last resort.
+      // We log the original error for debugging but don't rethrow, because
+      // the json_object path may succeed where json_schema failed.
+      if (/Groq structured output error/i.test((err as Error).message)) {
+        throw err; // already a structured error message — propagate
+      }
+      // Otherwise: unknown transient, try json_object.
+    }
+  }
+
+  // ─── Fallback: json_object mode + runtime validation (universal) ────
+  // Works on EVERY Groq model. We embed the schema in the prompt so the
+  // model knows what shape to produce, then validate the parsed JSON.
+  const promptWithSchema = `${prompt}
+
+Respond with JSON matching this exact shape:
+{
+  "followups": ["question 1", "question 2", "question 3"]
+}`;
+
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -99,17 +230,10 @@ Rules:
     },
     body: JSON.stringify({
       model,
-      messages: [{ role: "user", content: prompt }],
+      messages: [{ role: "user", content: promptWithSchema }],
       temperature: 0.4,
       max_tokens: 200,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "followups",
-          schema: FOLLOWUPS_SCHEMA_OPENAI,
-          strict: true,
-        },
-      },
+      response_format: { type: "json_object" },
     }),
   });
 
@@ -121,14 +245,15 @@ Rules:
   const data = (await response.json()) as {
     choices: { message: { content: string } }[];
   };
-
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error("Groq returned empty content");
 
-  const parsed = JSON.parse(content) as StructuredFollowups;
-  if (!Array.isArray(parsed.followups)) throw new Error("Invalid followups schema");
-
-  return parsed.followups.slice(0, 5).map((f) => f.trim()).filter(Boolean);
+  const parsed = JSON.parse(content) as unknown;
+  const validated = validateFollowups(parsed);
+  if (!validated) {
+    throw new Error("Groq json_object response did not match expected schema");
+  }
+  return validated;
 }
 
 // ─── Gemini implementation ──────────────────────────────────────────────────
@@ -171,7 +296,10 @@ Rules:
   const parsed = JSON.parse(text) as StructuredFollowups;
   if (!Array.isArray(parsed.followups)) throw new Error("Invalid followups schema");
 
-  return parsed.followups.slice(0, 5).map((f) => f.trim()).filter(Boolean);
+  return parsed.followups
+    .slice(0, 5)
+    .map((f) => f.trim())
+    .filter(Boolean);
 }
 
 // ─── Main: generateFollowupsStructured ──────────────────────────────────────
@@ -212,8 +340,14 @@ export async function generateFollowupsStructured(
         return followups;
       }
       if (provider === "gemini") {
-        // Use the cached working model if available, otherwise let Gemini pick
-        const model = process.env.AI_MODEL ?? "gemini-2.5-flash-lite";
+        // Use the cached working model from the chat path if available — it
+        // has already been validated against this API key. Fall back to
+        // AI_MODEL env var, then to the model discovery chain. The previous
+        // hardcoded `gemini-2.5-flash-lite` is deprecated for new GCP
+        // projects (404 NOT_FOUND: "no longer available to new users"), so
+        // we avoid it unless the user explicitly set AI_MODEL to it.
+        const chain = await getModelChain();
+        const model = chain[0] ?? "gemini-flash-latest";
         const followups = await generateFollowupsGemini(question, answer, model);
         logger.debug(
           { provider: "gemini", count: followups.length },

@@ -337,7 +337,34 @@ export async function discoverAvailableModels(): Promise<string[] | null> {
           }
         }
       }
-      // Case 5: unexpected shape — log it so we can debug
+      // Case 5: @google/genai ≥1.50 — the Pager shape. `client.models.list()`
+      // returns a Pager object whose `.pageInternal` field is the underlying
+      // array of model descriptors. The SDK intentionally does NOT expose
+      // pageInternal as a public property, but @google/genai@1.52 (and
+      // likely other 1.5x versions) leak it on the returned object — see
+      // the responsePreview in render-log:
+      //   {"pageInternal":[{"name":"models/gemini-2.5-flash-native-audio-preview-12-2025",...}]}
+      // Without this case, discovery returns 0 models → static fallback
+      // chain → every Gemini model 404s (new GCP projects have no
+      // legacy 2.x models), and the AI assistant is completely broken.
+      //
+      // We also attempt the async-iterator path first (Case 1) since
+      // a real Pager should be async-iterable. When the SDK version
+      // ships a non-iterable object that only exposes pageInternal
+      // (as observed in production logs), we fall through to here.
+      else if (
+        response &&
+        typeof response === "object" &&
+        Array.isArray((response as any).pageInternal)
+      ) {
+        for (const model of (response as any).pageInternal) {
+          const extracted = extractModel(model);
+          if (extracted && extracted.methods.includes("generateContent")) {
+            available.push(extracted.name);
+          }
+        }
+      }
+      // Case 6: unexpected shape — log it so we can debug
       else {
         logger.warn(
           {
@@ -417,7 +444,7 @@ export async function discoverAvailableModels(): Promise<string[] | null> {
  * models (due to unrecognized response shape), causing getModelChain()
  * to return [] and the for-loop to try 0 models.
  */
-async function getModelChain(): Promise<string[]> {
+export async function getModelChain(): Promise<string[]> {
   const explicit = process.env.AI_MODEL;
   if (explicit && explicit.trim().length > 0) {
     return [explicit.trim()];

@@ -36,13 +36,13 @@ import { getProviderChain } from "./aiRouter";
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface JudgeScore {
-  accuracy: number;      // 1-5
-  completeness: number;  // 1-5
-  clarity: number;       // 1-5
-  safety: number;        // 1-5
-  tone: number;          // 1-5
-  overall: number;       // average of the above
-  explanation: string;   // brief feedback from the judge
+  accuracy: number; // 1-5
+  completeness: number; // 1-5
+  clarity: number; // 1-5
+  safety: number; // 1-5
+  tone: number; // 1-5
+  overall: number; // average of the above
+  explanation: string; // brief feedback from the judge
   judgeModel: string;
   judgeProvider: string;
 }
@@ -135,10 +135,15 @@ async function judgeWithGroq(
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error("Groq judge returned empty content");
 
-  const parsed = JSON.parse(content) as Omit<JudgeScore, "overall" | "judgeModel" | "judgeProvider">;
-  const overall = Math.round(
-    ((parsed.accuracy + parsed.completeness + parsed.clarity + parsed.safety + parsed.tone) / 5) * 10,
-  ) / 10;
+  const parsed = JSON.parse(content) as Omit<
+    JudgeScore,
+    "overall" | "judgeModel" | "judgeProvider"
+  >;
+  const overall =
+    Math.round(
+      ((parsed.accuracy + parsed.completeness + parsed.clarity + parsed.safety + parsed.tone) / 5) *
+        10,
+    ) / 10;
 
   return {
     ...parsed,
@@ -199,9 +204,12 @@ async function judgeWithGemini(
     tone: clamp(parsed.tone),
     explanation: parsed.explanation,
   };
-  const overall = Math.round(
-    ((clamped.accuracy + clamped.completeness + clamped.clarity + clamped.safety + clamped.tone) / 5) * 10,
-  ) / 10;
+  const overall =
+    Math.round(
+      ((clamped.accuracy + clamped.completeness + clamped.clarity + clamped.safety + clamped.tone) /
+        5) *
+        10,
+    ) / 10;
 
   return {
     ...clamped,
@@ -249,8 +257,18 @@ export async function judgeResponse(
         return score;
       }
       if (provider === "gemini") {
-        // Use a strong model for judging — 2.5-pro if available, else flash
-        const model = process.env.AI_JUDGE_MODEL ?? "gemini-2.5-flash";
+        // Use AI_JUDGE_MODEL env var if set, otherwise resolve via the
+        // chat path's model discovery chain. The hardcoded
+        // `gemini-2.5-flash` returned 404 on new GCP projects (deprecated
+        // for new users), breaking LLM-as-judge evaluations entirely.
+        let model: string;
+        if (process.env.AI_JUDGE_MODEL) {
+          model = process.env.AI_JUDGE_MODEL;
+        } else {
+          const { getModelChain } = await import("./gemini");
+          const chain = await getModelChain();
+          model = chain[0] ?? "gemini-flash-latest";
+        }
         const score = await judgeWithGemini(question, response, model);
         logger.debug(
           { provider: "gemini", model, overall: score.overall },

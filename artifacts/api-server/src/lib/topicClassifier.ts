@@ -49,12 +49,26 @@ import {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const GROQ_MODEL = "llama-3.1-8b-instant"; // fastest + cheapest
+const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant"; // fastest + cheapest
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GEMINI_MODEL = "gemini-2.5-flash";
+// Use the discovered working Gemini model from the chat path. The previous
+// hardcoded `gemini-2.5-flash` returns 404 on new GCP projects (deprecated
+// for new users). Resolved lazily so the first request triggers discovery.
 const MAX_MESSAGE_CHARS = 1000;
 const CLASSIFIER_TEMPERATURE = 0.1;
 const CLASSIFIER_MAX_TOKENS = 50;
+
+// Same set as structuredOutput.ts / outputSafety.ts — keep in sync.
+const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "llama3-70b-8192",
+  "llama3-8b-8192",
+]);
+
+function supportsGroqJsonSchema(model: string): boolean {
+  return GROQ_MODELS_WITH_JSON_SCHEMA.has(model.split("@")[0]);
+}
 
 const TOPIC_CLASSIFIER_ENABLED =
   (process.env.TOPIC_CLASSIFIER_ENABLED ?? "true").toLowerCase() !== "false";
@@ -111,6 +125,25 @@ ${message.slice(0, MAX_MESSAGE_CHARS)}
 
 // ─── Groq classifier ────────────────────────────────────────────────────────
 
+// Topic classification schema (used by both json_schema and runtime validator).
+const TOPIC_SCHEMA = {
+  type: "object",
+  properties: {
+    isOnTopic: { type: "boolean" },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+  },
+  required: ["isOnTopic", "confidence"],
+  additionalProperties: false,
+};
+
+function validateTopicResult(parsed: unknown): { isOnTopic: boolean; confidence: number } | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.isOnTopic !== "boolean") return null;
+  if (typeof obj.confidence !== "number") return null;
+  return { isOnTopic: obj.isOnTopic, confidence: obj.confidence };
+}
+
 async function classifyTopicWithGroq(message: string): Promise<TopicCheckResult> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY is not set");
@@ -118,6 +151,61 @@ async function classifyTopicWithGroq(message: string): Promise<TopicCheckResult>
   const startTime = Date.now();
   const prompt = buildTopicPrompt(message);
 
+  // ─── Path 1: json_schema (only on models known to support it) ───
+  // Falls through to json_object on 400 "doesn't support json_schema".
+  if (supportsGroqJsonSchema(GROQ_MODEL)) {
+    const response = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages: [{ role: "user", content: prompt }],
+        temperature: CLASSIFIER_TEMPERATURE,
+        max_tokens: CLASSIFIER_MAX_TOKENS,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "topic_classification",
+            schema: TOPIC_SCHEMA,
+            strict: true,
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(4000),
+    });
+
+    if (response.ok) {
+      const data = (await response.json()) as {
+        choices: { message: { content: string } }[];
+      };
+      const content = data.choices?.[0]?.message?.content;
+      if (content) {
+        const validated = validateTopicResult(JSON.parse(content));
+        if (validated) {
+          return {
+            isOnTopic: validated.isOnTopic,
+            confidence: validated.confidence,
+            provider: "groq",
+            latencyMs: Date.now() - startTime,
+            explanation: `Groq: ${validated.isOnTopic ? "on-topic" : "off-topic"} (${validated.confidence})`,
+          };
+        }
+      }
+    } else {
+      const errBody = await response.text().catch(() => "");
+      if (!/does not support response format/i.test(errBody)) {
+        throw new Error(
+          `Groq topic classifier failed: ${response.status} — ${errBody.slice(0, 200)}`,
+        );
+      }
+      // Fall through to json_object mode.
+    }
+  }
+
+  // ─── Path 2: json_object + runtime validation (universal) ───
   const response = await fetch(GROQ_URL, {
     method: "POST",
     headers: {
@@ -129,22 +217,7 @@ async function classifyTopicWithGroq(message: string): Promise<TopicCheckResult>
       messages: [{ role: "user", content: prompt }],
       temperature: CLASSIFIER_TEMPERATURE,
       max_tokens: CLASSIFIER_MAX_TOKENS,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "topic_classification",
-          schema: {
-            type: "object",
-            properties: {
-              isOnTopic: { type: "boolean" },
-              confidence: { type: "number", minimum: 0, maximum: 1 },
-            },
-            required: ["isOnTopic", "confidence"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
+      response_format: { type: "json_object" },
     }),
     signal: AbortSignal.timeout(4000),
   });
@@ -157,18 +230,18 @@ async function classifyTopicWithGroq(message: string): Promise<TopicCheckResult>
   const data = (await response.json()) as {
     choices: { message: { content: string } }[];
   };
-
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error("Groq topic classifier: empty response");
 
-  const parsed = JSON.parse(content) as { isOnTopic: boolean; confidence: number };
+  const validated = validateTopicResult(JSON.parse(content));
+  if (!validated) throw new Error("Groq json_object topic classifier: invalid schema");
 
   return {
-    isOnTopic: parsed.isOnTopic,
-    confidence: parsed.confidence,
+    isOnTopic: validated.isOnTopic,
+    confidence: validated.confidence,
     provider: "groq",
     latencyMs: Date.now() - startTime,
-    explanation: `Groq: ${parsed.isOnTopic ? "on-topic" : "off-topic"} (${parsed.confidence})`,
+    explanation: `Groq: ${validated.isOnTopic ? "on-topic" : "off-topic"} (${validated.confidence})`,
   };
 }
 
@@ -181,8 +254,14 @@ async function classifyTopicWithGemini(message: string): Promise<TopicCheckResul
   const startTime = Date.now();
   const prompt = buildTopicPrompt(message);
 
+  // Resolve the Gemini model via the chat path's discovery chain. Avoids
+  // the previous hardcoded `gemini-2.5-flash` which 404s on new GCP projects.
+  const { getModelChain } = await import("./gemini");
+  const chain = await getModelChain();
+  const geminiModel = chain[0] ?? "gemini-flash-latest";
+
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -212,14 +291,15 @@ async function classifyTopicWithGemini(message: string): Promise<TopicCheckResul
   const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!content) throw new Error("Gemini topic classifier: empty response");
 
-  const parsed = JSON.parse(content) as { isOnTopic: boolean; confidence: number };
+  const validated = validateTopicResult(JSON.parse(content));
+  if (!validated) throw new Error("Gemini topic classifier: invalid schema");
 
   return {
-    isOnTopic: parsed.isOnTopic,
-    confidence: parsed.confidence,
+    isOnTopic: validated.isOnTopic,
+    confidence: validated.confidence,
     provider: "gemini",
     latencyMs: Date.now() - startTime,
-    explanation: `Gemini: ${parsed.isOnTopic ? "on-topic" : "off-topic"} (${parsed.confidence})`,
+    explanation: `Gemini: ${validated.isOnTopic ? "on-topic" : "off-topic"} (${validated.confidence})`,
   };
 }
 
