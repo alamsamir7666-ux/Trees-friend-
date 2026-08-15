@@ -15,6 +15,20 @@
       "when": 1786162127128,
       "tag": "0001_supreme_zombie",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786780345026,
+      "tag": "0008_kb_content_version",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786780345026,
+      "tag": "0009_bm25_trigger_order_fix",
+      "breakpoints": true
     }
   ]
 }

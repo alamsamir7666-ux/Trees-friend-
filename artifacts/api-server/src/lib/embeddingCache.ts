@@ -28,6 +28,27 @@
  *     lib/catalogCache.ts) — wired into all product/seller-listing
  *     mutation routes (POST/PUT/DELETE /products, /seller-listings,
  *     /admin/seller-listings/:id/{approve,reject}, /bulk-import).
+ *   - KB changes: invalidated via `invalidateKbCache()` (see lib/kbCache.ts)
+ *     which calls `invalidateCatalogCache()` AND `clearKbContentVersionCache()`.
+ *
+ * ─── BUG-3 fix: kb_content_version column ────────────────────────────────────
+ *
+ * Even with event-driven invalidation (BUG-1), there's a race window:
+ * Request A reads KB at T=0, admin edits KB at T=1 (cache cleared),
+ * Request A's LLM returns at T=2 (built from OLD KB), Request A writes
+ * to cache at T=3, Request B at T=4 finds Request A's cached response.
+ *
+ * The fix: every cached row stores a `kb_content_version` fingerprint
+ * (16-char hex) of the KB state used to build it. The lookup query
+ * filters `WHERE kb_content_version = $N` so rows built from old KB
+ * state are rejected at SELECT time. The version is computed by
+ * `getKbContentVersion()` (see lib/kbContentVersion.ts) and cleared
+ * from its in-process cache by `invalidateKbCache()` after every KB
+ * mutation.
+ *
+ * When the version can't be computed (DB error → "unknown"), the route
+ * bypasses the cache entirely (neither reads nor writes) — safer to
+ * miss the cache than risk serving stale content.
  *
  * What's NOT cached (same rules as exact-match cache):
  *   - Private queries (USER-SCOPED tool calls: get_user_orders, get_order_details)
@@ -136,12 +157,23 @@ async function generateEmbedding(text: string): Promise<number[] | null> {
  * Returns the most similar cached response, or null if no match / pgvector
  * unavailable / embedding generation failed.
  *
+ * BUG-3 fix: the lookup filters by `kb_content_version` so cached rows
+ * built from old KB state are rejected at SELECT time. NULL rows
+ * (legacy, pre-migration) are excluded because `NULL = anything` is NULL
+ * in SQL, not TRUE — they simply won't match the WHERE clause.
+ *
  * @param userMessage - The user's new message
  * @param isPrivate - If true, skip cache (user-specific data)
+ * @param kbContentVersion - 16-char hex fingerprint of the current KB state.
+ *   Must be non-null. The caller is responsible for computing it via
+ *   `getKbContentVersion()` and passing it here. If the version is
+ *   "unknown" (DB error), the caller should skip the cache lookup
+ *   entirely (don't call this function).
  */
 export async function getSemanticCachedResponse(
   userMessage: string,
-  isPrivate: boolean = false,
+  isPrivate: boolean,
+  kbContentVersion: string,
 ): Promise<SemanticCacheEntry | null> {
   if (isPrivate) return null;
   if (userMessage.trim().length < MIN_MESSAGE_LENGTH) return null;
@@ -162,6 +194,11 @@ export async function getSemanticCachedResponse(
     //
     // The COALESCE handles legacy rows (had_tool_calls IS NULL) by
     // treating them as non-tool (long TTL) — preserves backward compat.
+    //
+    // BUG-3 fix: filter by kb_content_version. NULL rows (legacy,
+    // pre-migration) are excluded because `NULL = $5` evaluates to NULL,
+    // not TRUE — they won't be cache hits. After TTL expiry (1h max),
+    // all NULL rows are gone.
     const result = await pool.query(
       `SELECT
          response,
@@ -169,22 +206,25 @@ export async function getSemanticCachedResponse(
          provider,
          1 - (embedding <=> $1::vector) AS similarity,
          created_at,
-         had_tool_calls
+         had_tool_calls,
+         kb_content_version
        FROM ai_response_cache
-       WHERE created_at > NOW() - (
-         CASE
-           WHEN COALESCE(had_tool_calls, FALSE) THEN ($3 || ' seconds')::INTERVAL
-           ELSE ($2 || ' seconds')::INTERVAL
-         END
-       )
+       WHERE kb_content_version = $5
+         AND created_at > NOW() - (
+           CASE
+             WHEN COALESCE(had_tool_calls, FALSE) THEN ($3 || ' seconds')::INTERVAL
+             ELSE ($2 || ' seconds')::INTERVAL
+           END
+         )
          AND 1 - (embedding <=> $1::vector) > $4
        ORDER BY embedding <=> $1::vector
        LIMIT 1`,
       [
         `[${embedding.join(",")}]`,
-        String(CACHE_TTL_SECONDS),       // long TTL (1h) for non-tool
-        String(TOOL_CACHE_TTL_SECONDS),  // short TTL (5min) for tool
+        String(CACHE_TTL_SECONDS), // long TTL (1h) for non-tool
+        String(TOOL_CACHE_TTL_SECONDS), // short TTL (5min) for tool
         SIMILARITY_THRESHOLD,
+        kbContentVersion,
       ],
     );
 
@@ -199,6 +239,7 @@ export async function getSemanticCachedResponse(
         model: row.model,
         provider: row.provider,
         hadToolCalls: row.had_tool_calls,
+        kbContentVersion: row.kb_content_version,
       },
       "Semantic cache: HIT",
     );
@@ -214,8 +255,11 @@ export async function getSemanticCachedResponse(
     // pgvector not available, or table doesn't exist, or query error
     // (e.g., had_tool_calls column doesn't exist yet — ensureAiTables
     // migration hasn't run. Fall back to the old query without the column.)
-    logger.debug({ err: (err as any)?.message }, "Semantic cache: search failed (pgvector unavailable? or schema not migrated?)");
-    return getSemanticCachedResponseLegacy(embedding);
+    logger.debug(
+      { err: (err as any)?.message },
+      "Semantic cache: search failed (pgvector unavailable? or schema not migrated?)",
+    );
+    return getSemanticCachedResponseLegacy(embedding, kbContentVersion);
   }
 }
 
@@ -224,8 +268,17 @@ export async function getSemanticCachedResponse(
  * exist yet (ensureAiTables migration hasn't run). Uses the old single-TTL
  * filter. This is non-fatal: the route still works, just without the
  * tool-call TTL distinction until the migration runs.
+ *
+ * BUG-3 fix: we still filter by `kb_content_version` here. If the
+ * kb_content_version column doesn't exist either (very old DB), the
+ * query will fail and we return null (cache miss → fresh LLM call).
+ * That's acceptable — the migration will add the column, then this
+ * path is no longer needed.
  */
-async function getSemanticCachedResponseLegacy(embedding: number[]): Promise<SemanticCacheEntry | null> {
+async function getSemanticCachedResponseLegacy(
+  embedding: number[],
+  kbContentVersion: string,
+): Promise<SemanticCacheEntry | null> {
   try {
     const result = await pool.query(
       `SELECT
@@ -235,11 +288,17 @@ async function getSemanticCachedResponseLegacy(embedding: number[]): Promise<Sem
          1 - (embedding <=> $1::vector) AS similarity,
          created_at
        FROM ai_response_cache
-       WHERE created_at > NOW() - ($2 || ' seconds')::INTERVAL
+       WHERE kb_content_version = $4
+         AND created_at > NOW() - ($2 || ' seconds')::INTERVAL
          AND 1 - (embedding <=> $1::vector) > $3
        ORDER BY embedding <=> $1::vector
        LIMIT 1`,
-      [`[${embedding.join(",")}]`, String(CACHE_TTL_SECONDS), SIMILARITY_THRESHOLD],
+      [
+        `[${embedding.join(",")}]`,
+        String(CACHE_TTL_SECONDS),
+        SIMILARITY_THRESHOLD,
+        kbContentVersion,
+      ],
     );
 
     if (result.rows.length === 0) return null;
@@ -270,13 +329,18 @@ async function getSemanticCachedResponseLegacy(embedding: number[]): Promise<Sem
  *   - Responses > 10K chars
  *   - Tool-call responses (tool results may change)
  *   - When embedding generation fails (falls back to exact-match cache)
+ *
+ * BUG-3 fix: stores the `kb_content_version` so future lookups can
+ * filter by it. NULL is never stored — only versioned rows are written
+ * (the caller skips cache writes when the version is "unknown").
  */
 export async function setSemanticCachedResponse(
   userMessage: string,
   response: string,
   model: string,
   provider: string,
-  hadToolCalls: boolean = false,
+  hadToolCalls: boolean,
+  kbContentVersion: string,
   isPrivate: boolean = false,
 ): Promise<void> {
   // Never cache private queries (user-scoped tool data, order lookups).
@@ -289,6 +353,13 @@ export async function setSemanticCachedResponse(
   if (userMessage.trim().length < MIN_MESSAGE_LENGTH) return;
   if (response.length > 10_000) return;
 
+  // BUG-3 fix: never cache when the KB version is unknown (DB error during
+  // version computation). Storing an "unknown" version would cause the
+  // next lookup to reject it (the lookup uses `WHERE kb_content_version = $N`,
+  // and $N would be a real version while the stored value is "unknown"),
+  // so we just skip the write entirely.
+  if (kbContentVersion === "unknown") return;
+
   const embedding = await generateEmbedding(userMessage);
   if (!embedding) return; // embedding failed — exact-match cache handles it
 
@@ -297,9 +368,12 @@ export async function setSemanticCachedResponse(
     // apply the correct TTL filter (short for tool-call entries, long
     // for non-tool entries). The column is added by ensureAiTables.ts
     // (idempotent ALTER ADD COLUMN IF NOT EXISTS).
+    //
+    // BUG-3 fix: also store kb_content_version. The column is added by
+    // migration 0008 + ensureAiTables.ts.
     await pool.query(
-      `INSERT INTO ai_response_cache (query_text, response, embedding, model, provider, had_tool_calls)
-       VALUES ($1, $2, $3::vector, $4, $5, $6)`,
+      `INSERT INTO ai_response_cache (query_text, response, embedding, model, provider, had_tool_calls, kb_content_version)
+       VALUES ($1, $2, $3::vector, $4, $5, $6, $7)`,
       [
         userMessage.slice(0, 1000),
         response,
@@ -307,24 +381,43 @@ export async function setSemanticCachedResponse(
         model,
         provider,
         hadToolCalls,
+        kbContentVersion,
       ],
     );
-    logger.debug({ model, provider, hadToolCalls }, "Semantic cache: STORED");
+    logger.debug({ model, provider, hadToolCalls, kbContentVersion }, "Semantic cache: STORED");
   } catch (err) {
-    // If the had_tool_calls column doesn't exist yet (migration hasn't
+    // If the kb_content_version column doesn't exist yet (migration hasn't
     // run), fall back to the old INSERT without it. This is non-fatal —
-    // the entry just won't have the flag (treated as non-tool on read).
+    // the entry just won't have the version (treated as NULL on read,
+    // which excludes it from cache hits until the migration runs).
     const errMsg = (err as any)?.message ?? "";
-    if (errMsg.includes("had_tool_calls") || errMsg.includes("column") || errMsg.includes("does not exist")) {
+    if (
+      errMsg.includes("kb_content_version") ||
+      errMsg.includes("column") ||
+      errMsg.includes("does not exist")
+    ) {
       try {
         await pool.query(
-          `INSERT INTO ai_response_cache (query_text, response, embedding, model, provider)
-           VALUES ($1, $2, $3::vector, $4, $5)`,
-          [userMessage.slice(0, 1000), response, `[${embedding.join(",")}]`, model, provider],
+          `INSERT INTO ai_response_cache (query_text, response, embedding, model, provider, had_tool_calls)
+           VALUES ($1, $2, $3::vector, $4, $5, $6)`,
+          [
+            userMessage.slice(0, 1000),
+            response,
+            `[${embedding.join(",")}]`,
+            model,
+            provider,
+            hadToolCalls,
+          ],
         );
-        logger.debug({ model, provider, hadToolCalls, fallback: true }, "Semantic cache: STORED (legacy schema, no had_tool_calls column)");
+        logger.debug(
+          { model, provider, hadToolCalls, fallback: true },
+          "Semantic cache: STORED (legacy schema, no kb_content_version column)",
+        );
       } catch (legacyErr) {
-        logger.debug({ err: (legacyErr as any)?.message }, "Semantic cache: legacy store also failed");
+        logger.debug(
+          { err: (legacyErr as any)?.message },
+          "Semantic cache: legacy store also failed",
+        );
       }
     } else {
       logger.debug({ err: errMsg }, "Semantic cache: store failed (pgvector unavailable?)");

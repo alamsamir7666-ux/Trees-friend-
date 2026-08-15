@@ -583,3 +583,64 @@ export const aiKbEntriesTable = pgTable(
 );
 
 export type AiKbEntry = typeof aiKbEntriesTable.$inferSelect;
+
+/**
+ * Embeddings-based semantic cache (pgvector).
+ *
+ * NOTE: this table is created by `ensureAiTables.ts` (raw SQL) and is
+ * NOT created by Drizzle Kit migrations. The Drizzle declaration here
+ * exists for type-safety in any code that wants to SELECT from the
+ * table via Drizzle's query builder. The actual schema (column types,
+ * HNSW vector index, etc.) lives in ensureAiTables.ts.
+ *
+ * ─── BUG-3 fix: kb_content_version column ────────────────────────────────────
+ *
+ * `kbContentVersion` is a 16-char hex fingerprint of the KB state at the
+ * time the cached response was built (sha1 of all active KB entry IDs +
+ * updated_at + is_active). It changes whenever any active entry is
+ * created, updated, deleted, activated, or deactivated.
+ *
+ * The lookup query filters `WHERE kb_content_version = $N` so cached
+ * rows built from old KB state are rejected at SELECT time. This
+ * eliminates the race window between event-driven invalidation (BUG-1)
+ * and concurrent in-flight requests that may re-cache stale content.
+ *
+ * Nullable: existing rows have NULL. NULL is treated as "version
+ * unknown" and is excluded from cache hits (NULL = anything is NULL,
+ * not TRUE). After TTL expiry (1h max) all NULL rows are gone.
+ *
+ * The column is added by migration `0008_kb_content_version.sql` (for
+ * existing DBs) and by `ensureAiTables.ts` (for fresh DBs without
+ * migration history).
+ */
+export const aiResponseCacheTable = pgTable(
+  "ai_response_cache",
+  {
+    id: serial("id").primaryKey(),
+    queryText: text("query_text").notNull(),
+    response: text("response").notNull(),
+    // Drizzle doesn't have a native vector type — declared as text.
+    // The actual column is `vector(768)` (created by ensureAiTables.ts).
+    embedding: text("embedding"),
+    model: text("model"),
+    provider: text("provider"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // Bug #4 fix: tracks whether the response involved tool calls
+    // (controls TTL: tool-call = 5min, non-tool = 1h).
+    hadToolCalls: boolean("had_tool_calls"),
+    // BUG-3 fix: KB content version fingerprint (16-char hex).
+    // Nullable for back-compat — NULL rows are excluded from cache hits.
+    kbContentVersion: text("kb_content_version"),
+  },
+  (table) => [
+    // Note: the HNSW vector index, the created_at index, the tool_calls
+    // partial index, and the kb_content_version partial index are all
+    // declared in ensureAiTables.ts (raw SQL) — Drizzle doesn't support
+    // vector indexes or partial indexes with WHERE clauses in the
+    // schema definition. They're idempotent CREATE INDEX IF NOT EXISTS
+    // statements there.
+    index("ai_response_cache_created_at_idx").on(table.createdAt),
+  ],
+);
+
+export type AiResponseCacheEntry = typeof aiResponseCacheTable.$inferSelect;

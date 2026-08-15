@@ -48,6 +48,7 @@
  * in `aiAdmin.ts`.
  */
 import { invalidateCatalogCache } from "./catalogCache";
+import { clearKbContentVersionCache } from "./kbContentVersion";
 import { logger } from "./logger";
 
 /**
@@ -58,12 +59,28 @@ import { logger } from "./logger";
  * would leave caches empty for no reason (the data didn't actually
  * change).
  *
+ * Two-layer invalidation:
+ *   1. `clearKbContentVersionCache()` — clears the in-process KB version
+ *      cache so the next chat request recomputes the version from the
+ *      (now-updated) DB state. MUST run BEFORE the catalog cache flush
+ *      so a concurrent in-flight request can't read the stale versioned
+ *      cache during the invalidation window.
+ *   2. `invalidateCatalogCache()` — flushes the Redis exact-match cache
+ *      + pgvector semantic cache + reranker cache. See catalogCache.ts
+ *      for the full list.
+ *
  * @param reason - human-readable label for audit logging.
  *                 Examples: "entry.update", "creator.tone.regen",
  *                 "source.batch-entries", "category.move".
  */
 export async function invalidateKbCache(reason: string): Promise<void> {
   try {
+    // Clear the in-process KB version cache FIRST so the next request
+    // recomputes the version from the (now-updated) DB state. If we
+    // cleared it after invalidateCatalogCache, a concurrent request
+    // could read the stale versioned cache during the invalidation window.
+    clearKbContentVersionCache();
+
     await invalidateCatalogCache(`kb:${reason}`);
     logger.info({ reason }, "KB cache: invalidated after mutation");
   } catch (err) {

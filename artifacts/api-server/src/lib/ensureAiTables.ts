@@ -555,6 +555,31 @@ CREATE INDEX IF NOT EXISTS ai_response_cache_tool_calls_idx
   ON ai_response_cache (created_at)
   WHERE had_tool_calls = TRUE;
 
+-- ─── BUG-3 fix: kb_content_version fingerprint ──────────────────────────────
+-- The kb_content_version column stores a 16-char hex fingerprint of the
+-- KB state used to build each cached response (sha1 of all active KB entry
+-- IDs + updated_at + is_active). It changes whenever any active entry is
+-- created, updated, deleted, activated, or deactivated.
+--
+-- The lookup query filters "WHERE kb_content_version = $N" so cached rows
+-- built from old KB state are rejected at SELECT time. This eliminates the
+-- race window between event-driven invalidation (BUG-1 fix via
+-- invalidateKbCache()) and concurrent in-flight requests that may re-cache
+-- stale content.
+--
+-- Nullable: existing rows have NULL. NULL is treated as "version unknown"
+-- and is excluded from cache hits (NULL = anything is NULL in SQL, not
+-- TRUE). After TTL expiry (1h max) all NULL rows are gone — no manual
+-- backfill needed.
+ALTER TABLE ai_response_cache
+  ADD COLUMN IF NOT EXISTS kb_content_version TEXT;
+
+-- Partial index: only rows with a non-NULL version are eligible for cache
+-- hits. NULL rows exist only as legacy data and are skipped at lookup time.
+CREATE INDEX IF NOT EXISTS ai_response_cache_kb_version_idx
+  ON ai_response_cache (kb_content_version)
+  WHERE kb_content_version IS NOT NULL;
+
 -- ─── v3.6: Feedback ownership (Bug #2 fix) ─────────────────────────────────
 -- The original ai_chat_feedback schema had ONLY (message_id) as a unique
 -- constraint, which meant:

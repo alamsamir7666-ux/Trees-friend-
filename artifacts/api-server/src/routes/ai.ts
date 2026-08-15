@@ -68,6 +68,9 @@ import { classifyTopic } from "../lib/topicClassifier";
 import { checkOutputSafety } from "../lib/outputSafety";
 import { getCachedResponse, setCachedResponse } from "../lib/semanticCache";
 import { getSemanticCachedResponse, setSemanticCachedResponse } from "../lib/embeddingCache";
+// BUG-3 fix: compute a KB content version fingerprint so the semantic cache
+// can reject rows built from old KB state at SELECT time.
+import { getKbContentVersion } from "../lib/kbContentVersion";
 import { getActivePrompt } from "../lib/promptVersioning";
 import { getTopKbEntriesForPrompt, formatKbContextForPrompt } from "../lib/kbSearch";
 import {
@@ -1279,32 +1282,59 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   }
 
   // 2. Semantic cache (pgvector — catches "how often to water mango?" ≈ "how often should I water a mango tree?")
-  const semanticCached = await getSemanticCachedResponse(safeMessage, isPrivateQuery);
-  if (semanticCached) {
-    logger.info(
-      {
-        cache: "semantic",
-        model: semanticCached.model,
-        provider: semanticCached.provider,
-        similarity: Math.round(semanticCached.similarity * 100) / 100,
-      },
-      "AI: semantic cache HIT, streaming cached response (chunked, no artificial delay)",
+  //
+  // BUG-3 fix: compute the KB content version fingerprint BEFORE the cache
+  // lookup. The version is a 16-char hex hash of all active KB entry IDs +
+  // updated_at + is_active. It changes whenever any active entry is
+  // created, updated, deleted, activated, or deactivated.
+  //
+  // The semantic cache filters `WHERE kb_content_version = $N` so cached
+  // rows built from old KB state are rejected at SELECT time. This
+  // eliminates the race window between event-driven invalidation (BUG-1)
+  // and concurrent in-flight requests.
+  //
+  // Fail-safe: if the version is "unknown" (DB error during version
+  // computation), bypass the semantic cache entirely — safer to miss the
+  // cache than risk serving stale content.
+  const kbContentVersion = await getKbContentVersion();
+  if (kbContentVersion !== "unknown" && !isPrivateQuery) {
+    const semanticCached = await getSemanticCachedResponse(
+      safeMessage,
+      isPrivateQuery,
+      kbContentVersion,
     );
-    // v3.6: Stream as chunked SSE deltas (no artificial delay).
-    await streamCachedResponse(res, semanticCached.response);
-    const assistantMsgId = await persistMessage(session.id, "assistant", semanticCached.response, {
-      model: semanticCached.model,
-      provider: semanticCached.provider,
-      responseMs: Date.now() - requestStartTime,
-      costUsd: 0,
-      promptVersion: "cached-semantic",
-    });
-    if (assistantMsgId != null) {
-      res.write(`data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`);
+    if (semanticCached) {
+      logger.info(
+        {
+          cache: "semantic",
+          model: semanticCached.model,
+          provider: semanticCached.provider,
+          similarity: Math.round(semanticCached.similarity * 100) / 100,
+          kbContentVersion,
+        },
+        "AI: semantic cache HIT, streaming cached response (chunked, no artificial delay)",
+      );
+      // v3.6: Stream as chunked SSE deltas (no artificial delay).
+      await streamCachedResponse(res, semanticCached.response);
+      const assistantMsgId = await persistMessage(
+        session.id,
+        "assistant",
+        semanticCached.response,
+        {
+          model: semanticCached.model,
+          provider: semanticCached.provider,
+          responseMs: Date.now() - requestStartTime,
+          costUsd: 0,
+          promptVersion: "cached-semantic",
+        },
+      );
+      if (assistantMsgId != null) {
+        res.write(`data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`);
+      }
+      res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+      res.end();
+      return;
     }
-    res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
-    res.end();
-    return;
   }
 
   // ─── 11. Stream AI response ───
@@ -1708,12 +1738,16 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       ).catch(() => {});
 
       // Semantic cache (fire-and-forget — embedding generation takes ~100ms).
+      // BUG-3 fix: pass kbContentVersion so the cached row is tagged with
+      // the KB state it was built from. Future lookups with a different
+      // version won't hit this row.
       setSemanticCachedResponse(
         safeMessage,
         fullResponse,
         model,
         provider,
         hadAnyTool,
+        kbContentVersion,
         effectiveIsPrivate,
       ).catch(() => {});
     }
