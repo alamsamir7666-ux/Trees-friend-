@@ -100,6 +100,92 @@ import { logger } from "./logger";
  */
 export const TRANSCRIPT_PLACEHOLDER_PREFIX = "[TRANSCRIPT PLACEHOLDER";
 
+// ─── Cookie validation (one-time check at module load) ──────────────────────
+
+/**
+ * The cookies YouTube actually checks for authenticated session validation.
+ *
+ * `__Secure-1PSID` and `__Secure-3PSID` are THE critical ones — they're
+ * the secure (HTTPS-only) versions of the SID cookie. Without them,
+ * YouTube sees a "partially cookie'd" session which is WORSE than no
+ * cookies (looks like a bot trying to fake a session) and returns
+ * LOGIN_REQUIRED.
+ *
+ * These cookies are flagged HttpOnly + Secure in the browser, which means
+ * `document.cookie` in JavaScript CAN'T see them. Admins who copy
+ * cookies via a browser console snippet will miss them — this is the #1
+ * cause of "I set the cookie but it still doesn't work" reports.
+ *
+ * Reference: https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies
+ */
+const CRITICAL_YOUTUBE_COOKIES = [
+  "__Secure-1PSID", // THE most critical — secure version of SID
+  "__Secure-3PSID", // THE most critical — third-party secure version of SID
+  "HSID", // Host-specific ID
+  "SSID", // Secure Session ID
+];
+
+/**
+ * One-time check at module load. If YOUTUBE_SESSION_COOKIE is set but
+ * missing critical cookies, logs a prominent warning so the admin sees it
+ * in the Render logs immediately after deploying.
+ *
+ * This is the difference between "the admin debugs for an hour wondering
+ * why the cookie retry still fails" vs "the admin sees the warning in
+ * the logs on first deploy and fixes the cookie immediately."
+ *
+ * Doesn't throw — the missing cookies are a soft failure (the no-auth
+ * path still works on residential IPs). Just warns.
+ */
+function validateYoutubeSessionCookie(): void {
+  const cookie = process.env.YOUTUBE_SESSION_COOKIE;
+  if (!cookie || !cookie.trim()) {
+    // No cookie configured — that's fine, the feature degrades to
+    // manual-fallback on datacenter IPs. No warning needed.
+    return;
+  }
+
+  // Parse the cookie string into a Set of cookie names.
+  const present = new Set<string>();
+  for (const part of cookie.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx === -1) continue;
+    present.add(trimmed.slice(0, eqIdx).trim());
+  }
+
+  const missing = CRITICAL_YOUTUBE_COOKIES.filter((name) => !present.has(name));
+  if (missing.length === 0) {
+    logger.info(
+      { cookieCount: present.size },
+      "YouTube: YOUTUBE_SESSION_COOKIE is configured and contains all critical auth cookies",
+    );
+    return;
+  }
+
+  // Log a prominent warning with the missing cookies + fix instructions.
+  // This is the message the admin will see in the Render logs.
+  logger.warn(
+    {
+      cookieCount: present.size,
+      missingCritical: missing,
+    },
+    "YouTube: YOUTUBE_SESSION_COOKIE is set but is MISSING critical auth cookies: " +
+      missing.join(", ") +
+      ". The cookie-retry path will STILL fail with LOGIN_REQUIRED because YouTube " +
+      "sees a 'partially cookie'd' session (worse than no cookies — looks like a bot). " +
+      "FIX: re-export ALL cookies using a method that captures HttpOnly cookies " +
+      "(the 'Get cookies.txt' browser extension, or DevTools → Application → Cookies). " +
+      "The critical cookies are HttpOnly+Secure so document.cookie can't see them — " +
+      "that's likely why they're missing from your current cookie string.",
+  );
+}
+
+// Run the one-time check at module load. This runs once when the api-server
+// starts (not per-request) so it doesn't spam the logs.
+validateYoutubeSessionCookie();
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface YoutubeVideoMetadata {
