@@ -77,6 +77,29 @@
 import { Innertube } from "youtubei.js";
 import { logger } from "./logger";
 
+// ─── Shared constants ───────────────────────────────────────────────────────
+
+/**
+ * Sentinel prefix used to mark a source's `rawText` as a placeholder when
+ * the YouTube auto-fetch falls back to manual mode (bot protection).
+ *
+ * The YouTube route (`POST /ai/admin/kb/sources/youtube`) writes
+ * `[TRANSCRIPT PLACEHOLDER — <reason>]` into rawText when the auto-fetch
+ * fails. This lets the source row be created (rawText is NOT NULL) while
+ * clearly signaling to the admin (and to the chunk route) that the text
+ * is NOT real content and must be replaced before chunking.
+ *
+ * The chunk route (`POST /ai/admin/kb/sources/:id/chunk`) checks for this
+ * prefix and refuses to chunk placeholder text — chunking it would
+ * produce garbage chunks like "TRANSCRIPT PLACEHOLDER — YouTube blocked...".
+ *
+ * Exported so both routes share the same source of truth. If you change
+ * this string, update both:
+ *   - routes/aiAdmin.ts (YouTube route: writes the placeholder)
+ *   - routes/aiAdmin.ts (chunk route: detects the prefix)
+ */
+export const TRANSCRIPT_PLACEHOLDER_PREFIX = "[TRANSCRIPT PLACEHOLDER";
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface YoutubeVideoMetadata {
@@ -408,11 +431,97 @@ function isBotChallengeError(err: unknown): boolean {
       /sign in|bot|captcha/i.test(err.message)
     );
   }
+  if (err instanceof InnertubeTimeoutError) {
+    // Timeouts are treated as bot-challenge errors because YouTube's bot
+    // detection often manifests as a long-running JavaScript challenge page
+    // that never resolves (rather than an explicit error response). By
+    // treating timeouts as bot-challenges, the caller falls through to the
+    // cookie-retry path (which often succeeds because the cookie
+    // authenticates the request and skips the challenge).
+    return true;
+  }
   const msg = (err as any)?.message ?? String(err);
   return /sign in to confirm|bot|captcha|unusual traffic/i.test(msg);
 }
 
+/**
+ * Thrown when a youtubei.js call exceeds the timeout. Treated as a
+ * bot-challenge error by `isBotChallengeError` so the caller falls
+ * through to the cookie-retry / oEmbed-fallback paths.
+ *
+ * Without this timeout, a single hanging YouTube request (e.g. YouTube
+ * serves a slow JavaScript challenge page that never resolves) would
+ * block one Express worker for up to 100s on Render — and on Render's
+ * free tier (1 worker), that queues ALL other API requests behind it.
+ */
+class InnertubeTimeoutError extends Error {
+  readonly timedOutAfterMs: number;
+  constructor(timedOutAfterMs: number) {
+    super(
+      `YouTube Innertube call timed out after ${timedOutAfterMs}ms. ` +
+        "This is usually caused by YouTube's bot-protection serving a slow " +
+        "JavaScript challenge page that never resolves.",
+    );
+    this.name = "InnertubeTimeoutError";
+    this.timedOutAfterMs = timedOutAfterMs;
+  }
+}
+
+/**
+ * Wraps a promise with a timeout. If the promise doesn't resolve within
+ * `timeoutMs`, rejects with `InnertubeTimeoutError`.
+ *
+ * Uses `Promise.race()` (the standard timeout pattern) rather than
+ * `AbortSignal.timeout()` because youtubei.js's `Innertube.create()` and
+ * `info.getTranscript()` don't accept an AbortSignal — they use their
+ * own internal fetch implementation. Promise.race is the only way to
+ * enforce a timeout on a promise that doesn't support cancellation.
+ *
+ * The losing promise (the actual youtubei.js call) continues running
+ * in the background after the timeout fires — we can't cancel it. This
+ * is acceptable because:
+ *   1. Node's event loop will eventually resolve or reject it (YouTube
+ *      will close the connection after their own server-side timeout).
+ *   2. The result is discarded (we already returned the fallback).
+ *   3. This is a low-volume admin endpoint — at most a handful of
+ *      in-flight youtubei.js calls at any time, so leaked background
+ *      promises don't accumulate.
+ */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new InnertubeTimeoutError(timeoutMs)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    // Clear the timer so it doesn't keep the event loop alive after the
+    // promise resolves. Without this, the timer would fire even after
+    // success (harmlessly, but it leaks a reference).
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
+
+/**
+ * Timeout for each Innertube call (in milliseconds).
+ *
+ * 15 seconds is the sweet spot:
+ *   - Long enough for normal operation: a typical Innertube getInfo +
+ *     getTranscript round-trip takes 1-4 seconds on a residential IP.
+ *   - Short enough to fail fast on bot challenges: YouTube's bot-protection
+ *     JavaScript challenge pages often never resolve (or resolve after
+ *     60+ seconds). 15s ensures we don't block the Express worker that long.
+ *   - Leaves headroom for the cookie-retry + oEmbed-fallback paths: total
+ *     worst-case latency for a single YouTube fetch is ~35s (15s no-auth
+ *     timeout + 15s cookie-retry timeout + 5s oEmbed fetch). The admin
+ *     UI shows a spinner so this is acceptable.
+ *
+ * Override via env var YOUTUBE_FETCH_TIMEOUT_MS (rare — only if your
+ * network is unusually slow or fast).
+ */
+const INNERTUBE_TIMEOUT_MS = Number(process.env.YOUTUBE_FETCH_TIMEOUT_MS ?? 15_000);
 
 /**
  * Fetches YouTube video metadata + transcript given a URL.
@@ -440,7 +549,7 @@ export async function fetchYoutubeTranscript(url: string): Promise<YoutubeTransc
 
   // ─── Step 1: Try Innertube with no auth ───
   try {
-    const result = await fetchTranscriptViaInnertube(videoId);
+    const result = await withTimeout(fetchTranscriptViaInnertube(videoId), INNERTUBE_TIMEOUT_MS);
     logger.info(
       {
         videoId,
@@ -480,7 +589,10 @@ export async function fetchYoutubeTranscript(url: string): Promise<YoutubeTransc
   const cookie = process.env.YOUTUBE_SESSION_COOKIE;
   if (cookie && cookie.trim()) {
     try {
-      const result = await fetchTranscriptViaInnertube(videoId, cookie);
+      const result = await withTimeout(
+        fetchTranscriptViaInnertube(videoId, cookie),
+        INNERTUBE_TIMEOUT_MS,
+      );
       logger.info(
         {
           videoId,

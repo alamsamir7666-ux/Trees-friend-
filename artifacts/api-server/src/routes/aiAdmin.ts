@@ -87,7 +87,11 @@ import {
   RAW_TEXT_MAX_LENGTH,
   VALID_LANGUAGES,
 } from "../lib/kbSources";
-import { fetchYoutubeTranscript, parseYoutubeUrl } from "../lib/youtubeTranscript";
+import {
+  fetchYoutubeTranscript,
+  parseYoutubeUrl,
+  TRANSCRIPT_PLACEHOLDER_PREFIX,
+} from "../lib/youtubeTranscript";
 import {
   listKbEntries,
   getKbEntry,
@@ -2220,8 +2224,11 @@ router.post(
     const isManualFallback = fetchResult.fetchedVia === "manual-fallback";
     if (isManualFallback && !fetchResult.transcript) {
       // Need rawText to be non-empty for createKbSource() validation.
-      // Use a placeholder that the admin will replace.
-      fetchResult.transcript = `[TRANSCRIPT PLACEHOLDER — ${fetchResult.manualFallbackReason}]`;
+      // Use a placeholder sentinel that the chunk route detects and refuses
+      // to chunk (see TRANSCRIPT_PLACEHOLDER_PREFIX in lib/youtubeTranscript.ts).
+      // The admin must edit the source and paste the real transcript before
+      // the source can be chunked.
+      fetchResult.transcript = `${TRANSCRIPT_PLACEHOLDER_PREFIX} — ${fetchResult.manualFallbackReason}]`;
     }
 
     // Truncate transcript if it exceeds RAW_TEXT_MAX_LENGTH (very long videos).
@@ -2523,6 +2530,32 @@ router.post("/ai/admin/kb/sources/:id/chunk", async (req: Request, res: Response
     if (source.sourceLanguage !== "en") {
       res.status(422).json({
         error: "AI chunking is only available for English content. Use manual chunking.",
+      });
+      return;
+    }
+    // Gap #4 fix: detect placeholder rawText left by the YouTube auto-fetch
+    // manual-fallback path. The YouTube route creates sources with
+    // rawText = "<TRANSCRIPT_PLACEHOLDER_PREFIX> — <reason>]" when the
+    // auto-fetch fails (bot protection). Chunking that placeholder would
+    // produce garbage chunks like "TRANSCRIPT PLACEHOLDER — YouTube blocked...".
+    //
+    // We detect the placeholder by its sentinel prefix and return 422
+    // with a clear message telling the admin to edit the source and paste
+    // the real transcript first. This is a defense-in-depth check — the
+    // Edit Source modal already shows a clear UI for sources with
+    // placeholder text (via the rawMetadata.fetchedVia === "manual-fallback"
+    // signal), but a determined admin could still click "AI Chunk" from
+    // the list view without opening the detail page.
+    //
+    // The prefix is a shared constant in lib/youtubeTranscript.ts so the
+    // writer (YouTube route) and reader (this chunk route) can't drift.
+    if (source.rawText.trim().startsWith(TRANSCRIPT_PLACEHOLDER_PREFIX)) {
+      res.status(422).json({
+        error:
+          "This source still has a placeholder transcript (YouTube auto-fetch failed). " +
+          "Edit the source and paste the real transcript before chunking. " +
+          'On the source detail page, click "Edit Source", paste the transcript ' +
+          "into the Raw Text field, and save.",
       });
       return;
     }
