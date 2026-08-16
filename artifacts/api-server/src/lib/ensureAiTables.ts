@@ -427,7 +427,15 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Partial index on is_active for fast stats refresh + active-entry scans
-CREATE INDEX CONCURRENTLY IF NOT EXISTS ai_kb_entries_active_partial_idx
+--
+-- NOTE: We intentionally do NOT use CREATE INDEX CONCURRENTLY here.
+-- The 'pg' npm package's pool.query() wraps a multi-statement string
+-- in an implicit transaction block, and Postgres error 25001 forbids
+-- CONCURRENTLY inside any transaction block (even an implicit one).
+-- CONCURRENTLY only matters for migrations on a live DB with concurrent
+-- writes; on cold start the table is small + IF NOT EXISTS makes this
+-- idempotent, so a blocking CREATE INDEX is fine.
+CREATE INDEX IF NOT EXISTS ai_kb_entries_active_partial_idx
   ON ai_kb_entries (id)
   WHERE is_active = true;
 
