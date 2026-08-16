@@ -346,6 +346,17 @@ export interface KbSourceUpdateInput {
   sourceUrl?: string | null;
   creatorId?: number | null;
   sourcePublishedAt?: string | null;
+  /**
+   * Optional raw text update. The backend rejects this with 409 if the
+   * source already has entries (changing rawText would invalidate the
+   * derived chunks). The edit modal disables the rawText field when
+   * entryCount > 0 so the admin never hits this error in normal use.
+   *
+   * When rawText IS updated, the backend also resets chunking metadata
+   * (processing_status → 'pending', chunking_method/model/chunked_at →
+   * NULL) so the admin can re-chunk from the new text.
+   */
+  rawText?: string;
 }
 
 export interface KbSourceFilters {

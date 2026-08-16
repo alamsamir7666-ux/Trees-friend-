@@ -422,12 +422,42 @@ export async function createKbSource(params: {
 }
 
 // ─── updateKbSource ──────────────────────────────────────────────────────────
+
 /**
- * Updates a source's metadata. Does NOT update `rawText` — changing the
- * raw text would invalidate all existing chunks (they were derived from
- * the old text). The admin must delete the source + re-create it to
- * change the raw text. (A future enhancement could add a "re-chunk"
- * endpoint that clears entries + re-runs chunking.)
+ * Thrown by `updateKbSource()` when the caller tries to update `rawText`
+ * on a source that already has entries. Updating rawText would
+ * invalidate all existing chunks (they were derived from the old text),
+ * so we refuse the update and tell the admin to delete the entries first.
+ *
+ * The route handler catches this and returns HTTP 409 with the message.
+ */
+export class KbSourceHasEntriesError extends Error {
+  readonly entryCount: number;
+  constructor(entryCount: number) {
+    super(
+      `Cannot update raw text: this source has ${entryCount} entr${entryCount === 1 ? "y" : "ies"}. ` +
+        "Delete the entries first (or delete the source and re-create it).",
+    );
+    this.name = "KbSourceHasEntriesError";
+    this.entryCount = entryCount;
+  }
+}
+
+/**
+ * Updates a source's metadata + (optionally) rawText.
+ *
+ * rawText updates are allowed ONLY when the source has no entries —
+ * changing the raw text after chunks have been derived would invalidate
+ * them. If entries exist, throws `KbSourceHasEntriesError` (the route
+ * handler returns 409).
+ *
+ * When rawText IS updated, we also reset:
+ *   - processing_status → 'pending'
+ *   - chunking_method, chunking_model, chunked_at → NULL
+ *   - chunking_error → NULL
+ *
+ * Because any previous chunking metadata no longer applies to the new text.
+ * This lets the admin re-chunk cleanly after pasting a new transcript.
  */
 export async function updateKbSource(
   id: number,
@@ -436,6 +466,7 @@ export async function updateKbSource(
     sourceUrl?: string | null;
     creatorId?: number | null;
     sourcePublishedAt?: Date | null;
+    rawText?: string;
   },
 ): Promise<KbSource | null> {
   if (!Number.isInteger(id) || id <= 0) return null;
@@ -471,6 +502,40 @@ export async function updateKbSource(
     }
   }
 
+  // ─── rawText validation + entries-exist guard ────
+  //
+  // If rawText is being updated, validate it (non-empty, length cap) AND
+  // check that the source has no entries. If entries exist, throw
+  // KbSourceHasEntriesError — the route handler returns 409 with a clear
+  // message telling the admin to delete entries first.
+  //
+  // This guard is the safety net that lets us safely expose rawText
+  // updates via the PUT route. Without it, an admin could change the
+  // rawText on a fully-chunked source and silently break the RAG
+  // retrieval (entries would no longer match the source text).
+  if (updates.rawText !== undefined) {
+    const rawText = updates.rawText?.trim() ?? "";
+    if (!rawText) {
+      logger.warn({ id }, "KB sources: update failed — rawText is empty");
+      return null;
+    }
+    if (rawText.length > RAW_TEXT_MAX_LENGTH) {
+      logger.warn({ id, textLen: rawText.length }, "KB sources: update failed — rawText too long");
+      return null;
+    }
+    // Check no entries exist — updating rawText would invalidate them.
+    // We count rather than just EXISTS() so the error message can tell
+    // the admin exactly how many entries need to be deleted.
+    const entryCountResult = await pool.query<{ cnt: string }>(
+      "SELECT COUNT(*)::bigint AS cnt FROM ai_kb_entries WHERE source_id = $1",
+      [id],
+    );
+    const entryCount = Number(entryCountResult.rows[0]?.cnt ?? 0);
+    if (entryCount > 0) {
+      throw new KbSourceHasEntriesError(entryCount);
+    }
+  }
+
   try {
     const setClauses: string[] = [];
     const values: (string | number | Date | null)[] = [];
@@ -490,6 +555,22 @@ export async function updateKbSource(
     if (updates.sourcePublishedAt !== undefined) {
       setClauses.push(`source_published_at = $${paramIdx++}`);
       values.push(updates.sourcePublishedAt);
+    }
+    if (updates.rawText !== undefined) {
+      // Push the new rawText (already validated + trimmed above).
+      setClauses.push(`raw_text = $${paramIdx++}`);
+      values.push(updates.rawText.trim());
+      // Reset chunking metadata — the previous chunking (if any) was
+      // derived from the OLD rawText and is now stale. Resetting lets
+      // the admin re-chunk cleanly from the new text.
+      //
+      // We use literal SQL (no params) for these because they're all
+      // constants — no injection risk.
+      setClauses.push(`processing_status = 'pending'`);
+      setClauses.push(`chunking_method = NULL`);
+      setClauses.push(`chunking_model = NULL`);
+      setClauses.push(`chunked_at = NULL`);
+      setClauses.push(`chunking_error = NULL`);
     }
     if (setClauses.length === 0) {
       logger.warn({ id }, "KB sources: update failed — no fields to update");

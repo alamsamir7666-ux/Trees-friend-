@@ -78,6 +78,7 @@ import {
   getKbSource,
   createKbSource,
   updateKbSource,
+  KbSourceHasEntriesError,
   deleteKbSource,
   updateProcessingStatus,
   updateChunkingMetadata,
@@ -2348,17 +2349,19 @@ router.put("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
     res.status(400).json({ error: "Invalid source id." });
     return;
   }
-  const { sourceTitle, sourceUrl, creatorId, sourcePublishedAt } = (req.body ?? {}) as {
+  const { sourceTitle, sourceUrl, creatorId, sourcePublishedAt, rawText } = (req.body ?? {}) as {
     sourceTitle?: string;
     sourceUrl?: string | null;
     creatorId?: number | null;
     sourcePublishedAt?: string | null;
+    rawText?: string;
   };
   const updates: {
     sourceTitle?: string;
     sourceUrl?: string | null;
     creatorId?: number | null;
     sourcePublishedAt?: Date | null;
+    rawText?: string;
   } = {};
   if (sourceTitle !== undefined) {
     if (typeof sourceTitle !== "string" || sourceTitle.trim().length === 0) {
@@ -2416,6 +2419,24 @@ router.put("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
       updates.sourcePublishedAt = parsed;
     }
   }
+  // rawText validation — non-empty string, length cap.
+  // The entries-exist guard is enforced inside updateKbSource() (it
+  // throws KbSourceHasEntriesError, caught below). We validate shape +
+  // length here so we can return 400 (bad request) rather than letting
+  // the lib function return null (which the route would map to 409).
+  if (rawText !== undefined) {
+    if (typeof rawText !== "string" || rawText.trim().length === 0) {
+      res.status(400).json({ error: "rawText must be a non-empty string." });
+      return;
+    }
+    if (rawText.length > RAW_TEXT_MAX_LENGTH) {
+      res
+        .status(400)
+        .json({ error: `rawText is too long (max ${RAW_TEXT_MAX_LENGTH} characters).` });
+      return;
+    }
+    updates.rawText = rawText;
+  }
   if (Object.keys(updates).length === 0) {
     res.status(400).json({ error: "No fields to update." });
     return;
@@ -2431,14 +2452,26 @@ router.put("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
       }
       return;
     }
-    logger.info({ id, updatedBy: req.dbUser?.email }, "AI admin: updated KB source");
+    logger.info(
+      { id, updatedBy: req.dbUser?.email, updatedRawText: rawText !== undefined },
+      "AI admin: updated KB source",
+    );
     // BUG-1 fix: invalidate chat caches — source metadata changes (title, url,
     // creator reassignment) can affect entry attribution in the {{knowledge}} block.
+    // rawText changes also invalidate caches because the {{summary}} block
+    // includes the source's char count + processing status.
     invalidateKbCache("source.update").catch((err) =>
       logger.error({ err, id }, "KB cache: invalidation failed after source update"),
     );
     res.json({ source: updated });
   } catch (err) {
+    // KbSourceHasEntriesError: admin tried to update rawText on a source
+    // that already has entries. Return 409 with the clear message from
+    // the error so the admin knows to delete entries first.
+    if (err instanceof KbSourceHasEntriesError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
     logger.error({ err, id }, "AI admin: update KB source failed");
     res.status(500).json({ error: "Failed to update KB source." });
   }

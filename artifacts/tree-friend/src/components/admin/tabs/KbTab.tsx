@@ -43,7 +43,6 @@ import {
   fetchKbSources,
   fetchKbSource,
   fetchKbEntries,
-  fetchKbEntry,
   fetchKbInsights,
   testKbSearch,
   fetchToneProfileStatus,
@@ -53,8 +52,6 @@ import {
   moveKbCategory,
   deleteKbCategory,
   chunkSourceWithAI,
-  createKbEntriesBatch,
-  updateKbEntry,
   activateKbEntry,
   deactivateKbEntry,
   deleteKbEntry,
@@ -66,7 +63,6 @@ import {
   type KbSource,
   type KbSourceWithEntries,
   type KbEntry,
-  type KbChunkSuggestion,
   type KbChunkResult,
   type KbInsights,
   type KbSearchTestResponse,
@@ -75,6 +71,7 @@ import {
 } from "@/lib/kbApi";
 import { KbCategoryModal } from "@/components/admin/modals/KbCategoryModal";
 import { KbSourceUploadModal } from "@/components/admin/modals/KbSourceUploadModal";
+import { KbSourceEditModal } from "@/components/admin/modals/KbSourceEditModal";
 import { KbChunkReviewModal } from "@/components/admin/modals/KbChunkReviewModal";
 import { KbEntryEditorModal } from "@/components/admin/modals/KbEntryEditorModal";
 import { KbToneProfileModal } from "@/components/admin/modals/KbToneProfileModal";
@@ -91,9 +88,9 @@ import { KbToneProfileModal } from "@/components/admin/modals/KbToneProfileModal
  */
 export function KbTab() {
   const apiFetch = useApiFetch();
-  const [activeSubTab, setActiveSubTab] = useState<"categories" | "sources" | "entries" | "insights" | "tone">(
-    "categories",
-  );
+  const [activeSubTab, setActiveSubTab] = useState<
+    "categories" | "sources" | "entries" | "insights" | "tone"
+  >("categories");
   // Shared category tree (used by Categories view + as dropdown options in
   // Sources/Entries modals). Fetched once on mount + refetched when any
   // view calls `refetchTree`.
@@ -150,18 +147,10 @@ export function KbTab() {
       </div>
 
       {activeSubTab === "categories" && (
-        <KbCategoriesView
-          tree={tree}
-          treeLoading={treeLoading}
-          refetchTree={refetchTree}
-        />
+        <KbCategoriesView tree={tree} treeLoading={treeLoading} refetchTree={refetchTree} />
       )}
       {activeSubTab === "sources" && (
-        <KbSourcesView
-          tree={tree}
-          creators={creators}
-          refetchCreators={refetchCreators}
-        />
+        <KbSourcesView tree={tree} creators={creators} refetchCreators={refetchCreators} />
       )}
       {activeSubTab === "entries" && <KbEntriesView tree={tree} />}
       {activeSubTab === "insights" && <KbInsightsView />}
@@ -204,22 +193,25 @@ function KbCategoriesView({
   // ─── Data fetching ──────────────────────────────────────────────────────
   // The tree is fetched by the parent (KbTab) + passed as a prop. We
   // just wrap refetchTree with a refreshing flag for the spinner.
-  const refetch = useCallback(async (silent = false) => {
-    if (!silent) setRefreshing(true);
-    try {
-      await refetchTree();
-      // Auto-expand all root nodes so the tree is browsable.
-      setExpanded((prev) => {
-        const nextSet = new Set(prev);
-        for (const root of tree) nextSet.add(root.id);
-        return nextSet;
-      });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load KB categories");
-    } finally {
-      setRefreshing(false);
-    }
-  }, [refetchTree, tree]);
+  const refetch = useCallback(
+    async (silent = false) => {
+      if (!silent) setRefreshing(true);
+      try {
+        await refetchTree();
+        // Auto-expand all root nodes so the tree is browsable.
+        setExpanded((prev) => {
+          const nextSet = new Set(prev);
+          for (const root of tree) nextSet.add(root.id);
+          return nextSet;
+        });
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to load KB categories");
+      } finally {
+        setRefreshing(false);
+      }
+    },
+    [refetchTree, tree],
+  );
 
   // Auto-expand root nodes when the tree first loads.
   useEffect(() => {
@@ -244,10 +236,7 @@ function KbCategoriesView({
     return out;
   }, [tree]);
 
-  const selected = useMemo(
-    () => flat.find((c) => c.id === selectedId) ?? null,
-    [flat, selectedId],
-  );
+  const selected = useMemo(() => flat.find((c) => c.id === selectedId) ?? null, [flat, selectedId]);
 
   // ─── Tree interaction ───────────────────────────────────────────────────
   function toggleExpand(id: number) {
@@ -447,7 +436,8 @@ function KbCategoriesView({
             Knowledge Base
           </h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Curated plant-care content the AI uses as its primary information source. Phase 1: category tree only.
+            Curated plant-care content the AI uses as its primary information source. Phase 1:
+            category tree only.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -563,13 +553,11 @@ function KbCategoriesView({
                   <div>
                     <Label className="text-sm font-medium">Active</Label>
                     <p className="text-[11px] text-muted-foreground/70 mt-0.5">
-                      Inactive categories are hidden from the AI search tool. Cascades to descendants.
+                      Inactive categories are hidden from the AI search tool. Cascades to
+                      descendants.
                     </p>
                   </div>
-                  <Switch
-                    checked={inlineIsActive}
-                    onCheckedChange={setInlineIsActive}
-                  />
+                  <Switch checked={inlineIsActive} onCheckedChange={setInlineIsActive} />
                 </div>
 
                 <div className="space-y-1 text-xs text-muted-foreground border-t pt-3">
@@ -638,8 +626,8 @@ function KbCategoriesView({
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Select a new parent. The category and all its descendants will move
-              (their paths + depths are rebuilt automatically).
+              Select a new parent. The category and all its descendants will move (their paths +
+              depths are rebuilt automatically).
             </p>
             <div>
               <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -700,14 +688,14 @@ function KbCategoriesView({
           <div className="space-y-3 text-sm">
             <p className="text-muted-foreground">
               This will permanently delete the category{" "}
-              <span className="font-medium text-foreground">{deleteTarget?.name}</span>{" "}
-              and <span className="font-medium">all its descendants</span> (cascading delete).
+              <span className="font-medium text-foreground">{deleteTarget?.name}</span> and{" "}
+              <span className="font-medium">all its descendants</span> (cascading delete).
             </p>
             <div className="rounded-xl bg-warning/10 border border-warning/20 px-3 py-2 text-warning flex items-start gap-2">
               <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>
-                If any category in this subtree has KB entries, the delete will be
-                rejected. Move or delete the entries first.
+                If any category in this subtree has KB entries, the delete will be rejected. Move or
+                delete the entries first.
               </span>
             </div>
           </div>
@@ -840,9 +828,7 @@ function TreeNode({
           onClick={() => onSelect(node.id)}
           className="flex-1 text-left text-sm truncate flex items-center gap-2"
         >
-          <span className={isSelected ? "font-medium text-primary" : ""}>
-            {node.name}
-          </span>
+          <span className={isSelected ? "font-medium text-primary" : ""}>{node.name}</span>
           {node.entryCount > 0 && (
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
               {node.entryCount}
@@ -857,10 +843,7 @@ function TreeNode({
 
         {/* Hover actions */}
         <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
-          <IconButton
-            onClick={() => onAddChild(node)}
-            title="Add child category"
-          >
+          <IconButton onClick={() => onAddChild(node)} title="Add child category">
             <Plus className="h-3.5 w-3.5" />
           </IconButton>
           <IconButton onClick={() => onEdit(node)} title="Edit">
@@ -869,11 +852,7 @@ function TreeNode({
           <IconButton onClick={() => onMove(node)} title="Move">
             <ArrowRightCircle className="h-3.5 w-3.5" />
           </IconButton>
-          <IconButton
-            onClick={() => onDelete(node)}
-            title="Delete"
-            danger
-          >
+          <IconButton onClick={() => onDelete(node)} title="Delete" danger>
             <Trash2 className="h-3.5 w-3.5" />
           </IconButton>
         </div>
@@ -987,6 +966,7 @@ function KbSourcesView({
   const [chunking, setChunking] = useState(false);
   const [entryEditorOpen, setEntryEditorOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<KbEntry | null>(null);
+  const [editingSource, setEditingSource] = useState<KbSource | null>(null);
 
   const PAGE_SIZE = 20;
 
@@ -1010,14 +990,17 @@ function KbSourcesView({
     refetchList();
   }, [refetchList]);
 
-  const refetchDetail = useCallback(async (id: number) => {
-    try {
-      const s = await fetchKbSource(apiFetch, id);
-      setSelectedSource(s);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load source");
-    }
-  }, [apiFetch]);
+  const refetchDetail = useCallback(
+    async (id: number) => {
+      try {
+        const s = await fetchKbSource(apiFetch, id);
+        setSelectedSource(s);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to load source");
+      }
+    },
+    [apiFetch],
+  );
 
   async function handleChunk(source: KbSource) {
     setChunking(true);
@@ -1085,15 +1068,26 @@ function KbSourcesView({
           >
             ← Back to Sources
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleDeleteSource(s.id)}
-            className="rounded-xl text-destructive hover:text-destructive"
-          >
-            <Trash2 className="h-4 w-4" />
-            Delete Source
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditingSource(s)}
+              className="rounded-xl"
+            >
+              <Pencil className="h-4 w-4" />
+              Edit Source
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleDeleteSource(s.id)}
+              className="rounded-xl text-destructive hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete Source
+            </Button>
+          </div>
         </div>
 
         {/* Metadata */}
@@ -1144,7 +1138,9 @@ function KbSourcesView({
             {s.creator && (
               <div className="col-span-2 md:col-span-4">
                 <span className="text-xs text-muted-foreground uppercase">Creator</span>
-                <p>{s.creator.name} ({s.creator.sourceType})</p>
+                <p>
+                  {s.creator.name} ({s.creator.sourceType})
+                </p>
               </div>
             )}
             {s.chunkingMethod && (
@@ -1169,7 +1165,11 @@ function KbSourcesView({
                 disabled={chunking}
                 className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground"
               >
-                {chunking ? "Chunking…" : s.chunkingMethod === "ai" ? "Re-chunk with AI" : "AI Chunk"}
+                {chunking
+                  ? "Chunking…"
+                  : s.chunkingMethod === "ai"
+                    ? "Re-chunk with AI"
+                    : "AI Chunk"}
               </Button>
               <Button
                 variant="outline"
@@ -1213,7 +1213,10 @@ function KbSourcesView({
           </div>
           {s.entries.length === 0 ? (
             <p className="px-5 py-8 text-sm text-muted-foreground text-center">
-              No entries yet. {s.sourceLanguage === "en" ? "Use AI Chunk or Add Manual Entry above." : "Use Add Manual Entry above."}
+              No entries yet.{" "}
+              {s.sourceLanguage === "en"
+                ? "Use AI Chunk or Add Manual Entry above."
+                : "Use Add Manual Entry above."}
             </p>
           ) : (
             <div className="divide-y">
@@ -1222,7 +1225,10 @@ function KbSourcesView({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm truncate">{entry.title}</span>
-                      <Badge variant={entry.isActive ? "default" : "secondary"} className="text-[10px]">
+                      <Badge
+                        variant={entry.isActive ? "default" : "secondary"}
+                        className="text-[10px]"
+                      >
                         {entry.isActive ? "Active" : "Inactive"}
                       </Badge>
                       <Badge
@@ -1280,7 +1286,9 @@ function KbSourcesView({
 
         {/* Raw text (collapsible) */}
         <details className="bg-card rounded-2xl border p-5">
-          <summary className="cursor-pointer font-medium">Raw Text ({s.rawText.length.toLocaleString()} chars)</summary>
+          <summary className="cursor-pointer font-medium">
+            Raw Text ({s.rawText.length.toLocaleString()} chars)
+          </summary>
           <pre className="mt-3 text-xs whitespace-pre-wrap font-mono max-h-96 overflow-y-auto bg-muted/30 p-3 rounded-lg">
             {s.rawText}
           </pre>
@@ -1303,6 +1311,27 @@ function KbSourcesView({
           sourceId={s.id}
           categoryTree={tree}
           onSaved={() => refetchDetail(s.id)}
+        />
+        <KbSourceEditModal
+          source={editingSource}
+          creators={creators}
+          onCreated={refetchCreators}
+          onSaved={() => {
+            // Refresh the detail view with the updated source, and clear
+            // the editing state so the modal closes. We don't use the
+            // returned `updated` source directly — we re-fetch from the
+            // server to get the fully-populated KbSourceWithEntries (the
+            // updateKbSource response is a plain KbSource without entries).
+            refetchDetail(s.id);
+            setEditingSource(null);
+            // Also refresh the list (the title/URL may have changed,
+            // which affects the list view).
+            refetchList();
+            toast.success("Source updated");
+          }}
+          onOpenChange={(open) => {
+            if (!open) setEditingSource(null);
+          }}
         />
       </div>
     );
@@ -1333,7 +1362,8 @@ function KbSourcesView({
           <BookOpen className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
           <p className="font-semibold text-muted-foreground mb-1">No sources yet</p>
           <p className="text-sm text-muted-foreground/70 mb-4">
-            Upload your first source (YouTube transcript, blog post, manual content) to start building the KB.
+            Upload your first source (YouTube transcript, blog post, manual content) to start
+            building the KB.
           </p>
           <Button
             onClick={() => setUploadOpen(true)}
@@ -1349,12 +1379,24 @@ function KbSourcesView({
             <table className="w-full text-sm">
               <thead className="bg-muted/50 border-b">
                 <tr>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Title</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Type</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Lang</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Status</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">Entries</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Created</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Title
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Type
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Lang
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Status
+                  </th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">
+                    Entries
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Created
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -1453,7 +1495,9 @@ function KbEntriesView({ tree }: { tree: KbCategoryNode[] }) {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
   const [filterActive, setFilterActive] = useState<"all" | "active" | "inactive">("all");
-  const [filterEmbedding, setFilterEmbedding] = useState<"all" | "pending" | "generated" | "failed">("all");
+  const [filterEmbedding, setFilterEmbedding] = useState<
+    "all" | "pending" | "generated" | "failed"
+  >("all");
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<KbEntry | null>(null);
 
@@ -1510,7 +1554,8 @@ function KbEntriesView({ tree }: { tree: KbCategoryNode[] }) {
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Entries</h2>
         <p className="text-xs text-muted-foreground">
-          Entries are created from the Sources tab. Activate entries here to make them available to the AI.
+          Entries are created from the Sources tab. Activate entries here to make them available to
+          the AI.
         </p>
       </div>
 
@@ -1567,11 +1612,21 @@ function KbEntriesView({ tree }: { tree: KbCategoryNode[] }) {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 border-b">
                 <tr>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Title</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Active</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Embedding</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">Priority</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Updated</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Title
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Active
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Embedding
+                  </th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">
+                    Priority
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Updated
+                  </th>
                   <th className="px-4 py-2.5"></th>
                 </tr>
               </thead>
@@ -1891,7 +1946,8 @@ function KbInsightsView() {
         <div>
           <h3 className="font-medium">Search Tester</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Test the KB search engine. See what results the AI would get + the score breakdown for each.
+            Test the KB search engine. See what results the AI would get + the score breakdown for
+            each.
           </p>
         </div>
         <form onSubmit={handleSearch} className="flex gap-2">
@@ -1921,7 +1977,8 @@ function KbInsightsView() {
         {searchResults && (
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
-              {searchResults.count} result{searchResults.count === 1 ? "" : "s"} for "{searchResults.query}"
+              {searchResults.count} result{searchResults.count === 1 ? "" : "s"} for "
+              {searchResults.query}"
             </p>
             {searchResults.results.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
@@ -1934,8 +1991,7 @@ function KbInsightsView() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-sm">
-                          <span className="text-muted-foreground">#{idx + 1}</span>{" "}
-                          {r.title}
+                          <span className="text-muted-foreground">#{idx + 1}</span> {r.title}
                         </p>
                         <p className="text-xs text-muted-foreground mt-0.5">
                           {r.creator && `${r.creator} · `}
@@ -2045,7 +2101,10 @@ function KbToneView() {
   const [status, setStatus] = useState<KbToneProfilesStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [profileModalCreator, setProfileModalCreator] = useState<{ id: number; name: string } | null>(null);
+  const [profileModalCreator, setProfileModalCreator] = useState<{
+    id: number;
+    name: string;
+  } | null>(null);
   const [regeneratingIds, setRegeneratingIds] = useState<Set<number>>(new Set());
   const [editingPct, setEditingPct] = useState<number | null>(null);
   const [pctInput, setPctInput] = useState("");
@@ -2086,9 +2145,7 @@ function KbToneView() {
 
   async function handleGenerateAllPending() {
     if (!status) return;
-    const pending = status.creators.filter(
-      (c) => c.toneMatchEligible && !c.hasProfile,
-    );
+    const pending = status.creators.filter((c) => c.toneMatchEligible && !c.hasProfile);
     if (pending.length === 0) {
       toast.info("No eligible creators without profiles.");
       return;
@@ -2164,7 +2221,8 @@ function KbToneView() {
         <div>
           <h2 className="text-lg font-semibold">Tone Profiles</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Threshold: {status.threshold} entries · Default match: {status.defaultPercentage}% · Regen delta: {status.regenerationDelta} entries
+            Threshold: {status.threshold} entries · Default match: {status.defaultPercentage}% ·
+            Regen delta: {status.regenerationDelta} entries
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -2192,20 +2250,30 @@ function KbToneView() {
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-card rounded-2xl border p-4">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total Creators</p>
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Total Creators
+          </p>
           <p className="text-2xl font-bold mt-1">{status.creators.length}</p>
         </div>
         <div className="bg-card rounded-2xl border p-4">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Eligible ({status.threshold}+)</p>
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Eligible ({status.threshold}+)
+          </p>
           <p className="text-2xl font-bold mt-1">{eligibleCount}</p>
         </div>
         <div className="bg-card rounded-2xl border p-4">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Profiles Generated</p>
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Profiles Generated
+          </p>
           <p className="text-2xl font-bold mt-1">{generatedCount}</p>
         </div>
         <div className="bg-card rounded-2xl border p-4">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Needs Regen</p>
-          <p className="text-2xl font-bold mt-1 text-amber-600 dark:text-amber-400">{needsRegenCount}</p>
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Needs Regen
+          </p>
+          <p className="text-2xl font-bold mt-1 text-amber-600 dark:text-amber-400">
+            {needsRegenCount}
+          </p>
         </div>
       </div>
 
@@ -2215,7 +2283,8 @@ function KbToneView() {
           <BookOpen className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
           <p className="font-semibold text-muted-foreground mb-1">No creators with entries yet</p>
           <p className="text-sm text-muted-foreground/70">
-            Upload sources + create entries (Phase 2) to populate the KB. Creators with {status.threshold}+ entries become eligible for tone matching.
+            Upload sources + create entries (Phase 2) to populate the KB. Creators with{" "}
+            {status.threshold}+ entries become eligible for tone matching.
           </p>
         </div>
       ) : (
@@ -2224,13 +2293,27 @@ function KbToneView() {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 border-b">
                 <tr>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Creator</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">Entries</th>
-                  <th className="px-4 py-2.5 text-center text-xs font-semibold text-muted-foreground uppercase">Eligible</th>
-                  <th className="px-4 py-2.5 text-center text-xs font-semibold text-muted-foreground uppercase">Profile</th>
-                  <th className="px-4 py-2.5 text-center text-xs font-semibold text-muted-foreground uppercase">Match %</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">Last Generated</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">Actions</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Creator
+                  </th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">
+                    Entries
+                  </th>
+                  <th className="px-4 py-2.5 text-center text-xs font-semibold text-muted-foreground uppercase">
+                    Eligible
+                  </th>
+                  <th className="px-4 py-2.5 text-center text-xs font-semibold text-muted-foreground uppercase">
+                    Profile
+                  </th>
+                  <th className="px-4 py-2.5 text-center text-xs font-semibold text-muted-foreground uppercase">
+                    Match %
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">
+                    Last Generated
+                  </th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -2248,9 +2331,13 @@ function KbToneView() {
                     <td className="px-4 py-2.5 text-center">
                       {c.hasProfile ? (
                         c.needsRegeneration ? (
-                          <Badge variant="destructive" className="text-[10px]">⚠ Regen</Badge>
+                          <Badge variant="destructive" className="text-[10px]">
+                            ⚠ Regen
+                          </Badge>
                         ) : (
-                          <Badge variant="default" className="text-[10px]">✓ Ready</Badge>
+                          <Badge variant="default" className="text-[10px]">
+                            ✓ Ready
+                          </Badge>
                         )
                       ) : (
                         <Badge variant="secondary" className="text-[10px]">
@@ -2288,9 +2375,7 @@ function KbToneView() {
                           onClick={() => {
                             setEditingPct(c.id);
                             setPctInput(
-                              c.toneMatchPercentage !== null
-                                ? String(c.toneMatchPercentage)
-                                : "",
+                              c.toneMatchPercentage !== null ? String(c.toneMatchPercentage) : "",
                             );
                           }}
                           className="text-sm hover:text-primary hover:underline"
@@ -2303,9 +2388,7 @@ function KbToneView() {
                       )}
                     </td>
                     <td className="px-4 py-2.5 text-muted-foreground text-xs">
-                      {c.lastGeneratedAt
-                        ? new Date(c.lastGeneratedAt).toLocaleDateString()
-                        : "—"}
+                      {c.lastGeneratedAt ? new Date(c.lastGeneratedAt).toLocaleDateString() : "—"}
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <div className="flex items-center justify-end gap-1">
