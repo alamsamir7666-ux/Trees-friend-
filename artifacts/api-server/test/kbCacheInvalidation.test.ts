@@ -158,11 +158,13 @@ describe("BUG-1 fix: aiAdmin.ts imports + uses invalidateKbCache", () => {
     expect(source).toContain('import { invalidateKbCache } from "../lib/kbCache"');
   });
 
-  it("calls invalidateKbCache exactly 19 times (one per mutation endpoint)", () => {
-    // 19 mutation endpoints — see the engineering brief for the full list.
+  it("calls invalidateKbCache exactly 20 times (one per mutation endpoint)", () => {
+    // 20 mutation endpoints — 19 original + 1 new (POST /ai/admin/kb/sources/youtube,
+    // which creates a source and needs the same cache invalidation as the
+    // manual create route). See the engineering brief for the original list.
     const matches = source.match(/invalidateKbCache\(/g);
     expect(matches).not.toBeNull();
-    expect(matches!.length).toBe(19);
+    expect(matches!.length).toBe(20);
   });
 
   it("every invalidateKbCache call is fire-and-forget (.catch-chained)", () => {
@@ -172,7 +174,7 @@ describe("BUG-1 fix: aiAdmin.ts imports + uses invalidateKbCache", () => {
     const callPattern = /invalidateKbCache\([^)]+\)\s*\.catch\(/g;
     const matches = source.match(callPattern);
     expect(matches).not.toBeNull();
-    expect(matches!.length).toBe(19);
+    expect(matches!.length).toBe(20);
   });
 });
 

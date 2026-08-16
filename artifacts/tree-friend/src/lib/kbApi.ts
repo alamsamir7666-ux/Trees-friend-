@@ -79,9 +79,7 @@ async function parseError(res: Response): Promise<string> {
  * Lists all KB categories (active + inactive), flat, ordered by path ASC.
  * Each row includes a denormalized `entryCount`.
  */
-export async function fetchKbCategories(
-  apiFetch: ApiFetch,
-): Promise<KbCategory[]> {
+export async function fetchKbCategories(apiFetch: ApiFetch): Promise<KbCategory[]> {
   const res = await apiFetch("/api/ai/admin/kb/categories");
   if (!res.ok) throw new Error(await parseError(res));
   const data = (await res.json()) as { categories: KbCategory[]; count: number };
@@ -92,9 +90,7 @@ export async function fetchKbCategories(
  * Returns the nested category tree (root nodes with `children` arrays).
  * Children are sorted by name on the backend.
  */
-export async function fetchKbCategoryTree(
-  apiFetch: ApiFetch,
-): Promise<KbCategoryNode[]> {
+export async function fetchKbCategoryTree(apiFetch: ApiFetch): Promise<KbCategoryNode[]> {
   const res = await apiFetch("/api/ai/admin/kb/categories/tree");
   if (!res.ok) throw new Error(await parseError(res));
   const data = (await res.json()) as { tree: KbCategoryNode[]; count: number };
@@ -104,10 +100,7 @@ export async function fetchKbCategoryTree(
 /**
  * Fetches a single category by id.
  */
-export async function fetchKbCategory(
-  apiFetch: ApiFetch,
-  id: number,
-): Promise<KbCategory> {
+export async function fetchKbCategory(apiFetch: ApiFetch, id: number): Promise<KbCategory> {
   const res = await apiFetch(`/api/ai/admin/kb/categories/${id}`);
   if (!res.ok) throw new Error(await parseError(res));
   const data = (await res.json()) as { category: KbCategory };
@@ -174,10 +167,7 @@ export async function moveKbCategory(
  * category or any descendant has entries — the admin must move or delete
  * the entries first. On success, the delete cascades to descendants.
  */
-export async function deleteKbCategory(
-  apiFetch: ApiFetch,
-  id: number,
-): Promise<void> {
+export async function deleteKbCategory(apiFetch: ApiFetch, id: number): Promise<void> {
   const res = await apiFetch(`/api/ai/admin/kb/categories/${id}`, {
     method: "DELETE",
   });
@@ -435,10 +425,7 @@ export async function fetchKbSources(
   return (await res.json()) as KbSourceListResult;
 }
 
-export async function fetchKbSource(
-  apiFetch: ApiFetch,
-  id: number,
-): Promise<KbSourceWithEntries> {
+export async function fetchKbSource(apiFetch: ApiFetch, id: number): Promise<KbSourceWithEntries> {
   const res = await apiFetch(`/api/ai/admin/kb/sources/${id}`);
   if (!res.ok) throw new Error(await parseError(res));
   const data = (await res.json()) as { source: KbSourceWithEntries };
@@ -479,10 +466,7 @@ export async function deleteKbSource(apiFetch: ApiFetch, id: number): Promise<vo
   if (!res.ok) throw new Error(await parseError(res));
 }
 
-export async function chunkSourceWithAI(
-  apiFetch: ApiFetch,
-  id: number,
-): Promise<KbChunkResult> {
+export async function chunkSourceWithAI(apiFetch: ApiFetch, id: number): Promise<KbChunkResult> {
   const res = await apiFetch(`/api/ai/admin/kb/sources/${id}/chunk`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -490,6 +474,61 @@ export async function chunkSourceWithAI(
   });
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as KbChunkResult;
+}
+
+// ─── YouTube auto-fetch ────────────────────────────────────────────────────
+
+export interface YoutubeSourceCreateInput {
+  url: string;
+  creatorId?: number | null;
+  sourceLanguage?: "en" | "bn" | "banglish";
+}
+
+/**
+ * Result of POST /api/ai/admin/kb/sources/youtube.
+ *
+ * The route always returns 201 with a created source — even when the
+ * auto-fetch failed (bot protection). In that case `manualFallback` is
+ * populated and `transcript` is null. The admin then needs to edit the
+ * source and paste the transcript manually.
+ */
+export interface YoutubeSourceCreateResult {
+  source: KbSource;
+  /** Present only when the transcript was auto-fetched successfully. */
+  transcript?: {
+    fetchedVia: "innertube-noauth" | "innertube-cookie" | "manual-fallback";
+    segmentCount: number;
+    detectedLanguage: string | null;
+  };
+  /** Present only when the admin needs to paste the transcript manually. */
+  manualFallback?: {
+    reason: string;
+    transcriptUrl: string;
+    videoId: string;
+    thumbnailUrl: string | null;
+  };
+}
+
+/**
+ * Creates a KB source from a YouTube URL by auto-fetching the transcript +
+ * metadata server-side. Uses youtubei.js (InnerTube API) with a YOUTUBE_SESSION_COOKIE
+ * fallback for datacenter IPs that get bot-challenged.
+ *
+ * On bot-challenge (no cookie or cookie also failed), the route still
+ * creates a source row with metadata only — `manualFallback` is populated
+ * and the admin needs to edit the source to paste the transcript manually.
+ */
+export async function createKbSourceFromYoutube(
+  apiFetch: ApiFetch,
+  input: YoutubeSourceCreateInput,
+): Promise<YoutubeSourceCreateResult> {
+  const res = await apiFetch("/api/ai/admin/kb/sources/youtube", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as YoutubeSourceCreateResult;
 }
 
 export async function createKbEntriesBatch(
@@ -726,10 +765,9 @@ export async function generateToneProfile(
   apiFetch: ApiFetch,
   creatorId: number,
 ): Promise<{ ok: boolean; message?: string }> {
-  const res = await apiFetch(
-    `/api/ai/admin/kb/creators/${creatorId}/tone-profile/generate`,
-    { method: "POST" },
-  );
+  const res = await apiFetch(`/api/ai/admin/kb/creators/${creatorId}/tone-profile/generate`, {
+    method: "POST",
+  });
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as { ok: boolean; message?: string };
 }
@@ -739,14 +777,11 @@ export async function setToneMatchPercentage(
   creatorId: number,
   percentage: number | null,
 ): Promise<{ ok: boolean; toneMatchPercentage: number | null; effectivePercentage: number }> {
-  const res = await apiFetch(
-    `/api/ai/admin/kb/creators/${creatorId}/tone-percentage`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ percentage }),
-    },
-  );
+  const res = await apiFetch(`/api/ai/admin/kb/creators/${creatorId}/tone-percentage`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ percentage }),
+  });
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as {
     ok: boolean;
