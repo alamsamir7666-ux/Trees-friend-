@@ -11,6 +11,8 @@ import { responseHelpersMiddleware } from "./lib/responses";
 import { ensureConversationsTables } from "./lib/ensureConversationsTables";
 import { ensurePresenceTables } from "./lib/ensurePresenceTables";
 import { ensureAiTables } from "./lib/ensureAiTables";
+// BUG-E1 critical fix: on startup, mark stale-model embeddings for re-embedding.
+import { markStaleEmbeddingsForReembedding } from "./lib/kbEmbeddings";
 import { apiLimiter } from "./middlewares/rateLimiter";
 
 const app: Express = express();
@@ -34,6 +36,14 @@ ensurePresenceTables().catch((err) => {
 ensureAiTables().catch((err) => {
   logger.error({ err }, "ensureAiTables failed at app init");
 });
+// BUG-E1 critical fix: after ensureAiTables adds the embedding_model column,
+// mark any stale-model embeddings (from a different model than the current
+// GEMINI_EMBEDDING_MODEL) as 'pending' for re-embedding. The background job
+// will pick them up on the next run (30s on Render, 5min on Vercel).
+// Fire-and-forget — non-fatal if it fails (the search SQL also guards with
+// CASE WHEN embedding_model = $model, so stale embeddings are excluded from
+// similarity comparison even if this check doesn't run).
+markStaleEmbeddingsForReembedding().catch(() => {});
 
 // ─── Security: Trust proxy (required if behind nginx/load balancer) ──────────
 app.set("trust proxy", 1);
@@ -90,12 +100,16 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
 // `true` is convenient for local testing across ports.
 const allowedOrigins: boolean | string[] =
   process.env.NODE_ENV === "production"
-    ? (process.env.ALLOWED_ORIGINS
-        ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
-        : [])
-    : (process.env.ALLOWED_ORIGINS
-        ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
-        : true);
+    ? process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(",")
+          .map((o) => o.trim())
+          .filter(Boolean)
+      : []
+    : process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(",")
+          .map((o) => o.trim())
+          .filter(Boolean)
+      : true;
 
 if (
   process.env.NODE_ENV === "production" &&
@@ -143,7 +157,7 @@ app.use(clerkMiddleware({ publishableKey: process.env.CLERK_PUBLISHABLE_KEY }));
 // addition to IP — see routes/orders.ts, routes/mobileAuth.ts, etc.
 // Mounting them here (before requireAuth) would make req.userId always
 // undefined, defeating the per-user keying.
-app.use("/api", apiLimiter);  // covers both /api and /api/v1 (since /api/v1 starts with /api)
+app.use("/api", apiLimiter); // covers both /api and /api/v1 (since /api/v1 starts with /api)
 
 // ─── API routes (versioned + backward-compat alias) ──────────────────────────
 //

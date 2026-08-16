@@ -338,19 +338,16 @@ describe("Phase 3: aiContext.ts {{knowledge}} placeholder + rules", () => {
 
   it("SYSTEM_PROMPT_TEMPLATE_V1 has a KNOWLEDGE BASE rules section", () => {
     expect(source).toContain("KNOWLEDGE BASE");
-    // Privacy: system prompt no longer tells the LLM to cite creators.
-    // Check only executable lines (strip comments + regex patterns that
-    // mention "cite the creator" for backward-compat with cached prompts).
-    const codeOnly = source
-      .split("\n")
-      .filter(
-        (line) =>
-          !line.trim().startsWith("//") &&
-          !line.trim().startsWith("*") &&
-          !line.includes("HEADER_PATTERN"),
-      )
-      .join("\n");
-    expect(codeOnly).not.toContain("cite the creator");
+    // Privacy: the SYSTEM_PROMPT_TEMPLATE_V1 string must NOT tell the LLM
+    // to cite creators. We check ONLY the template string (not the whole
+    // file — clearKbBlockFromPrompt's regex legitimately contains
+    // "cite the creator" for backward-compat matching of old cached prompts).
+    const templateStart = source.indexOf("SYSTEM_PROMPT_TEMPLATE_V1 = `");
+    const templateEnd = source.indexOf("`;", templateStart);
+    expect(templateStart).toBeGreaterThan(-1);
+    expect(templateEnd).toBeGreaterThan(templateStart);
+    const template = source.slice(templateStart, templateEnd);
+    expect(template).not.toContain("cite the creator");
     expect(source).toContain("search_knowledge_base tool");
   });
 

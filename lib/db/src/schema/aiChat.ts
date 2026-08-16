@@ -559,6 +559,11 @@ export const aiKbEntriesTable = pgTable(
     embeddingStatus: text("embedding_status").default("pending").notNull(),
     embeddingError: text("embedding_error"),
     embeddingGeneratedAt: timestamp("embedding_generated_at"),
+    // BUG-E1 critical fix: tracks which embedding model generated this
+    // embedding. When the model changes, old embeddings are in a different
+    // vector space — the search SQL filters by embedding_model to exclude
+    // stale embeddings from similarity comparison.
+    embeddingModel: text("embedding_model"),
 
     // ─── v5.0: BM25 support columns ─────────────────────────────────────
     // bm25_doc_length: precomputed |D| (number of lexemes in search_tsvector).

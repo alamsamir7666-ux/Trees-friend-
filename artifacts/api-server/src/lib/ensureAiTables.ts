@@ -809,6 +809,19 @@ ALTER TABLE ai_kb_entries
   ADD COLUMN IF NOT EXISTS embedding_error TEXT,
   ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMP;
 
+-- BUG-E1 critical fix: track which embedding model generated each embedding.
+-- When the model changes (e.g. text-embedding-004 to gemini-embedding-001),
+-- old embeddings are in a different vector space — cosine similarity against
+-- new-model query embeddings is meaningless. The search SQL filters
+-- "WHERE embedding_model = current_model" so stale embeddings fall back
+-- to keyword-only matching instead of producing garbage similarity scores.
+ALTER TABLE ai_kb_entries
+  ADD COLUMN IF NOT EXISTS embedding_model TEXT;
+
+CREATE INDEX IF NOT EXISTS ai_kb_entries_embedding_model_idx
+  ON ai_kb_entries (embedding_model)
+  WHERE embedding_model IS NOT NULL;
+
 -- Phase 2: track the chunking process per source.
 --   chunking_method  — 'ai' (Gemini chunked it) | 'manual' (admin chunked it)
 --   chunking_model   — which Gemini model was used (for reproducibility)

@@ -29,6 +29,13 @@
       "when": 1786780345026,
       "tag": "0009_bm25_trigger_order_fix",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786872000000,
+      "tag": "0010_embedding_model_tracking",
+      "breakpoints": true
     }
   ]
 }
