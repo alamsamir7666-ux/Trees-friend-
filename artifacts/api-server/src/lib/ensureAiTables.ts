@@ -301,7 +301,20 @@ SET bm25_doc_length = coalesce(
 WHERE bm25_doc_length = 0;
 
 -- Trigger to maintain bm25_doc_length on insert/update
+-- BUG-FIX (mirror of migration 0009):
+-- Migration 0009 renamed the trigger to 'zz_ai_kb_entries_bm25_doclength_trigger'
+-- (with 'zz_' prefix) so it sorts AFTER 'ai_kb_entries_search_tsvector_trigger'
+-- and fires SECOND. If we only drop the old (non-prefixed) name, the 'zz_'
+-- trigger still depends on 'ai_kb_entries_bm25_doclength_update()', so
+-- DROP FUNCTION fails with Postgres error 2BP01:
+--   "cannot drop function ai_kb_entries_bm25_doclength_update() because
+--    other objects depend on it"
+-- We must drop BOTH trigger names (old + new) before dropping the function.
+-- DROP FUNCTION ... CASCADE is intentionally NOT used because it would
+-- silently drop the trigger we are about to recreate -- we want the explicit
+-- DROP TRIGGER statements to document the trigger lifecycle.
 DROP TRIGGER IF EXISTS ai_kb_entries_bm25_doclength_trigger ON ai_kb_entries;
+DROP TRIGGER IF EXISTS zz_ai_kb_entries_bm25_doclength_trigger ON ai_kb_entries;
 DROP FUNCTION IF EXISTS ai_kb_entries_bm25_doclength_update();
 CREATE OR REPLACE FUNCTION ai_kb_entries_bm25_doclength_update() RETURNS trigger AS $$
 BEGIN
@@ -313,7 +326,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
-CREATE TRIGGER ai_kb_entries_bm25_doclength_trigger
+-- Recreate the trigger with the 'zz_' prefix so it sorts AFTER
+-- ai_kb_entries_search_tsvector_trigger (PostgreSQL fires BEFORE triggers
+-- in alphabetical name order; 'zz_...' > 'ai_...').
+CREATE TRIGGER zz_ai_kb_entries_bm25_doclength_trigger
   BEFORE INSERT OR UPDATE OF title, content
   ON ai_kb_entries
   FOR EACH ROW
