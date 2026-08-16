@@ -59,7 +59,10 @@ function getRedis(): Redis | null {
     _redis = new Redis({ url, token });
     logger.info("Rate limiter: connected to Upstash Redis");
   } catch (err) {
-    logger.error({ err }, "Rate limiter: failed to connect to Upstash Redis, falling back to in-memory (NOT production-safe)");
+    logger.error(
+      { err },
+      "Rate limiter: failed to connect to Upstash Redis, falling back to in-memory (NOT production-safe)",
+    );
   }
   return _redis;
 }
@@ -78,12 +81,15 @@ const inMemoryStore = new Map<string, InMemoryEntry>();
 // (frozen between invocations), which is fine because the fallback is
 // dev-only.
 if (typeof setInterval !== "undefined") {
-  setInterval(() => {
-    const now = Date.now();
-    for (const [key, entry] of inMemoryStore.entries()) {
-      if (entry.resetAt < now) inMemoryStore.delete(key);
-    }
-  }, 5 * 60 * 1000).unref?.();
+  setInterval(
+    () => {
+      const now = Date.now();
+      for (const [key, entry] of inMemoryStore.entries()) {
+        if (entry.resetAt < now) inMemoryStore.delete(key);
+      }
+    },
+    5 * 60 * 1000,
+  ).unref?.();
 }
 
 // ─── Rate limiter factory ───────────────────────────────────────────────────
@@ -219,7 +225,11 @@ export function createRateLimiter(options: {
  * the others.
  */
 export function chainRateLimiters(...limiters: ReturnType<typeof createRateLimiter>[]) {
-  return async function chainedRateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
+  return async function chainedRateLimitMiddleware(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
     let i = 0;
     async function run() {
       if (i >= limiters.length) return next();
@@ -244,7 +254,7 @@ export function chainRateLimiters(...limiters: ReturnType<typeof createRateLimit
 // ─── Pre-configured limiters ────────────────────────────────────────────────
 
 export const apiLimiter = createRateLimiter({
-  windowMs: 15 * 60 * 1000,   // 15 minutes
+  windowMs: 15 * 60 * 1000, // 15 minutes
   max: 200,
   message: "Too many requests from this IP. Please try again in 15 minutes.",
   keyPrefix: "api",
@@ -265,7 +275,7 @@ export const authLimiter = createRateLimiter({
 });
 
 export const newsletterLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000,  // 1 hour
+  windowMs: 60 * 60 * 1000, // 1 hour
   max: 3,
   message: "Too many subscription attempts.",
   keyPrefix: "newsletter",
@@ -276,6 +286,39 @@ export const stockAlertLimiter = createRateLimiter({
   max: 5,
   message: "Too many stock alert requests.",
   keyPrefix: "stockalert",
+});
+
+// YouTube transcript auto-fetch (admin-only, server-side scrape via youtubei.js).
+//
+// Why this needs a dedicated limiter (vs. relying on requireAdmin alone):
+//   YouTube's bot-protection kicks in around ~100 requests/hour per IP on
+//   datacenter IPs. Once an IP is flagged, EVERY admin on this Render
+//   instance loses the auto-fetch feature (they all hit the same outgoing
+//   IP). So a single compromised admin token — or even just an over-eager
+//   admin bulk-uploading 50 videos — could permanently break the feature
+//   for everyone on the instance.
+//
+// The limit is intentionally generous enough for normal admin use (10
+// fetches/hour = one video every 6 minutes, which is way more than any
+// human admin would do) but strict enough to stop the runaway-abuse case.
+// If an admin genuinely needs to bulk-import 20+ videos, they should
+// paste the URLs into a script and stagger them over a few hours, OR set
+// YOUTUBE_SESSION_COOKIE (which makes the bot check a non-issue).
+//
+// Per-admin (not per-IP) because:
+//   - requireAdmin has already authenticated the user by the time this
+//     limiter runs, so req.userId is set. The key becomes
+//     `youtube:ip:userId`, which means each admin has their own 10/hour
+//     budget regardless of how many admins share the server's outgoing IP.
+//   - This protects against one bad admin burning the quota for everyone.
+export const youtubeFetchLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  message:
+    "Too many YouTube transcript fetches (10/hour per admin). " +
+    "If you need to bulk-import, space requests over a few hours, or set " +
+    "YOUTUBE_SESSION_COOKIE to bypass bot protection.",
+  keyPrefix: "youtube",
 });
 
 // Chat messages (text + file/image uploads): buyer<->seller conversations

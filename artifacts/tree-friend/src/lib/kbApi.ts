@@ -245,6 +245,63 @@ export interface KbSource {
   createdAt: string;
 }
 
+/**
+ * Structured YouTube metadata stored in `KbSource.rawMetadata` (JSON string).
+ *
+ * The backend (`POST /ai/admin/kb/sources/youtube`) populates this when
+ * auto-fetching a YouTube video. Use `parseYoutubeMetadata(source.rawMetadata)`
+ * to safely extract it — returns null for non-YouTube sources or if the
+ * JSON is malformed (defensive parse).
+ */
+export interface YoutubeSourceMetadata {
+  videoId: string;
+  author: string;
+  authorUrl: string | null;
+  thumbnailUrl: string | null;
+  durationSeconds: number | null;
+  viewCount: number | null;
+  detectedLanguage: string | null;
+  /** How the transcript was obtained: innertube-noauth | innertube-cookie | manual-fallback */
+  fetchedVia: string;
+  /** ISO timestamp of when the transcript was fetched. */
+  fetchedAt: string;
+}
+
+/**
+ * Safely parses the `rawMetadata` JSON string on a KB source into a typed
+ * `YoutubeSourceMetadata` object. Returns null if:
+ *   - `rawMetadata` is null (manual/blog/facebook sources have no metadata)
+ *   - The JSON is malformed
+ *   - The parsed object doesn't have the expected `videoId` field
+ *     (defensive — guards against future schema drift)
+ *
+ * Use this in the admin UI to render the YouTube thumbnail + channel link
+ * without re-fetching from YouTube.
+ */
+export function parseYoutubeMetadata(rawMetadata: string | null): YoutubeSourceMetadata | null {
+  if (!rawMetadata) return null;
+  try {
+    const parsed = JSON.parse(rawMetadata) as Partial<YoutubeSourceMetadata>;
+    // Defensive: require at least `videoId` to consider it valid YouTube
+    // metadata. Other fields may be null (e.g. on manual-fallback path,
+    // detectedLanguage is null because no transcript was fetched).
+    if (!parsed || typeof parsed.videoId !== "string") return null;
+    return {
+      videoId: parsed.videoId,
+      author: parsed.author ?? "Unknown",
+      authorUrl: parsed.authorUrl ?? null,
+      thumbnailUrl: parsed.thumbnailUrl ?? null,
+      durationSeconds: parsed.durationSeconds ?? null,
+      viewCount: parsed.viewCount ?? null,
+      detectedLanguage: parsed.detectedLanguage ?? null,
+      fetchedVia: parsed.fetchedVia ?? "unknown",
+      fetchedAt: parsed.fetchedAt ?? new Date(0).toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export interface KbEntry {
   id: number;
   sourceId: number;

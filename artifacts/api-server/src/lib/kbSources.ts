@@ -284,6 +284,23 @@ export async function createKbSource(params: {
   sourceLanguage: string;
   sourcePublishedAt?: Date | null;
   rawText: string;
+  /**
+   * Optional structured metadata to persist alongside the raw text.
+   *
+   * Stored in the `raw_metadata` column as a JSON string. The schema
+   * (lib/db/src/schema/aiChat.ts → ai_kb_sources.raw_metadata) defines
+   * the column as TEXT (jsonb-as-text) — we JSON.stringify here and the
+   * reader (mapRow) leaves it as a string for callers to parse.
+   *
+   * Used by the YouTube auto-fetch flow to persist the video's thumbnail
+   * URL, channel URL, duration, view count, and detected caption language
+   * — so the admin UI can render the thumbnail + deep-link to the channel
+   * without re-fetching from YouTube.
+   *
+   * For manual/blog/facebook sources, this is left undefined (the column
+   * stays NULL) — those source types have no structured metadata to store.
+   */
+  rawMetadata?: Record<string, unknown> | null;
 }): Promise<KbSource | null> {
   const sourceTitle = params.sourceTitle?.trim() ?? "";
   const sourceType = params.sourceType;
@@ -291,6 +308,12 @@ export async function createKbSource(params: {
   const sourceUrl = params.sourceUrl?.trim() || null;
   const rawText = params.rawText ?? "";
   const creatorId = params.creatorId ?? null;
+  // Stringify metadata if provided. Null/undefined → NULL in DB (the
+  // column is nullable). We cap the JSON length to prevent pathological
+  // inputs — 16KB is more than enough for any reasonable metadata payload
+  // (the YouTube metadata object is ~500 bytes).
+  const rawMetadataJson =
+    params.rawMetadata != null ? JSON.stringify(params.rawMetadata).slice(0, 16_384) : null;
 
   // Validate sourceTitle.
   if (!sourceTitle || sourceTitle.length > SOURCE_TITLE_MAX_LENGTH) {
@@ -352,7 +375,10 @@ export async function createKbSource(params: {
         [sourceUrl],
       );
       if (dup.rows.length > 0) {
-        logger.warn({ sourceUrl, existingId: dup.rows[0].id }, "KB sources: create failed — duplicate URL");
+        logger.warn(
+          { sourceUrl, existingId: dup.rows[0].id },
+          "KB sources: create failed — duplicate URL",
+        );
         return null;
       }
     } catch (err) {
@@ -365,10 +391,19 @@ export async function createKbSource(params: {
     const result = await pool.query<{ id: number }>(
       `INSERT INTO ai_kb_sources
          (creator_id, source_type, source_url, source_title, source_language,
-          source_published_at, raw_text, processing_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+          source_published_at, raw_text, raw_metadata, processing_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
        RETURNING id`,
-      [creatorId, sourceType, sourceUrl, sourceTitle, sourceLanguage, params.sourcePublishedAt ?? null, rawText],
+      [
+        creatorId,
+        sourceType,
+        sourceUrl,
+        sourceTitle,
+        sourceLanguage,
+        params.sourcePublishedAt ?? null,
+        rawText,
+        rawMetadataJson,
+      ],
     );
     const newId = result.rows[0].id;
     // Re-fetch with the denormalized entry_count (will be 0).
@@ -428,7 +463,10 @@ export async function updateKbSource(
   }
   if (updates.creatorId !== undefined && updates.creatorId !== null) {
     if (!Number.isInteger(updates.creatorId) || updates.creatorId <= 0) {
-      logger.warn({ id, creatorId: updates.creatorId }, "KB sources: update failed — invalid creatorId");
+      logger.warn(
+        { id, creatorId: updates.creatorId },
+        "KB sources: update failed — invalid creatorId",
+      );
       return null;
     }
   }
@@ -507,10 +545,7 @@ export async function deleteKbSource(id: number): Promise<boolean> {
       }
     }
 
-    const result = await pool.query(
-      "DELETE FROM ai_kb_sources WHERE id = $1",
-      [id],
-    );
+    const result = await pool.query("DELETE FROM ai_kb_sources WHERE id = $1", [id]);
     return (result.rowCount ?? 0) > 0;
   } catch (err) {
     logger.error({ err, id }, "KB sources: delete failed");
@@ -537,10 +572,10 @@ export async function updateProcessingStatus(
         [status, error, id],
       );
     } else {
-      await pool.query(
-        "UPDATE ai_kb_sources SET processing_status = $1 WHERE id = $2",
-        [status, id],
-      );
+      await pool.query("UPDATE ai_kb_sources SET processing_status = $1 WHERE id = $2", [
+        status,
+        id,
+      ]);
     }
   } catch (err) {
     logger.error({ err, id, status }, "KB sources: updateProcessingStatus failed");

@@ -26,6 +26,7 @@
 import { Router, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 import { requireAdmin } from "../middlewares/auth";
+import { youtubeFetchLimiter } from "../middlewares/rateLimiter";
 import { logger } from "../lib/logger";
 import {
   getModelDebugInfo,
@@ -2134,6 +2135,11 @@ router.post("/ai/admin/kb/sources", async (req: Request, res: Response) => {
 // `rawText` is empty and `processing_status = 'pending'` — the admin can
 // edit the source to paste the transcript later.
 //
+// Rate limiting: youtubeFetchLimiter (10/hour per admin). See
+// middlewares/rateLimiter.ts for why this needs a dedicated limiter (a
+// single over-eager admin could otherwise trip YouTube's IP-level bot
+// flag and break the feature for ALL admins on the instance).
+//
 // Request body:
 //   { url: string, creatorId?: number, sourceLanguage?: "en" | "bn" | "banglish" }
 //
@@ -2145,170 +2151,195 @@ router.post("/ai/admin/kb/sources", async (req: Request, res: Response) => {
 //
 // Response 422 (invalid URL or video unavailable):
 //   { error: string }
-router.post("/ai/admin/kb/sources/youtube", async (req: Request, res: Response) => {
-  const { url, creatorId, sourceLanguage } = (req.body ?? {}) as {
-    url?: string;
-    creatorId?: number | null;
-    sourceLanguage?: string;
-  };
+router.post(
+  "/ai/admin/kb/sources/youtube",
+  youtubeFetchLimiter,
+  async (req: Request, res: Response) => {
+    const { url, creatorId, sourceLanguage } = (req.body ?? {}) as {
+      url?: string;
+      creatorId?: number | null;
+      sourceLanguage?: string;
+    };
 
-  // Validate URL.
-  if (typeof url !== "string" || url.trim().length === 0) {
-    res.status(400).json({ error: "url is required (a YouTube video URL)." });
-    return;
-  }
-  const parsed = parseYoutubeUrl(url);
-  if (!parsed) {
-    res.status(422).json({
-      error:
-        "Invalid YouTube URL. Expected youtube.com/watch?v=..., youtu.be/..., /embed/..., or /shorts/...",
-    });
-    return;
-  }
-
-  // Validate language if provided (default to "en" — most YouTube content
-  // with captions is English). The actual language we persist is computed
-  // later as `finalLanguage` — it prefers the admin's explicit choice, then
-  // falls back to the video's detected caption language, then "en".
-  if (
-    sourceLanguage !== undefined &&
-    sourceLanguage !== null &&
-    (typeof sourceLanguage !== "string" || !VALID_LANGUAGES.includes(sourceLanguage as never))
-  ) {
-    res.status(400).json({
-      error: `sourceLanguage must be one of: ${VALID_LANGUAGES.join(", ")}.`,
-    });
-    return;
-  }
-
-  // Validate creatorId (optional — must be a positive integer if provided).
-  let normalizedCreatorId: number | null = null;
-  if (creatorId !== undefined && creatorId !== null) {
-    normalizedCreatorId = Number(creatorId);
-    if (!Number.isInteger(normalizedCreatorId) || normalizedCreatorId <= 0) {
-      res.status(400).json({ error: "creatorId must be a positive integer or null." });
+    // Validate URL.
+    if (typeof url !== "string" || url.trim().length === 0) {
+      res.status(400).json({ error: "url is required (a YouTube video URL)." });
       return;
     }
-  }
-
-  // Fetch transcript + metadata. This can take 2-5 seconds (two network
-  // round-trips to YouTube + parsing). Never times out the request — the
-  // admin UI shows a spinner.
-  let fetchResult;
-  try {
-    fetchResult = await fetchYoutubeTranscript(url);
-  } catch (err) {
-    const msg = (err as Error)?.message ?? String(err);
-    logger.error({ err, url }, "AI admin: YouTube fetch failed");
-    res.status(422).json({ error: msg });
-    return;
-  }
-
-  // If the transcript auto-fetch failed (bot protection), we still create
-  // the source row with empty rawText so the admin has the metadata saved.
-  // The admin can then edit the source to paste the transcript manually.
-  const isManualFallback = fetchResult.fetchedVia === "manual-fallback";
-  if (isManualFallback && !fetchResult.transcript) {
-    // Need rawText to be non-empty for createKbSource() validation.
-    // Use a placeholder that the admin will replace.
-    fetchResult.transcript = `[TRANSCRIPT PLACEHOLDER — ${fetchResult.manualFallbackReason}]`;
-  }
-
-  // Truncate transcript if it exceeds RAW_TEXT_MAX_LENGTH (very long videos).
-  // 100KB ≈ 17,000 words ≈ ~2hr of dense speech — should be rare.
-  let rawText = fetchResult.transcript;
-  if (rawText.length > RAW_TEXT_MAX_LENGTH) {
-    rawText = rawText.slice(0, RAW_TEXT_MAX_LENGTH);
-    logger.warn(
-      { videoId: parsed.videoId, originalLength: fetchResult.transcript.length },
-      "YouTube: transcript truncated (exceeds RAW_TEXT_MAX_LENGTH)",
-    );
-  }
-
-  // Compute source URL (canonical form for dedup).
-  const canonicalUrl = `https://www.youtube.com/watch?v=${parsed.videoId}`;
-
-  // Use video's detected caption language if the admin didn't override.
-  // This avoids the case where an admin uploads a Bengali video but leaves
-  // the language as "en" — the AI chunking step would then fail with the
-  // "English-only" gate.
-  const finalLanguage = sourceLanguage ?? fetchResult.metadata.detectedLanguage ?? "en";
-  const validatedLanguage = VALID_LANGUAGES.includes(finalLanguage as never) ? finalLanguage : "en";
-
-  try {
-    const created = await createKbSource({
-      creatorId: normalizedCreatorId,
-      sourceType: "youtube",
-      sourceUrl: canonicalUrl,
-      sourceTitle: fetchResult.metadata.title || `YouTube video ${parsed.videoId}`,
-      sourceLanguage: validatedLanguage,
-      sourcePublishedAt: fetchResult.metadata.publishedAt
-        ? new Date(fetchResult.metadata.publishedAt)
-        : null,
-      rawText,
-    });
-
-    if (!created) {
-      // Most common cause: duplicate source_url (admin already uploaded this video).
-      res.status(409).json({
-        error: "A KB source with this YouTube URL already exists.",
+    const parsed = parseYoutubeUrl(url);
+    if (!parsed) {
+      res.status(422).json({
+        error:
+          "Invalid YouTube URL. Expected youtube.com/watch?v=..., youtu.be/..., /embed/..., or /shorts/...",
       });
       return;
     }
 
-    logger.info(
-      {
-        id: created.id,
-        videoId: parsed.videoId,
-        title: created.sourceTitle,
-        fetchedVia: fetchResult.fetchedVia,
-        segmentCount: fetchResult.segmentCount,
-        language: validatedLanguage,
-        createdBy: req.dbUser?.email,
-      },
-      "AI admin: created YouTube KB source",
-    );
+    // Validate language if provided (default to "en" — most YouTube content
+    // with captions is English). The actual language we persist is computed
+    // later as `finalLanguage` — it prefers the admin's explicit choice, then
+    // falls back to the video's detected caption language, then "en".
+    if (
+      sourceLanguage !== undefined &&
+      sourceLanguage !== null &&
+      (typeof sourceLanguage !== "string" || !VALID_LANGUAGES.includes(sourceLanguage as never))
+    ) {
+      res.status(400).json({
+        error: `sourceLanguage must be one of: ${VALID_LANGUAGES.join(", ")}.`,
+      });
+      return;
+    }
 
-    // Invalidate caches (same as the manual create route).
-    invalidateKbCache("source.create").catch((err) =>
-      logger.error(
-        { err, id: created.id },
-        "KB cache: invalidation failed after YouTube source create",
-      ),
-    );
+    // Validate creatorId (optional — must be a positive integer if provided).
+    let normalizedCreatorId: number | null = null;
+    if (creatorId !== undefined && creatorId !== null) {
+      normalizedCreatorId = Number(creatorId);
+      if (!Number.isInteger(normalizedCreatorId) || normalizedCreatorId <= 0) {
+        res.status(400).json({ error: "creatorId must be a positive integer or null." });
+        return;
+      }
+    }
 
-    if (isManualFallback) {
-      res.status(201).json({
-        source: created,
-        manualFallback: {
-          reason: fetchResult.manualFallbackReason,
-          // Deep-link to the YouTube transcript page so the admin can copy
-          // it in one click. YouTube's transcript viewer is at
-          // `https://www.youtube.com/watch?v=<id>` then click "Show transcript"
-          // below the description.
-          transcriptUrl: `https://www.youtube.com/watch?v=${parsed.videoId}`,
-          videoId: parsed.videoId,
+    // Fetch transcript + metadata. This can take 2-5 seconds (two network
+    // round-trips to YouTube + parsing). Never times out the request — the
+    // admin UI shows a spinner.
+    let fetchResult;
+    try {
+      fetchResult = await fetchYoutubeTranscript(url);
+    } catch (err) {
+      const msg = (err as Error)?.message ?? String(err);
+      logger.error({ err, url }, "AI admin: YouTube fetch failed");
+      res.status(422).json({ error: msg });
+      return;
+    }
+
+    // If the transcript auto-fetch failed (bot protection), we still create
+    // the source row with empty rawText so the admin has the metadata saved.
+    // The admin can then edit the source to paste the transcript manually.
+    const isManualFallback = fetchResult.fetchedVia === "manual-fallback";
+    if (isManualFallback && !fetchResult.transcript) {
+      // Need rawText to be non-empty for createKbSource() validation.
+      // Use a placeholder that the admin will replace.
+      fetchResult.transcript = `[TRANSCRIPT PLACEHOLDER — ${fetchResult.manualFallbackReason}]`;
+    }
+
+    // Truncate transcript if it exceeds RAW_TEXT_MAX_LENGTH (very long videos).
+    // 100KB ≈ 17,000 words ≈ ~2hr of dense speech — should be rare.
+    let rawText = fetchResult.transcript;
+    if (rawText.length > RAW_TEXT_MAX_LENGTH) {
+      rawText = rawText.slice(0, RAW_TEXT_MAX_LENGTH);
+      logger.warn(
+        { videoId: parsed.videoId, originalLength: fetchResult.transcript.length },
+        "YouTube: transcript truncated (exceeds RAW_TEXT_MAX_LENGTH)",
+      );
+    }
+
+    // Compute source URL (canonical form for dedup).
+    const canonicalUrl = `https://www.youtube.com/watch?v=${parsed.videoId}`;
+
+    // Use video's detected caption language if the admin didn't override.
+    // This avoids the case where an admin uploads a Bengali video but leaves
+    // the language as "en" — the AI chunking step would then fail with the
+    // "English-only" gate.
+    const finalLanguage = sourceLanguage ?? fetchResult.metadata.detectedLanguage ?? "en";
+    const validatedLanguage = VALID_LANGUAGES.includes(finalLanguage as never)
+      ? finalLanguage
+      : "en";
+
+    try {
+      const created = await createKbSource({
+        creatorId: normalizedCreatorId,
+        sourceType: "youtube",
+        sourceUrl: canonicalUrl,
+        sourceTitle: fetchResult.metadata.title || `YouTube video ${parsed.videoId}`,
+        sourceLanguage: validatedLanguage,
+        sourcePublishedAt: fetchResult.metadata.publishedAt
+          ? new Date(fetchResult.metadata.publishedAt)
+          : null,
+        rawText,
+        // Persist the structured YouTube metadata so the admin UI can render
+        // the thumbnail + deep-link to the channel without re-fetching. Stored
+        // in the `raw_metadata` column as JSON. See lib/kbSources.ts.
+        rawMetadata: {
+          videoId: fetchResult.metadata.videoId,
+          author: fetchResult.metadata.author,
+          authorUrl: fetchResult.metadata.authorUrl,
           thumbnailUrl: fetchResult.metadata.thumbnailUrl,
+          durationSeconds: fetchResult.metadata.durationSeconds,
+          viewCount: fetchResult.metadata.viewCount,
+          detectedLanguage: fetchResult.metadata.detectedLanguage,
+          // Track how the transcript was obtained — useful for debugging
+          // "why does this source have no transcript?" later. Values:
+          //   innertube-noauth / innertube-cookie / manual-fallback
+          fetchedVia: fetchResult.fetchedVia,
+          // When the transcript was fetched (ISO string) — lets the admin
+          // decide whether to re-fetch (e.g. if the video was updated).
+          fetchedAt: new Date().toISOString(),
         },
       });
-    } else {
-      res.status(201).json({
-        source: created,
-        transcript: {
+
+      if (!created) {
+        // Most common cause: duplicate source_url (admin already uploaded this video).
+        res.status(409).json({
+          error: "A KB source with this YouTube URL already exists.",
+        });
+        return;
+      }
+
+      logger.info(
+        {
+          id: created.id,
+          videoId: parsed.videoId,
+          title: created.sourceTitle,
           fetchedVia: fetchResult.fetchedVia,
           segmentCount: fetchResult.segmentCount,
-          detectedLanguage: fetchResult.metadata.detectedLanguage,
+          language: validatedLanguage,
+          createdBy: req.dbUser?.email,
         },
-      });
+        "AI admin: created YouTube KB source",
+      );
+
+      // Invalidate caches (same as the manual create route).
+      invalidateKbCache("source.create").catch((err) =>
+        logger.error(
+          { err, id: created.id },
+          "KB cache: invalidation failed after YouTube source create",
+        ),
+      );
+
+      if (isManualFallback) {
+        res.status(201).json({
+          source: created,
+          manualFallback: {
+            reason: fetchResult.manualFallbackReason,
+            // Deep-link to the YouTube transcript page so the admin can copy
+            // it in one click. YouTube's transcript viewer is at
+            // `https://www.youtube.com/watch?v=<id>` then click "Show transcript"
+            // below the description.
+            transcriptUrl: `https://www.youtube.com/watch?v=${parsed.videoId}`,
+            videoId: parsed.videoId,
+            thumbnailUrl: fetchResult.metadata.thumbnailUrl,
+          },
+        });
+      } else {
+        res.status(201).json({
+          source: created,
+          transcript: {
+            fetchedVia: fetchResult.fetchedVia,
+            segmentCount: fetchResult.segmentCount,
+            detectedLanguage: fetchResult.metadata.detectedLanguage,
+          },
+        });
+      }
+    } catch (err) {
+      logger.error(
+        { err, url, videoId: parsed.videoId },
+        "AI admin: create YouTube KB source failed",
+      );
+      res.status(500).json({ error: "Failed to create YouTube KB source." });
     }
-  } catch (err) {
-    logger.error(
-      { err, url, videoId: parsed.videoId },
-      "AI admin: create YouTube KB source failed",
-    );
-    res.status(500).json({ error: "Failed to create YouTube KB source." });
-  }
-});
+  },
+);
 
 // ─── PUT /ai/admin/kb/sources/:id ────────────────────────────────────────────
 router.put("/ai/admin/kb/sources/:id", async (req: Request, res: Response) => {
