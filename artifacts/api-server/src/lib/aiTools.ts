@@ -46,6 +46,12 @@ import { logger } from "./logger";
 // hardcoded minScore: 0.3 + returned full content (no truncation), causing
 // the LLM to see two different views of the KB for the same query.
 import { searchKnowledgeBase, UNIFIED_MIN_SCORE, UNIFIED_CONTENT_TRUNCATE_CHARS } from "./kbSearch";
+// v6.1: seller-listing search. Searches ACTUAL purchasable listings (not
+// just the variety catalog). Returns specific seller listings with seller
+// name, location, variants, price, stock, rating. Used for purchase-intent
+// queries ("I want to buy a mango sapling"). The new dual-citation format
+// `[[listing:<id>|<display>]]` deep-links to SellerListingDetailPage.
+import { searchSellerListings } from "./sellerListingSearch";
 
 // ─── Tool declarations (sent to Gemini) ──────────────────────────────────────
 
@@ -179,6 +185,11 @@ export const CATALOG_TOOLS: ReadonlySet<string> = new Set([
   // The 5-min TTL (default) is appropriate — if an admin edits an entry,
   // the cache expires within 5 min + the next query picks up the change.
   "search_knowledge_base",
+  // v6.1: seller-listing search tool is also catalog-like (public data —
+  // listings, variants, sellers are all visible on the public marketplace).
+  // The 5-min TTL is appropriate because sellers can update prices/stock
+  // at any time; we don't want to show stale prices for too long.
+  "search_seller_listings",
 ]);
 
 export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
@@ -307,6 +318,70 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ["query"],
     },
   },
+  // ─── v6.1: Seller-listing search tool ──────────────────────────────────────
+  // The 6th tool. Searches ACTUAL purchasable seller listings (not just
+  // the variety catalog). Returns specific listings with seller name,
+  // location, variants (form, height, price, stock), rating, delivery info.
+  //
+  // Use this tool when the user has PURCHASE intent — "I want to buy a
+  // mango sapling", "where can I get a mango tree", "price of mango",
+  // "in stock near Dhaka", etc.
+  //
+  // The AI should emit the new dual-citation format for each listing it
+  // recommends:
+  //   [[listing:42|Alphonso Mango — 3ft sapling, 450 BDT]]
+  //
+  // The frontend's parseMessage.ts + ListingChip.tsx extract these and
+  // deep-link to /products/:productId/seller-listings/:listingId (one
+  // click to the SellerListingDetailPage where the user can add to cart).
+  //
+  // For KNOWLEDGE-intent questions ("how to care for a mango tree"), use
+  // the existing get_product_care + search_knowledge_base tools instead.
+  {
+    name: "search_seller_listings",
+    description:
+      "Search for SPECIFIC seller listings that the user can buy. " +
+      "Returns actual purchasable items with seller name, location, variants " +
+      "(form, height, price, stock), rating, and delivery info. " +
+      "Use this when the user wants to BUY something (purchase intent) — " +
+      '"I want to buy a mango sapling", "where can I get a mango tree", ' +
+      '"price of mango sapling", "available near me", etc. ' +
+      "For each listing you recommend, emit the citation format " +
+      "[[listing:<id>|<display>]] — the frontend will deep-link to the listing detail page.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        query: {
+          type: Type.STRING,
+          description:
+            "Search keywords — plant name, variety, or what the user is looking for. " +
+            'e.g. "mango sapling", "Alphonso mango", "indoor plant", "Mangifera indica"',
+        },
+        max_price: {
+          type: Type.NUMBER,
+          description:
+            "Optional maximum price in BDT (Bangladeshi Taka). " +
+            "e.g. 500 for listings under 500 BDT. Filters at the variant level — " +
+            "only listings with at least one variant at or below this price are returned.",
+        },
+        form: {
+          type: Type.STRING,
+          description:
+            "Optional form filter — restrict to listings that have at least " +
+            "one variant of this form. Common values: 'sapling', 'seed', " +
+            "'grafted', 'potted'. Use this when the user specifically asks for " +
+            "a form (e.g. 'sapling' when they say 'mango sapling').",
+        },
+        limit: {
+          type: Type.NUMBER,
+          description:
+            "Maximum listings to return (default 5, max 8). Each listing includes " +
+            "up to 3 cheapest variants. Higher limits = more options but more tokens.",
+        },
+      },
+      required: ["query"],
+    },
+  },
 ];
 
 // ─── Tool executor ───────────────────────────────────────────────────────────
@@ -381,6 +456,19 @@ export async function executeTool(
         // BUG-I4 fix: pass the tool context so searchKb can include
         // `tone_locked_creator` in the response envelope.
         return await searchKb(args, userId, context);
+      case "search_seller_listings":
+        // v6.1: pass the buyer's location (from their default address) so
+        // the search can sort by distance. Null for anonymous users → no
+        // distance sort (just rating + price). See loadBuyerLocation in
+        // routes/ai.ts for the privacy rationale.
+        return await searchSellerListings({
+          query: typeof args.query === "string" ? args.query : "",
+          max_price: typeof args.max_price === "number" ? args.max_price : undefined,
+          form: typeof args.form === "string" ? args.form : undefined,
+          limit: typeof args.limit === "number" ? args.limit : undefined,
+          userCity: context?.userCity ?? null,
+          userDistrict: context?.userDistrict ?? null,
+        });
       default:
         logger.warn({ name }, "AI tool: unknown function called");
         return { error: `Unknown function: ${name}` };

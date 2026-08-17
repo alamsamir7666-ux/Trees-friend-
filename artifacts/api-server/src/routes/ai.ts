@@ -1359,7 +1359,14 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // Admins can then create new versions (v1.1.0, v2.0.0, …) and activate
   // them via POST /api/ai/admin/prompts/:id/activate.
   const promptVersionInfo = await getActivePrompt();
-  const catalogContext = await buildCatalogContext(safeMessage);
+  // v6.1: pass the detected intent to buildCatalogContext. When intent is
+  // PURCHASE, the catalog context block is SKIPPED — the AI will call
+  // search_seller_listings instead (which returns specific purchasable
+  // listings, not variety-level info). This saves ~200-500 tokens per
+  // request + avoids confusing the LLM with two granularities of info.
+  // For KNOWLEDGE + MIXED + GREETING intent, the catalog context is still
+  // injected (existing behavior).
+  const catalogContext = await buildCatalogContext(safeMessage, intentClassification.intent);
   const summaryBlock = buildSummaryPromptBlock(memory.summary);
 
   // ─── Phase 3: Build Knowledge Base context ────────────────────────────────
@@ -3364,6 +3371,105 @@ router.get("/ai/products-by-slug", async (req: Request, res: Response) => {
     logger.error({ err, slugs }, "AI: products-by-slug failed");
     // Don't fail the whole UI over a chip-rendering issue.
     res.json({ products: [] });
+  }
+});
+
+// ─── GET /ai/listings-by-ids?ids=42,1337 ────────────────────────────────────
+// v6.1: Resolves an array of seller-listing IDs (extracted from AI responses
+// by the frontend via [[listing:<id>|<display>]] citations) to minimal
+// listing info: { id, productId, productName, sellerName, minPrice, image }.
+//
+// Used by the frontend's ListingChip component to deep-link to
+// /products/:productId/listings/:listingId (the SellerListingDetailPage).
+//
+// The AI's citation format only includes the listingId (not the productId)
+// — the frontend needs the productId to build the deep-link URL. This
+// endpoint resolves that mapping in one batched request (up to 10 IDs).
+//
+// Public endpoint (no auth required) — same as products-by-slug. The data
+// returned is already public on the marketplace.
+router.get("/ai/listings-by-ids", async (req: Request, res: Response) => {
+  const idsParam = (req.query.ids as string | undefined) ?? "";
+  const ids = idsParam
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => /^\d+$/.test(s)) // only allow positive integers
+    .slice(0, 10) // hard cap to prevent abuse
+    .map(Number);
+
+  if (ids.length === 0) {
+    res.json({ listings: [] });
+    return;
+  }
+
+  try {
+    // Build parameterized IN clause: $1, $2, ...
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+    const result = await pool.query<{
+      id: number;
+      product_id: number;
+      product_name: string;
+      product_slug: string;
+      seller_name: string;
+      min_price: string | null;
+      image: string | null;
+      has_qualifying_variant: boolean;
+    }>(
+      `SELECT
+         sl.id,
+         sl.product_id,
+         p.name AS product_name,
+         p.slug AS product_slug,
+         s.business_name AS seller_name,
+         -- Cheapest variant price for this listing (after discount).
+         (
+           SELECT MIN(COALESCE(slv.discount_price, slv.price)::text)
+           FROM seller_listing_variants slv
+           WHERE slv.seller_listing_id = sl.id
+             AND (slv.available_quantity > 0 OR slv.is_pre_order = true)
+         ) AS min_price,
+         -- First image of the listing (fallback to product image).
+         COALESCE(
+           (sl.images::jsonb->0->>'url'),
+           (p.images::jsonb->0->>'url')
+         ) AS image,
+         -- Whether the listing has at least one in-stock or pre-order variant.
+         EXISTS(
+           SELECT 1 FROM seller_listing_variants slv
+           WHERE slv.seller_listing_id = sl.id
+             AND (slv.available_quantity > 0 OR slv.is_pre_order = true)
+         ) AS has_qualifying_variant
+       FROM seller_listings sl
+       JOIN products p ON p.id = sl.product_id
+       JOIN sellers s ON s.id = sl.seller_id
+       WHERE sl.id IN (${placeholders})
+         AND sl.visibility = 'public'
+         AND sl.approval_status = 'approved'
+         AND s.status = 'active'`,
+      ids,
+    );
+
+    // Preserve the input id order in the response.
+    const byId = new Map(result.rows.map((r) => [r.id, r]));
+    const ordered = ids.map((id) => byId.get(id)).filter(Boolean) as typeof result.rows;
+
+    res.json({
+      listings: ordered.map((r) => ({
+        id: r.id,
+        productId: r.product_id,
+        productName: r.product_name,
+        productSlug: r.product_slug,
+        sellerName: r.seller_name,
+        price: r.min_price,
+        currency: "BDT",
+        image: r.image,
+        hasQualifyingVariant: r.has_qualifying_variant,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err, ids }, "AI: listings-by-ids failed");
+    // Don't fail the whole UI over a chip-rendering issue.
+    res.json({ listings: [] });
   }
 });
 

@@ -51,11 +51,13 @@ import {
 import { useAiChat, type ChatMessage, type ActiveToolCall } from "@/hooks/useAiChat";
 import { MarkdownText } from "./MarkdownText";
 import { ProductChips } from "./ProductChips";
+import { ListingChips } from "./ListingChip";
 import { FollowupChips } from "./FollowupChips";
 import { FeedbackButtons } from "./FeedbackButtons";
 import {
   extractFollowups,
   extractProductMentions,
+  extractListingMentions,
   stripProductMentionMarkers,
 } from "./parseMessage";
 
@@ -516,6 +518,10 @@ function MessageRow({
   const { cleanedContent, followups } = extractFollowups(message.content);
   const displayContent = stripProductMentionMarkers(cleanedContent);
   const productMentions = extractProductMentions(cleanedContent);
+  // v6.1: extract [[listing:<id>|<display>]] mentions — distinct from
+  // product mentions. These deep-link to SellerListingDetailPage (one
+  // click to buy) instead of the variety catalog search.
+  const listingMentions = extractListingMentions(cleanedContent);
 
   // BUG-I7 fix: prefer structured followups from SSE (message.followups)
   // over parsed followups from [followups]...[/followups] block. The
@@ -570,9 +576,14 @@ function MessageRow({
           )}
         </div>
 
-        {/* v1.5: Product chips */}
+        {/* v1.5: Product chips (variety-level, links to catalog search) */}
         {!isStreaming && productMentions.length > 0 && (
           <ProductChips names={productMentions} onClose={onClose} />
+        )}
+
+        {/* v6.1: Listing chips (purchasable, deep-links to SellerListingDetailPage) */}
+        {!isStreaming && listingMentions.length > 0 && (
+          <ListingChips mentions={listingMentions} onClose={onClose} />
         )}
 
         {/* BUG-I7 fix: "Generating suggestions…" spinner when the backend */}

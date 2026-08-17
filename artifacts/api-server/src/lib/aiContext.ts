@@ -468,7 +468,37 @@ export const GREETING_INTRO_MESSAGE =
  * keywords. To avoid sending an explosion of OR clauses, we extract up to
  * the 5 longest "word-ish" tokens from the message and OR them together.
  */
-export async function buildCatalogContext(userMessage: string): Promise<string> {
+/**
+ * v6.1 (Part 2): the intent classifier (lib/intentClassifier.ts) returns
+ * "PURCHASE" | "KNOWLEDGE" | "MIXED" | "GREETING" for each user message.
+ *
+ * When the intent is PURCHASE, the AI will call the new search_seller_listings
+ * tool (Part 2) which returns specific purchasable listings. There's no
+ * point ALSO injecting the variety-level CATALOG CONTEXT — it would:
+ *   - Waste tokens (~200-500 per request) on variety info the AI doesn't need.
+ *   - Confuse the LLM by mixing two different granularities of info.
+ *   - Risk the LLM citing variety names ([[Alphonso Mango]]) instead of
+ *     specific listings ([[listing:42|...]]).
+ *
+ * So when intent === "PURCHASE", we SKIP the catalog context block. The
+ * search_seller_listings tool result is the authoritative source for
+ * purchase-intent responses.
+ *
+ * For KNOWLEDGE + MIXED + GREETING intent, we keep the existing behavior
+ * (inject the catalog context). MIXED intent benefits from BOTH (the
+ * variety info helps with the knowledge half, the listing tool handles
+ * the purchase half).
+ */
+export async function buildCatalogContext(
+  userMessage: string,
+  intent?: "PURCHASE" | "KNOWLEDGE" | "MIXED" | "GREETING" | null,
+): Promise<string> {
+  // v6.1: skip catalog context for pure PURCHASE intent — the AI will call
+  // search_seller_listings instead, which returns specific listings.
+  if (intent === "PURCHASE") {
+    return "";
+  }
+
   const tokens = extractSearchTokens(userMessage);
   if (tokens.length === 0) return "";
 
@@ -591,16 +621,18 @@ IMPORTANT: Order/account queries are IN-SCOPE. When a user asks about their orde
 
 LANGUAGE: Reply in the same language as the user's message. Support English, বাংলা (Bengali Unicode), and Banglish (Bengali written in Latin script). If the user mixes languages, mirror their mix.
 
-TOOLS (v3.0 — Phase 3):
+TOOLS (v3.0 — Phase 3, v6.1 — seller-listing search):
 You have access to function-calling tools that let you query the TreeFriend database:
-- search_catalog(query, max_price?, sunlight?) — search products with optional filters
-- get_product_care(product_slug) — get detailed care info for a specific product
+- search_catalog(query, max_price?, sunlight?) — search the VARIETY catalog (admin-owned product info). Returns variety-level data (name, slug, sunlight, watering) + an aggregate min_price across sellers. Use this for KNOWLEDGE-intent questions about what varieties exist.
+- get_product_care(product_slug) — get detailed care info for a specific variety. Use this for KNOWLEDGE-intent questions about how to care for a plant.
+- search_seller_listings(query, max_price?, form?, limit?) — search ACTUAL purchasable seller listings (v6.1). Returns specific listings with seller name, location, variants (form, height, price, stock), rating, delivery info. Use this for PURCHASE-intent questions — when the user wants to BUY something.
 - get_user_orders() — get the signed-in user's recent orders (requires sign-in)
 - get_order_details(order_number) — get detailed status for a specific order
 - search_knowledge_base(query, category_slug?, product_slug?, max_results?) — search curated plant care content from creators
 
 USE TOOLS when:
-- The user asks about specific products → call search_catalog first, then get_product_care if they want details
+- The user wants to BUY something ("I want a mango sapling", "where can I get", "price of", "in stock near me") → call search_seller_listings. The system automatically detects purchase intent via the new intent classifier (v6.1) and may pre-call this tool for you.
+- The user asks about specific varieties (knowledge intent) → call search_catalog first, then get_product_care if they want details
 - The user asks "where is my order" or "what did I buy" → call get_user_orders
 - The user mentions a specific order number → call get_order_details
 - The user asks a specific botanical question and no KNOWLEDGE BASE CONTEXT was injected → call search_knowledge_base
@@ -610,7 +642,10 @@ Don't call tools unnecessarily — if the CATALOG CONTEXT already has the answer
 
 RULES:
 - Never invent product prices, IDs, slugs, or availability you didn't see in the CATALOG CONTEXT or tool results.
-- If a tree is in the catalog, mention its EXACT name wrapped in double square brackets like [[Alphonso Mango]] or [[Mango Sapling]] — the frontend will auto-link these to the product page. Use the exact name as it appears in the CATALOG CONTEXT or tool results.
+- v6.1 DUAL-CITATION FORMAT — use the right format based on intent:
+  - For KNOWLEDGE answers (variety info, care, botanical facts), wrap the EXACT variety name in double square brackets like [[Alphonso Mango]] — the frontend linkifies these to the variety catalog search page (/products?q=<name>).
+  - For PURCHASE answers (specific seller listings), wrap each listing you recommend in the NEW format: [[listing:<id>|<display>]] where <id> is the listingId from the search_seller_listings tool result, and <display> is a short human-readable label (e.g. [[listing:42|Alphonso Mango — 3ft sapling, 450 BDT]]). The frontend deep-links these to the SellerListingDetailPage (/products/:productId/listings/:listingId) — one click to buy.
+  - Use ONLY ONE format per listing — don't double-cite. If you mention a variety by name, use [[name]]. If you mention a specific purchasable listing, use [[listing:id|display]].
 - If a tree is NOT in the catalog, answer from general botanical knowledge — don't wrap it in brackets and don't claim it's for sale.
 - Be concise: 2-4 short paragraphs max. Use short sentences.
 - Use Markdown for formatting: **bold** for key terms, bullet lists (- item) for care instructions, line breaks (double newline) between sections.

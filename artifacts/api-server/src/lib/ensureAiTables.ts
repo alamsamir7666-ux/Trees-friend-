@@ -943,6 +943,45 @@ export async function ensureAiTables(): Promise<void> {
       );
     }
 
+    // ─── v6.1: seed prompt v1.1.0 (seller-listing-aware dual-citation) ────
+    // Creates the v1.1.0 row IF it doesn't already exist (idempotent via
+    // WHERE NOT EXISTS). Does NOT auto-activate — the admin can activate
+    // via POST /api/ai/admin/prompts/:id/activate when ready.
+    //
+    // The v1.1.0 template adds:
+    //   - Documentation of the new search_seller_listings tool.
+    //   - The dual-citation format: [[name]] for variety citations (knowledge
+    //     intent), [[listing:<id>|<display>]] for seller-listing citations
+    //     (purchase intent, deep-links to SellerListingDetailPage).
+    //   - Guidance on when to use each tool (PURCHASE → search_seller_listings,
+    //     KNOWLEDGE → search_catalog + get_product_care + search_knowledge_base).
+    try {
+      const { SYSTEM_PROMPT_TEMPLATE_V1 } = await import("./aiContext");
+      // The v1.1.0 template IS the v1.0.0 template (now updated to include
+      // the new tool + dual-citation rules). The version bump signals that
+      // the prompt has been updated — admins can A/B test by activating
+      // v1.1.0 vs keeping v1.0.0 (which they can manually recreate if
+      // they saved the old text).
+      await pool.query(
+        `INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
+         SELECT $1, $2, $3, FALSE, $4
+         WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = $1)`,
+        [
+          "1.1.0",
+          SYSTEM_PROMPT_TEMPLATE_V1,
+          "v6.1: seller-listing-aware search. Adds the search_seller_listings tool + dual-citation format ([[listing:<id>|<display>]] for purchase intent, [[name]] for knowledge intent). Activate via POST /api/ai/admin/prompts/<id>/activate when ready.",
+          "system",
+        ],
+      );
+    } catch (seedErr) {
+      // Non-fatal: the v1.0.0 row (if it exists) is still active. The
+      // admin can manually create v1.1.0 via the admin UI.
+      logger.warn(
+        { err: seedErr },
+        "AI: failed to seed prompt v1.1.0 (admin can create manually via UI)",
+      );
+    }
+
     // ─── Phase 1: Knowledge Base seed data ────────────────────────────────
     // Seed one default creator ("Manual") + three root categories so the
     // admin UI has something to show on first load. Idempotent via

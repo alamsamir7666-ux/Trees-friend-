@@ -62,6 +62,10 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
   search_catalog: "catalog",
   get_product_care: "catalog",
   search_knowledge_base: "catalog",
+  // v6.1: seller-listing search is public catalog data (listings + variants
+  // + sellers are all visible on the public marketplace). Same tier as the
+  // other catalog tools — 60 calls/hour.
+  search_seller_listings: "catalog",
   get_user_orders: "sensitive",
   get_order_details: "sensitive",
 };
