@@ -80,7 +80,91 @@ export function GenericToolSkeleton({ label }: { label: string }) {
 export function getToolSkeleton(toolName: string): React.FC {
   const SKELETONS: Record<string, React.FC> = {
     get_order_details: OrderCardSkeleton,
-    get_user_orders: OrderCardSkeleton, // similar shape — list of orders
+    get_user_orders: OrderListSkeleton,
+    search_seller_listings: ListingGridSkeleton,
+    get_product_care: CareGuideSkeleton,
   };
   return SKELETONS[toolName] ?? (() => <GenericToolSkeleton label="Loading" />);
+}
+
+/**
+ * Skeleton for OrderListCard — mimics the list layout (header + 3 rows).
+ */
+export function OrderListSkeleton() {
+  return (
+    <div className="border rounded-lg overflow-hidden bg-muted/30 space-y-0 animate-in fade-in duration-300">
+      <div className="p-2 border-b bg-muted/20">
+        <Skeleton className="h-3 w-28" />
+      </div>
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="flex items-center gap-2 p-2 border-b last:border-0">
+          <Skeleton className="h-8 w-8 rounded" />
+          <div className="flex-1 space-y-1">
+            <Skeleton className="h-2.5 w-16" />
+            <Skeleton className="h-2 w-32" />
+          </div>
+          <div className="text-right space-y-1">
+            <Skeleton className="h-2.5 w-10" />
+            <Skeleton className="h-2 w-8" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Skeleton for ListingGridCard — mimics a 2-column grid of 4 listing cards.
+ */
+export function ListingGridSkeleton() {
+  return (
+    <div className="space-y-2 animate-in fade-in duration-300">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="border rounded-lg p-3 bg-muted/30 space-y-2">
+            <div className="flex items-center justify-between">
+              <Skeleton className="h-3 w-20" />
+              <Skeleton className="h-3 w-12" />
+            </div>
+            <Skeleton className="h-2 w-24" />
+            <Skeleton className="h-2 w-16" />
+            <div className="flex items-center justify-between">
+              <Skeleton className="h-4 w-12" />
+              <Skeleton className="h-6 w-14 rounded-lg" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Skeleton for CareGuideCard — mimics the header + fields grid + tips.
+ */
+export function CareGuideSkeleton() {
+  return (
+    <div className="border rounded-lg overflow-hidden bg-muted/30 space-y-3 animate-in fade-in duration-300">
+      <div className="flex items-center gap-3 p-3 border-b bg-muted/20">
+        <Skeleton className="h-12 w-12 rounded" />
+        <div className="space-y-1">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-2 w-20" />
+        </div>
+      </div>
+      <div className="p-3 grid grid-cols-2 gap-2">
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <div key={i} className="flex items-center gap-2">
+            <Skeleton className="h-3.5 w-3.5 rounded-full" />
+            <Skeleton className="h-2.5 w-20" />
+          </div>
+        ))}
+      </div>
+      <div className="px-3 pb-3 space-y-1">
+        <Skeleton className="h-2 w-16" />
+        <Skeleton className="h-2 w-full" />
+        <Skeleton className="h-2 w-3/4" />
+      </div>
+    </div>
+  );
 }

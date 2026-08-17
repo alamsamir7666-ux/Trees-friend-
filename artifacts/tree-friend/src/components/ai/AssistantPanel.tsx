@@ -672,7 +672,12 @@ const TOOL_LABELS: Record<string, { label: string; Icon: typeof Search }> = {
 
 // v6.2 Part 1: tools that have rich skeleton loading states.
 // While in-flight, these tools show a skeleton card instead of just a chip.
-const TOOLS_WITH_SKELETONS = new Set(["get_order_details", "get_user_orders"]);
+const TOOLS_WITH_SKELETONS = new Set([
+  "get_order_details",
+  "get_user_orders",
+  "search_seller_listings",
+  "get_product_care",
+]);
 
 function ToolCallChips({ calls }: { calls: ActiveToolCall[] }) {
   // v6.2 Part 1: split calls into skeleton-worthy + chip-only.

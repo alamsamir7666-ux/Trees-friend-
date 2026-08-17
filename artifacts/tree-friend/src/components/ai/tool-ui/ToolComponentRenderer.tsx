@@ -21,6 +21,9 @@
  */
 import type { ToolResultEntry } from "@/hooks/useAiChat";
 import { OrderDetailCard } from "./OrderDetailCard";
+import { OrderListCard } from "./OrderListCard";
+import { ListingGridCard } from "./ListingGridCard";
+import { CareGuideCard } from "./CareGuideCard";
 
 // ─── Component registry ───────────────────────────────────────────────────
 
@@ -31,10 +34,9 @@ interface ToolComponentProps {
 
 const TOOL_UI_MAP: Record<string, React.FC<ToolComponentProps>> = {
   get_order_details: OrderDetailCard,
-  // Part 2 will add:
-  // get_user_orders: OrderListCard,
-  // search_seller_listings: ListingGridCard,
-  // get_product_care: CareGuideCard,
+  get_user_orders: OrderListCard,
+  search_seller_listings: ListingGridCard,
+  get_product_care: CareGuideCard,
 };
 
 /**
