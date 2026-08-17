@@ -107,6 +107,25 @@ export interface SellerListingResult {
   warrantyDays: number | null;
   paymentMethod: string; // "cod" | "advance" | "both"
   certification: string | null;
+  /**
+   * Representative thumbnail URL for the listing.
+   *
+   * v6.2 Part 4 fix (Bug 1): previously this field did not exist on the
+   * tool result, so the frontend `ListingGridCard` add-to-cart path
+   * hard-coded `image: ""` — the cart page then rendered a broken
+   * thumbnail for any item added from the chat.
+   *
+   * Source priority (COALESCE in SQL):
+   *   1. seller_listings.images[0]  — most specific to this listing
+   *   2. products.images[0]         — fallback to the catalog image
+   *
+   * Both columns are `jsonb NOT NULL DEFAULT '[]'::jsonb` arrays of URL
+   * strings (see lib/db/src/schema/{sellerListings,products}.ts). Postgres
+   * `jsonb->>0` returns NULL when the array is empty, so COALESCE produces
+   * NULL only when BOTH arrays are empty. The frontend uses an SVG leaf
+   * placeholder in that case — the cart page never renders a broken img.
+   */
+  productImage: string | null;
   /** Top variants by price asc, capped at 3 per listing. */
   variants: SellerListingVariantResult[];
   /** True if at least one variant has availableQuantity > 0 (in-stock). */
@@ -301,6 +320,7 @@ export async function searchSellerListings(
         -- pass as search_catalog). The tsvector column is maintained by
         -- trigger (migration 0006) on title + description.
         SELECT p.id AS product_id, p.name AS product_name, p.slug AS product_slug,
+               p.images AS product_images,
                ts_rank_cd(p.search_tsvector, websearch_to_tsquery('english', $1)) AS text_rank
         FROM products p
         WHERE p.deleted_at IS NULL
@@ -313,9 +333,9 @@ export async function searchSellerListings(
         -- Filtered to active listings + purchasable variants (in-stock or
         -- pre-order) + optional price/form filters.
         SELECT
-          cp.product_id, cp.product_name, cp.product_slug, cp.text_rank,
+          cp.product_id, cp.product_name, cp.product_slug, cp.product_images, cp.text_rank,
           sl.id AS listing_id, sl.seller_id, sl.delivery_time_days,
-          sl.warranty_days, sl.payment_method, sl.certification,
+          sl.warranty_days, sl.payment_method, sl.certification, sl.images AS listing_images,
           s.business_name AS seller_name, s.location AS seller_location,
           s.is_verified AS seller_is_verified,
           slv.id AS variant_id, slv.form, slv.root_type, slv.pot_size,
@@ -332,6 +352,11 @@ export async function searchSellerListings(
       )
       SELECT
         lv.*,
+        -- v6.2 Part 4 (Bug 1 fix): representative thumbnail for the card
+        -- AND for the cart page (frontend passes this through to addItem).
+        -- jsonb->>0 returns NULL when the array is empty, so COALESCE picks
+        -- the product image only when the listing has no images of its own.
+        COALESCE(lv.listing_images->>0, lv.product_images->>0) AS product_image,
         COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.seller_listing_id = lv.listing_id), 0) AS rating,
         (SELECT COUNT(*) FROM reviews r WHERE r.seller_listing_id = lv.listing_id) AS review_count
       FROM listing_variants lv
@@ -342,6 +367,7 @@ export async function searchSellerListings(
       product_id: number;
       product_name: string;
       product_slug: string;
+      product_images: string[] | null; // jsonb array → driver returns it as string[]
       text_rank: string;
       listing_id: number;
       seller_id: number;
@@ -349,6 +375,7 @@ export async function searchSellerListings(
       warranty_days: number | null;
       payment_method: string;
       certification: string | null;
+      listing_images: string[] | null;
       seller_name: string;
       seller_location: string | null;
       seller_is_verified: boolean;
@@ -364,6 +391,7 @@ export async function searchSellerListings(
       available_quantity: number;
       delivery_charge: string;
       is_pre_order: boolean;
+      product_image: string | null;
       rating: string;
       review_count: string;
     }>(sqlQuery, [tsquery]);
@@ -400,6 +428,11 @@ export async function searchSellerListings(
           warrantyDays: row.warranty_days,
           paymentMethod: row.payment_method,
           certification: row.certification,
+          // v6.2 Part 4 (Bug 1 fix): the COALESCE in SQL already picked
+          // the seller-listing image OR the product image; we just pass
+          // it through. NULL when both arrays are empty (frontend uses
+          // an SVG leaf placeholder in that case).
+          productImage: row.product_image,
           variants: [],
           hasInStockVariant: false,
           hasPreOrderVariant: false,

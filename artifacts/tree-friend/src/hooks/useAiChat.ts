@@ -142,6 +142,39 @@ interface UseAiChatResult {
   send: (text: string) => Promise<void>;
   clear: () => Promise<void>;
   /**
+   * v6.2 Part 5 (P1-6): Stop the in-flight stream. Aborts the AbortController,
+   * which causes the fetch's `reader.read()` to throw an AbortError — caught
+   * by the `catch` block in `send()` which silently returns. The `finally`
+   * block then cleans up state (loading=false, activeToolCalls=[], etc.).
+   *
+   * The partial assistant message is KEPT (industry standard — ChatGPT,
+   * Claude, Gemini all keep partial output when the user clicks Stop).
+   * If the message has no content + no tool results (stopped before the
+   * first delta), the finally block removes it entirely so the chat
+   * doesn't show an empty bubble.
+   *
+   * Safe to call when not streaming — `abortRef.current?.abort()` is a
+   * no-op when `abortRef.current` is null.
+   */
+  stop: () => void;
+  /**
+   * v6.2 Part 5 (P1-7): Regenerate the assistant message with the given id.
+   *
+   * Finds the user message immediately before the assistant message,
+   * captures its content, removes BOTH from `messages`, then calls
+   * `send(capturedContent)` to re-run the LLM.
+   *
+   * Industry standard (ChatGPT): only available on the LAST assistant
+   * message — regenerating mid-history would invalidate every message
+   * after it, which is confusing UX. The UI enforces this; the hook
+   * also guards against `loadingRef.current` (no concurrent regen).
+   *
+   * If the message before the assistant message is not a user message
+   * (defensive — shouldn't happen), only the assistant message is
+   * removed and `send` is not called.
+   */
+  regenerate: (messageId: number | string) => Promise<void>;
+  /**
    * v3.7: Tools currently being executed. Empty when no tools are in
    * flight. Render these as progress chips below the assistant bubble.
    */
@@ -593,7 +626,7 @@ export function useAiChat(): UseAiChatResult {
         }
       }
     } catch (err: any) {
-      if (err.name === "AbortError") return; // user-cancelled
+      if (err.name === "AbortError") return; // user-cancelled (Stop button)
       const msg = err?.message ?? "Something went wrong.";
       setError(msg);
       // Replace the placeholder assistant bubble with the error.
@@ -609,11 +642,75 @@ export function useAiChat(): UseAiChatResult {
       // proceed immediately (not waiting for the next render cycle).
       loadingRef.current = false;
       abortRef.current = null;
+      // v6.2 Part 5 (P1-6): if the assistant message ended up empty
+      // (stopped before first delta, or stream returned nothing), remove
+      // it so the chat doesn't show a permanent empty bubble. We check
+      // for content + tool results — a tool result alone is enough to
+      // keep the bubble (some tool calls return data without LLM text).
+      // This runs on EVERY completion (success, error, abort) but is a
+      // no-op when the message has content or tool results.
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (
+          last &&
+          last.role === "assistant" &&
+          !last.content &&
+          (!last.toolResults || last.toolResults.length === 0)
+        ) {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
     }
   }, []); // Bug #16 fix: removed `[loading]` dep — we now use loadingRef
   // (a ref, stable identity) so `send` has a stable reference and doesn't
   // recreate on every loading flip. This prevents unnecessary re-renders
   // of children that depend on `send`.
+
+  // ─── v6.2 Part 5 (P1-6): Stop the in-flight stream ────────────────────────
+  // Aborts the AbortController. The fetch's reader.read() throws an
+  // AbortError → caught by `send()`'s catch (silent return) → finally
+  // block cleans up state. Partial content is preserved; empty bubbles
+  // are removed by the finally block above.
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
+
+  // ─── v6.2 Part 5 (P1-7): Regenerate an assistant message ──────────────────
+  // Removes the assistant message + the user message preceding it, then
+  // re-sends the user message via `send()`. `send()` will append fresh
+  // optimistic messages at the end.
+  //
+  // Two state updates happen in sequence (both queued via setMessages):
+  //   1. remove the two messages
+  //   2. send() appends new optimistic userMsg + assistantMsg
+  // React batches these — the final state has the regenerated pair at the
+  // end, exactly where the user expects them.
+  //
+  // Edge case: if `messageId` isn't found (e.g. user clicked regenerate
+  // twice rapidly), setMessages returns `prev` unchanged and we skip send.
+  // The `loadingRef.current` guard prevents concurrent regen + send.
+  const regenerate = useCallback(
+    async (messageId: number | string) => {
+      if (loadingRef.current) return;
+      let userContent: string | null = null;
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.id === messageId);
+        if (idx === -1) return prev;
+        // Find the user message immediately before the assistant message.
+        if (idx > 0 && prev[idx - 1].role === "user") {
+          userContent = prev[idx - 1].content;
+          return [...prev.slice(0, idx - 1), ...prev.slice(idx + 1)];
+        }
+        // No preceding user message — just remove the assistant message.
+        return [...prev.slice(0, idx), ...prev.slice(idx + 1)];
+      });
+      if (userContent) {
+        await send(userContent);
+      }
+    },
+    [send],
+  );
 
   // ─── Clear conversation ─────────────────────────────────────────────────
   // The session token now lives in an HttpOnly cookie. We don't generate
@@ -718,6 +815,8 @@ export function useAiChat(): UseAiChatResult {
     error,
     send,
     clear,
+    stop,
+    regenerate,
     activeToolCalls,
     exportConversation,
     shareConversation,

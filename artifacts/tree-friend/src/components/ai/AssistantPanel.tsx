@@ -47,6 +47,14 @@ import {
   Download,
   Share2,
   Check,
+  // v6.2 Part 5 (P1-6, P1-7, P1-8): Stop / Regenerate / Copy icons.
+  // Square is the industry-standard "Stop" affordance (ChatGPT, Claude,
+  // Gemini all use a filled square inside the send button while streaming).
+  // RotateCw is the industry-standard "Regenerate" affordance.
+  // Copy is the industry-standard "Copy to clipboard" affordance.
+  Square,
+  RotateCw,
+  Copy,
 } from "lucide-react";
 import { useAiChat, type ChatMessage, type ActiveToolCall } from "@/hooks/useAiChat";
 import { MarkdownText } from "./MarkdownText";
@@ -98,6 +106,8 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
     error,
     send,
     clear,
+    stop,
+    regenerate,
     activeToolCalls,
     exportConversation,
     shareConversation,
@@ -203,11 +213,27 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
   // BUG-I8 fix: removed the `messages.length > 0` requirement — now shows
   // the typing indicator even on the first message (when the user sends
   // their first message and is waiting for the AI to start responding).
+  //
+  // v6.2 Part 5 (P1-9 fix): the typing indicator is now HIDDEN when there
+  // are active tool calls. The ToolCallChips component already shows
+  // "Searching listings…" + a skeleton card — rendering BOTH the typing
+  // dots AND the tool chip + skeleton would be 3 stacked progress
+  // indicators for the same wait. Industry standard (ChatGPT, Claude):
+  // when a tool is running, the tool chip IS the progress indicator.
+  // The typing dots are reserved for the "thinking before first token"
+  // phase where there's no other progress UI.
+  //
+  // Also: when `isTyping` is true, the empty streaming bubble (which
+  // contains only a tiny pulsing cursor) is now SKIPPED in the render
+  // loop below — rendering both an empty bubble AND a typing indicator
+  // is redundant (industry standard: only show the typing indicator).
+  const lastMsg = messages[messages.length - 1];
   const isTyping =
     loading &&
     messages.length > 0 &&
-    messages[messages.length - 1].role === "assistant" &&
-    !messages[messages.length - 1].content;
+    lastMsg?.role === "assistant" &&
+    !lastMsg?.content &&
+    activeToolCalls.length === 0;
 
   const charCount = input.length;
   const overSoftLimit = charCount > INPUT_SOFT_LIMIT;
@@ -388,18 +414,40 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
               <EmptyState onPick={send} />
             ) : (
               <div className="space-y-4">
-                {messages.map((m, i) => (
-                  <MessageRow
-                    key={m.id ?? `m${i}`}
-                    message={m}
-                    isStreaming={
-                      loading && m.role === "assistant" && i === messages.length - 1 && !!m.content
-                    }
-                    onPickFollowup={send}
-                    disabled={loading}
-                    onClose={onClose}
-                  />
-                ))}
+                {messages.map((m, i) => {
+                  // v6.2 Part 5 (P1-9 fix): when isTyping is true, the last
+                  // assistant message has empty content + no tool results.
+                  // The TypingIndicator (rendered below) handles that state
+                  // — skip rendering the empty bubble here so the user
+                  // doesn't see an empty bubble + typing dots stacked
+                  // (industry-standard: only the typing indicator).
+                  if (
+                    isTyping &&
+                    i === messages.length - 1 &&
+                    m.role === "assistant" &&
+                    !m.content &&
+                    (!m.toolResults || m.toolResults.length === 0)
+                  ) {
+                    return null;
+                  }
+                  return (
+                    <MessageRow
+                      key={m.id ?? `m${i}`}
+                      message={m}
+                      isStreaming={
+                        loading &&
+                        m.role === "assistant" &&
+                        i === messages.length - 1 &&
+                        !!m.content
+                      }
+                      isLast={i === messages.length - 1}
+                      onRegenerate={regenerate}
+                      onPickFollowup={send}
+                      disabled={loading}
+                      onClose={onClose}
+                    />
+                  );
+                })}
                 {isTyping && <TypingIndicator />}
                 {activeToolCalls.length > 0 && <ToolCallChips calls={activeToolCalls} />}
                 {error && (
@@ -451,14 +499,38 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
             maxLength={INPUT_MAX_LENGTH}
             aria-label="Type your message"
           />
-          <button
-            type="submit"
-            disabled={!input.trim() || loading}
-            className="h-9 w-9 shrink-0 rounded-xl bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed hover:bg-primary/90 active:scale-95 transition-all shadow-sm"
-            aria-label="Send message"
-          >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </button>
+          {/* v6.2 Part 5 (P1-6): Stop button while streaming.
+              Industry standard (ChatGPT, Claude, Gemini): when the AI is
+              generating, the Send button morphs into a Stop button.
+              Clicking it aborts the in-flight stream via `stop()` from
+              useAiChat — the partial response is kept (so the user sees
+              what was generated), and empty bubbles are auto-removed by
+              the hook's finally block.
+
+              Visual: a filled square (the universal "Stop" affordance)
+              inside the same button shape — keeps muscle memory + layout
+              stable. The button is intentionally NOT disabled (otherwise
+              the user can't click it). aria-label announces the action. */}
+          {loading ? (
+            <button
+              type="button"
+              onClick={stop}
+              className="h-9 w-9 shrink-0 rounded-xl bg-foreground text-background flex items-center justify-center hover:bg-foreground/90 active:scale-95 transition-all shadow-sm"
+              aria-label="Stop generating"
+              title="Stop generating"
+            >
+              <Square className="h-3.5 w-3.5" fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!input.trim()}
+              className="h-9 w-9 shrink-0 rounded-xl bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed hover:bg-primary/90 active:scale-95 transition-all shadow-sm"
+              aria-label="Send message"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          )}
         </form>
         <div className="flex items-center justify-between mt-2 px-1">
           <p className="text-[10px] text-muted-foreground/60">
@@ -485,17 +557,79 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
 function MessageRow({
   message,
   isStreaming,
+  isLast,
+  onRegenerate,
   onPickFollowup,
   disabled,
   onClose,
 }: {
   message: ChatMessage;
   isStreaming: boolean;
+  /**
+   * v6.2 Part 5 (P1-7): true if this is the last message in the list.
+   * Used to gate the Regenerate button — only available on the last
+   * assistant message (regenerating mid-history would invalidate
+   * every message after it, which is confusing UX).
+   */
+  isLast: boolean;
+  /**
+   * v6.2 Part 5 (P1-7): callback to regenerate this assistant message.
+   * The hook finds the user message preceding this one, removes both,
+   * and re-sends the user message. The hook guards against concurrent
+   * calls (loadingRef.current check).
+   */
+  onRegenerate: (messageId: number | string) => void;
   onPickFollowup: (s: string) => void;
   disabled?: boolean;
   onClose?: () => void;
 }) {
   const isUser = message.role === "user";
+
+  // v6.2 Part 5 (P1-8): copy-to-clipboard state.
+  // 'idle' | 'copying' | 'copied' — 'copied' shows ✓ for 1.5s, then reverts.
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "copied">("idle");
+
+  const handleCopy = async () => {
+    if (copyStatus !== "idle") return;
+    setCopyStatus("copying");
+    const text = message.content;
+    try {
+      // Preferred: async Clipboard API. Works in secure contexts (HTTPS,
+      // localhost). Permissionless for plain text.
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // Fallback: legacy execCommand('copy'). Works in older browsers
+        // + insecure contexts (HTTP, file://). Creates a hidden textarea,
+        // selects, copies, removes.
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      setCopyStatus("copied");
+      // Revert to idle after 1.5s — same timing as the add-to-cart ✓ flash.
+      window.setTimeout(() => setCopyStatus("idle"), 1500);
+    } catch {
+      setCopyStatus("idle");
+      // No toast — the click feedback (no ✓) signals failure. Industry
+      // standard (ChatGPT) just silently fails; clipboard may be locked.
+    }
+  };
+
+  // v6.2 Part 5 (P1-7): regenerate handler. Passes the message id to the
+  // hook. The hook handles the find-remove-resend flow + the loadingRef
+  // guard. We don't need a local loading state — the hook flips `loading`
+  // which disables the action row via the `disabled` prop.
+  const handleRegenerate = () => {
+    if (disabled || isStreaming || !message.id) return;
+    onRegenerate(message.id);
+  };
 
   // ─── Parse the AI response ─────────────────────────────────────────
   if (isUser) {
@@ -613,6 +747,57 @@ function MessageRow({
         {/* v1.5: Feedback buttons */}
         {!isStreaming && typeof message.id === "number" && (
           <FeedbackButtons messageId={message.id} />
+        )}
+
+        {/* v6.2 Part 5 (P1-7 + P1-8): Copy + Regenerate action row.
+            Industry standard (ChatGPT, Claude, Gemini): hover-style
+            action buttons appear under each assistant message. Copy
+            duplicates the raw markdown text to the clipboard; Regenerate
+            re-runs the LLM for the same prompt (only available on the
+            LAST assistant message — regenerating mid-history would
+            invalidate everything after it).
+
+            Both buttons are disabled while streaming (isStreaming) or
+            when the global `disabled` prop is set (during another
+            send/stop in flight). The disabled visual is muted opacity
+            + not-allowed cursor. */}
+
+        {!isStreaming && (
+          <div className="flex items-center gap-0.5 mt-1 -ml-1">
+            {/* Copy button */}
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={copyStatus !== "idle" || disabled}
+              className="p-1.5 rounded-md text-muted-foreground/70 hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title={copyStatus === "copied" ? "Copied!" : "Copy message"}
+              aria-label={
+                copyStatus === "copied" ? "Copied to clipboard" : "Copy message to clipboard"
+              }
+            >
+              {copyStatus === "copied" ? (
+                <Check className="h-3.5 w-3.5 text-success" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+            </button>
+
+            {/* Regenerate button — only on the LAST assistant message.
+                Mid-history regeneration is intentionally not supported
+                (would invalidate everything after). Industry standard. */}
+            {isLast && (
+              <button
+                type="button"
+                onClick={handleRegenerate}
+                disabled={disabled}
+                className="p-1.5 rounded-md text-muted-foreground/70 hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                title="Regenerate response"
+                aria-label="Regenerate this response"
+              >
+                <RotateCw className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

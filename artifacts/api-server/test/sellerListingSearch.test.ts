@@ -90,6 +90,9 @@ describe("sellerListingSearch module interface", () => {
       warrantyDays: null,
       paymentMethod: "cod",
       certification: null,
+      // v6.2 Part 4 (Bug 1 fix): new required field. NULL when both the
+      // seller-listing and product image arrays are empty.
+      productImage: null,
       variants: [],
       hasInStockVariant: false,
       hasPreOrderVariant: false,
@@ -180,10 +183,13 @@ describe("ToolContext: v6.1 userCity/userDistrict fields", () => {
 describe("executeTool: search_seller_listings routing (source-shape)", () => {
   it("the executeTool switch includes a case for search_seller_listings", async () => {
     const fs = await import("node:fs");
-    const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/aiTools.ts",
-      "utf8",
-    );
+    const path = await import("node:path");
+    // v6.2 Part 4: replaced hardcoded absolute path with a repo-relative
+    // resolve so the test runs in any checkout location (CI, fresh clone,
+    // different developer machine). Previously the test hardcoded
+    // "/home/z/my-project/repos/Trees-friend-/..." which only worked on
+    // one developer's machine.
+    const source = fs.readFileSync(path.resolve(__dirname, "../src/lib/aiTools.ts"), "utf8");
     // The switch must include a case for search_seller_listings that calls
     // searchSellerListings with the right arg-mapping.
     expect(source).toContain('case "search_seller_listings":');
@@ -197,8 +203,10 @@ describe("executeTool: search_seller_listings routing (source-shape)", () => {
 describe("ACTIVE_LISTING_FILTER (v6.1 bug fix verification)", () => {
   it("sellerListingSearch.ts uses the canonical filter (no deleted_at, no is_active)", async () => {
     const fs = await import("node:fs");
+    const path = await import("node:path");
+    // v6.2 Part 4: same path-portability fix as above.
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/sellerListingSearch.ts",
+      path.resolve(__dirname, "../src/lib/sellerListingSearch.ts"),
       "utf8",
     );
     // The new module must use the canonical buyer-facing filter (visibility

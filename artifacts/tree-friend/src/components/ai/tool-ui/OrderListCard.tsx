@@ -62,13 +62,51 @@ function OrderRow({ order, onClose }: { order: OrderItem; onClose?: () => void }
   const itemsSummary = order.items?.slice(0, 2).join(", ") ?? "";
   const extraCount = (order.items?.length ?? 0) - 2;
 
+  // v6.2 Part 5 (P1-10): keyboard accessibility.
+  // The row was a clickable <div> with no role/tabIndex/onKeyDown —
+  // keyboard users couldn't activate it. Now it's a proper button-like
+  // element: role="button", tabIndex=0 (focusable in DOM order), and
+  // Enter/Space triggers the same navigation as a click.
+  //
+  // Industry standard (WAI-ARIA Authoring Practices for list-of-links):
+  //   - role="button" (NOT "link" — this is a JS-driven navigation, not a
+  //     real <a>; the URL doesn't change in the address bar on focus)
+  //   - tabIndex={0} (reachable via Tab key)
+  //   - onKeyDown handles Enter + Space (the two activation keys per
+  //     WAI-ARIA — Space is the standard for buttons, Enter for both)
+  //   - aria-label describes the destination for screen readers
+  //
+  // We DON'T use a real <button> here because the row contains a flex
+  // layout with multiple interactive children — a <button> can't legally
+  // contain other interactive elements per the HTML spec. The role="button"
+  // pattern is the WAI-ARIA sanctioned workaround.
+  const handleNavigate = () => {
+    onClose?.();
+    navigate(`/orders/${order.order_number}`);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Enter OR Space activates — both are standard per WAI-ARIA APG.
+    // preventDefault on Space to stop the page from scrolling (default
+    // Space behavior when focus is on a non-form element).
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      handleNavigate();
+    }
+  };
+
   return (
     <div
-      className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted/30 transition-colors cursor-pointer"
-      onClick={() => {
-        onClose?.();
-        navigate(`/orders/${order.order_number}`);
-      }}
+      role="button"
+      tabIndex={0}
+      onClick={handleNavigate}
+      onKeyDown={handleKeyDown}
+      // Comprehensive aria-label so screen readers announce the row's
+      // content as a single action — without this, the row would be
+      // announced as a confusing sequence of "#123, delivered, 2 items,
+      // ৳1,200, Aug 12" without the context that it's clickable.
+      aria-label={`View order ${order.order_number}, status ${order.status}, total ${formatPrice(order.total)}, placed ${formatDate(order.date)}`}
+      className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted/30 focus-visible:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset transition-colors cursor-pointer"
     >
       {/* Icon */}
       <div className="h-8 w-8 rounded bg-primary/10 flex items-center justify-center flex-shrink-0">
