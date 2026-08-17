@@ -300,7 +300,11 @@ describe("v6.1 Part 3: chat route auto-calls search_seller_listings for PURCHASE
     expect(source).toContain('intentClassification.intent === "PURCHASE"');
     expect(source).toContain('intentClassification.intent === "MIXED"');
     expect(source).toContain("await searchSellerListings(");
-    expect(source).toContain("formatSellerListingContextForPrompt(listingSearchResult.listings)");
+    // v6.1 Part 4: formatSellerListingContextForPrompt now takes 2 args
+    // (listings + careSummary). The old single-arg call is updated.
+    expect(source).toContain("formatSellerListingContextForPrompt(");
+    expect(source).toContain("listingSearchResult.listings");
+    expect(source).toContain("listingSearchResult.careSummary");
   });
 
   it("the chat route passes listingsBlock to renderPromptTemplate + buildSystemPrompt", async () => {

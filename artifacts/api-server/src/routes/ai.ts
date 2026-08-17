@@ -1393,7 +1393,21 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // The unified config now uses 5 for both paths — no need for the explicit
   // arg. The tool declaration's max_results description tells the LLM that
   // the auto-injected block also returns up to 5 entries.
-  const kbContext = await getTopKbEntriesForPrompt(safeMessage);
+  //
+  // v6.1 Part 4: for MIXED intent, we SKIP this KB auto-inject — the
+  // search_seller_listings call below (with careSummary=true) fetches a
+  // 1-line care summary in the SAME tool response. This saves ~1500
+  // tokens of redundant KB context per MIXED query (5 entries × ~300
+  // chars each vs. 1 line × ~200 chars).
+  //
+  // For KNOWLEDGE + PURCHASE + GREETING intent, KB auto-inject runs as
+  // usual (KNOWLEDGE needs the full 5 entries; PURCHASE + GREETING
+  // typically return nothing — KB content is care-focused, doesn't
+  // match pure purchase/greeting queries).
+  const skipKbAutoInject = intentClassification.intent === "MIXED";
+  const kbContext = skipKbAutoInject
+    ? { injected: false, entries: [], toneCreator: null }
+    : await getTopKbEntriesForPrompt(safeMessage);
   const knowledgeBlock = kbContext.injected ? formatKbContextForPrompt(kbContext.entries) : "";
   if (kbContext.injected) {
     logger.info(
@@ -1403,6 +1417,11 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
         entryIds: kbContext.entries.map((e) => e.entry.id),
       },
       "AI: KB context injected into prompt",
+    );
+  } else if (skipKbAutoInject) {
+    logger.info(
+      { intent: intentClassification.intent },
+      "AI: KB auto-inject skipped for MIXED intent (v6.1 Part 4 — care summary will be in the listings tool response)",
     );
   }
 
@@ -1432,7 +1451,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     }
   }
 
-  // ─── v6.1 Part 3: Auto-call search_seller_listings for PURCHASE/MIXED intent ──
+  // ─── v6.1 Part 3+4: Auto-call search_seller_listings for PURCHASE/MIXED intent ──
   // Mirrors the getTopKbEntriesForPrompt auto-inject pattern (above). When
   // the intent classifier detects PURCHASE or MIXED intent, we pre-call
   // search_seller_listings so the LLM has the listings upfront — no
@@ -1443,23 +1462,37 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // returns nothing because PURCHASE queries don't match care-info keywords.
   // The KB block is empty, the listings block has the purchasable items.
   //
-  // MIXED intent: BOTH blocks are populated. KB has care info, listings has
-  // purchasable items. The LLM uses both (care answer + buy link).
+  // MIXED intent: KB auto-inject is SKIPPED (see skipKbAutoInject above) +
+  // the listings call passes careSummary=true, which fetches a 1-line KB
+  // care summary in the SAME response. The listings block (with care summary
+  // prepended) replaces both the KB block AND the listings block.
+  //   - Token savings: ~1500 tokens (5 KB entries × ~300 chars vs 1 line × ~200 chars)
+  //   - Latency savings: ~50ms (no separate KB DB call)
+  //   - LLM still has care info (1 line) + listings (5 items) — enough for
+  //     a "buy this + here's how to care for it" response.
   //
   // KNOWLEDGE intent: listings block is skipped (no point injecting listings
   // if the user just wants care info). The LLM can still call the
   // search_seller_listings tool on-demand if the user follows up with a
   // purchase question.
   let listingsBlock = "";
-  if (intentClassification.intent === "PURCHASE" || intentClassification.intent === "MIXED") {
+  const isMixedIntent = intentClassification.intent === "MIXED";
+  if (intentClassification.intent === "PURCHASE" || isMixedIntent) {
     try {
       const listingSearchResult = await searchSellerListings({
         query: safeMessage,
         userCity: buyerLocation?.city ?? null,
         userDistrict: buyerLocation?.district ?? null,
+        // v6.1 Part 4: for MIXED intent, also fetch a 1-line care summary
+        // in the same response. For PURCHASE intent, skip (user doesn't
+        // want care info).
+        careSummary: isMixedIntent,
       });
       if (listingSearchResult.listings.length > 0) {
-        listingsBlock = formatSellerListingContextForPrompt(listingSearchResult.listings);
+        listingsBlock = formatSellerListingContextForPrompt(
+          listingSearchResult.listings,
+          listingSearchResult.careSummary,
+        );
         logger.info(
           {
             intent: intentClassification.intent,
@@ -1467,8 +1500,10 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
             totalCount: listingSearchResult.totalCount,
             listingIds: listingSearchResult.listings.map((l) => l.listingId),
             buyerDistrict: buyerLocation?.district ?? null,
+            careSummaryIncluded: listingSearchResult.careSummary !== null,
+            careSummarySource: listingSearchResult.careSummary?.sourceTitle ?? null,
           },
-          "AI: seller-listing context injected into prompt (v6.1 Part 3 auto-call)",
+          "AI: seller-listing context injected into prompt (v6.1 Part 3+4 auto-call)",
         );
       } else {
         logger.info(

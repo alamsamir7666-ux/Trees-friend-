@@ -862,6 +862,21 @@ export function formatSellerListingContextForPrompt(
       isPreOrder: boolean;
     }[];
   }[],
+  /**
+   * v6.1 Part 4: optional 1-line KB care summary. When present (MIXED
+   * intent), this is prepended to the listing context block so the LLM
+   * can give the user "buy this + here's how to care for it" in one
+   * response — without a separate KB auto-inject DB call.
+   *
+   * Format: { content: string (≤200 chars), entryId?, sourceTitle? }
+   * Null when careSummary wasn't requested (PURCHASE intent) OR the KB
+   * search returned no high-confidence matches.
+   */
+  careSummary?: {
+    content: string;
+    entryId?: number;
+    sourceTitle?: string;
+  } | null,
 ): string {
   if (!listings || listings.length === 0) return "";
 
@@ -870,6 +885,20 @@ export function formatSellerListingContextForPrompt(
     "For each listing you recommend, cite it using the format [[listing:<id>|<display>]] where <id> is the listingId and <display> is a short label (e.g. [[listing:42|Alphonso Mango — 3ft sapling, 450 BDT]]). The frontend will deep-link this to the SellerListingDetailPage where the user can add to cart.",
     "",
   ];
+
+  // v6.1 Part 4: prepend the 1-line care summary if present (MIXED intent).
+  // The LLM is instructed to use this as a brief care tip in the response —
+  // saves a separate KB auto-inject DB call + ~1500 tokens of redundant
+  // context.
+  if (careSummary && careSummary.content) {
+    lines.push(
+      `CARE SUMMARY (1-line KB excerpt — include this in your response as a brief care tip alongside the buy recommendation): ${careSummary.content}`,
+    );
+    if (careSummary.sourceTitle) {
+      lines.push(`  (source: ${careSummary.sourceTitle})`);
+    }
+    lines.push("");
+  }
 
   for (const l of listings) {
     const inStockLabel = l.hasInStockVariant

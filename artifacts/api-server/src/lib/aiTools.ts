@@ -347,7 +347,11 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       '"I want to buy a mango sapling", "where can I get a mango tree", ' +
       '"price of mango sapling", "available near me", etc. ' +
       "For each listing you recommend, emit the citation format " +
-      "[[listing:<id>|<display>]] — the frontend will deep-link to the listing detail page.",
+      "[[listing:<id>|<display>]] — the frontend will deep-link to the listing detail page. " +
+      "v6.1 Part 4: pass care_summary=true to ALSO fetch a 1-line KB care " +
+      "summary in the same response (saves a separate search_knowledge_base call). " +
+      "Use this for MIXED-intent queries where the user wants both care info AND " +
+      "buyable listings (e.g. 'buy a mango sapling and how to care for it').",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -377,6 +381,14 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
           description:
             "Maximum listings to return (default 5, max 8). Each listing includes " +
             "up to 3 cheapest variants. Higher limits = more options but more tokens.",
+        },
+        care_summary: {
+          type: Type.BOOLEAN,
+          description:
+            "v6.1 Part 4: when true, also fetch a 1-line KB care summary (max ~200 chars) " +
+            "from the top knowledge-base entry + include it as 'careSummary' in the response. " +
+            "Use this for MIXED-intent queries where the user wants both care info AND buyable listings. " +
+            "The chat route auto-passes this for MIXED intent — you usually don't need to set it manually.",
         },
       },
       required: ["query"],
@@ -461,6 +473,8 @@ export async function executeTool(
         // the search can sort by distance. Null for anonymous users → no
         // distance sort (just rating + price). See loadBuyerLocation in
         // routes/ai.ts for the privacy rationale.
+        // v6.1 Part 4: pass careSummary if the LLM requested it (or if the
+        // chat route auto-passes it for MIXED intent — see routes/ai.ts).
         return await searchSellerListings({
           query: typeof args.query === "string" ? args.query : "",
           max_price: typeof args.max_price === "number" ? args.max_price : undefined,
@@ -468,6 +482,7 @@ export async function executeTool(
           limit: typeof args.limit === "number" ? args.limit : undefined,
           userCity: context?.userCity ?? null,
           userDistrict: context?.userDistrict ?? null,
+          careSummary: args.care_summary === true,
         });
       default:
         logger.warn({ name }, "AI tool: unknown function called");

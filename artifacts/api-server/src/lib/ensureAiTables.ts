@@ -982,6 +982,36 @@ export async function ensureAiTables(): Promise<void> {
       );
     }
 
+    // ─── v6.1 Part 4: seed prompt v1.2.0 (careSummary for MIXED intent) ───
+    // Same text as v1.1.0 (SYSTEM_PROMPT_TEMPLATE_V1 is the single source
+    // of truth — the version bump signals the new careSummary flag on the
+    // search_seller_listings tool + the chat route's MIXED-intent skip of
+    // the KB auto-inject.
+    //
+    // The chat route's auto-call passes careSummary=true for MIXED intent,
+    // fetching a 1-line KB care summary in the SAME tool response — saves
+    // ~1500 tokens of redundant KB context per MIXED query.
+    try {
+      const { SYSTEM_PROMPT_TEMPLATE_V1 } = await import("./aiContext");
+      await pool.query(
+        `INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
+         SELECT $1, $2, $3, FALSE, $4
+         WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = $1)`,
+        [
+          "1.2.0",
+          SYSTEM_PROMPT_TEMPLATE_V1,
+          "v6.1 Part 4: search_seller_listings tool now accepts care_summary=true (returns 1-line KB care summary in same response). Chat route auto-passes this for MIXED intent + SKIPS the separate KB auto-inject (saves ~1500 tokens per MIXED query).",
+          "system",
+        ],
+      );
+    } catch (seedErr) {
+      // Non-fatal.
+      logger.warn(
+        { err: seedErr },
+        "AI: failed to seed prompt v1.2.0 (admin can create manually via UI)",
+      );
+    }
+
     // ─── Phase 1: Knowledge Base seed data ────────────────────────────────
     // Seed one default creator ("Manual") + three root categories so the
     // admin UI has something to show on first load. Idempotent via

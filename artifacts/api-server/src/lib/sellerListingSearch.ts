@@ -68,6 +68,12 @@ import { logger } from "./logger";
 // from the buyer's district. Replaces the v1 same-district heuristic with
 // a real geographic distance calculation across all 64 Bangladesh districts.
 import { extractDistrictFromLocation, distanceBetweenDistricts } from "./bangladeshDistricts";
+// v6.1 Part 4: when careSummary=true, the search also fetches the top KB
+// entry (1 result, higher threshold, skip reranker for speed) and includes
+// a 1-line care summary in the response. Used for MIXED-intent queries —
+// saves a separate KB auto-inject call (~50ms + ~1500 tokens of redundant
+// context per MIXED query).
+import { searchKnowledgeBase } from "./kbSearch";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -120,6 +126,25 @@ export interface SellerListingSearchResult {
   buyerCity: string | null;
   /** The buyer's district (for transparency). */
   buyerDistrict: string | null;
+  /**
+   * v6.1 Part 4: 1-line KB care summary, included when careSummary=true
+   * was passed to the search params. Null when:
+   *   - careSummary was not requested (PURCHASE intent — no need).
+   *   - The KB search returned no high-confidence matches (minScore 0.5).
+   *   - The KB search itself errored (fail-safe — listings still returned).
+   *
+   * The LLM uses this for MIXED-intent responses — the user gets a
+   * one-line "how to care for it" alongside the buyable listings, in
+   * ONE tool response (no separate KB auto-inject needed).
+   */
+  careSummary?: {
+    /** The truncated care-info text (max ~200 chars). */
+    content: string;
+    /** The KB entry ID (for the LLM's reference; not surfaced to the user). */
+    entryId?: number;
+    /** The KB source title (e.g. "Mango Sapling Care — Summer Watering"). */
+    sourceTitle?: string;
+  } | null;
   /** Set when the search errored gracefully. */
   error?: string;
 }
@@ -147,6 +172,32 @@ export interface SellerListingSearchParams {
   userCity?: string | null;
   /** Buyer's district. Null for anonymous users. */
   userDistrict?: string | null;
+  /**
+   * v6.1 Part 4: when true, the search ALSO fetches the top KB entry
+   * (1 result, higher threshold 0.5, skip reranker for speed) and
+   * includes it as `careSummary` in the result.
+   *
+   * Used by the chat route for MIXED-intent queries — the user wants
+   * BOTH care info AND buyable listings. Without this flag, the chat
+   * route would need TWO separate DB calls:
+   *   1. getTopKbEntriesForPrompt() → 5 KB entries (~1500 tokens, ~50ms)
+   *   2. searchSellerListings() → 5 listings (~500 tokens, ~30ms)
+   *
+   * With careSummary=true, ONE call returns:
+   *   - 5 listings (~500 tokens)
+   *   - 1-line care summary (~30 tokens)
+   * Total: ~530 tokens (4x reduction) + ~30ms saved (no separate KB call).
+   *
+   * The care summary uses NON-UNIFIED retrieval params (maxResults=1,
+   * minScore=0.5, skipRerank=true) — this is intentional + documented
+   * (see the BUG-I1 "unified retrieval contract" comment in kbSearch.ts).
+   * The unified params (5 entries, minScore 0.3, reranked) are for
+   * KNOWLEDGE-intent queries where the user wants 5 detailed articles.
+   * The careSummary is a DIFFERENT semantic — "give me 1 quick line to
+   * accompany these listings" — so a higher threshold + 1 result is
+   * appropriate. We're trading recall for precision + speed.
+   */
+  careSummary?: boolean;
 }
 
 /**
@@ -412,12 +463,68 @@ export async function searchSellerListings(
       }
     }
 
+    // ─── v6.1 Part 4: fetch care summary if requested ────────────────────
+    // When careSummary=true (MIXED intent), we fetch the top KB entry
+    // (1 result, higher threshold 0.5, skip reranker for speed) and
+    // include it as a 1-line care summary in the result. The LLM uses
+    // this to give the user "buy this + here's how to care for it" in
+    // ONE response, without a separate KB auto-inject DB call.
+    //
+    // Fail-safe: if the KB search errors OR returns nothing, careSummary
+    // is null. The listings are still returned — the LLM can fall back
+    // to its training data for care info (or the user can ask a follow-up
+    // KNOWLEDGE question which triggers the existing KB auto-inject path).
+    let careSummary: SellerListingSearchResult["careSummary"] = null;
+    if (params.careSummary === true && truncated.length > 0) {
+      try {
+        // Use the ORIGINAL (non-lowercased) query for KB search — the KB
+        // content is in mixed case, and searchKnowledgeBase's tsvector
+        // handles case normalization internally. Passing the lowercased
+        // query would lose case-sensitive proper nouns (e.g. "Alphonso").
+        const originalQuery = (params.query ?? "").trim();
+        const kbResults = await searchKnowledgeBase({
+          query: originalQuery,
+          maxResults: 1,
+          minScore: 0.5, // higher than UNIFIED_MIN_SCORE (0.3) — we want only high-confidence care info
+          skipRerank: true, // skip the reranker (saves ~50ms) — we just need 1 entry, not the perfect one
+        });
+        if (kbResults.length > 0) {
+          const top = kbResults[0];
+          // Truncate to ~200 chars (sentence boundary preferred).
+          const CARE_SUMMARY_MAX_CHARS = 200;
+          let content = top.entry.content.trim();
+          if (content.length > CARE_SUMMARY_MAX_CHARS) {
+            // Try to cut at a sentence boundary (period + space).
+            const cut = content.lastIndexOf(".", CARE_SUMMARY_MAX_CHARS);
+            content =
+              cut > CARE_SUMMARY_MAX_CHARS - 50
+                ? content.slice(0, cut + 1)
+                : content.slice(0, CARE_SUMMARY_MAX_CHARS).trim() + "…";
+          }
+          careSummary = {
+            content,
+            entryId: top.entry.id,
+            sourceTitle: top.source?.title,
+          };
+        }
+      } catch (err) {
+        // Non-fatal — the listings are still returned. The LLM can fall
+        // back to its training data for care info, OR the user can ask a
+        // follow-up KNOWLEDGE question which triggers the existing KB path.
+        logger.warn(
+          { err: (err as Error)?.message ?? String(err), query: query.slice(0, 80) },
+          "sellerListingSearch: careSummary KB fetch failed (non-fatal — listings still returned)",
+        );
+      }
+    }
+
     return {
       listings: truncated,
       totalCount: ranked.length,
       query,
       buyerCity,
       buyerDistrict,
+      careSummary,
     };
   } catch (err) {
     logger.error(
