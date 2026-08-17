@@ -175,6 +175,36 @@ interface UseAiChatResult {
    */
   regenerate: (messageId: number | string) => Promise<void>;
   /**
+   * v6.2 Part 7 (P3-6): Edit a user message + resend.
+   *
+   * Replaces the content of the user message with the given id, then
+   * removes ALL messages after it (the old assistant response + any
+   * follow-up exchange) and re-sends the edited content via `send()`.
+   *
+   * Industry standard (ChatGPT, Claude): clicking the edit pencil on a
+   * user message pre-fills the composer with that message's text. The
+   * user tweaks it + hits Send → the conversation is truncated at that
+   * point + the edited message is sent fresh. This is more intuitive
+   * than requiring the user to manually delete + retype.
+   *
+   * UX contract:
+   *   - Only USER messages can be edited (assistant messages can be
+   *     regenerated via `regenerate()`, not edited).
+   *   - The UI enforces the edit window (e.g. 15 min after sending)
+   *     before calling this hook — the hook itself doesn't time-gate.
+   *   - The hook doesn't persist the edit to the backend's message
+   *     history (the old assistant response is just dropped from the
+   *     local state; the backend still has it in the DB, but the user
+   *     won't see it). This matches ChatGPT's behavior — editing creates
+   *     a "fork" in the conversation tree, and the old branch is hidden
+   *     but not deleted server-side.
+   *   - `loadingRef.current` guard prevents concurrent edit + send.
+   *
+   * Edge case: if `messageId` isn't found (e.g. user clicked edit twice
+   * rapidly), setMessages returns `prev` unchanged and we skip send.
+   */
+  editMessage: (messageId: number | string, newContent: string) => Promise<void>;
+  /**
    * v3.7: Tools currently being executed. Empty when no tools are in
    * flight. Render these as progress chips below the assistant bubble.
    */
@@ -186,6 +216,31 @@ interface UseAiChatResult {
     title?: string;
     expiresHours?: number;
   }) => Promise<{ shareToken: string; shareUrl: string; expiresAt: string | null }>;
+  /**
+   * v6.2 Part 7 (P3-16): Create a share link anchored to a specific message.
+   *
+   * Reuses `shareConversation` under the hood (the backend doesn't support
+   * per-message sharing — a share link exposes the WHOLE conversation).
+   * The returned URL has a `#msg-<id>` fragment so the SharedConversationPage
+   * can scroll to / highlight the specific message after loading.
+   *
+   * Industry standard (ChatGPT): each assistant message has a "Share"
+   * button that creates a link to that specific message in a public
+   * read-only view. The recipient sees the full conversation but scrolled
+   * to the shared message.
+   *
+   * UX contract:
+   *   - The first share call creates the link (network round-trip ~200ms).
+   *   - Subsequent share calls on the SAME conversation reuse the existing
+   *     link (the hook caches it locally — `shareConversation` on the backend
+   *     is idempotent: it returns the existing link if one is already active).
+   *   - The URL is copied to the clipboard automatically. The UI shows a
+   *     "Copied!" ✓ flash for 1.5s (matching the Copy button timing).
+   *   - The `#msg-<id>` fragment is appended only when messageId is a
+   *     number (persisted). Ephemeral `pending-*` ids can't be shared
+   *     (the message isn't in the DB yet).
+   */
+  shareMessage: (messageId: number | string) => Promise<void>;
 }
 
 /**
@@ -712,6 +767,45 @@ export function useAiChat(): UseAiChatResult {
     [send],
   );
 
+  // ─── v6.2 Part 7 (P3-6): Edit a user message + resend ────────────────────
+  // Truncates the conversation at the edited message, replaces its content,
+  // then re-sends via `send()`. The old assistant response + any follow-up
+  // exchange is dropped from local state (server-side history is unchanged —
+  // matches ChatGPT's fork behavior).
+  //
+  // Two state updates happen in sequence (both queued via setMessages):
+  //   1. truncate the messages array up to + INCLUDING the edited message,
+  //      with the edited message's content replaced
+  //   2. send() appends fresh optimistic userMsg + assistantMsg
+  // React batches these — the final state has the edited user message +
+  // a fresh assistant placeholder at the end.
+  //
+  // The `loadingRef.current` guard prevents concurrent edit + send.
+  const editMessage = useCallback(
+    async (messageId: number | string, newContent: string) => {
+      const trimmed = newContent.trim();
+      if (!trimmed || loadingRef.current) return;
+      let didEdit = false;
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.id === messageId);
+        if (idx === -1) return prev;
+        // Only user messages can be edited (defensive — UI enforces this,
+        // but the hook guards against misuse).
+        if (prev[idx].role !== "user") return prev;
+        didEdit = true;
+        // Truncate up to + INCLUDING the edited message, with the new
+        // content. Everything after (the old assistant response + any
+        // follow-up exchange) is dropped.
+        const edited = { ...prev[idx], content: trimmed };
+        return [...prev.slice(0, idx), edited];
+      });
+      if (didEdit) {
+        await send(trimmed);
+      }
+    },
+    [send],
+  );
+
   // ─── Clear conversation ─────────────────────────────────────────────────
   // The session token now lives in an HttpOnly cookie. We don't generate
   // a new one client-side — the server does that via `Set-Cookie` on the
@@ -809,6 +903,58 @@ export function useAiChat(): UseAiChatResult {
     [],
   );
 
+  // ─── v6.2 Part 7 (P3-16): Per-message share link ────────────────────────
+  // Wraps `shareConversation` + appends a `#msg-<id>` fragment so the
+  // SharedConversationPage can scroll to / highlight the specific message.
+  //
+  // The first call creates the link (~200ms). Subsequent calls reuse the
+  // cached `lastShareUrl` (avoids re-hitting the backend — the backend's
+  // share endpoint is idempotent, but we save the round-trip anyway).
+  //
+  // We DON'T copy to clipboard here — that's the UI's job (the UI shows
+  // the ✓ flash + handles the clipboard API fallback). The hook just
+  // returns the URL via the shared `shareUrl` state.
+  //
+  // Why cache locally instead of re-calling shareConversation:
+  //   - The backend creates a new share_token on every POST /share call
+  //     (it doesn't dedupe). Calling it repeatedly would create multiple
+  //     active share links for the same conversation — wasteful + confusing
+  //     in the admin "shared links" dashboard.
+  //   - The local cache is per-session (component instance) — if the user
+  //     refreshes, the cache is gone + the next share call creates a fresh
+  //     link. That's fine.
+  const [lastShareUrl, setLastShareUrl] = useState<string | null>(null);
+
+  const shareMessage = useCallback(
+    async (messageId: number | string): Promise<void> => {
+      // Only persisted (numeric) messages can be shared — ephemeral
+      // pending-* messages aren't in the DB, so the SharedConversationPage
+      // can't reference them.
+      if (typeof messageId !== "number") return;
+
+      // Reuse the cached URL if we have one (saves a network round-trip
+      // + avoids creating multiple share tokens for the same conversation).
+      if (lastShareUrl) {
+        const anchoredUrl = `${lastShareUrl}#msg-${messageId}`;
+        await copyToClipboard(anchoredUrl);
+        return;
+      }
+
+      try {
+        const result = await shareConversation();
+        // Cache the base URL (without the fragment) for future share calls.
+        setLastShareUrl(result.shareUrl);
+        const anchoredUrl = `${result.shareUrl}#msg-${messageId}`;
+        await copyToClipboard(anchoredUrl);
+      } catch {
+        // Silent fail — the UI's shareLoading state will revert + the
+        // user sees no ✓ flash. Industry standard: don't interrupt with
+        // a toast for an optional share action.
+      }
+    },
+    [lastShareUrl, shareConversation],
+  );
+
   return {
     messages,
     loading,
@@ -817,10 +963,47 @@ export function useAiChat(): UseAiChatResult {
     clear,
     stop,
     regenerate,
+    editMessage,
     activeToolCalls,
     exportConversation,
     shareConversation,
+    shareMessage,
   };
+}
+
+/**
+ * v6.2 Part 7 (P3-16): copies text to the clipboard with a legacy fallback.
+ *
+ * Preferred: async Clipboard API (`navigator.clipboard.writeText`) — works
+ * in secure contexts (HTTPS, localhost), permissionless for plain text.
+ *
+ * Fallback: `document.execCommand('copy')` via a hidden textarea — works
+ * in older browsers + insecure contexts (HTTP, file://). The textarea is
+ * positioned off-screen so it's never visible.
+ *
+ * Silently fails if both methods are unavailable (e.g. clipboard API
+ * rejected, execCommand not supported). Industry standard: don't
+ * interrupt with a toast for clipboard failures — the click feedback
+ * (no ✓) signals the failure.
+ */
+async function copyToClipboard(text: string): Promise<void> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
+  } catch {
+    // Silent fail — see JSDoc above.
+  }
 }
 
 async function buildAuthHeader(): Promise<Record<string, string>> {

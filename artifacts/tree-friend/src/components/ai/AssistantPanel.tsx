@@ -55,6 +55,9 @@ import {
   Square,
   RotateCw,
   Copy,
+  // v6.2 Part 7 (P3-6): Pencil icon for editing user messages.
+  // Pencil is the industry-standard "Edit" affordance.
+  Pencil,
 } from "lucide-react";
 import { useAiChat, type ChatMessage, type ActiveToolCall } from "@/hooks/useAiChat";
 import { MarkdownText } from "./MarkdownText";
@@ -108,6 +111,8 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
     clear,
     stop,
     regenerate,
+    editMessage,
+    shareMessage,
     activeToolCalls,
     exportConversation,
     shareConversation,
@@ -121,6 +126,26 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
   // GET /sessions/current resolution. Previously the user saw EmptyState
   // even if they had prior history.
   const [historyLoading, setHistoryLoading] = useState(true);
+  // v6.2 Part 7 (P3-6): edit-mode state.
+  //
+  // When non-null, the composer is in "edit mode" for the user message
+  // with the given id. The textarea is pre-filled with that message's
+  // content, the Send button becomes a "Save" button, and a cancel
+  // affordance restores the original state.
+  //
+  // Industry standard (ChatGPT, Claude): clicking the pencil on a user
+  // message transforms the composer into an editor. Saving re-sends from
+  // that point (truncating everything after). This is more intuitive than
+  // requiring the user to manually delete + retype.
+  //
+  // The state holds { id, originalContent } so we can restore on cancel
+  // without re-reading from `messages` (which might have changed if the
+  // user navigated away — though they can't navigate within the chat
+  // sheet, the defensive copy is still safer).
+  const [editingMessage, setEditingMessage] = useState<{
+    id: number | string;
+    originalContent: string;
+  } | null>(null);
   // useAuth() doesn't expose `user` directly (only isSignedIn + userId).
   // useUser() returns the full user object (firstName, username, etc.).
   const { isSignedIn } = useAuth();
@@ -194,10 +219,60 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
     e.preventDefault();
     const text = input.trim();
     if (!text || loading) return;
+
+    // v6.2 Part 7 (P3-6): if we're in edit mode, save the edit instead of
+    // sending a new message. This routes the composer's current text to
+    // `editMessage(id, text)` which truncates + re-sends from that point.
+    if (editingMessage) {
+      const editId = editingMessage.id;
+      setEditingMessage(null);
+      setInput("");
+      await editMessage(editId, text);
+      return;
+    }
+
     setInput("");
     setIsAtBottom(true);
     await send(text);
   };
+
+  // v6.2 Part 7 (P3-6): start editing a user message.
+  //
+  // Pre-fills the composer with the message's content + focuses the
+  // textarea. The user can then tweak + hit Send (which calls
+  // `editMessage` via `handleSubmit`'s edit-mode branch) OR hit Esc
+  // / click Cancel to abort.
+  //
+  // Industry standard (ChatGPT, Claude): the composer transforms into
+  // an editor with a visible "editing" banner so the user knows
+  // they're editing, not composing new.
+  const handleStartEdit = useCallback(
+    (message: ChatMessage) => {
+      if (loading || message.role !== "user") return;
+      setEditingMessage({
+        id: message.id ?? Date.now(),
+        originalContent: message.content,
+      });
+      setInput(message.content);
+      // Focus the textarea on the next tick (after the input state
+      // has been applied). requestAnimationFrame avoids a flash of
+      // the old value.
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        // Select-all so the user can immediately retype or arrow-edit.
+        textareaRef.current?.select();
+      });
+    },
+    [loading],
+  );
+
+  // v6.2 Part 7 (P3-6): cancel edit mode — restore the original input
+  // state (empty composer, no editing banner).
+  const handleCancelEdit = useCallback(() => {
+    setEditingMessage(null);
+    setInput("");
+    textareaRef.current?.focus();
+  }, []);
 
   const handleClear = async () => {
     if (loading) return;
@@ -487,6 +562,9 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
                       }
                       isLast={i === messages.length - 1}
                       onRegenerate={regenerate}
+                      onStartEdit={handleStartEdit}
+                      isEditing={editingMessage?.id === m.id}
+                      onShareMessage={shareMessage}
                       onPickFollowup={send}
                       disabled={loading}
                       onClose={onClose}
@@ -523,6 +601,26 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
 
       {/* ─── Composer ────────────────────────────────────────────────── */}
       <div className="border-t bg-background p-3">
+        {/* v6.2 Part 7 (P3-6): Edit-mode banner.
+            When editingMessage is set, show a banner above the composer
+            announcing "Editing message" with a Cancel button. This matches
+            the ChatGPT/Claude pattern — the user knows they're editing,
+            not composing new, and can abort. */}
+        {editingMessage && (
+          <div className="mb-2 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/5 border border-primary/20 text-xs">
+            <Pencil className="h-3 w-3 text-primary flex-shrink-0" />
+            <span className="text-primary font-medium flex-1">Editing message</span>
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="Cancel edit"
+              title="Cancel (Esc)"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
         <form
           onSubmit={handleSubmit}
           className="flex items-end gap-2 bg-muted/40 rounded-2xl border border-border focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20 transition-all px-3 py-2"
@@ -532,17 +630,25 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
+              // v6.2 Part 7 (P3-6): Esc cancels edit mode.
+              // Industry standard (ChatGPT, Claude): Esc aborts the edit
+              // and restores the original composer state.
+              if (e.key === "Escape" && editingMessage) {
+                e.preventDefault();
+                handleCancelEdit();
+                return;
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 handleSubmit(e as unknown as FormEvent);
               }
             }}
             rows={1}
-            placeholder="Ask about plants, care, gardening…"
+            placeholder={editingMessage ? "Edit your message…" : "Ask about plants, care, gardening…"}
             disabled={loading}
             className="flex-1 resize-none bg-transparent border-0 outline-none text-sm placeholder:text-muted-foreground/60 disabled:opacity-60 max-h-[120px] py-1"
             maxLength={INPUT_MAX_LENGTH}
-            aria-label="Type your message"
+            aria-label={editingMessage ? "Edit your message" : "Type your message"}
           />
           {/* v6.2 Part 5 (P1-6): Stop button while streaming.
               Industry standard (ChatGPT, Claude, Gemini): when the AI is
@@ -571,9 +677,13 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
               type="submit"
               disabled={!input.trim()}
               className="h-9 w-9 shrink-0 rounded-xl bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed hover:bg-primary/90 active:scale-95 transition-all shadow-sm"
-              aria-label="Send message"
+              aria-label={editingMessage ? "Save edited message" : "Send message"}
+              title={editingMessage ? "Save (Enter)" : "Send (Enter)"}
             >
-              <Send className="h-4 w-4" />
+              {/* v6.2 Part 7 (P3-6): show Check icon when editing (Save),
+                  Send icon when composing. Industry standard (ChatGPT,
+                  Claude) — the icon swap signals the mode change. */}
+              {editingMessage ? <Check className="h-4 w-4" /> : <Send className="h-4 w-4" />}
             </button>
           )}
         </form>
@@ -604,6 +714,9 @@ function MessageRow({
   isStreaming,
   isLast,
   onRegenerate,
+  onStartEdit,
+  isEditing,
+  onShareMessage,
   onPickFollowup,
   disabled,
   onClose,
@@ -624,6 +737,23 @@ function MessageRow({
    * calls (loadingRef.current check).
    */
   onRegenerate: (messageId: number | string) => void;
+  /**
+   * v6.2 Part 7 (P3-6): callback to start editing a user message.
+   * Pre-fills the composer with the message's content + focuses it.
+   * The hook truncates the conversation at that point + re-sends on save.
+   */
+  onStartEdit: (message: ChatMessage) => void;
+  /**
+   * v6.2 Part 7 (P3-6): true if this message is currently being edited.
+   * Used to highlight the message + hide the edit pencil (already editing).
+   */
+  isEditing: boolean;
+  /**
+   * v6.2 Part 7 (P3-16): callback to share this assistant message.
+   * Creates a share link anchored to this message (#msg-<id>) + copies
+   * it to the clipboard. Only callable on persisted (numeric-id) messages.
+   */
+  onShareMessage: (messageId: number | string) => Promise<void>;
   onPickFollowup: (s: string) => void;
   disabled?: boolean;
   onClose?: () => void;
@@ -633,6 +763,13 @@ function MessageRow({
   // v6.2 Part 5 (P1-8): copy-to-clipboard state.
   // 'idle' | 'copying' | 'copied' — 'copied' shows ✓ for 1.5s, then reverts.
   const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "copied">("idle");
+
+  // v6.2 Part 7 (P3-16): share-link state.
+  // Same 3-state pattern as copy: 'idle' | 'sharing' | 'shared'.
+  // 'shared' shows ✓ for 1.5s, then reverts. The shareLoading state is
+  // local to this MessageRow (each assistant message tracks its own
+  // share status independently).
+  const [shareStatus, setShareStatus] = useState<"idle" | "sharing" | "shared">("idle");
 
   const handleCopy = async () => {
     if (copyStatus !== "idle") return;
@@ -676,19 +813,76 @@ function MessageRow({
     onRegenerate(message.id);
   };
 
+  // v6.2 Part 7 (P3-16): share handler.
+  //
+  // Calls the hook's `shareMessage(messageId)` which creates a share link
+  // anchored to this message (#msg-<id>) + copies it to the clipboard.
+  // The hook caches the base share URL so subsequent share calls on other
+  // messages reuse the same link (avoids creating multiple share tokens).
+  //
+  // The 3-state UI matches the Copy button: idle → sharing → shared → idle.
+  // 'shared' shows ✓ for 1.5s (signals success), then reverts so the user
+  // can share again if needed.
+  //
+  // Only callable on persisted (numeric-id) messages — the hook guards
+  // against ephemeral `pending-*` ids, but we also disable the button in
+  // the UI when `typeof message.id !== "number"`.
+  const handleShare = async () => {
+    if (shareStatus !== "idle" || disabled || isStreaming) return;
+    if (typeof message.id !== "number") return;
+    setShareStatus("sharing");
+    try {
+      await onShareMessage(message.id);
+      setShareStatus("shared");
+      // Revert after 1.5s — matches the Copy button timing.
+      window.setTimeout(() => setShareStatus("idle"), 1500);
+    } catch {
+      setShareStatus("idle");
+      // Silent fail — no toast (matches handleCopy's behavior).
+    }
+  };
+
   // ─── Parse the AI response ─────────────────────────────────────────
   if (isUser) {
     return (
       <div className="flex justify-end animate-in fade-in slide-in-from-bottom-2 duration-300">
         <div className="max-w-[80%] sm:max-w-[70%]">
-          <div className="px-4 py-2.5 text-sm whitespace-pre-wrap break-words bg-primary text-primary-foreground rounded-2xl rounded-br-md shadow-sm">
+          {/* v6.2 Part 7 (P3-6): highlight the bubble when actively being
+              edited (ring-2 ring-primary/40 + slightly elevated shadow).
+              Industry standard (ChatGPT): the user sees which message
+              they're editing without needing to look at the composer banner. */}
+          <div
+            className={`px-4 py-2.5 text-sm whitespace-pre-wrap break-words bg-primary text-primary-foreground rounded-2xl rounded-br-md shadow-sm transition-all ${
+              isEditing ? "ring-2 ring-primary/40 ring-offset-2 ring-offset-background" : ""
+            }`}
+          >
             {message.content}
           </div>
-          {message.createdAt && (
-            <div className="text-[10px] text-muted-foreground/60 mt-1 text-right pr-1">
-              {formatTime(message.createdAt)}
-            </div>
-          )}
+          <div className="flex items-center justify-end gap-0.5 mt-1 pr-1">
+            {message.createdAt && (
+              <span className="text-[10px] text-muted-foreground/60 mr-1">
+                {formatTime(message.createdAt)}
+              </span>
+            )}
+            {/* v6.2 Part 7 (P3-6): Edit pencil on user messages.
+                Industry standard (ChatGPT, Claude): hover-to-reveal pencil
+                icon at the bottom-right of the user bubble. Clicking it
+                pre-fills the composer (handleStartEdit in AssistantPanel).
+                Disabled during streaming/another send. Hidden when already
+                editing this message (isEditing). */}
+            {!isEditing && (
+              <button
+                type="button"
+                onClick={() => onStartEdit(message)}
+                disabled={disabled}
+                className="p-1 rounded-md text-muted-foreground/50 hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                title="Edit message"
+                aria-label="Edit this message"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -826,6 +1020,36 @@ function MessageRow({
                 <Copy className="h-3.5 w-3.5" />
               )}
             </button>
+
+            {/* v6.2 Part 7 (P3-16): Share button.
+                Creates a share link anchored to this message + copies it
+                to the clipboard. Industry standard (ChatGPT): each
+                assistant message has a share affordance. The 3-state UI
+                matches the Copy button (idle → sharing → shared → idle).
+                Disabled during streaming + on ephemeral (pending-*)
+                messages (no DB id to anchor the share URL to). */}
+            {typeof message.id === "number" && (
+              <button
+                type="button"
+                onClick={handleShare}
+                disabled={shareStatus !== "idle" || disabled}
+                className="p-1.5 rounded-md text-muted-foreground/70 hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                title={shareStatus === "shared" ? "Link copied!" : "Share message"}
+                aria-label={
+                  shareStatus === "shared"
+                    ? "Share link copied to clipboard"
+                    : "Create share link for this message"
+                }
+              >
+                {shareStatus === "shared" ? (
+                  <Check className="h-3.5 w-3.5 text-success" />
+                ) : shareStatus === "sharing" ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Share2 className="h-3.5 w-3.5" />
+                )}
+              </button>
+            )}
 
             {/* Regenerate button — only on the LAST assistant message.
                 Mid-history regeneration is intentionally not supported

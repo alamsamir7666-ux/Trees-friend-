@@ -330,7 +330,7 @@ export function SellerListingDetailPage() {
               )}
               <div className="flex items-center gap-2">
                 <span className="text-[19px] font-bold text-success-foreground">৳{price.toLocaleString()}</span>
-                {selectedVariant?.discountPrice != null && (
+                {selectedVariant?.discountPrice != null && selectedVariant.discountPrice > 0 && selectedVariant.discountPrice < selectedVariant.price && (
                   <>
                     <span className="text-[13px] font-medium text-muted-foreground/70 line-through">৳{originalPrice.toLocaleString()}</span>
                     {discountPct != null && discountPct > 0 && (

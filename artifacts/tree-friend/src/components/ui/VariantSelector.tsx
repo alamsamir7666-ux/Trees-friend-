@@ -74,7 +74,7 @@ export const VariantSelector = memo(function VariantSelector({ variants, selecte
           <span className="font-semibold text-foreground">
             Tk{(selected.discountPrice ?? selected.price).toLocaleString()}
           </span>
-          {selected.discountPrice != null && (
+          {selected.discountPrice != null && selected.discountPrice > 0 && selected.discountPrice < selected.price && (
             <span className="line-through text-muted-foreground ml-2">
               Tk{selected.price.toLocaleString()}
             </span>

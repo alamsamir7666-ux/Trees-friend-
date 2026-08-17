@@ -140,7 +140,7 @@ function SellerListingCard({ card, onAddToBag, adding, isLoggedIn }: CardProps) 
           {pricedVariant && (
             <>
               <span className="font-serif text-xl font-bold text-primary">Tk{pricedVariant.discountPrice ?? pricedVariant.price}</span>
-              {pricedVariant.discountPrice != null && (
+              {pricedVariant.discountPrice != null && pricedVariant.discountPrice > 0 && pricedVariant.discountPrice < pricedVariant.price && (
                 <>
                   <span className="text-sm text-muted-foreground line-through">Tk{pricedVariant.price}</span>
                   {discountPct != null && discountPct > 0 && (

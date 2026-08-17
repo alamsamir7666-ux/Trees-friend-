@@ -25,6 +25,7 @@ import { useLocation } from "wouter";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Leaf } from "lucide-react";
 import { AssistantPanel } from "./AssistantPanel";
+import { useSwipeToDismiss } from "@/hooks/useSwipeToDismiss";
 
 export function AssistantBubble() {
   const [open, setOpen] = useState(false);
@@ -58,6 +59,29 @@ export function AssistantBubble() {
   }, []);
 
   if (isConversationRoute || isAssistantPage) return null;
+
+  // v6.2 Part 7 (P3-13): swipe-to-dismiss on mobile.
+  //
+  // Only active on touch devices (the hook's touch handlers are no-ops
+  // on desktop). The hook translates a wrapper div right by `dragX` px
+  // during an active drag + calls `setOpen(false)` when the drag passes
+  // 100px. Radix's Sheet then runs its native exit animation (slide-out-
+  // to-right) — the wrapper's transform snaps back to 0 in parallel.
+  //
+  // The threshold (100px) + edge zone (32px from the left edge) match
+  // the iOS Messages interactive pop gesture. Without the edge zone,
+  // any horizontal touch would hijack the gesture — breaking the chat's
+  // internal horizontal scrolls (suggestion cards, tool card grids).
+  //
+  // The hook is called unconditionally (Rules of Hooks) but only has
+  // effect when `open` is true + a touch is in progress. We pass
+  // `() => setOpen(false)` as the dismiss callback.
+  const swipe = useSwipeToDismiss({
+    onDismiss: () => setOpen(false),
+    threshold: 100,
+    edgeWidth: 32,
+    maxWidth: 320,
+  });
 
   return (
     <>
@@ -94,13 +118,37 @@ export function AssistantBubble() {
           <SheetHeader className="sr-only">
             <SheetTitle>TreeBot Assistant</SheetTitle>
           </SheetHeader>
-          <AssistantPanel
-            onClose={() => setOpen(false)}
-            onOpenFullPage={() => {
-              setOpen(false);
-              navigate("/assistant");
+          {/* v6.2 Part 7 (P3-13): swipe-to-dismiss wrapper.
+              The wrapper div gets the touch handlers + the dragX transform.
+              `transition-transform` is applied UNLESS we're actively
+              dragging — during the drag, we want 1:1 tracking (no easing);
+              after release, the transition snaps the wrapper back to 0 (or
+              Radix's exit animation takes over if the threshold was met).
+
+              The wrapper has `h-full flex-1 flex flex-col` so the
+              AssistantPanel fills the sheet height (the panel's own
+              flex-col + overflow handling needs a flex parent).
+
+              `touch-none` would block ALL touch events (including the
+              chat's vertical scroll) — we DON'T use it. The hook's
+              `|dx| > |dy|` direction gate ensures vertical scrolls pass
+              through to the AssistantPanel. */}
+          <div
+            {...swipe.handlers}
+            className="h-full flex-1 flex flex-col touch-pan-y"
+            style={{
+              transform: swipe.dragX > 0 ? `translateX(${swipe.dragX}px)` : undefined,
+              transition: swipe.isDragging ? "none" : "transform 200ms cubic-bezier(0.2, 0, 0, 1)",
             }}
-          />
+          >
+            <AssistantPanel
+              onClose={() => setOpen(false)}
+              onOpenFullPage={() => {
+                setOpen(false);
+                navigate("/assistant");
+              }}
+            />
+          </div>
         </SheetContent>
       </Sheet>
     </>

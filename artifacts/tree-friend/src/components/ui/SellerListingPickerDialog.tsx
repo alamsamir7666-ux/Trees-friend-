@@ -158,7 +158,7 @@ export function SellerListingPickerDialog({
                   </span>
                   <span className="shrink-0 flex items-baseline gap-1.5">
                     <span className="font-semibold">Tk{price.toLocaleString()}</span>
-                    {v.discountPrice != null && (
+                    {v.discountPrice != null && v.discountPrice > 0 && v.discountPrice < v.price && (
                       <span className="text-xs text-muted-foreground line-through">Tk{v.price.toLocaleString()}</span>
                     )}
                   </span>
