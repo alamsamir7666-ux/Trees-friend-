@@ -1156,6 +1156,16 @@ function ToolCallChips({ calls }: { calls: ActiveToolCall[] }) {
                 </span>
               )}
             </div>
+            {/* v6.2 Part 9 (Gap 17 fix — Phase B): live progress text
+                from long-running tools. Rendered as a subtle line under
+                the spinner label, above the skeleton. Falls back to
+                nothing when the tool doesn't emit progress (the common
+                case for SQL-based tools). */}
+            {call.progress && (
+              <div className="text-[10px] text-muted-foreground/70 italic pl-1 animate-in fade-in duration-200">
+                {call.progress}
+              </div>
+            )}
             <SkeletonComp />
           </div>
         );
@@ -1178,6 +1188,12 @@ function ToolCallChips({ calls }: { calls: ActiveToolCall[] }) {
                 {call.argsPreview && (
                   <span className="text-primary/60 font-normal truncate max-w-[120px]">
                     {call.argsPreview}
+                  </span>
+                )}
+                {/* v6.2 Part 9 (Gap 17 fix — Phase B): progress text inline */}
+                {call.progress && (
+                  <span className="text-primary/50 font-normal truncate max-w-[100px] animate-in fade-in duration-200">
+                    · {call.progress}
                   </span>
                 )}
               </span>

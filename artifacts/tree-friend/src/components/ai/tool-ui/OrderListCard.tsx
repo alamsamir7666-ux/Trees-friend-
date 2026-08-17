@@ -17,6 +17,7 @@ import { memo } from "react";
 import { Package, ChevronRight, LogIn } from "lucide-react";
 import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
+import { useStaggeredReveal } from "@/hooks/useStaggeredReveal";
 
 interface OrderItem {
   order_number: number;
@@ -151,6 +152,14 @@ export const OrderListCard = memo(function OrderListCard({
 }) {
   const result = data as OrdersResult;
 
+  // v6.2 Part 9 (Gap 17 fix — Phase A): staggered reveal of order rows.
+  // Each row fades in 40ms after the previous (capped at 400ms — tighter
+  // than ListingGridCard because order rows are smaller + the user scans
+  // them faster). Matches Claude's artifact streaming visual pattern.
+  // Computed before early returns (Rules of Hooks).
+  const visibleOrders = result?.orders ?? [];
+  const rowStyles = useStaggeredReveal(visibleOrders.length, 40, 400);
+
   // Not signed in.
   if (!result || !result.signed_in) {
     return (
@@ -187,8 +196,15 @@ export const OrderListCard = memo(function OrderListCard({
 
       {/* Order rows */}
       <div className="divide-y">
-        {result.orders.map((order) => (
-          <OrderRow key={order.order_number} order={order} onClose={onClose} />
+        {/* v6.2 Part 9: staggered fade-in per row (Phase A progressive render) */}
+        {visibleOrders.map((order, i) => (
+          <div
+            key={order.order_number}
+            style={rowStyles[i]}
+            className="animate-in fade-in slide-in-from-bottom-1 duration-200"
+          >
+            <OrderRow order={order} onClose={onClose} />
+          </div>
         ))}
       </div>
     </div>

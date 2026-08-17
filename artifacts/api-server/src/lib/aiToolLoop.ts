@@ -161,6 +161,25 @@ export type ToolStreamEvent =
       toolCallId: string;
       name?: string; // present on the first delta (when the tool name is known)
       argsDelta: string; // partial JSON string to append
+    }
+  // v6.2 Part 9 (Gap 17 fix — Phase B): optional progress event emitted by
+  // long-running tools during execution. SQL-based tools (search_catalog,
+  // get_user_orders, etc.) complete in <100ms + DON'T emit this — the
+  // existing tool_call → tool_result flow stays. Future slow tools (e.g.
+  // a YouTube transcript fetch that takes 5s, or a multi-step pipeline)
+  // can emit tool_progress to give the user live feedback.
+  //
+  // Industry standard: Vercel AI SDK's `streamUI` tool progress, Claude's
+  // "Thinking..." + "Searching..." status updates. The frontend renders
+  // `progress` text under the spinner in ToolCallChips so the user sees
+  // what the tool is doing RIGHT NOW (not just "Loading…").
+  //
+  // Backward compatible: existing tools don't emit this, so the frontend
+  // falls back to the static "Loading…" label. No migration needed.
+  | {
+      type: "tool_progress";
+      name: string;
+      progress: string;
     };
 
 /**

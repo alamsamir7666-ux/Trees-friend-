@@ -46,6 +46,7 @@ import { useAddToCart, getGetCartQueryKey } from "@workspace/api-client-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useGuestCart } from "@/hooks/useGuestCart";
+import { useStaggeredReveal } from "@/hooks/useStaggeredReveal";
 import {
   ChatVariantPickerDialog,
   shouldShowVariantPicker,
@@ -513,6 +514,14 @@ export const ListingGridCard = memo(function ListingGridCard({
 }) {
   const result = data as SearchResult;
 
+  // v6.2 Part 9 (Gap 17 fix — Phase A): compute staggered reveal styles
+  // BEFORE the early return (Rules of Hooks — hooks can't be conditional).
+  // When there are no listings, this is a no-op (0-length array). The
+  // visibleListings slice keeps the count stable across renders so the
+  // memoized style array identity is stable too.
+  const visibleListings = result?.listings?.slice(0, 5) ?? [];
+  const cardStyles = useStaggeredReveal(visibleListings.length, 50, 600);
+
   if (!result || !result.listings || result.listings.length === 0) {
     return (
       <div className="border rounded-lg p-3 bg-muted/30 text-xs text-muted-foreground text-center">
@@ -537,8 +546,21 @@ export const ListingGridCard = memo(function ListingGridCard({
 
       {/* ─── Listing grid ────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {result.listings.slice(0, 5).map((listing) => (
-          <ListingCard key={listing.listingId} listing={listing} onClose={onClose} />
+        {/* v6.2 Part 9 (Gap 17 fix — Phase A): staggered reveal of listing
+            cards. Each card fades in 50ms after the previous one (capped at
+            600ms total). Delivers the perceived "streaming" feel — cards
+            appear to build one by one even though data arrived at once.
+            Matches Claude's artifact streaming visual pattern. The outer
+            container's animate-in (from ToolComponentRenderer) handles the
+            wrapper's enter; here we add per-card stagger inside. */}
+        {visibleListings.map((listing, i) => (
+          <div
+            key={listing.listingId}
+            style={cardStyles[i]}
+            className="animate-in fade-in slide-in-from-bottom-2 duration-300"
+          >
+            <ListingCard listing={listing} onClose={onClose} />
+          </div>
         ))}
       </div>
 

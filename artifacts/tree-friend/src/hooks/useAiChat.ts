@@ -133,6 +133,19 @@ export interface ActiveToolCall {
    * NULL/empty when the provider doesn't stream args (Gemini).
    */
   argsPreview?: string;
+  /**
+   * v6.2 Part 9 (Gap 17 fix — Phase B): live progress text from
+   * `tool_progress` SSE events. NULL when the tool doesn't emit progress
+   * (the common case — SQL-based tools complete in <100ms). When present,
+   * the ToolCallChips component renders this text under the spinner so
+   * the user sees what the tool is doing RIGHT NOW.
+   *
+   * Industry standard: Vercel AI SDK's `streamUI` tool progress, Claude's
+   * "Thinking..." + "Searching..." status updates. Without this, the user
+   * sees a generic "Loading…" for the entire tool execution; with it,
+   * they see "Fetching YouTube transcript… (45%)" or similar.
+   */
+  progress?: string;
 }
 
 interface UseAiChatResult {
@@ -565,6 +578,33 @@ export function useAiChat(): UseAiChatResult {
                 return [...prev.slice(0, targetIdx), updated, ...prev.slice(targetIdx + 1)];
               });
             }
+          } else if (payload.type === "tool_progress" && typeof payload.name === "string") {
+            // v6.2 Part 9 (Gap 17 fix — Phase B): live progress from a
+            // long-running tool. Update the matching ActiveToolCall's
+            // `progress` field so ToolCallChips can display it under the
+            // spinner. SQL-based tools don't emit this event — the field
+            // stays undefined + the chip shows the static "Loading…" label.
+            //
+            // We match the LAST active call with this name (most recent —
+            // matches the tool_call_delta handler's pattern). If multiple
+            // tools are running in parallel with the same name (rare),
+            // only the most recent gets the progress update.
+            setActiveToolCalls((prev) => {
+              let targetIdx = -1;
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].name === payload.name) {
+                  targetIdx = i;
+                  break;
+                }
+              }
+              if (targetIdx === -1) return prev;
+              const target = prev[targetIdx];
+              const updated: ActiveToolCall = {
+                ...target,
+                progress: typeof payload.progress === "string" ? payload.progress : undefined,
+              };
+              return [...prev.slice(0, targetIdx), updated, ...prev.slice(targetIdx + 1)];
+            });
           } else if (payload.type === "tool_result" && typeof payload.name === "string") {
             // v3.7: A tool finished executing. Remove it from activeToolCalls.
             // We remove the FIRST matching entry (oldest) — if the same tool

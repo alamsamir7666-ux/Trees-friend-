@@ -921,6 +921,18 @@ export async function* streamGeminiChat(
       name: string,
       args: Record<string, unknown>,
       userId: string | null,
+      // v6.2 Part 9 (Gap 17 fix — Phase B): optional context + onProgress.
+      // The context is forwarded from the chat route (carries tone-locked
+      // creator info). The onProgress callback lets long-running tools
+      // emit live progress updates to the SSE pipe.
+      //
+      // We use a single options object as the 4th param so we can add
+      // more fields later without breaking the signature again. Tools
+      // that don't need progress just ignore it.
+      options?: {
+        context?: unknown;
+        onProgress?: (progress: string) => void;
+      },
     ) => Promise<unknown>;
   },
   userId?: string | null,
@@ -1337,7 +1349,18 @@ export async function* streamGeminiChat(
         }
         const t0 = Date.now();
         try {
-          const result = await tools.execute(toolName, toolArgs, userId ?? null);
+          // v6.2 Part 9 (Gap 17 fix — Phase B): pass an onProgress callback
+          // to tools.execute so long-running tools can emit live progress.
+          // The callback fires a `tool_progress` SSE event via onToolEvent.
+          // Existing SQL-based tools ignore the callback (they don't call
+          // it) — no behavior change for them.
+          const result = await tools.execute(toolName, toolArgs, userId ?? null, {
+            onProgress: onToolEvent
+              ? (progress: string) => {
+                  onToolEvent({ type: "tool_progress", name: toolName, progress });
+                }
+              : undefined,
+          });
           if (onToolEvent) {
             onToolEvent({
               type: "tool_result",

@@ -24,6 +24,7 @@ import { Package, Truck, CheckCircle2, Clock, MapPin, XCircle } from "lucide-rea
 import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useStaggeredReveal } from "@/hooks/useStaggeredReveal";
 
 // ─── Types matching the backend tool result ──────────────────────────────
 
@@ -100,6 +101,15 @@ export const OrderDetailCard = memo(function OrderDetailCard({
   const [, navigate] = useLocation();
   const result = data as OrderResult;
 
+  // v6.2 Part 9 (Gap 17 fix — Phase A): pre-compute item + step counts
+  // before the early return so we can call useStaggeredReveal unconditionally
+  // (Rules of Hooks). When the order is null, these are 0-length arrays.
+  const items = result?.order?.items ?? [];
+  const itemStyles = useStaggeredReveal(items.length, 40, 320);
+  // Timeline has 5 fixed steps (pending → confirmed → processing → shipped → delivered).
+  // Stagger them 60ms apart — they're the focal point of the card.
+  const stepStyles = useStaggeredReveal(5, 60, 400);
+
   // Error states.
   if (!result || !result.order) {
     return (
@@ -139,8 +149,14 @@ export const OrderDetailCard = memo(function OrderDetailCard({
 
       {/* ─── Items ────────────────────────────────────────────────── */}
       <div className="p-3 space-y-2">
-        {order.items?.map((item, i) => (
-          <div key={i} className="flex items-center gap-3">
+        {/* v6.2 Part 9 (Gap 17 fix — Phase A): staggered fade-in per item.
+            Each item reveals 40ms after the previous one. */}
+        {items.map((item, i) => (
+          <div
+            key={i}
+            style={itemStyles[i]}
+            className="flex items-center gap-3 animate-in fade-in slide-in-from-bottom-1 duration-200"
+          >
             <div className="h-10 w-10 rounded bg-muted flex items-center justify-center flex-shrink-0">
               <Package className="h-4 w-4 text-muted-foreground" />
             </div>
@@ -157,12 +173,19 @@ export const OrderDetailCard = memo(function OrderDetailCard({
       {!isCancelled ? (
         <div className="px-3 pb-3">
           <div className="flex items-start gap-0">
+            {/* v6.2 Part 9 (Gap 17 fix — Phase A): staggered fade-in per
+                timeline step. Each step reveals 60ms after the previous
+                one — the timeline is the focal point of the card. */}
             {STEPS.map((step, i) => {
               const done = i < currentStep;
               const active = i === currentStep;
               const Icon = STEP_ICONS[step] || Clock;
               return (
-                <div key={step} className="flex-1 flex flex-col items-center relative">
+                <div
+                  key={step}
+                  style={stepStyles[i]}
+                  className="flex-1 flex flex-col items-center relative animate-in fade-in slide-in-from-bottom-1 duration-200"
+                >
                   {i < STEPS.length - 1 && (
                     <div
                       className={`absolute top-4 left-1/2 w-full h-0.5 ${done ? "bg-primary" : "bg-border"}`}

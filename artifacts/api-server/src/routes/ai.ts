@@ -1923,6 +1923,25 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
               argsDelta: event.argsDelta,
             })}\n\n`,
           );
+        } else if (event.type === "tool_progress") {
+          // v6.2 Part 9 (Gap 17 fix — Phase B): optional progress event
+          // from long-running tools. Forwarded to the client so the
+          // frontend ToolCallChips can display live progress text under
+          // the spinner (e.g. "Fetching YouTube transcript… (45%)").
+          //
+          // Backward compatible: existing SQL-based tools don't emit
+          // this event, so the frontend never sees it for them. The
+          // frontend falls back to the static "Loading…" label.
+          //
+          // Security: `progress` is a server-generated string (the tool
+          // chose what to write), not user input. Safe to forward.
+          res.write(
+            `data: ${JSON.stringify({
+              type: "tool_progress",
+              name: event.name,
+              progress: event.progress,
+            })}\n\n`,
+          );
         }
       } catch (writeErr) {
         // Best-effort — if the response is closed (client disconnected),
@@ -1996,17 +2015,27 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       // for off-creator citations.
       {
         declarations: AI_TOOL_DECLARATIONS,
-        execute: (name, args, uid) =>
-          executeTool(name, args, uid, {
-            toneLockedCreatorId: kbContext.toneCreator?.creatorId ?? null,
-            toneLockedCreatorName: kbContext.toneCreator?.creatorName ?? null,
-            // v6.1: pass the buyer's location (from their default address)
-            // to the tool executor. Used by search_seller_listings (Part 2)
-            // for distance-aware sorting. Null for anonymous users → no
-            // distance sort (just rating + price).
-            userCity: buyerLocation?.city ?? null,
-            userDistrict: buyerLocation?.district ?? null,
-          }),
+        // v6.2 Part 9 (Gap 17 fix — Phase B): accept the options object
+        // (4th param) so we can forward onProgress to executeTool. The
+        // context (toneLockedCreatorId, buyerLocation) is still passed
+        // positionally as before — only onProgress is new.
+        execute: (name, args, uid, options) =>
+          executeTool(
+            name,
+            args,
+            uid,
+            {
+              toneLockedCreatorId: kbContext.toneCreator?.creatorId ?? null,
+              toneLockedCreatorName: kbContext.toneCreator?.creatorName ?? null,
+              // v6.1: pass the buyer's location (from their default address)
+              // to the tool executor. Used by search_seller_listings (Part 2)
+              // for distance-aware sorting. Null for anonymous users → no
+              // distance sort (just rating + price).
+              userCity: buyerLocation?.city ?? null,
+              userDistrict: buyerLocation?.district ?? null,
+            },
+            options?.onProgress,
+          ),
       },
       clerkUserId,
       // v3.0: metadata callback -- the provider calls this with model + usage

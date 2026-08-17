@@ -427,6 +427,15 @@ export async function executeTool(
   // pass it (the response will have `tone_locked_creator: null`, which the
   // LLM treats as "no tone active").
   context?: ToolContext,
+  // v6.2 Part 9 (Gap 17 fix — Phase B): optional progress callback.
+  // Long-running tools (e.g. YouTube transcript fetch) can call this with
+  // a human-readable progress string ("Fetching transcript…", "50% done",
+  // etc.) to give the user live feedback during execution. The callback
+  // is wired through to the SSE pipe by the route handler.
+  //
+  // Backward compatible: existing tools don't accept this param + don't
+  // call it. The fallback "Loading…" label renders in the frontend.
+  onProgress?: (progress: string) => void,
 ): Promise<unknown> {
   // v5.6: per-tool rate limit check (before execution)
   // The IP is not available in this context (executeTool is called from

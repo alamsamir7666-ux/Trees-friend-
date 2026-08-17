@@ -555,6 +555,13 @@ export async function* streamGroqChat(
       name: string,
       args: Record<string, unknown>,
       userId: string | null,
+      // v6.2 Part 9 (Gap 17 fix — Phase B): same options object as gemini.ts.
+      // See that file for full rationale. Single options object as 4th param
+      // so we can extend later without breaking the signature.
+      options?: {
+        context?: unknown;
+        onProgress?: (progress: string) => void;
+      },
     ) => Promise<unknown>;
   },
   userId?: string | null,
@@ -859,7 +866,15 @@ export async function* streamGroqChat(
               }
               const t0 = Date.now();
               try {
-                const toolResult = await tools.execute(toolName, args, userId ?? null);
+                // v6.2 Part 9 (Gap 17 fix — Phase B): pass onProgress callback
+                // (mirrors gemini.ts). Long-running tools can emit live progress.
+                const toolResult = await tools.execute(toolName, args, userId ?? null, {
+                  onProgress: onToolEvent
+                    ? (progress: string) => {
+                        onToolEvent({ type: "tool_progress", name: toolName, progress });
+                      }
+                    : undefined,
+                });
                 if (onToolEvent) {
                   onToolEvent({
                     type: "tool_result",

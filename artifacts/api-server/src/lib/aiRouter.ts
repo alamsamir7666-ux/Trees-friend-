@@ -56,7 +56,20 @@ export type ProviderName = "gemini" | "groq";
 
 export interface ChatTools {
   declarations: FunctionDeclaration[];
-  execute: (name: string, args: Record<string, unknown>, userId: string | null) => Promise<unknown>;
+  // v6.2 Part 9 (Gap 17 fix — Phase B): added optional 4th param `options`
+  // with `context` + `onProgress`. The onProgress callback lets long-running
+  // tools emit live progress updates to the SSE pipe. Backward compatible —
+  // existing callers that pass a 3-param execute function still work (the
+  // 4th param is optional). Matches the signature in gemini.ts + groq.ts.
+  execute: (
+    name: string,
+    args: Record<string, unknown>,
+    userId: string | null,
+    options?: {
+      context?: unknown;
+      onProgress?: (progress: string) => void;
+    },
+  ) => Promise<unknown>;
 }
 
 /**
