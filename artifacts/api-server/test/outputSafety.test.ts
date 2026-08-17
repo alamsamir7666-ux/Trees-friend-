@@ -48,7 +48,9 @@ describe("Output safety: source-shape tests", () => {
 
   it("outputSafety.ts uses Groq (free tier) as primary + Gemini fallback", () => {
     const source = readSource("artifacts/api-server/src/lib/outputSafety.ts");
-    expect(source).toContain("llama-3.1-8b-instant");
+    // v6.2 Part 10: was llama-3.1-8b-instant (deprecated Aug 16, 2026).
+    // Now uses llama-4-scout-17b-16e-instruct as the default Groq model.
+    expect(source).toContain("llama-4-scout-17b-16e-instruct");
     expect(source).toContain("gemini-2.5-flash");
   });
 

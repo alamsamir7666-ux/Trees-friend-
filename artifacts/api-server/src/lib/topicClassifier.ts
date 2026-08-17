@@ -49,7 +49,7 @@ import {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant"; // fastest + cheapest
+const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-4-scout-17b-16e-instruct"; // v6.2 Part 10: was llama-3.1-8b-instant (deprecated Aug 16, 2026)
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 // Use the discovered working Gemini model from the chat path. The previous
 // hardcoded `gemini-2.5-flash` returns 404 on new GCP projects (deprecated
@@ -60,6 +60,9 @@ const CLASSIFIER_MAX_TOKENS = 50;
 
 // Same set as structuredOutput.ts / outputSafety.ts — keep in sync.
 const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
+  "llama-4-scout-17b-16e-instruct",
+  "llama-4-maverick-17b-128e-instruct",
+  "openai/gpt-oss-120b",
   "llama-3.3-70b-versatile",
   "llama-3.1-8b-instant",
   "llama3-70b-8192",

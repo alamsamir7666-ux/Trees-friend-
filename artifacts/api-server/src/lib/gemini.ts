@@ -13,14 +13,26 @@
  * Configuration:
  *   GEMINI_API_KEY   — required, get one free at https://aistudio.google.com/apikey
  *   AI_MODEL          — optional, overrides the auto-fallback chain with a
- *                       specific model name. If unset, we try models in order:
+ *                       specific model name. If unset, we try models in order
+ *                       (v6.2 Part 10 — see MODEL_FALLBACK_CHAIN below for
+ *                       the full current list + rationale):
  *
- *                         1. gemini-flash-latest      (Google's alias)
- *                         2. gemini-2.5-flash-lite
- *                         3. gemini-2.5-flash
- *                         4. gemini-2.5-pro
- *                         5. gemini-2.0-flash         (legacy fallback)
- *                         6. gemini-1.5-flash         (very old fallback)
+ *                         1. gemini-3.7-flash         (GA Aug 13, 2026 — production workhorse)
+ *                         2. gemini-3.1-flash         (older 3.x fallback)
+ *                         3. gemini-3.0-flash         (older 3.x fallback)
+ *                         4. gemini-3.5-flash         (older 3.x fallback)
+ *                         5. gemini-3.6-flash         (20 RPD — last resort 3.x)
+ *                         6. gemini-2.5-flash-lite    (shutting down Oct 2026)
+ *                         7. gemini-2.5-flash         (shutting down Oct 2026)
+ *                         8. gemini-2.5-pro          (shutting down Oct 2026)
+ *                         9. gemini-flash-latest      (alias — unpredictable)
+ *                        10. gemini-2.0-flash         (legacy — likely 404)
+ *                        11. gemini-1.5-flash         (very old — likely 404)
+ *
+ *                       v3.0.1 auto-discovery (ListModels API) runs first +
+ *                       replaces this chain with whatever the API key actually
+ *                       has access to. The static chain is only the fallback
+ *                       if discovery fails.
  *
  *   AI_TEMPERATURE     — optional, 0.0–2.0, default 0.4. Lower = more
  *                        deterministic; higher = more creative. The
@@ -66,26 +78,44 @@ import {
 //
 //   - gemini-1.5-flash      — DEPRECATED (404 for everyone)
 //   - gemini-2.0-flash      — DEPRECATED (404 for everyone)
-//   - gemini-2.5-*          — 404 for NEW GCP projects (created after ~Jun 2026)
-//   - gemini-3.0-flash      — available, moderate free tier
-//   - gemini-3.5-flash      — available, moderate free tier
-//   - gemini-3.6-flash      — available, VERY restrictive free tier (20 RPD!)
+//   - gemini-2.5-*          — 404 for NEW GCP projects (created after ~Jun 2026),
+//                              AND scheduled for full shutdown October 2026
+//   - gemini-3.0-flash      — was available, moderate free tier
+//   - gemini-3.5-flash      — was available, moderate free tier
+//   - gemini-3.6-flash      — was available, VERY restrictive free tier (20 RPD!)
+//   - gemini-3.7-flash      — GA Aug 13, 2026. New production workhorse.
+//                              Best price-performance for coding + agents.
+//   - gemini-3.1-flash      — older 3.x, still available as fallback
 //   - gemini-flash-latest   — alias, resolves unpredictably (may 404)
 //
 // v3.0 incidents:
 //   1. gemini-flash-latest resolved to gemini-3.6-flash (20 RPD) → 429 storm
 //   2. Reordered chain to put 2.5-* first → ALL 404 (new GCP project)
 //
+// v6.2 Part 10 (Production fix, Aug 18 2026):
+//   - Production logs showed "All configured Gemini models are unavailable"
+//     on every request → AI router fell back to Groq → Groq was ALSO broken
+//     (llama-3.3-70b-versatile decommissioned Aug 16, 2026) → 500 error.
+//   - Root cause: the static chain had stale 3.0/3.5/3.6 names that 404
+//     for many projects, AND 2.5-* names that are being shut down Oct 2026.
+//   - Fix: put gemini-3.7-flash (just GA'd Aug 13) FIRST in the chain.
+//     Keep the auto-discovery (v3.0.1) as the primary source of truth —
+//     the static chain is only the fallback if discovery fails.
+//
 // v3.0.1 fix: auto-discover available models at startup via ListModels API.
 // This way we never waste time trying models that will 404. We also add
 // the 3.x models to the static chain as a fallback if discovery fails.
 const MODEL_FALLBACK_CHAIN = [
-  // 3.x models — available to new GCP projects (post-Jun 2026)
-  "gemini-3.0-flash", // moderate free tier
-  "gemini-3.5-flash", // moderate free tier
+  // v6.2 Part 10: GA Aug 13, 2026. New production workhorse — try FIRST.
+  "gemini-3.7-flash",
+  // Older 3.x models — still available as fallbacks.
+  "gemini-3.1-flash",
+  "gemini-3.0-flash",
+  "gemini-3.5-flash",
   "gemini-3.6-flash", // VERY restrictive (20 RPD) but works for new projects
-  // 2.x models — available to older GCP projects (pre-Jun 2026)
-  "gemini-2.5-flash-lite", // 1500 RPD free tier — best for production
+  // 2.x models — scheduled for FULL SHUTDOWN October 2026.
+  // Kept as last-resort fallbacks for older GCP projects that still have them.
+  "gemini-2.5-flash-lite", // 1500 RPD free tier — best for production (if available)
   "gemini-2.5-flash",
   "gemini-2.5-pro",
   // Aliases — unpredictable, last resort

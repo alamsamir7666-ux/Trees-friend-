@@ -248,7 +248,7 @@ export async function judgeResponse(
   for (const provider of providers) {
     try {
       if (provider === "groq") {
-        const model = process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
+        const model = process.env.GROQ_MODEL ?? "llama-4-scout-17b-16e-instruct"; // v6.2 Part 10: was llama-3.3-70b-versatile (deprecated Aug 16, 2026)
         const score = await judgeWithGroq(question, response, model);
         logger.debug(
           { provider: "groq", model, overall: score.overall },

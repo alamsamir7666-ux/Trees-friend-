@@ -109,10 +109,11 @@ AI's response to evaluate:
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 // Use GROQ_MODEL env var if set, otherwise default to the same model the chat
-// path uses. Both llama-3.3-70b-versatile and llama-3.1-8b-instant support
-// json_schema per Groq's docs, but we still implement a json_object fallback
-// below for forward-compat with future Groq model changes.
-const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
+// path uses. v6.2 Part 10 (Production fix): switched from the deprecated
+// llama-3.3-70b-versatile (decommissioned Aug 16, 2026) to llama-4-scout.
+// Both support json_schema per Groq's docs; we still implement a json_object
+// fallback below for forward-compat with future Groq model changes.
+const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-4-scout-17b-16e-instruct";
 const MAX_RESPONSE_CHARS = 2000;
 const MAX_QUESTION_CHARS = 500;
 const AI_TEMPERATURE = 0.1;
@@ -121,7 +122,13 @@ const AI_MAX_TOKENS = 50;
 // Same set of models known to support json_schema on Groq. Kept in sync with
 // structuredOutput.ts. If GROQ_MODEL isn't in this set, we skip the
 // json_schema attempt and go straight to json_object + runtime validation.
+// v6.2 Part 10: added llama-4-* models (Llama 4 MoE family, supports json_schema).
+// Kept the deprecated llama-3.3-70b-versatile + llama-3.1-8b-instant entries
+// for backward compat (users with GROQ_MODEL env var still pointing at them).
 const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
+  "llama-4-scout-17b-16e-instruct",
+  "llama-4-maverick-17b-128e-instruct",
+  "openai/gpt-oss-120b",
   "llama-3.3-70b-versatile",
   "llama-3.1-8b-instant",
   "llama3-70b-8192",

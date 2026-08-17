@@ -28,7 +28,8 @@ describe("Topic classifier: source-shape tests", () => {
 
   it("topicClassifier.ts uses Groq (free tier) as primary classifier", () => {
     const source = readSource("artifacts/api-server/src/lib/topicClassifier.ts");
-    expect(source).toContain("llama-3.1-8b-instant");
+    // v6.2 Part 10: was llama-3.1-8b-instant (deprecated Aug 16, 2026).
+    expect(source).toContain("llama-4-scout-17b-16e-instruct");
     expect(source).toContain("json_schema");
   });
 

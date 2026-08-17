@@ -85,6 +85,9 @@ export interface StructuredFollowups {
  * json_schema — they reject with HTTP 400 if you try.
  */
 const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
+  "llama-4-scout-17b-16e-instruct",
+  "llama-4-maverick-17b-128e-instruct",
+  "openai/gpt-oss-120b",
   "llama-3.3-70b-versatile",
   "llama-3.1-8b-instant",
   "llama3-70b-8192",
@@ -331,7 +334,8 @@ export async function generateFollowupsStructured(
   for (const provider of providers) {
     try {
       if (provider === "groq") {
-        const model = process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
+        // v6.2 Part 10: was llama-3.3-70b-versatile (deprecated Aug 16, 2026).
+        const model = process.env.GROQ_MODEL ?? "llama-4-scout-17b-16e-instruct";
         const followups = await generateFollowupsGroq(question, answer, model);
         logger.debug(
           { provider: "groq", count: followups.length },

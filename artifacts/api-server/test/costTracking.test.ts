@@ -22,7 +22,9 @@ process.env.AI_SESSION_SECRET ??= "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90L
 import { calculateCost, getModelPricing, getAllPricing } from "../src/lib/costTracker";
 
 describe("Bug #9 fix: costTracker has real per-model pricing", () => {
-  it("Groq llama-3.3-70b-versatile has non-zero pricing", () => {
+  it("Groq llama-3.3-70b-versatile has non-zero pricing (kept for historical records)", () => {
+    // v6.2 Part 10: model deprecated Aug 16, 2026, but pricing entry kept
+    // so admin dashboard can resolve historical cost records.
     const pricing = getModelPricing("llama-3.3-70b-versatile");
     expect(pricing).not.toBeNull();
     expect(pricing!.prompt).toBeGreaterThan(0);
@@ -30,8 +32,35 @@ describe("Bug #9 fix: costTracker has real per-model pricing", () => {
     expect(pricing!.tier).toBe("paid");
   });
 
-  it("Groq llama-3.1-8b-instant has non-zero pricing", () => {
+  it("Groq llama-3.1-8b-instant has non-zero pricing (kept for historical records)", () => {
+    // v6.2 Part 10: model deprecated Aug 16, 2026, but pricing entry kept.
     const pricing = getModelPricing("llama-3.1-8b-instant");
+    expect(pricing).not.toBeNull();
+    expect(pricing!.prompt).toBeGreaterThan(0);
+    expect(pricing!.completion).toBeGreaterThan(0);
+    expect(pricing!.tier).toBe("paid");
+  });
+
+  // v6.2 Part 10: new Llama 4 MoE models (replacements for the deprecated
+  // llama-3.3-70b-versatile + llama-3.1-8b-instant).
+  it("Groq llama-4-scout-17b-16e-instruct has non-zero pricing", () => {
+    const pricing = getModelPricing("llama-4-scout-17b-16e-instruct");
+    expect(pricing).not.toBeNull();
+    expect(pricing!.prompt).toBeGreaterThan(0);
+    expect(pricing!.completion).toBeGreaterThan(0);
+    expect(pricing!.tier).toBe("paid");
+  });
+
+  it("Groq llama-4-maverick-17b-128e-instruct has non-zero pricing", () => {
+    const pricing = getModelPricing("llama-4-maverick-17b-128e-instruct");
+    expect(pricing).not.toBeNull();
+    expect(pricing!.prompt).toBeGreaterThan(0);
+    expect(pricing!.completion).toBeGreaterThan(0);
+    expect(pricing!.tier).toBe("paid");
+  });
+
+  it("Groq openai/gpt-oss-120b has non-zero pricing", () => {
+    const pricing = getModelPricing("openai/gpt-oss-120b");
     expect(pricing).not.toBeNull();
     expect(pricing!.prompt).toBeGreaterThan(0);
     expect(pricing!.completion).toBeGreaterThan(0);
@@ -41,13 +70,16 @@ describe("Bug #9 fix: costTracker has real per-model pricing", () => {
   it("Gemini models are still marked free tier ($0)", () => {
     // Gemini's Google AI Studio free tier is genuinely $0. We don't
     // inflate these — the admin sees $0 spent on Gemini, which is correct.
+    // v6.2 Part 10: includes the new gemini-3.7-flash (GA Aug 13, 2026).
     const geminiModels = [
       "gemini-2.5-flash",
       "gemini-2.5-flash-lite",
       "gemini-2.5-pro",
       "gemini-3.0-flash",
+      "gemini-3.1-flash",
       "gemini-3.5-flash",
       "gemini-3.6-flash",
+      "gemini-3.7-flash",
     ];
     for (const model of geminiModels) {
       const pricing = getModelPricing(model);
@@ -72,8 +104,11 @@ describe("Bug #9 fix: costTracker has real per-model pricing", () => {
 
   it("getAllPricing returns the full pricing table", () => {
     const all = getAllPricing();
-    expect(Object.keys(all).length).toBeGreaterThanOrEqual(9); // 7 Gemini + 2 Groq
+    // v6.2 Part 10: 9 Gemini + 5 Groq (2 deprecated + 3 new) = 14 entries
+    expect(Object.keys(all).length).toBeGreaterThanOrEqual(14);
     expect(all["llama-3.3-70b-versatile"]).toBeDefined();
+    expect(all["llama-4-scout-17b-16e-instruct"]).toBeDefined();
+    expect(all["gemini-3.7-flash"]).toBeDefined();
     expect(all["gemini-2.5-flash"]).toBeDefined();
   });
 });

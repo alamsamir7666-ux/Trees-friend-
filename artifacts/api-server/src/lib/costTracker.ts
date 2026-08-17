@@ -48,6 +48,11 @@ const PRICING: Record<string, { prompt: number; completion: number; tier: "free"
   //   - gemini-2.5-flash: $0.075/1M prompt, $0.30/1M completion
   //   - gemini-2.5-flash-lite: $0.075/1M prompt, $0.30/1M completion
   //   - gemini-2.5-pro: $1.25/1M prompt, $5.00/1M completion
+  //   - gemini-3.7-flash (v6.2 Part 10): GA Aug 13, 2026. Same free-tier
+  //     pricing as the rest of the 3.x family ($0 free / paid TBD).
+  //     Tracked as $0 until Google publishes paid-tier pricing.
+  "gemini-3.7-flash": { prompt: 0, completion: 0, tier: "free" },
+  "gemini-3.1-flash": { prompt: 0, completion: 0, tier: "free" },
   "gemini-3.6-flash": { prompt: 0, completion: 0, tier: "free" },
   "gemini-3.5-flash": { prompt: 0, completion: 0, tier: "free" },
   "gemini-3.0-flash": { prompt: 0, completion: 0, tier: "free" },
@@ -61,8 +66,26 @@ const PRICING: Record<string, { prompt: number; completion: number; tier: "free"
   // Even on the free tier, we track the PAID price so the admin sees the
   // real cost equivalent. When the free tier RPD limit is hit, the cost
   // numbers already reflect what the paid tier would charge.
+  //
+  // v6.2 Part 10 (Production fix): Groq deprecated llama-3.3-70b-versatile +
+  // llama-3.1-8b-instant on June 17, 2026. Kept the old entries for
+  // historical cost records (messages already persisted with these model
+  // names still need to resolve to a pricing entry for the admin dashboard).
   "llama-3.3-70b-versatile": { prompt: 0.59, completion: 0.79, tier: "paid" },
   "llama-3.1-8b-instant": { prompt: 0.05, completion: 0.08, tier: "paid" },
+  // v6.2 Part 10: new Llama 4 MoE models (replacements).
+  // Pricing per Groq's public docs as of Aug 2026.
+  // Llama 4 Scout (17B active / 109B total, MoE 16 experts):
+  //   $0.11/1M prompt, $0.34/1M completion (paid tier).
+  // Llama 4 Maverick (17B active / 400B total, MoE 128 experts):
+  //   $0.20/1M prompt, $0.60/1M completion (paid tier — higher because
+  //   the 128-expert model uses more compute per token).
+  // GPT-OSS 120B (Groq's hosted OpenAI open-weights model):
+  //   $0.10/1M prompt, $0.30/1M completion (paid tier).
+  // Free tier (30 RPM, 14400 RPD) is $0 — same as before.
+  "llama-4-scout-17b-16e-instruct": { prompt: 0.11, completion: 0.34, tier: "paid" },
+  "llama-4-maverick-17b-128e-instruct": { prompt: 0.2, completion: 0.6, tier: "paid" },
+  "openai/gpt-oss-120b": { prompt: 0.1, completion: 0.3, tier: "paid" },
 };
 
 // Bug #9 fix: default pricing for unknown models. The old default was

@@ -19,10 +19,22 @@
  *   swap between them transparently.
  *
  * Model chain:
- *   - llama-3.3-70b-versatile — best quality, supports function calling, 30 RPM
- *   - llama-3.1-8b-instant — faster + cheaper, supports function calling
- *   Groq models are stable (no frequent deprecations like Gemini), so we
- *   don't need model discovery. Just try them in order with 429 cooldown.
+ *   - llama-4-scout-17b-16e-instruct — Llama 4 Scout, MoE (17B active / 109B total),
+ *     supports function calling, 30 RPM free tier, 10M context. Best quality
+ *     replacement for the deprecated llama-3.3-70b-versatile.
+ *   - llama-4-maverick-17b-128e-instruct — Llama 4 Maverick, MoE (17B active /
+ *     400B total), supports function calling, 30 RPM free tier. Stronger than
+ *     Scout for complex reasoning.
+ *   - openai/gpt-oss-120b — Groq's hosted GPT-OSS 120B. Recommended by Groq
+ *     as a migration target for some Llama 3.3 workloads.
+ *
+ * v6.2 Part 10 (Production fix): Groq deprecated llama-3.3-70b-versatile +
+ * llama-3.1-8b-instant on June 17, 2026, with full decommission by August 16,
+ * 2026. The old chain was returning 404 model_not_found errors in production.
+ * Updated to the current Llama 4 family.
+ *
+ * Groq models are stable (no frequent deprecations like Gemini), so we
+ * don't need model discovery. Just try them in order with 429 cooldown.
  *
  * Config:
  *   GROQ_API_KEY — required, get one free at https://console.groq.com
@@ -44,11 +56,22 @@ import {
 } from "./aiToolLoop";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
+// v6.2 Part 10 (Production fix): Groq deprecated llama-3.3-70b-versatile +
+// llama-3.1-8b-instant on June 17, 2026 (full decommission Aug 16, 2026).
+// The old chain was returning 404 model_not_found errors in production.
+//
+// New chain uses the Llama 4 family (MoE models — Mixture of Experts).
+// Both support function calling + have 30 RPM free tier (same as the old
+// llama-3.3-70b-versatile). The Maverick variant has more experts (128 vs
+// 16) so it's better for complex reasoning at the cost of slightly higher
+// latency. We try Scout first (faster), then Maverick (stronger).
+//
 // Groq models are stable (unlike Gemini's frequent deprecations), so we
 // don't need ListModels discovery. Just try in order.
 const GROQ_MODEL_CHAIN = [
-  "llama-3.3-70b-versatile", // best quality, function calling, 30 RPM
-  "llama-3.1-8b-instant", // faster + cheaper, function calling
+  "llama-4-scout-17b-16e-instruct", // Llama 4 Scout, MoE, function calling, 30 RPM
+  "llama-4-maverick-17b-128e-instruct", // Llama 4 Maverick, MoE, function calling, 30 RPM
+  "openai/gpt-oss-120b", // GPT-OSS 120B (Groq's hosted version)
 ];
 
 // ─── Config ──────────────────────────────────────────────────────────────────

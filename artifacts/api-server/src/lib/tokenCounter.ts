@@ -17,10 +17,13 @@
 
 // ─── Per-model context windows ───────────────────────────────────────────────
 // Source: official docs as of Aug 2026. Updated periodically.
+// v6.2 Part 10: added gemini-3.7-flash + gemini-3.1-flash + Llama 4 models.
 const CONTEXT_WINDOWS: Record<string, number> = {
   // Gemini
+  "gemini-3.7-flash": 1_048_576, // v6.2 Part 10: GA Aug 13, 2026
   "gemini-3.6-flash": 1_048_576,
   "gemini-3.5-flash": 1_048_576,
+  "gemini-3.1-flash": 1_048_576,
   "gemini-3.0-flash": 1_048_576,
   "gemini-2.5-flash": 1_048_576,
   "gemini-2.5-flash-lite": 1_048_576,
@@ -28,7 +31,11 @@ const CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-2.0-flash": 1_048_576,
   "gemini-1.5-flash": 1_048_576,
   "gemini-flash-latest": 1_048_576,
-  // Groq
+  // Groq — Llama 4 family (v6.2 Part 10: replacements for deprecated llama-3.3-70b-versatile)
+  "llama-4-scout-17b-16e-instruct": 131_072, // 17B active / 109B total MoE
+  "llama-4-maverick-17b-128e-instruct": 131_072, // 17B active / 400B total MoE
+  "openai/gpt-oss-120b": 131_072, // Groq's hosted GPT-OSS 120B
+  // Groq — deprecated models (kept for backward compat with persisted messages)
   "llama-3.3-70b-versatile": 131_072,
   "llama-3.1-8b-instant": 131_072,
 };

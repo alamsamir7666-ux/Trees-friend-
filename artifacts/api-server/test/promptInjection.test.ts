@@ -42,7 +42,7 @@ describe("Prompt-injection: source-shape tests", () => {
     const source = readSource("artifacts/api-server/src/lib/promptInjectionLLM.ts");
     expect(source).toContain("export async function classifyWithLLM");
     expect(source).toContain("export function isLLMClassifierConfigured");
-    expect(source).toContain("llama-3.1-8b-instant"); // Groq free-tier model
+    expect(source).toContain("llama-4-scout-17b-16e-instruct"); // v6.2 Part 10: Groq free-tier model (was llama-3.1-8b-instant, deprecated Aug 16, 2026)
     expect(source).toContain("json_schema"); // structured output
   });
 
