@@ -136,7 +136,7 @@ describe("v6.1 Part 4: formatSellerListingContextForPrompt prepends care summary
 });
 
 describe("v6.1 Part 4: chat route skips KB auto-inject for MIXED intent", () => {
-  it("routes/ai.ts declares skipKbAutoInject for MIXED intent", async () => {
+  it("routes/ai.ts declares skipKbAutoInject for MIXED+PURCHASE intent", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
       "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
@@ -144,10 +144,11 @@ describe("v6.1 Part 4: chat route skips KB auto-inject for MIXED intent", () => 
     );
     // v6.1 Part 5 (Gap #4): changed from `const` to `let` so the
     // MIXED+0-listings fallback can reassign kbContext.
-    expect(source).toContain('const skipKbAutoInject = intentClassification.intent === "MIXED"');
-    // The skip pattern still exists (with `let` instead of `const` + type
-    // assertions for the empty fallback shape).
+    // v6.1 Part 6: also skips for PURCHASE intent (KB is care-focused,
+    // won't match pure purchase queries — saves ~200ms-3.5s).
     expect(source).toContain("skipKbAutoInject");
+    expect(source).toContain('intentClassification.intent === "MIXED"');
+    expect(source).toContain('intentClassification.intent === "PURCHASE"');
     expect(source).toContain("let kbContext = skipKbAutoInject");
     expect(source).toContain("injected: false");
     // The fallback logic for MIXED + 0 listings.

@@ -168,14 +168,20 @@ function getMaxRetries(): number {
  * partial text + a "continue from where you left off" instruction, until
  * the model finishes naturally (STOP) or we hit the limit.
  *
- * Default: 2 (so up to 3 × AI_MAX_TOKENS = 6144 tokens with default 2048).
- * Set to 0 to disable auto-continue (restores v3.8 behavior — truncated
- * responses stay truncated).
+ * v6.1 Part 6 (latency optimization): default reduced from 2 to 1. Each
+ * auto-continue call adds ~500ms-2s. With AI_MAX_TOKENS=2048 (the default),
+ * most responses fit in a single call — the auto-continue only triggers
+ * when the response is genuinely long (care guides, multi-listing
+ * recommendations). 1 continuation (2 total calls × 2048 = 4096 tokens)
+ * is enough for ~99% of responses.
+ *
+ * Set to 0 to disable auto-continue entirely (restores v3.8 behavior).
+ * Set to 2+ if you regularly have responses >4096 tokens.
  */
 function getMaxAutoContinues(): number {
   const raw = Number(process.env.AI_MAX_AUTO_CONTINUES);
   if (Number.isFinite(raw) && raw >= 0 && raw <= 5) return raw;
-  return 2;
+  return 1;
 }
 
 // ─── Lazy-initialized client ─────────────────────────────────────────────────

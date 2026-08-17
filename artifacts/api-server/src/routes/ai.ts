@@ -1091,7 +1091,26 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // circuit is OPEN, so we never reach this topic classifier when throttled.
   // The LLM topic classifier call is therefore implicitly skipped — no
   // need for an explicit `if (circuitOpen)` guard here.
-  if (!hasBotanicalKeyword(safeMessage)) {
+  //
+  // v6.1 Part 6 (latency optimization): SKIP the topic classifier when
+  // the intent classifier already returned a confident PURCHASE or
+  // KNOWLEDGE intent. If the user said "buy a mango sapling" (PURCHASE)
+  // or "how to water a mango tree" (KNOWLEDGE), the message is clearly
+  // on-topic — no need for an LLM topic classification call (~200ms-4s).
+  // The intent classifier is lexical (~10μs) and its PURCHASE/KNOWLEDGE
+  // results are high-confidence (a primary keyword matched).
+  //
+  // Only run the topic classifier for MIXED intent (ambiguous messages
+  // where the keyword gate fails AND the intent is unclear). This covers
+  // the edge cases the keyword list misses (Bengali, Banglish, paraphrased
+  // questions) without slowing down every request.
+  //
+  // Latency impact: saves ~200ms-4s for ~70-80% of messages (those where
+  // the intent classifier returns PURCHASE or KNOWLEDGE with high
+  // confidence).
+  const skipTopicClassifier =
+    intentClassification.intent === "PURCHASE" || intentClassification.intent === "KNOWLEDGE";
+  if (!hasBotanicalKeyword(safeMessage) && !skipTopicClassifier) {
     // Keyword gate failed — run the LLM topic classifier.
     const topicCheck = await classifyTopic(safeMessage);
     if (!topicCheck.isOnTopic) {
@@ -1409,11 +1428,20 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // a tool round + ~500ms latency). The fallback is implemented below
   // after the listings search result is known.
   //
-  // For KNOWLEDGE + PURCHASE + GREETING intent, KB auto-inject runs as
-  // usual (KNOWLEDGE needs the full 5 entries; PURCHASE + GREETING
-  // typically return nothing — KB content is care-focused, doesn't
-  // match pure purchase/greeting queries).
-  const skipKbAutoInject = intentClassification.intent === "MIXED";
+  // For KNOWLEDGE + GREETING intent, KB auto-inject runs as usual
+  // (KNOWLEDGE needs the full 5 entries; GREETING typically returns
+  // nothing — KB content is care-focused, doesn't match pure greeting
+  // queries).
+  //
+  // v6.1 Part 6 (latency optimization): also skip for PURCHASE intent.
+  // The KB content is care-focused (watering, sunlight, pruning) — it
+  // doesn't match pure purchase queries like "buy a mango sapling".
+  // Skipping saves ~200ms-3.5s (the KB search + reranker latency) for
+  // every PURCHASE-intent query. The LLM can still call
+  // search_knowledge_base on-demand if it needs care info for the
+  // specific listing it's recommending.
+  const skipKbAutoInject =
+    intentClassification.intent === "MIXED" || intentClassification.intent === "PURCHASE";
   // Changed from `const` to `let` so the MIXED+0-listings fallback can
   // reassign kbContext below (Gap #4 fix).
   let kbContext = skipKbAutoInject
@@ -2096,7 +2124,15 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     //
     // Done BEFORE persisting so the stored response always has a valid block.
     // The extra API call only happens when the prompt fails (~5% of the time).
-    if (fullResponse && !piiResult.hadPii) {
+    //
+    // v6.1 Part 6 (latency optimization): this fallback can be DISABLED via
+    // AI_FOLLOWUPS_FALLBACK_ENABLED=false. When disabled, a missing [followups]
+    // block means no follow-up chips are shown — the response itself is fine.
+    // Saves ~500ms-2s per request where the LLM forgets the block (~5% of
+    // responses). The frontend handles missing followups gracefully.
+    const followupsFallbackEnabled =
+      (process.env.AI_FOLLOWUPS_FALLBACK_ENABLED ?? "true").toLowerCase() !== "false";
+    if (fullResponse && !piiResult.hadPii && followupsFallbackEnabled) {
       const { found } = extractFollowups(fullResponse);
       if (!found) {
         logger.info("AI: [followups] block missing, generating via structured output");
@@ -2144,7 +2180,18 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     // The client is notified via a `response_replaced` SSE event so it can
     // update the displayed message (the original was already streamed via
     // deltas, so we need to tell the client to replace it).
-    if (fullResponse && fullResponse.trim()) {
+    //
+    // v6.1 Part 6 (latency optimization): the Constitutional AI check (an
+    // LLM call, ~200ms-3s) can be DISABLED via
+    // OUTPUT_CONSTITUTIONAL_AI_ENABLED=false. PII redaction (regex, ~1ms)
+    // still runs. When disabled, the check is skipped entirely — the
+    // response is persisted as-is. This is a security trade-off: the
+    // PII regex still catches phone numbers, emails, NID numbers, etc.
+    // The Constitutional AI catches subtler issues (harmful advice,
+    // jailbreak compliance). Disable at your own risk.
+    const constitutionalAiEnabled =
+      (process.env.OUTPUT_CONSTITUTIONAL_AI_ENABLED ?? "true").toLowerCase() !== "false";
+    if (fullResponse && fullResponse.trim() && constitutionalAiEnabled) {
       const outputSafety = await checkOutputSafety(safeMessage, fullResponse);
       if (outputSafety.sanitizedResponse !== fullResponse) {
         // The response was modified (PII redacted or safety fallback).

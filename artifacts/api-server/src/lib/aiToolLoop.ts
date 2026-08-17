@@ -47,17 +47,20 @@ import { logger } from "./logger";
  * between 1 and 25 (inclusive). Values outside this range are clamped
  * and a warning is logged.
  *
- * Why 10?
- *   - 4 (the old default) was too low for queries like:
- *       "I ordered a mango tree last month — check the order, then tell
- *        me how to care for it based on the seller's instructions"
- *     which legitimately needs 3-4 rounds (get_order → get_product_care
- *     → search_knowledge_base → final synthesis).
- *   - 10 leaves headroom for genuinely complex multi-tool flows without
- *     letting a runaway model burn the entire request budget.
- *   - 25 (OpenAI's ceiling) is excessive on Gemini's free tier.
+ * Why 5?
+ *   - v6.1 Part 6 (latency optimization): reduced from 10 to 5. Most
+ *     legitimate queries need 1-3 rounds. With the auto-inject paths
+ *     (KB context + seller-listing context pre-populated via intent
+ *     routing), the LLM often needs ZERO tool calls — the context is
+ *     already in the prompt. 5 rounds is enough for the rare multi-tool
+ *     flow (e.g. get_order → get_product_care) while preventing
+ *     runaway loops from burning 30+ seconds.
+ *   - The stuck-loop detector (detectStuckLoop) still fires at round 6+
+ *     if the model repeats the same tool call with the same args.
+ *   - Operators who need more headroom can set AI_MAX_TOOL_ROUNDS=10
+ *     (or up to 25) via env var.
  */
-export const DEFAULT_MAX_TOOL_ROUNDS = 10;
+export const DEFAULT_MAX_TOOL_ROUNDS = 5;
 
 /**
  * Hard upper bound on AI_MAX_TOOL_ROUNDS. Even if the operator sets
