@@ -20,6 +20,7 @@
  *   - get_product_care → CareGuideCard
  */
 import type { ToolResultEntry } from "@/hooks/useAiChat";
+import { AlertCircle } from "lucide-react";
 import { OrderDetailCard } from "./OrderDetailCard";
 import { OrderListCard } from "./OrderListCard";
 import { ListingGridCard } from "./ListingGridCard";
@@ -65,13 +66,21 @@ export function ToolComponentRenderer({
     if (!Component) continue; // no UI registered for this tool — skip
 
     if (!result.ok) {
-      // Tool errored — show a compact error card.
+      // v6.2 Part 3: enhanced error state with retry hint.
       components.push(
         <div
-          key={`${result.name}-${result.durationMs ?? 0}`}
-          className="border rounded-lg p-3 bg-destructive/5 border-destructive/20"
+          key={`error-${result.name}-${result.durationMs ?? 0}`}
+          className="border rounded-lg p-3 bg-destructive/5 border-destructive/20 flex items-start gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300"
         >
-          <p className="text-xs text-destructive">{result.error || `${result.name} failed`}</p>
+          <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-xs text-destructive font-medium">
+              {result.error || `${result.name} failed`}
+            </p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              Try asking again — the AI can retry the lookup.
+            </p>
+          </div>
         </div>,
       );
       continue;
@@ -84,12 +93,14 @@ export function ToolComponentRenderer({
       continue;
     }
 
+    // v6.2 Part 3: CSS animation (smooth fade-in + slide-up).
     components.push(
-      <Component
+      <div
         key={`${result.name}-${result.durationMs ?? 0}`}
-        data={result.data}
-        onClose={onClose}
-      />,
+        className="animate-in fade-in slide-in-from-bottom-2 duration-300"
+      >
+        <Component data={result.data} onClose={onClose} />
+      </div>,
     );
   }
 

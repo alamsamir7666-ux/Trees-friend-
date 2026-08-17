@@ -17,10 +17,12 @@
  *       availableQuantity, isPreOrder }], hasInStockVariant,
  *     hasPreOrderVariant, minPrice }
  */
-import { ShoppingBag, MapPin, Star, BadgeCheck, Truck } from "lucide-react";
+import { ShoppingBag, MapPin, Star, BadgeCheck, Truck, Plus } from "lucide-react";
 import { useLocation } from "wouter";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useGuestCart } from "@/hooks/useGuestCart";
 
 interface ListingVariant {
   variantId: number;
@@ -29,6 +31,7 @@ interface ListingVariant {
   price: number;
   discountPrice: number | null;
   availableQuantity: number;
+  deliveryCharge: number;
   isPreOrder: boolean;
 }
 
@@ -76,8 +79,32 @@ function formatStock(listing: ListingData): string {
 
 function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () => void }) {
   const [, navigate] = useLocation();
+  const guestCart = useGuestCart();
   const topVariant = listing.variants?.[0];
   const effectivePrice = topVariant?.discountPrice ?? topVariant?.price ?? listing.minPrice;
+  const canAddToCart = listing.hasInStockVariant || listing.hasPreOrderVariant;
+
+  const handleAddToCart = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!topVariant) return;
+    guestCart.addItem({
+      productId: listing.productId,
+      sellerListingVariantId: topVariant.variantId,
+      quantity: 1,
+      name: listing.productName,
+      price: topVariant.price,
+      discountPrice: topVariant.discountPrice,
+      image: "",
+      deliveryCharge: topVariant.deliveryCharge,
+    });
+    toast.success(`${listing.productName} added to cart`, {
+      description: `${topVariant.form ?? "Variant"} · ${formatPrice(effectivePrice)}`,
+      action: {
+        label: "View cart",
+        onClick: () => navigate("/cart"),
+      },
+    });
+  };
 
   return (
     <div className="border rounded-lg p-3 bg-card hover:shadow-md transition-shadow">
@@ -132,9 +159,9 @@ function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () 
         </div>
       )}
 
-      {/* ─── Price + button ────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
-        <div>
+      {/* ─── Price + buttons ──────────────────────────────────── */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
           <span className="text-base font-bold">{formatPrice(effectivePrice)}</span>
           {topVariant?.discountPrice !== null && topVariant?.discountPrice !== undefined && (
             <span className="text-[10px] text-muted-foreground line-through ml-1">
@@ -142,18 +169,26 @@ function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () 
             </span>
           )}
         </div>
-        <Button
-          variant="default"
-          size="sm"
-          className="h-7 text-xs"
-          onClick={() => {
-            onClose?.();
-            navigate(`/products/${listing.productId}/listings/${listing.listingId}`);
-          }}
-        >
-          <ShoppingBag className="h-3 w-3 mr-1" />
-          View
-        </Button>
+        <div className="flex gap-1.5 flex-shrink-0">
+          {canAddToCart && (
+            <Button variant="default" size="sm" className="h-7 text-xs" onClick={handleAddToCart}>
+              <Plus className="h-3 w-3 mr-0.5" />
+              Cart
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => {
+              onClose?.();
+              navigate(`/products/${listing.productId}/listings/${listing.listingId}`);
+            }}
+          >
+            <ShoppingBag className="h-3 w-3 mr-1" />
+            View
+          </Button>
+        </div>
       </div>
     </div>
   );
