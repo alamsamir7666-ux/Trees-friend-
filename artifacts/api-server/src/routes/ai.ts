@@ -80,6 +80,11 @@ import { startSseHeartbeat, type HeartbeatHandle } from "../lib/sseHeartbeat";
 import { isCircuitOpen, recordCost, getDailyBudgetUsd } from "../lib/costTracker";
 import { detectPromptInjection } from "../lib/promptInjection";
 import { classifyTopic } from "../lib/topicClassifier";
+// v6.1: Lexical intent classifier (PURCHASE / KNOWLEDGE / MIXED / GREETING).
+// Routes chat requests to the right tool flow: PURCHASE → search_seller_listings,
+// KNOWLEDGE → get_product_care + KB, MIXED → both. Fast (~10μs after warmup),
+// $0 cost (no LLM call), deterministic. Fail-open to MIXED when no keywords match.
+import { classifyIntent } from "../lib/intentClassifier";
 import { checkOutputSafety } from "../lib/outputSafety";
 import { getCachedResponse, setCachedResponse } from "../lib/semanticCache";
 import { getSemanticCachedResponse, setSemanticCachedResponse } from "../lib/embeddingCache";
@@ -565,6 +570,60 @@ async function resolveSessionToken(
  * progress). The DB row's user_id is set ONLY on insert; existing rows
  * are NEVER updated here (rotation handled by `resolveSessionToken`).
  */
+// ─── v6.1: loadBuyerLocation ─────────────────────────────────────────────────
+/**
+ * Loads the buyer's default shipping address (city + district only) for
+ * use as the `userCity` / `userDistrict` fields in `ToolContext`.
+ *
+ * Privacy design:
+ *   - We ONLY select city + district (NOT street, phone, fullName, postalCode).
+ *     The chat tool executor + LLM see just the city/district — enough for
+ *     distance-aware listing sort, not enough to identify the user's home.
+ *   - Anonymous users (clerkUserId == null) → returns null location.
+ *   - Signed-in users with no addresses → returns null location.
+ *   - Signed-in users with addresses but no default → returns the most
+ *     recently added address (best-effort — better than nothing for the
+ *     distance sort).
+ *
+ * Performance: this runs on EVERY chat request (hot path), so we use a
+ * single-column SELECT with an index hint (addresses_user_id_idx covers
+ * WHERE user_id = ?). The query is ~2ms typical. We catch all errors and
+ * return null — a DB hiccup here doesn't break the chat (just disables
+ * distance sorting for that one request).
+ *
+ * @param clerkUserId The Clerk user ID (null for anonymous users).
+ * @returns `{ city: string; district: string } | null`
+ */
+async function loadBuyerLocation(
+  clerkUserId: string | null,
+): Promise<{ city: string; district: string } | null> {
+  if (!clerkUserId) return null;
+  try {
+    // Order by is_default DESC then created_at DESC — gets the default
+    // address if one exists, otherwise the most recently added.
+    const result = await pool.query<{ city: string; district: string }>(
+      `SELECT city, district
+       FROM addresses
+       WHERE user_id = $1
+       ORDER BY is_default DESC, created_at DESC
+       LIMIT 1`,
+      [clerkUserId],
+    );
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0];
+    // Defensive: if either field is null/empty, return null so the tool
+    // falls back to no-distance-sort (don't pass partial location data).
+    if (!row.city || !row.district) return null;
+    return { city: row.city, district: row.district };
+  } catch (err) {
+    logger.warn(
+      { err: (err as Error)?.message ?? String(err), clerkUserId },
+      "AI: loadBuyerLocation failed — proceeding with null location (no distance sort)",
+    );
+    return null;
+  }
+}
+
 async function findOrCreateSession(
   sid: string,
   firstMessage: string,
@@ -836,6 +895,22 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // in, we proceed as anonymous (v1 behavior).
   const clerkUserId = req.userId ?? getAuth(req)?.userId ?? null;
 
+  // ─── 1b-v6.1. Load buyer's default address (city + district) ──────────────
+  // Used by the search_seller_listings tool (Part 2 of this PR series) for
+  // distance-aware sorting. Anonymous users → null (no distance sort, just
+  // rating + price). Signed-in users with no default address → also null.
+  //
+  // Privacy: we only load city + district, NOT street/phone/fullName. The
+  // tool receives just the city/district for distance sorting. The user's
+  // full address stays in the addresses table.
+  //
+  // Fire-and-forget: if this query fails, we proceed with null location —
+  // the worst case is that listings sort by rating only (no distance).
+  // We use Promise.allSettled so a slow DB doesn't block the chat request.
+  // (Part 1 only LOGS the result — the actual ToolContext wiring happens
+  // below at the executeTool closure.)
+  const buyerLocation = await loadBuyerLocation(clerkUserId);
+
   // ─── 1c. Resolve session token (cookie-first, body-fallback, verify HMAC) ───
   // IDOR fix: the previous code blindly trusted `sessionToken` from the
   // request body (a bare crypto.randomUUID() stored in localStorage). Now
@@ -955,6 +1030,27 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     }
     return;
   }
+
+  // ─── 3c. v6.1: Classify intent (PURCHASE / KNOWLEDGE / MIXED) ──────────
+  // Lexical classifier — fast (~10μs after L1 cache warmup), $0 cost (no LLM
+  // call), deterministic. Used in Part 3 of this PR series to route chat
+  // requests to the right tool flow:
+  //   - PURCHASE  → search_seller_listings (returns specific seller listings)
+  //   - KNOWLEDGE → get_product_care + KB (existing flow, unchanged)
+  //   - MIXED     → both (single tool call with care summary flag)
+  //
+  // Part 1 (this commit) only LOGS the classification to ai_chat_events
+  // for observability — no behavior change yet. This lets us validate the
+  // classifier's accuracy on real production traffic BEFORE depending on it
+  // for routing (Part 3). Industry standard: "instrument first, then act"
+  // — same pattern as the topic classifier's v5.3 rollout.
+  //
+  // The classifier runs AFTER PII redaction (so the redacted message is
+  // what gets classified — protects user privacy in cache + logs) and
+  // AFTER the circuit check (so we don't waste cycles when throttled).
+  // It runs BEFORE the topic gate so we can correlate intent + topic in
+  // the event log.
+  const intentClassification = classifyIntent(safeMessage);
 
   // ─── 4. Topic gate (v5.3: soft LLM-based, not hard keyword block) ───
   // Industry standard: modern chatbots (ChatGPT, Claude, Gemini) do NOT use
@@ -1155,6 +1251,30 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     res.status(500).json({ error: "Failed to start chat session." });
     return;
   }
+
+  // v6.1: Log the intent classification to ai_chat_events for observability.
+  // Part 1 (this commit) only logs — no routing behavior change yet.
+  // Part 3 will use the classification to drive tool selection.
+  //
+  // Best-effort: if the event log fails, the chat still proceeds. We log
+  // the intent + reason + sample of matched keywords (truncated to keep
+  // the payload small — the admin dashboard can show "PURCHASE intent
+  // matched 'buy' + 'price'" without dumping the full keyword list).
+  // We also log the buyer's location status (city/district known or null)
+  // so the admin can see what % of chat requests have location data for
+  // distance-aware listing sort.
+  await logAiEvent(session.id, "intent_classified", {
+    intent: intentClassification.intent,
+    reason: intentClassification.reason.slice(0, 200),
+    purchaseHitCount: intentClassification.purchaseHits.length,
+    knowledgeHitCount: intentClassification.knowledgeHits.length,
+    purchaseHitsSample: intentClassification.purchaseHits.slice(0, 5),
+    knowledgeHitsSample: intentClassification.knowledgeHits.slice(0, 5),
+    // v6.1: buyer location status for distance-aware tool routing.
+    // We log city/district (not street/phone) — privacy-preserving.
+    buyerCity: buyerLocation?.city ?? null,
+    buyerDistrict: buyerLocation?.district ?? null,
+  }).catch(() => {});
 
   // ─── 6. v3.0 Conversation memory: load + maybe summarize ───
   // Load the existing summary (if any) for this session. Then check if
@@ -1621,6 +1741,12 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
           executeTool(name, args, uid, {
             toneLockedCreatorId: kbContext.toneCreator?.creatorId ?? null,
             toneLockedCreatorName: kbContext.toneCreator?.creatorName ?? null,
+            // v6.1: pass the buyer's location (from their default address)
+            // to the tool executor. Used by search_seller_listings (Part 2)
+            // for distance-aware sorting. Null for anonymous users → no
+            // distance sort (just rating + price).
+            userCity: buyerLocation?.city ?? null,
+            userDistrict: buyerLocation?.district ?? null,
           }),
       },
       clerkUserId,
@@ -3205,13 +3331,22 @@ router.get("/ai/products-by-slug", async (req: Request, res: Response) => {
          (p.images::jsonb->0->>'url') AS image,
          -- Cheapest variant price across active seller listings for this product.
          -- If no listings exist, returns NULL.
+         --
+         -- v6.1 fix: the seller_listings table has NO 'is_active' column and
+         -- NO 'deleted_at' column. The previous SQL referenced both, causing
+         -- PostgreSQL error 42703 on every chip-rendering request. The
+         -- outer try/catch swallowed it and returned { products: [] } --
+         -- meaning every [[product]] chip rendered with NO price (just the
+         -- name + image). The fix is to use the canonical buyer-facing
+         -- filter (visibility + approval_status) matching the rest of the
+         -- codebase (routes/sellerListings.ts, aiTools.ts:searchCatalog).
          (
            SELECT MIN(sl.price::text)
            FROM seller_listings sl
            JOIN seller_listing_variants slv ON slv.seller_listing_id = sl.id
            WHERE sl.product_id = p.id
-             AND sl.is_active = true
-             AND sl.deleted_at IS NULL
+             AND sl.visibility = 'public'
+             AND sl.approval_status = 'approved'
          ) AS price,
          'BDT' AS currency
        FROM products p

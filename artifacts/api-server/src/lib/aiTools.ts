@@ -66,12 +66,35 @@ import { searchKnowledgeBase, UNIFIED_MIN_SCORE, UNIFIED_CONTENT_TRUNCATE_CHARS 
  *
  * Null when no tone is active (no auto-injected KB entries, or the top
  * creator has no tone profile).
+ *
+ * v6.1 extension: `userCity` + `userDistrict` — the buyer's default
+ * shipping address, used by the new `search_seller_listings` tool (Part 2
+ * of this PR series) to sort results by distance. Sourced from the
+ * `addresses` table (is_default = true) via the chat route's
+ * `loadBuyerLocation` helper.
+ *
+ * Privacy: this is the user's own address — only their own city/district
+ * is shared with the tool, not their street or phone. Anonymous users have
+ * these fields as null — the search_seller_listings tool then sorts by
+ * rating + price only (no distance sort).
  */
 export interface ToolContext {
   /** The creator whose tone profile is locked into the system prompt's
    * {{tone}} block. Null when no tone is active. */
   toneLockedCreatorId?: number | null;
   toneLockedCreatorName?: string | null;
+  /**
+   * v6.1: The buyer's city (e.g. "Dhaka"). Null for anonymous users or
+   * signed-in users with no default address. Used by search_seller_listings
+   * for distance-aware sorting.
+   */
+  userCity?: string | null;
+  /**
+   * v6.1: The buyer's district (e.g. "Dhaka"). More granular than city —
+   * Bangladesh has 64 districts. Used for distance calc against the
+   * seller's district (sellersTable.district).
+   */
+  userDistrict?: string | null;
 }
 
 /**
@@ -400,11 +423,23 @@ async function searchCatalog(args: Record<string, unknown>): Promise<{
   // PostgreSQL error 42703 ("column sl.is_active does not exist") on every
   // search_catalog tool call, breaking the AI assistant's product search.
   //
-  // Soft-delete filter (`deleted_at IS NULL`) is applied on the listing row
-  // here; the variant row (seller_listing_variants) does NOT have a
-  // deleted_at column in the schema, so we must NOT filter on it.
-  const ACTIVE_LISTING_FILTER =
-    "sl.visibility = 'public' AND sl.approval_status = 'approved' AND sl.deleted_at IS NULL";
+  // v6.1 fix: the seller_listings table also has NO `deleted_at` column
+  // (soft-delete is not implemented at the listing level — listings use
+  // visibility = 'hidden' + approval_status = 'rejected' instead). The
+  // previous `AND sl.deleted_at IS NULL` clause caused PostgreSQL error
+  // 42703 on every search_catalog call, silently breaking AI product
+  // search. The outer try/catch in executeTool swallowed the error and
+  // returned { error: "Tool execution failed" } to the LLM, which fell
+  // back to the variety-level CATALOG CONTEXT injected by
+  // buildCatalogContext() — meaning the AI never had access to per-seller
+  // pricing for any product, ever.
+  //
+  // The fix is to drop the `deleted_at` clause. If we ever add soft-delete
+  // to seller_listings (a deliberate schema change), re-add it here AND in
+  // the products-by-slug route (routes/ai.ts) AND in
+  // routes/products.ts:fetchSellerListingCardsFor — all three sites that
+  // join seller_listings must stay in sync.
+  const ACTIVE_LISTING_FILTER = "sl.visibility = 'public' AND sl.approval_status = 'approved'";
 
   // The price subquery joins seller_listings → seller_listing_variants to
   // find the lowest variant price per product. Only listings that pass the
