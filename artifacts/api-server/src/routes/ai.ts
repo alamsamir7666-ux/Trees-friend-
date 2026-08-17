@@ -57,6 +57,9 @@ import {
   // are now the primary source — keeping the auto-inject block around
   // would create confusion (stale context mixed with fresh tool results).
   clearKbBlockFromPrompt,
+  // v6.1 Part 3: formats the seller-listing search results as a prompt
+  // block for the {{listings}} placeholder.
+  formatSellerListingContextForPrompt,
   hasBotanicalKeyword,
   isPureGreeting,
   GREETING_INTRO_MESSAGE,
@@ -93,11 +96,21 @@ import { getSemanticCachedResponse, setSemanticCachedResponse } from "../lib/emb
 import { getKbContentVersion } from "../lib/kbContentVersion";
 import { getActivePrompt } from "../lib/promptVersioning";
 import { getTopKbEntriesForPrompt, formatKbContextForPrompt } from "../lib/kbSearch";
+// v6.1 Part 3: seller-listing search auto-inject. When intent is PURCHASE
+// or MIXED, the chat route pre-calls searchSellerListings and injects the
+// results into the {{listings}} placeholder — mirrors how
+// getTopKbEntriesForPrompt auto-injects KB context. The LLM gets the
+// listings upfront (no first-round tool call needed), which reduces latency
+// by ~1 LLM round (~500ms-2s) for purchase-intent queries.
+import { searchSellerListings } from "../lib/sellerListingSearch";
 import {
   getToneProfile,
   getEffectiveToneMatchPercentage,
   formatToneBlockForPrompt,
 } from "../lib/kbToneProfiles";
+// formatSellerListingContextForPrompt lives in aiContext.ts (alongside
+// renderPromptTemplate + buildSystemPrompt + the other prompt formatters).
+// We add it to the existing aiContext import below.
 import { generateFollowupsStructured, formatFollowupsBlock } from "../lib/structuredOutput";
 import { extractFollowups } from "../lib/followupParser";
 import {
@@ -1419,6 +1432,64 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     }
   }
 
+  // ─── v6.1 Part 3: Auto-call search_seller_listings for PURCHASE/MIXED intent ──
+  // Mirrors the getTopKbEntriesForPrompt auto-inject pattern (above). When
+  // the intent classifier detects PURCHASE or MIXED intent, we pre-call
+  // search_seller_listings so the LLM has the listings upfront — no
+  // first-round tool call needed. This saves ~1 LLM round (~500ms-2s)
+  // of latency for purchase-intent queries.
+  //
+  // PURCHASE intent: KB auto-inject is still attempted (above) but typically
+  // returns nothing because PURCHASE queries don't match care-info keywords.
+  // The KB block is empty, the listings block has the purchasable items.
+  //
+  // MIXED intent: BOTH blocks are populated. KB has care info, listings has
+  // purchasable items. The LLM uses both (care answer + buy link).
+  //
+  // KNOWLEDGE intent: listings block is skipped (no point injecting listings
+  // if the user just wants care info). The LLM can still call the
+  // search_seller_listings tool on-demand if the user follows up with a
+  // purchase question.
+  let listingsBlock = "";
+  if (intentClassification.intent === "PURCHASE" || intentClassification.intent === "MIXED") {
+    try {
+      const listingSearchResult = await searchSellerListings({
+        query: safeMessage,
+        userCity: buyerLocation?.city ?? null,
+        userDistrict: buyerLocation?.district ?? null,
+      });
+      if (listingSearchResult.listings.length > 0) {
+        listingsBlock = formatSellerListingContextForPrompt(listingSearchResult.listings);
+        logger.info(
+          {
+            intent: intentClassification.intent,
+            listingCount: listingSearchResult.listings.length,
+            totalCount: listingSearchResult.totalCount,
+            listingIds: listingSearchResult.listings.map((l) => l.listingId),
+            buyerDistrict: buyerLocation?.district ?? null,
+          },
+          "AI: seller-listing context injected into prompt (v6.1 Part 3 auto-call)",
+        );
+      } else {
+        logger.info(
+          {
+            intent: intentClassification.intent,
+            query: safeMessage.slice(0, 80),
+            error: listingSearchResult.error,
+          },
+          "AI: search_seller_listings returned 0 listings — LLM will rely on KB / catalog context",
+        );
+      }
+    } catch (err) {
+      // Non-fatal — the LLM can still call search_seller_listings as a tool
+      // on-demand (the tool is declared, the LLM can invoke it).
+      logger.warn(
+        { err: (err as Error)?.message ?? String(err), intent: intentClassification.intent },
+        "AI: search_seller_listings auto-call failed (non-fatal — LLM can call as tool)",
+      );
+    }
+  }
+
   const systemPrompt =
     promptVersionInfo.text && promptVersionInfo.text.trim().length > 0
       ? renderPromptTemplate(
@@ -1427,8 +1498,9 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
           catalogContext,
           knowledgeBlock,
           toneBlock,
+          listingsBlock,
         )
-      : buildSystemPrompt(catalogContext, summaryBlock, knowledgeBlock, toneBlock);
+      : buildSystemPrompt(catalogContext, summaryBlock, knowledgeBlock, toneBlock, listingsBlock);
 
   // ─── 10. Set up SSE response ───
   res.setHeader("Content-Type", "text/event-stream");

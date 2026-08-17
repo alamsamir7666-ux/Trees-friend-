@@ -674,7 +674,7 @@ After your main answer, ALWAYS append a follow-up suggestions block in this EXAC
 - Third short question
 [/followups]
 
-The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.{{summary}}{{knowledge}}{{catalog}}{{tone}}
+The questions should be relevant to the user's current question and your answer. Each on its own line, prefixed with "- ". Keep them short (max 8 words each). Write them in the SAME language as your main answer.{{summary}}{{knowledge}}{{listings}}{{catalog}}{{tone}}
 
 REMEMBER: Stay strictly on-topic. If you're unsure whether a question is botanical, refuse politely. Always include the [followups]...[/followups] block at the end.`;
 
@@ -709,6 +709,13 @@ export function renderPromptTemplate(
   catalogContext: string,
   knowledgeBlock: string = "",
   toneBlock: string = "",
+  /**
+   * v6.1 Part 3: seller-listing context block. Auto-injected when the
+   * intent classifier detects PURCHASE or MIXED intent — the chat route
+   * pre-calls search_seller_listings so the LLM has the listings upfront
+   * (mirrors how getTopKbEntriesForPrompt auto-injects KB context).
+   */
+  listingsBlock: string = "",
 ): string {
   const contextBlock = catalogContext
     ? `\n\nCATALOG CONTEXT (use when relevant; cite exact product names):\n${catalogContext}\n`
@@ -717,6 +724,7 @@ export function renderPromptTemplate(
   const summary = summaryBlock || "";
   const knowledge = knowledgeBlock || "";
   const tone = toneBlock || "";
+  const listings = listingsBlock || "";
 
   let rendered = template;
 
@@ -736,6 +744,19 @@ export function renderPromptTemplate(
     // block (so KB context appears first = higher priority). We find the
     // catalog block + prepend the knowledge block to it.
     rendered = rendered.replace(/(\n\nCATALOG CONTEXT)/, `\n\n${knowledge}$1`);
+  }
+
+  // v6.1 Part 3: Replace {{listings}} placeholder if present.
+  // The listings block is the auto-injected seller-listing context for
+  // PURCHASE-intent queries. Distinct from {{knowledge}} (KB care info)
+  // — different semantic meaning, different citation format.
+  if (rendered.includes("{{listings}}")) {
+    rendered = rendered.replaceAll("{{listings}}", listings);
+  } else if (listings) {
+    // No placeholder but listings exist — insert before the catalog block
+    // (same priority logic as knowledge — listings context is more
+    // actionable than variety-level catalog info for purchase queries).
+    rendered = rendered.replace(/(\n\nCATALOG CONTEXT)/, `\n\n${listings}$1`);
   }
 
   // Replace {{catalog}} placeholder if present.
@@ -783,6 +804,7 @@ export function buildSystemPrompt(
   summaryBlock: string = "",
   knowledgeBlock: string = "",
   toneBlock: string = "",
+  listingsBlock: string = "",
 ): string {
   return renderPromptTemplate(
     SYSTEM_PROMPT_TEMPLATE_V1,
@@ -790,7 +812,98 @@ export function buildSystemPrompt(
     catalogContext,
     knowledgeBlock,
     toneBlock,
+    listingsBlock,
   );
+}
+
+// ─── v6.1 Part 3: format seller-listing context for the system prompt ───────
+
+/**
+ * Formats seller-listing search results as a system prompt block.
+ *
+ * The block is injected into the {{listings}} placeholder (or appended
+ * before the catalog block if the placeholder is missing). It tells the
+ * LLM to use these listings as the primary source for purchase-intent
+ * responses, and to cite each listing using the new
+ * [[listing:<id>|<display>]] format.
+ *
+ * Industry standard: same pattern as formatKbContextForPrompt — a clear
+ * header explaining the block's purpose + structured entries the LLM can
+ * reference. The block explicitly tells the LLM the citation format +
+ * that clicking the chip deep-links to the SellerListingDetailPage.
+ *
+ * Token budget: each listing is ~80-120 tokens (id, seller name, location,
+ * 2-3 variants with form/price/stock). 5 listings = ~500-600 tokens.
+ * Within Gemini/Groq context windows (128K+).
+ *
+ * @param listings The listings returned by searchSellerListings.
+ * @returns A formatted prompt block, or "" if no listings.
+ */
+export function formatSellerListingContextForPrompt(
+  listings: {
+    listingId: number;
+    productId: number;
+    productName: string;
+    sellerName: string;
+    sellerLocation: string | null;
+    sellerIsVerified: boolean;
+    rating: number;
+    reviewCount: number;
+    deliveryTimeDays: number | null;
+    minPrice: number | null;
+    hasInStockVariant: boolean;
+    hasPreOrderVariant: boolean;
+    variants: {
+      form: string | null;
+      height: string | null;
+      price: number;
+      discountPrice: number | null;
+      availableQuantity: number;
+      isPreOrder: boolean;
+    }[];
+  }[],
+): string {
+  if (!listings || listings.length === 0) return "";
+
+  const lines: string[] = [
+    "SELLER LISTING CONTEXT (use as PRIMARY source for purchase-intent responses):",
+    "For each listing you recommend, cite it using the format [[listing:<id>|<display>]] where <id> is the listingId and <display> is a short label (e.g. [[listing:42|Alphonso Mango — 3ft sapling, 450 BDT]]). The frontend will deep-link this to the SellerListingDetailPage where the user can add to cart.",
+    "",
+  ];
+
+  for (const l of listings) {
+    const inStockLabel = l.hasInStockVariant
+      ? l.hasPreOrderVariant
+        ? "in stock + pre-order"
+        : "in stock"
+      : l.hasPreOrderVariant
+        ? "pre-order only"
+        : "out of stock";
+
+    const verifiedLabel = l.sellerIsVerified ? " [verified seller]" : "";
+    const ratingLabel =
+      l.reviewCount > 0 ? ` ${l.rating.toFixed(1)}★ (${l.reviewCount} reviews)` : " no reviews";
+
+    lines.push(
+      `- listingId:${l.listingId} productId:${l.productId} "${l.productName}" — seller: ${l.sellerName}${verifiedLabel}, location: ${l.sellerLocation ?? "unknown"}, ${inStockLabel}${ratingLabel}, minPrice: ${l.minPrice ?? "n/a"} BDT${l.deliveryTimeDays !== null ? `, delivery: ${l.deliveryTimeDays}d` : ""}`,
+    );
+
+    // List up to 3 variants per listing.
+    for (const v of l.variants.slice(0, 3)) {
+      const formPart = v.form ? `${v.form}` : "variant";
+      const heightPart = v.height ? `, ${v.height}` : "";
+      const effectivePrice = v.discountPrice ?? v.price;
+      const stockPart =
+        v.availableQuantity > 0
+          ? `${v.availableQuantity} in stock`
+          : v.isPreOrder
+            ? "pre-order"
+            : "out of stock";
+      lines.push(`    - variant: ${formPart}${heightPart}, ${effectivePrice} BDT, ${stockPart}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 // ─── BUG-I5 fix: clear the KB block after the first tool round ──────────────

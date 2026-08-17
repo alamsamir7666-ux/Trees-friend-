@@ -214,6 +214,30 @@ interface BudgetStatus {
   date: string;
 }
 
+// ─── v6.1 Part 3: Intent classifier types ─────────────────────────────────
+
+interface IntentHealth {
+  enabled: boolean;
+  cache: {
+    enabled: boolean;
+    l1Entries: number;
+    l1MaxEntries: number;
+  };
+}
+
+interface IntentMetrics {
+  hours: number;
+  purchase: number;
+  knowledge: number;
+  mixed: number;
+  greeting: number;
+  total: number;
+  purchasePct: number;
+  knowledgePct: number;
+  mixedPct: number;
+  greetingPct: number;
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export function AiInsightsTab() {
@@ -244,6 +268,13 @@ export function AiInsightsTab() {
   const [budgetStatus, setBudgetStatus] = useState<BudgetStatus | null>(null);
   const [circuitResetting, setCircuitResetting] = useState(false);
   const [testAlertSending, setTestAlertSending] = useState(false);
+
+  // v6.1 Part 3: Intent classifier state. Shows the distribution of
+  // PURCHASE/KNOWLEDGE/MIXED/GREETING intents over the last 24h + the L1
+  // cache stats. Used to validate the classifier's accuracy on real
+  // production traffic.
+  const [intentHealth, setIntentHealth] = useState<IntentHealth | null>(null);
+  const [intentMetrics, setIntentMetrics] = useState<IntentMetrics | null>(null);
 
   const PAGE_SIZE = 10;
 
@@ -284,14 +315,18 @@ export function AiInsightsTab() {
       }
     };
 
-    const [secHealth, topHealth, topMetrics, search, attacks, budget] = await Promise.all([
-      safeFetch<SecurityHealth>("/api/ai/admin/security/health"),
-      safeFetch<TopicHealth>("/api/ai/admin/topic/health"),
-      safeFetch<TopicMetrics>("/api/ai/admin/topic/metrics?hours=24"),
-      safeFetch<SearchHealth>("/api/ai/admin/kb/search/health"),
-      safeFetch<{ attacks: AttackLogItem[] }>("/api/ai/admin/security/attack-log?limit=5"),
-      safeFetch<BudgetStatus>("/api/ai/admin/cost/budget"),
-    ]);
+    const [secHealth, topHealth, topMetrics, search, attacks, budget, intHealth, intMetrics] =
+      await Promise.all([
+        safeFetch<SecurityHealth>("/api/ai/admin/security/health"),
+        safeFetch<TopicHealth>("/api/ai/admin/topic/health"),
+        safeFetch<TopicMetrics>("/api/ai/admin/topic/metrics?hours=24"),
+        safeFetch<SearchHealth>("/api/ai/admin/kb/search/health"),
+        safeFetch<{ attacks: AttackLogItem[] }>("/api/ai/admin/security/attack-log?limit=5"),
+        safeFetch<BudgetStatus>("/api/ai/admin/cost/budget"),
+        // v6.1 Part 3: intent classifier health + metrics.
+        safeFetch<IntentHealth>("/api/ai/admin/intent/health"),
+        safeFetch<IntentMetrics>("/api/ai/admin/intent/metrics?hours=24"),
+      ]);
 
     setSecurityHealth(secHealth);
     setTopicHealth(topHealth);
@@ -299,6 +334,8 @@ export function AiInsightsTab() {
     setSearchHealth(search);
     setRecentAttacks(attacks?.attacks ?? []);
     setBudgetStatus(budget);
+    setIntentHealth(intHealth);
+    setIntentMetrics(intMetrics);
   }, [getToken]);
 
   useEffect(() => {
@@ -965,6 +1002,119 @@ export function AiInsightsTab() {
                 Send Test Alert
               </Button>
             </div>
+          </div>
+        )}
+      </CollapsibleSection>
+
+      {/* ─── v6.1 Part 3: Intent Classifier ────────────────────────────────── */}
+      <CollapsibleSection
+        id="intent"
+        title="Intent Classifier (24h)"
+        icon={<Brain className="h-4 w-4 text-muted-foreground" />}
+        expanded={expandedSection === "intent"}
+        onToggle={() => setExpandedSection(expandedSection === "intent" ? null : "intent")}
+      >
+        {!intentHealth || !intentMetrics ? (
+          <EmptyList text="Intent classifier unavailable (deploy v6.1 Part 1+)." />
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              {intentHealth.enabled ? (
+                <Badge variant="outline" className="text-success border-success/30">
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> Active
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-muted-foreground">
+                  Disabled
+                </Badge>
+              )}
+              <span className="text-xs text-muted-foreground">
+                Lexical (PURCHASE/KNOWLEDGE/MIXED/GREETING) · L1 cache:{" "}
+                {intentHealth.cache.l1Entries}/{intentHealth.cache.l1MaxEntries}
+              </span>
+            </div>
+
+            {/* Intent distribution */}
+            <div className="grid grid-cols-4 gap-2 text-xs">
+              <div className="bg-success/5 border border-success/20 rounded p-2 text-center">
+                <div className="text-muted-foreground text-[10px]">Purchase</div>
+                <div className="font-semibold text-success">{intentMetrics.purchase}</div>
+                <div className="text-[9px] text-muted-foreground">
+                  {intentMetrics.purchasePct.toFixed(1)}%
+                </div>
+              </div>
+              <div className="bg-info/5 border border-info/20 rounded p-2 text-center">
+                <div className="text-muted-foreground text-[10px]">Knowledge</div>
+                <div className="font-semibold text-info">{intentMetrics.knowledge}</div>
+                <div className="text-[9px] text-muted-foreground">
+                  {intentMetrics.knowledgePct.toFixed(1)}%
+                </div>
+              </div>
+              <div className="bg-warning/5 border border-warning/20 rounded p-2 text-center">
+                <div className="text-muted-foreground text-[10px]">Mixed</div>
+                <div className="font-semibold text-warning">{intentMetrics.mixed}</div>
+                <div className="text-[9px] text-muted-foreground">
+                  {intentMetrics.mixedPct.toFixed(1)}%
+                </div>
+              </div>
+              <div className="bg-muted/30 border border-muted/20 rounded p-2 text-center">
+                <div className="text-muted-foreground text-[10px]">Greeting</div>
+                <div className="font-semibold">{intentMetrics.greeting}</div>
+                <div className="text-[9px] text-muted-foreground">
+                  {intentMetrics.greetingPct.toFixed(1)}%
+                </div>
+              </div>
+            </div>
+
+            {/* Stacked distribution bar */}
+            {intentMetrics.total > 0 && (
+              <div className="bg-muted/30 rounded-lg p-3">
+                <div className="text-xs text-muted-foreground mb-2">
+                  Distribution ({intentMetrics.total} classified messages in {intentMetrics.hours}h)
+                </div>
+                <div className="h-4 rounded-full overflow-hidden flex">
+                  {intentMetrics.purchase > 0 && (
+                    <div
+                      className="bg-success"
+                      style={{ width: `${intentMetrics.purchasePct}%` }}
+                      title={`Purchase: ${intentMetrics.purchase} (${intentMetrics.purchasePct}%)`}
+                    />
+                  )}
+                  {intentMetrics.knowledge > 0 && (
+                    <div
+                      className="bg-info"
+                      style={{ width: `${intentMetrics.knowledgePct}%` }}
+                      title={`Knowledge: ${intentMetrics.knowledge} (${intentMetrics.knowledgePct}%)`}
+                    />
+                  )}
+                  {intentMetrics.mixed > 0 && (
+                    <div
+                      className="bg-warning"
+                      style={{ width: `${intentMetrics.mixedPct}%` }}
+                      title={`Mixed: ${intentMetrics.mixed} (${intentMetrics.mixedPct}%)`}
+                    />
+                  )}
+                  {intentMetrics.greeting > 0 && (
+                    <div
+                      className="bg-muted-foreground/40"
+                      style={{ width: `${intentMetrics.greetingPct}%` }}
+                      title={`Greeting: ${intentMetrics.greeting} (${intentMetrics.greetingPct}%)`}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+
+            {intentMetrics.purchase > 10 && (
+              <div className="text-xs bg-success/5 border border-success/20 rounded p-2 flex items-start gap-1.5">
+                <Zap className="h-3 w-3 text-success flex-shrink-0 mt-0.5" />
+                <span>
+                  {intentMetrics.purchase} purchase-intent queries in 24h. The new
+                  search_seller_listings tool auto-calls for these — saving ~1 LLM round (~500ms-2s)
+                  per query vs the on-demand tool path.
+                </span>
+              </div>
+            )}
           </div>
         )}
       </CollapsibleSection>

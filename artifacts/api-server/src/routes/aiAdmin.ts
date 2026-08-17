@@ -3681,6 +3681,126 @@ router.get("/ai/admin/topic/metrics", async (req: Request, res: Response) => {
   }
 });
 
+// ─── v6.1 Part 3: Intent classifier metrics ───────────────────────────────
+//   GET  /api/ai/admin/intent/health        — config + cache stats
+//   GET  /api/ai/admin/intent/metrics       — distribution by intent (24h)
+//   POST /api/ai/admin/intent/test          — test a message against the classifier
+//   POST /api/ai/admin/intent/clear-cache   — clear the L1 cache
+
+// ─── GET /api/ai/admin/intent/health ─────────────────────────────────────────
+// Returns the intent classifier configuration + L1 cache stats.
+router.get("/ai/admin/intent/health", async (_req: Request, res: Response) => {
+  try {
+    const { getIntentCacheStats } = await import("../lib/intentClassifier");
+    res.json({
+      enabled: true, // the lexical classifier is always enabled (no env var to disable)
+      cache: getIntentCacheStats(),
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: intent health failed");
+    res.status(500).json({ error: "Failed to get intent classifier status." });
+  }
+});
+
+// ─── GET /api/ai/admin/intent/metrics?hours=24 ───────────────────────────────
+// Returns the distribution of detected intents (PURCHASE/KNOWLEDGE/MIXED/
+// GREETING) over the last N hours. Queries the ai_chat_events table for
+// 'intent_classified' events (added in Part 1).
+//
+// The admin uses this to validate the classifier's accuracy on real
+// production traffic before trusting it for routing (Part 3 added the
+// routing — this metrics endpoint is for ongoing monitoring).
+router.get("/ai/admin/intent/metrics", async (req: Request, res: Response) => {
+  try {
+    const hours = Math.min(Math.max(Number(req.query.hours ?? 24), 1), 720);
+    // The intent_classified event payload has the shape:
+    //   { intent: "PURCHASE"|"KNOWLEDGE"|"MIXED"|"GREETING",
+    //     reason: string, ... }
+    // We extract the intent from each payload + group by it.
+    const result = await pool.query<{
+      intent: string;
+      cnt: string;
+    }>(
+      `SELECT
+         (payload::jsonb->>'intent') AS intent,
+         COUNT(*)::bigint AS cnt
+       FROM ai_chat_events
+       WHERE type = 'intent_classified'
+         AND created_at > NOW() - INTERVAL '${hours} hours'
+         AND payload IS NOT NULL
+         AND payload::jsonb->>'intent' IS NOT NULL
+       GROUP BY (payload::jsonb->>'intent')`,
+    );
+
+    const metrics: Record<string, number> = {
+      PURCHASE: 0,
+      KNOWLEDGE: 0,
+      MIXED: 0,
+      GREETING: 0,
+    };
+    let total = 0;
+    for (const row of result.rows) {
+      const count = Number(row.cnt) || 0;
+      metrics[row.intent] = count;
+      total += count;
+    }
+
+    res.json({
+      hours,
+      purchase: metrics.PURCHASE,
+      knowledge: metrics.KNOWLEDGE,
+      mixed: metrics.MIXED,
+      greeting: metrics.GREETING,
+      total,
+      // Percentages (0-100, rounded to 1 decimal).
+      purchasePct: total > 0 ? Math.round((metrics.PURCHASE / total) * 1000) / 10 : 0,
+      knowledgePct: total > 0 ? Math.round((metrics.KNOWLEDGE / total) * 1000) / 10 : 0,
+      mixedPct: total > 0 ? Math.round((metrics.MIXED / total) * 1000) / 10 : 0,
+      greetingPct: total > 0 ? Math.round((metrics.GREETING / total) * 1000) / 10 : 0,
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: intent metrics failed");
+    res.status(500).json({ error: "Failed to load intent metrics." });
+  }
+});
+
+// ─── POST /api/ai/admin/intent/test ──────────────────────────────────────────
+// Tests a message against the intent classifier. Admins can use this to
+// verify the classifier is working + see what intent a message gets.
+//
+// Body: { message: string }
+// Returns: { intent, reason, purchaseHits, knowledgeHits, normalizedMessage }
+router.post("/ai/admin/intent/test", async (req: Request, res: Response) => {
+  try {
+    const { message } = (req.body ?? {}) as { message?: string };
+    if (typeof message !== "string" || !message.trim()) {
+      res.status(400).json({ error: "message is required (non-empty string)." });
+      return;
+    }
+    const { classifyIntent } = await import("../lib/intentClassifier");
+    const result = classifyIntent(message);
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "AI admin: intent test failed");
+    res.status(500).json({ error: "Failed to test intent classifier." });
+  }
+});
+
+// ─── POST /api/ai/admin/intent/clear-cache ──────────────────────────────────
+// Clears the intent classifier L1 cache. Useful for testing — the admin
+// can clear the cache + re-test a message to see fresh classification.
+router.post("/ai/admin/intent/clear-cache", async (_req: Request, res: Response) => {
+  try {
+    const { clearIntentCache } = await import("../lib/intentClassifier");
+    const cleared = clearIntentCache();
+    logger.info({ cleared, adminEmail: _req.dbUser?.email }, "AI admin: intent cache cleared");
+    res.json({ ok: true, cleared });
+  } catch (err) {
+    logger.error({ err }, "AI admin: intent clear-cache failed");
+    res.status(500).json({ error: "Failed to clear intent cache." });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ─── v5.5: Output Safety endpoints ──────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════

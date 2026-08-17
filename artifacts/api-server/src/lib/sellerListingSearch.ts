@@ -64,6 +64,10 @@
 
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
+// v6.1 Part 3: Haversine distance for ranking seller listings by distance
+// from the buyer's district. Replaces the v1 same-district heuristic with
+// a real geographic distance calculation across all 64 Bangladesh districts.
+import { extractDistrictFromLocation, distanceBetweenDistricts } from "./bangladeshDistricts";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -443,16 +447,21 @@ export async function searchSellerListings(
  *   - price score (DEFAULT_PRICE_WEIGHT = 0.4) — lower price = higher score
  *   - rating score (DEFAULT_RATING_WEIGHT = 0.3) — higher rating = higher score
  *   - verified boost (DEFAULT_VERIFIED_BOOST = 0.2)
- *   - distance score (DEFAULT_DISTANCE_WEIGHT = 0.3) — only when the buyer's
- *     district is known
+ *   - distance score (DEFAULT_DISTANCE_WEIGHT = 0.3) — Haversine distance
+ *     from buyer's district to seller's district (Part 3).
  *
  * The score is normalized to [0, 1] for each component (except the boolean
  * bonuses). Final score = sum of normalized components. Higher = better.
  *
- * Note: distance calc is deferred to Part 3 (Bangladesh district distance
- * lookup table). For now, when buyerDistrict is known, we use a simple
- * "same district = 1.0, else 0.0" heuristic — adequate for v1 (the user
- * gets same-district sellers first, then others by rating/price).
+ * v6.1 Part 3: distance scoring now uses the full Haversine formula via
+ * lib/bangladeshDistricts.ts. The buyer's district is resolved to lat/lng,
+ * the seller's freeform location is parsed to extract their district, and
+ * the great-circle distance is computed. Sellers in the buyer's district
+ * get a 1.0 distance score; sellers 500+km away get a 0.0 score; the
+ * range is linearly interpolated.
+ *
+ * When the buyer's district is unknown (anonymous user, or no default
+ * address), distance scoring is skipped (no penalty for far-away sellers).
  */
 function rankListings(
   listings: SellerListingResult[],
@@ -486,6 +495,25 @@ function rankListings(
   const priceRange = maxPrice - minPrice || 1;
   const ratingRange = maxRating - minRating || 1;
   const textRankRange = maxTextRank - minTextRank || 1;
+
+  // v6.1 Part 3: pre-compute seller district + distance from buyer.
+  // This avoids re-computing the Haversine for each scoring pass.
+  // Sellers whose location can't be parsed to a district get distance =
+  // Infinity (effectively excluded from distance sort, but still ranked
+  // by other factors).
+  const DISTANCE_MAX_KM = 500; // 500km = 0.0 distance score; 0km = 1.0.
+  const distancesByListingId = new Map<number, number>();
+  if (buyerDistrict !== null) {
+    for (const l of listings) {
+      const sellerDistrict = extractDistrictFromLocation(l.sellerLocation);
+      if (sellerDistrict) {
+        const dist = distanceBetweenDistricts(buyerDistrict, sellerDistrict.name);
+        distancesByListingId.set(l.listingId, dist);
+      } else {
+        distancesByListingId.set(l.listingId, Infinity);
+      }
+    }
+  }
 
   const scored = listings.map((l) => {
     let score = 0;
@@ -525,14 +553,17 @@ function rankListings(
       score += DEFAULT_VERIFIED_BOOST;
     }
 
-    // Distance score (Part 3 will replace with full Haversine lookup
-    // table). For now, same district = 1.0, else 0.0.
-    if (buyerDistrict !== null && l.sellerLocation !== null) {
-      const sellerLocationLower = l.sellerLocation.toLowerCase();
-      const buyerDistrictLower = buyerDistrict.toLowerCase();
-      if (sellerLocationLower.includes(buyerDistrictLower)) {
-        score += DEFAULT_DISTANCE_WEIGHT;
+    // Distance score (v6.1 Part 3: Haversine).
+    // Linear scale: 0km = 1.0 (full bonus), DISTANCE_MAX_KM = 0.0 (no bonus).
+    // > DISTANCE_MAX_KM or Infinity (unknown district) = 0.0.
+    if (buyerDistrict !== null) {
+      const dist = distancesByListingId.get(l.listingId) ?? Infinity;
+      if (Number.isFinite(dist)) {
+        const distanceScore = Math.max(0, 1 - dist / DISTANCE_MAX_KM);
+        score += DEFAULT_DISTANCE_WEIGHT * distanceScore;
       }
+      // Infinity (unknown seller district) → no distance bonus. The
+      // listing still ranks by other factors (rating, price, etc.).
     }
 
     return { listing: l, score };
