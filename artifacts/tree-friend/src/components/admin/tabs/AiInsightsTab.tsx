@@ -56,6 +56,7 @@ import { MarkdownText } from "@/components/ai/MarkdownText";
 import {
   extractFollowups,
   extractProductMentions,
+  extractListingMentions,
   stripProductMentionMarkers,
 } from "@/components/ai/parseMessage";
 
@@ -1280,6 +1281,10 @@ function FeedbackRow({ item }: { item: FeedbackItem }) {
   const { cleanedContent } = extractFollowups(item.assistantContent);
   const displayContent = stripProductMentionMarkers(cleanedContent);
   const productMentions = extractProductMentions(cleanedContent);
+  // v6.1 Part 5 (Gap #6 fix): also extract listing mentions so the admin
+  // can see which seller listings the AI cited in negative-feedback
+  // responses (helps identify which listings might have bad info).
+  const listingMentions = extractListingMentions(cleanedContent);
 
   return (
     <div className="border rounded-lg p-3 bg-destructive/5">
@@ -1306,6 +1311,21 @@ function FeedbackRow({ item }: { item: FeedbackItem }) {
           <p className="line-clamp-3 text-foreground/80">{displayContent}</p>
         )}
       </div>
+      {/* v6.1 Part 5: show listing citations as badges (green = purchasable) */}
+      {listingMentions.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-2">
+          {listingMentions.slice(0, 3).map((l) => (
+            <span
+              key={l.listingId}
+              className="text-[10px] px-1.5 py-0.5 rounded-full bg-success/10 text-success border border-success/20"
+              title={`Listing ID: ${l.listingId}`}
+            >
+              🛒 {l.display.slice(0, 40)}
+              {l.display.length > 40 ? "…" : ""}
+            </span>
+          ))}
+        </div>
+      )}
       {productMentions.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-2">
           {productMentions.slice(0, 3).map((p) => (
@@ -1586,31 +1606,83 @@ function ConversationsSection() {
                   ))}
                 </div>
               ) : thread && thread.length > 0 ? (
-                thread.map((m) => (
-                  <div
-                    key={m.id}
-                    className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-                  >
+                thread.map((m) => {
+                  // v6.1 Part 5 (Gap #6 fix): parse assistant messages the
+                  // same way the chat UI does — strip [[...]] markers from
+                  // the displayed text + extract product/listing mentions
+                  // as badges below the message.
+                  const isAssistant = m.role === "assistant";
+                  const { cleanedContent: threadCleaned } = isAssistant
+                    ? extractFollowups(m.content)
+                    : { cleanedContent: m.content };
+                  const threadDisplay = isAssistant
+                    ? stripProductMentionMarkers(threadCleaned)
+                    : m.content;
+                  const threadProductMentions = isAssistant
+                    ? extractProductMentions(threadCleaned)
+                    : [];
+                  const threadListingMentions = isAssistant
+                    ? extractListingMentions(threadCleaned)
+                    : [];
+
+                  return (
                     <div
-                      className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
-                        m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted border"
-                      }`}
+                      key={m.id}
+                      className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
                     >
-                      <div className="whitespace-pre-wrap break-words">{m.content}</div>
-                      {m.offTopic && (
-                        <div className="text-[10px] opacity-70 mt-1">⚠ off-topic refusal</div>
-                      )}
-                      {m.greeting && (
-                        <div className="text-[10px] opacity-70 mt-1">👋 greeting shortcut</div>
-                      )}
-                      {m.feedback && (
-                        <div className="text-[10px] mt-1 opacity-70">
-                          {m.feedback.rating === "up" ? "👍 rated" : "👎 rated"}
-                        </div>
-                      )}
+                      <div
+                        className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
+                          m.role === "user"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted border"
+                        }`}
+                      >
+                        {isAssistant ? (
+                          <MarkdownText content={threadDisplay} />
+                        ) : (
+                          <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                        )}
+                        {threadListingMentions.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {threadListingMentions.slice(0, 3).map((l) => (
+                              <span
+                                key={l.listingId}
+                                className="text-[10px] px-1.5 py-0.5 rounded-full bg-success/10 text-success border border-success/20"
+                                title={`Listing ID: ${l.listingId}`}
+                              >
+                                🛒 {l.display.slice(0, 40)}
+                                {l.display.length > 40 ? "…" : ""}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {threadProductMentions.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {threadProductMentions.slice(0, 3).map((p) => (
+                              <span
+                                key={p}
+                                className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20"
+                              >
+                                {p}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {m.offTopic && (
+                          <div className="text-[10px] opacity-70 mt-1">⚠ off-topic refusal</div>
+                        )}
+                        {m.greeting && (
+                          <div className="text-[10px] opacity-70 mt-1">👋 greeting shortcut</div>
+                        )}
+                        {m.feedback && (
+                          <div className="text-[10px] mt-1 opacity-70">
+                            {m.feedback.rating === "up" ? "👍 rated" : "👎 rated"}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <EmptyList text="No messages in this conversation." />
               )}

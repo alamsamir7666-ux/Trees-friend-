@@ -1400,15 +1400,31 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // tokens of redundant KB context per MIXED query (5 entries × ~300
   // chars each vs. 1 line × ~200 chars).
   //
+  // v6.1 Part 5 (Gap #4 fix): if the listings search later returns 0
+  // results for MIXED intent, we FALL BACK to the KB auto-inject. This
+  // ensures the LLM always has SOME context for MIXED queries — either
+  // listings + care summary (the optimal path) OR full KB entries (the
+  // fallback). Without this fallback, MIXED + 0 listings → the LLM gets
+  // NOTHING + would have to call search_knowledge_base on-demand (adding
+  // a tool round + ~500ms latency). The fallback is implemented below
+  // after the listings search result is known.
+  //
   // For KNOWLEDGE + PURCHASE + GREETING intent, KB auto-inject runs as
   // usual (KNOWLEDGE needs the full 5 entries; PURCHASE + GREETING
   // typically return nothing — KB content is care-focused, doesn't
   // match pure purchase/greeting queries).
   const skipKbAutoInject = intentClassification.intent === "MIXED";
-  const kbContext = skipKbAutoInject
-    ? { injected: false, entries: [], toneCreator: null }
+  // Changed from `const` to `let` so the MIXED+0-listings fallback can
+  // reassign kbContext below (Gap #4 fix).
+  let kbContext = skipKbAutoInject
+    ? {
+        injected: false,
+        entries: [] as Awaited<ReturnType<typeof getTopKbEntriesForPrompt>>["entries"],
+        toneCreator: null as Awaited<ReturnType<typeof getTopKbEntriesForPrompt>>["toneCreator"],
+      }
     : await getTopKbEntriesForPrompt(safeMessage);
-  const knowledgeBlock = kbContext.injected ? formatKbContextForPrompt(kbContext.entries) : "";
+  // Changed from `const` to `let` for the same fallback reason.
+  let knowledgeBlock = kbContext.injected ? formatKbContextForPrompt(kbContext.entries) : "";
   if (kbContext.injected) {
     logger.info(
       {
@@ -1421,7 +1437,7 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   } else if (skipKbAutoInject) {
     logger.info(
       { intent: intentClassification.intent },
-      "AI: KB auto-inject skipped for MIXED intent (v6.1 Part 4 — care summary will be in the listings tool response)",
+      "AI: KB auto-inject skipped for MIXED intent (v6.1 Part 4 — care summary will be in the listings tool response, or fallback to KB if 0 listings)",
     );
   }
 
@@ -1514,6 +1530,72 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
           },
           "AI: search_seller_listings returned 0 listings — LLM will rely on KB / catalog context",
         );
+
+        // ─── v6.1 Part 5 (Gap #4 fix): MIXED + 0 listings fallback ────
+        // When MIXED intent + 0 listings found, the LLM has NO listings
+        // block AND NO KB block (we skipped it earlier via skipKbAutoInject).
+        // The LLM would have to call search_knowledge_base on-demand,
+        // adding a tool round + ~500ms latency.
+        //
+        // Fix: fall back to the regular KB auto-inject (getTopKbEntriesForPrompt)
+        // so the LLM at least has care info to work with. The LLM can still
+        // call search_seller_listings on-demand if it wants to try again
+        // with different args (e.g. a broader query).
+        //
+        // This fallback is ONLY for MIXED intent. PURCHASE intent with 0
+        // listings is fine — the KB content is care-focused, wouldn't
+        // help a pure purchase query. The LLM will say "no listings found
+        // for that query" + suggest browsing the catalog.
+        if (isMixedIntent) {
+          try {
+            logger.info(
+              { intent: intentClassification.intent, query: safeMessage.slice(0, 80) },
+              "AI: MIXED + 0 listings → falling back to KB auto-inject (Gap #4 fix)",
+            );
+            const fallbackKbContext = await getTopKbEntriesForPrompt(safeMessage);
+            if (fallbackKbContext.injected) {
+              kbContext = fallbackKbContext;
+              knowledgeBlock = formatKbContextForPrompt(fallbackKbContext.entries);
+              logger.info(
+                {
+                  entryCount: fallbackKbContext.entries.length,
+                  topScore: fallbackKbContext.entries[0]?.score,
+                  entryIds: fallbackKbContext.entries.map((e) => e.entry.id),
+                },
+                "AI: MIXED fallback KB context injected into prompt",
+              );
+              // Re-compute tone matching (the initial toneBlock was "" because
+              // kbContext was empty — now we have real entries + maybe a toneCreator).
+              if (fallbackKbContext.toneCreator?.hasToneProfile) {
+                const profile = await getToneProfile(fallbackKbContext.toneCreator.creatorId);
+                if (profile) {
+                  const matchPct = await getEffectiveToneMatchPercentage(
+                    fallbackKbContext.toneCreator.creatorId,
+                  );
+                  toneBlock = formatToneBlockForPrompt(
+                    profile,
+                    fallbackKbContext.toneCreator.creatorName,
+                    matchPct,
+                  );
+                  logger.info(
+                    {
+                      creator: fallbackKbContext.toneCreator.creatorName,
+                      creatorId: fallbackKbContext.toneCreator.creatorId,
+                      matchPct,
+                    },
+                    "AI: MIXED fallback tone matching activated",
+                  );
+                }
+              }
+            }
+          } catch (fallbackErr) {
+            // Non-fatal — the LLM can still call search_knowledge_base as a tool.
+            logger.warn(
+              { err: (fallbackErr as Error)?.message ?? String(fallbackErr) },
+              "AI: MIXED fallback KB auto-inject failed (non-fatal — LLM can call search_knowledge_base as tool)",
+            );
+          }
+        }
       }
     } catch (err) {
       // Non-fatal — the LLM can still call search_seller_listings as a tool

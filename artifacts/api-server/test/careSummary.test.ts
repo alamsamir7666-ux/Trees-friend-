@@ -142,11 +142,18 @@ describe("v6.1 Part 4: chat route skips KB auto-inject for MIXED intent", () => 
       "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
       "utf8",
     );
+    // v6.1 Part 5 (Gap #4): changed from `const` to `let` so the
+    // MIXED+0-listings fallback can reassign kbContext.
     expect(source).toContain('const skipKbAutoInject = intentClassification.intent === "MIXED"');
-    // When skipKbAutoInject is true, getTopKbEntriesForPrompt is NOT called.
-    expect(source).toContain(
-      "skipKbAutoInject\n    ? { injected: false, entries: [], toneCreator: null }",
-    );
+    // The skip pattern still exists (with `let` instead of `const` + type
+    // assertions for the empty fallback shape).
+    expect(source).toContain("skipKbAutoInject");
+    expect(source).toContain("let kbContext = skipKbAutoInject");
+    expect(source).toContain("injected: false");
+    // The fallback logic for MIXED + 0 listings.
+    expect(source).toContain("isMixedIntent");
+    expect(source).toContain("MIXED + 0 listings");
+    expect(source).toContain("fallbackKbContext");
   });
 
   it("the chat route passes careSummary=isMixedIntent to searchSellerListings", async () => {
