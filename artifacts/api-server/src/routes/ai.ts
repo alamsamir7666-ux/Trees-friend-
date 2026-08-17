@@ -1860,13 +1860,48 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
             })}\n\n`,
           );
         } else if (event.type === "tool_result") {
+          // v6.2 Part 1: include the tool result DATA in the SSE event so
+          // the frontend can render rich UI components (OrderDetailCard,
+          // ListingGrid, etc.) from the structured data — without a
+          // separate API call.
+          //
+          // Size limit: 10KB. If the result is larger (e.g. search_seller_listings
+          // returns 5 listings with variants), we DON'T send it — the frontend
+          // falls back to the AI's text response (which already has the data
+          // via the [[listing:id|display]] citations). This prevents large SSE
+          // events from blocking the stream.
+          //
+          // Only send results for tools that have registered UI components.
+          // Other tools (search_knowledge_base, search_catalog) don't need
+          // the data on the frontend — the LLM already processed it.
+          const TOOLS_WITH_UI = new Set([
+            "get_order_details",
+            "get_user_orders",
+            "search_seller_listings",
+            "get_product_care",
+          ]);
+          let resultPayload: unknown = undefined;
+          if (event.ok && event.result !== undefined && TOOLS_WITH_UI.has(event.name)) {
+            try {
+              const jsonStr = JSON.stringify(event.result);
+              if (jsonStr.length <= 10_000) {
+                resultPayload = event.result;
+              }
+            } catch {
+              // Result not JSON-serializable — skip.
+            }
+          }
           res.write(
             `data: ${JSON.stringify({
               type: "tool_result",
               name: event.name,
               ok: event.ok,
               durationMs: event.durationMs,
-              ...(event.ok ? {} : { error: event.error }),
+              ...(event.ok
+                ? resultPayload !== undefined
+                  ? { result: resultPayload }
+                  : {}
+                : { error: event.error }),
             })}\n\n`,
           );
         } else if (event.type === "tool_call_delta") {

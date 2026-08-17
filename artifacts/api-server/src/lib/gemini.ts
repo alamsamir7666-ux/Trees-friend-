@@ -1344,6 +1344,7 @@ export async function* streamGeminiChat(
               name: toolName,
               ok: true,
               durationMs: Date.now() - t0,
+              result,
             });
           }
           return {

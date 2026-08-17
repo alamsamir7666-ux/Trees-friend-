@@ -866,6 +866,7 @@ export async function* streamGroqChat(
                     name: toolName,
                     ok: true,
                     durationMs: Date.now() - t0,
+                    result: toolResult,
                   });
                 }
                 return {

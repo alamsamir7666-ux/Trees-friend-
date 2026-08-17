@@ -144,7 +144,7 @@ export function getMaxToolRounds(): number {
  */
 export type ToolStreamEvent =
   | { type: "tool_call"; name: string; args: unknown }
-  | { type: "tool_result"; name: string; ok: true; durationMs: number }
+  | { type: "tool_result"; name: string; ok: true; durationMs: number; result?: unknown }
   | {
       type: "tool_result";
       name: string;

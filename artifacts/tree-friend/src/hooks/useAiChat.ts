@@ -85,6 +85,33 @@ export interface ChatMessage {
    * (structured output fallback). Rendered as chips by FollowupChips.
    */
   followups?: string[];
+  /**
+   * v6.2 Part 1: Tool results captured from the `tool_result` SSE event.
+   * Each entry has the tool name + the structured result data (if the
+   * backend sent it — only tools with registered UI components send
+   * result data; other tools just send name + ok + durationMs).
+   *
+   * The frontend's ToolComponentRenderer maps tool names → React
+   * components (OrderDetailCard, ListingGrid, etc.) and renders them
+   * inline below the text bubble.
+   */
+  toolResults?: ToolResultEntry[];
+}
+
+/**
+ * v6.2 Part 1: A captured tool result stored on a ChatMessage.
+ */
+export interface ToolResultEntry {
+  /** The tool name (e.g. "get_order_details", "search_seller_listings"). */
+  name: string;
+  /** Whether the tool succeeded. */
+  ok: boolean;
+  /** The structured result data (present only for tools with UI components). */
+  data?: unknown;
+  /** Error message if ok=false. */
+  error?: string;
+  /** Execution duration in ms. */
+  durationMs?: number;
 }
 
 /**
@@ -460,6 +487,33 @@ export function useAiChat(): UseAiChatResult {
               if (idx === -1) return prev;
               return [...prev.slice(0, idx), ...prev.slice(idx + 1)];
             });
+
+            // v6.2 Part 1: capture the tool result DATA (if present) + store
+            // on the current assistant message. The backend only sends
+            // `result` for tools that have registered UI components
+            // (get_order_details, get_user_orders, search_seller_listings,
+            // get_product_care). For other tools, `result` is absent and
+            // we don't store anything — the LLM already handled it.
+            if (payload.result !== undefined) {
+              setMessages((prev) =>
+                prev.map((m) => {
+                  if (m.id !== assistantMsg.id) return m;
+                  const toolResults = m.toolResults ?? [];
+                  return {
+                    ...m,
+                    toolResults: [
+                      ...toolResults,
+                      {
+                        name: payload.name!,
+                        ok: payload.ok ?? true,
+                        data: payload.result,
+                        durationMs: payload.durationMs,
+                      },
+                    ],
+                  };
+                }),
+              );
+            }
           } else if (payload.type === "usage") {
             // v5.1: Live token/cost display. The provider sent usage metadata
             // (prompt + completion tokens). We store it on the assistant

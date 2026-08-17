@@ -52,6 +52,7 @@ import { useAiChat, type ChatMessage, type ActiveToolCall } from "@/hooks/useAiC
 import { MarkdownText } from "./MarkdownText";
 import { ProductChips } from "./ProductChips";
 import { ListingChips } from "./ListingChip";
+import { ToolComponentRenderer } from "./tool-ui/ToolComponentRenderer";
 import { FollowupChips } from "./FollowupChips";
 import { FeedbackButtons } from "./FeedbackButtons";
 import {
@@ -586,6 +587,11 @@ function MessageRow({
           <ListingChips mentions={listingMentions} onClose={onClose} />
         )}
 
+        {/* v6.2 Part 1: Rich tool-result components (OrderDetailCard, etc.) */}
+        {!isStreaming && message.toolResults && message.toolResults.length > 0 && (
+          <ToolComponentRenderer toolResults={message.toolResults} onClose={onClose} />
+        )}
+
         {/* BUG-I7 fix: "Generating suggestions…" spinner when the backend */}
         {/* is computing followups via structured output. */}
         {showFollowupsLoading && (
@@ -652,39 +658,74 @@ function TypingIndicator() {
  * is added there without a corresponding entry here, the chip falls back
  * to a generic label ("Working") + the HelpCircle icon.
  */
+// v6.2 Part 1: also imported getToolSkeleton for skeleton loading states.
+import { getToolSkeleton } from "./tool-ui/Skeletons";
+
 const TOOL_LABELS: Record<string, { label: string; Icon: typeof Search }> = {
   search_catalog: { label: "Searching catalog", Icon: Search },
   get_product_care: { label: "Loading care guide", Icon: Leaf },
   get_user_orders: { label: "Looking up your orders", Icon: ShoppingCart },
   get_order_details: { label: "Fetching order details", Icon: FileText },
+  search_seller_listings: { label: "Finding listings", Icon: Search },
   search_knowledge_base: { label: "Searching knowledge base", Icon: BookOpen },
 };
 
+// v6.2 Part 1: tools that have rich skeleton loading states.
+// While in-flight, these tools show a skeleton card instead of just a chip.
+const TOOLS_WITH_SKELETONS = new Set(["get_order_details", "get_user_orders"]);
+
 function ToolCallChips({ calls }: { calls: ActiveToolCall[] }) {
+  // v6.2 Part 1: split calls into skeleton-worthy + chip-only.
+  const skeletonCalls = calls.filter((c) => TOOLS_WITH_SKELETONS.has(c.name));
+  const chipCalls = calls.filter((c) => !TOOLS_WITH_SKELETONS.has(c.name));
+
   return (
-    <div className="flex flex-wrap gap-1.5 animate-in fade-in slide-in-from-bottom-1 duration-200 pl-10">
-      {calls.map((call) => {
+    <div className="space-y-2 animate-in fade-in slide-in-from-bottom-1 duration-200 pl-10">
+      {/* v6.2 Part 1: skeleton cards for tools with rich UI */}
+      {skeletonCalls.map((call) => {
         const meta = TOOL_LABELS[call.name];
-        const Label = meta?.label ?? "Working";
-        const Icon = meta?.Icon ?? HelpCircle;
+        const label = meta?.label ?? "Loading";
+        const SkeletonComp = getToolSkeleton(call.name);
         return (
-          <span
-            key={call.id}
-            className="inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full bg-primary/10 text-primary border border-primary/20"
-          >
-            <Loader2 className="h-3 w-3 animate-spin" />
-            <Icon className="h-3 w-3" />
-            <span className="font-medium">{Label}…</span>
-            {/* BUG-I7 fix: render the previously-dead `argsPreview` SSE data. */}
-            {/* Shows "Searching for: mang…" → "mango…" as args stream in. */}
-            {call.argsPreview && (
-              <span className="text-primary/60 font-normal truncate max-w-[120px]">
-                {call.argsPreview}
-              </span>
-            )}
-          </span>
+          <div key={`skeleton-${call.id}`} className="space-y-1">
+            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="font-medium">{label}…</span>
+              {call.argsPreview && (
+                <span className="text-muted-foreground/60 font-normal truncate max-w-[120px]">
+                  {call.argsPreview}
+                </span>
+              )}
+            </div>
+            <SkeletonComp />
+          </div>
         );
       })}
+      {/* Standard chips for tools without skeletons */}
+      {chipCalls.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {chipCalls.map((call) => {
+            const meta = TOOL_LABELS[call.name];
+            const Label = meta?.label ?? "Working";
+            const Icon = meta?.Icon ?? HelpCircle;
+            return (
+              <span
+                key={call.id}
+                className="inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full bg-primary/10 text-primary border border-primary/20"
+              >
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <Icon className="h-3 w-3" />
+                <span className="font-medium">{Label}…</span>
+                {call.argsPreview && (
+                  <span className="text-primary/60 font-normal truncate max-w-[120px]">
+                    {call.argsPreview}
+                  </span>
+                )}
+              </span>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
