@@ -36,7 +36,7 @@
  *     productImage (string | null), variants: [...], hasInStockVariant,
  *     hasPreOrderVariant, minPrice }
  */
-import { useState, useMemo, memo } from "react";
+import { useState, useMemo, useRef, memo } from "react";
 import { ShoppingBag, MapPin, Star, BadgeCheck, Truck, Plus, Check, Loader2 } from "lucide-react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -186,8 +186,14 @@ function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () 
         // (`getGetCartQueryKey`) so it stays in sync with the OpenAPI spec.
         qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
         setAddStatus("added");
+        // v6.2 Part 8 (Gap E fix): read from the ref (always current —
+        // no stale closure). Shows the variant the buyer actually picked
+        // (from the picker dialog), not always topVariant.
+        const addedVariant = lastAddedVariantRef.current;
+        const addedPrice =
+          addedVariant?.discountPrice ?? addedVariant?.price ?? effectivePrice;
         toast.success(`${listing.productName} added to cart`, {
-          description: `${lastAddedVariant?.form ?? "Variant"} · ${formatPrice(lastAddedVariant?.discountPrice ?? lastAddedVariant?.price ?? effectivePrice)}`,
+          description: `${addedVariant?.form ?? "Variant"} · ${formatPrice(addedPrice)}`,
           action: {
             label: "View cart",
             onClick: () => navigate("/cart"),
@@ -230,7 +236,21 @@ function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () 
   // Track the most recently added variant so the success toast shows
   // the right variant label + price (not always topVariant — could be
   // any variant the buyer picked in the dialog).
-  const [lastAddedVariant, setLastAddedVariant] = useState<ListingVariant | null>(null);
+  //
+  // v6.2 Part 8 (Gap E fix): use a REF instead of STATE for this.
+  // Previously, `useState` caused the mutation's `onSuccess` callback
+  // (defined when the mutation is created) to close over a potentially
+  // stale `lastAddedVariant`. TanStack Query v5 picks up the latest
+  // options on each render so it worked, but the pattern is fragile —
+  // if anyone memoizes the mutation options, the success toast would
+  // show "Variant" instead of the actual variant form.
+  //
+  // The ref approach: `setLastAddedVariantRef.current = variant` in
+  // `doAddToCart`, then read `lastAddedVariantRef.current` in
+  // `onSuccess`. The ref's identity is stable across renders, so the
+  // `onSuccess` callback is created once + always reads the latest
+  // value via `.current`. No stale closure possible.
+  const lastAddedVariantRef = useRef<ListingVariant | null>(null);
 
   // The image to render in the card thumbnail AND pass to the cart. NULL
   // image (both backend arrays empty) → SVG leaf placeholder so the cart
@@ -241,7 +261,9 @@ function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () 
   // Extracted so the picker's onConfirm and the direct Cart click share
   // the exact same logic — no risk of drift between the two paths.
   const doAddToCart = (variant: ListingVariant) => {
-    setLastAddedVariant(variant);
+    // v6.2 Part 8 (Gap E fix): store on the ref, not state. The mutation's
+    // onSuccess reads this ref via .current — no stale closure possible.
+    lastAddedVariantRef.current = variant;
     const variantEffectivePrice = variant.discountPrice ?? variant.price;
 
     if (isSignedIn) {

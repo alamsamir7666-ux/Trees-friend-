@@ -86,6 +86,12 @@ export function useSwipeToDismiss({
   const draggingRef = useRef(false);
   const decidedRef = useRef(false); // whether we've committed to horizontal vs vertical
   const dragXRef = useRef(0); // mirrors dragX so onTouchEnd can read the latest value
+  // v6.2 Part 8 (Gap G fix): tracks whether we've already vibrated for this
+  // gesture. Without this, navigator.vibrate(15) would fire on EVERY
+  // touchmove where dragX crosses the threshold (dozens of times per
+  // gesture — a buzzing phone). We vibrate ONCE when the threshold is
+  // first crossed, matching the useSwipeToReply hook's pattern.
+  const vibratedRef = useRef(false);
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     const touch = e.touches[0];
@@ -93,6 +99,8 @@ export function useSwipeToDismiss({
     startYRef.current = touch.clientY;
     decidedRef.current = false;
     draggingRef.current = false;
+    // v6.2 Part 8 (Gap G fix): reset the vibration flag for this new gesture.
+    vibratedRef.current = false;
   }, []);
 
   const onTouchMove = useCallback(
@@ -129,6 +137,30 @@ export function useSwipeToDismiss({
         const clamped = Math.max(0, Math.min(maxWidth, dx));
         dragXRef.current = clamped;
         setDragX(clamped);
+
+        // v6.2 Part 8 (Gap G fix): vibrate ONCE when the drag crosses the
+        // dismiss threshold. The tactile feedback signals "release now to
+        // dismiss" — matches useSwipeToReply's pattern + the iOS native
+        // swipe-to-dismiss haptics. The vibratedRef guard ensures we only
+        // fire once per gesture (not on every touchmove past the threshold).
+        //
+        // navigator.vibrate is gated behind a feature check — it's
+        // undefined on desktop browsers + iOS Safari (Apple doesn't
+        // support the Vibration API on iOS). The feature check avoids a
+        // runtime error; the hook silently no-ops on those platforms.
+        if (clamped >= threshold && !vibratedRef.current) {
+          vibratedRef.current = true;
+          if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+            try {
+              navigator.vibrate(15);
+            } catch {
+              // Silent fail — some browsers throw if the user hasn't
+              // interacted with the page yet (autoplay-style policy).
+              // The gesture itself counts as interaction, but defensive.
+            }
+          }
+        }
+
         // We DON'T call e.preventDefault — React's synthetic touchmove
         // is passive by default, so preventDefault is a no-op + logs a
         // console warning. The vertical scroll might jitter slightly
@@ -137,7 +169,7 @@ export function useSwipeToDismiss({
         // feedback even if the scroll also moves a few pixels).
       }
     },
-    [edgeWidth, maxWidth],
+    [edgeWidth, maxWidth, threshold],
   );
 
   const onTouchEnd = useCallback(() => {

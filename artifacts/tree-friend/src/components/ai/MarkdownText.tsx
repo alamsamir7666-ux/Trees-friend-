@@ -70,6 +70,29 @@ const MAX_TABLE_ROWS = 20;
 const MAX_TABLE_COLS = 8;
 
 /**
+ * v6.2 Part 8 (Gap I fix): sentinel character used to temporarily replace
+ * escaped pipes (`\|`) before splitting a table row on `|`.
+ *
+ * Why a control character (U+0001 SOH, "Start of Heading"):
+ *   - It's extremely unlikely to appear in plant-care text (it's not
+ *     typable on any keyboard + not in any natural language).
+ *   - It's a single code unit (won't mess with split/join length math).
+ *   - It survives JSON serialization (control chars below U+0020 are
+ *     valid in JSON strings, though some linters warn — but we restore
+ *     it immediately after split, so it never persists).
+ *
+ * The flow:
+ *   1. Before splitting: replace `\|` with the sentinel.
+ *   2. Split on `|` (now only real cell-separator pipes remain).
+ *   3. Restore: replace the sentinel back to `|` in each cell.
+ *
+ * This handles the GFM spec's escaped-pipe rule: `|` inside a cell must
+ * be escaped as `\|` so it's not treated as a cell separator.
+ */
+const ESCAPED_PIPE_SENTINEL = "\u0001";
+const ESCAPED_PIPE_REGEX = /\\\|/g;
+
+/**
  * Tests whether a line looks like a GFM table row (contains at least one
  * `|` and isn't a code fence / heading / list item).
  *
@@ -107,20 +130,29 @@ function isTableSeparator(line: string): boolean {
  *
  * - Strips leading/trailing `|` (the GFM convention is `| a | b |`, but
  *   the leading/trailing pipes are optional).
- * - Splits on `|`.
+ * - v6.2 Part 8 (Gap I fix): temporarily replaces escaped pipes (`\|`)
+ *   with a sentinel character before splitting, then restores them in
+ *   each cell. This handles the GFM spec's rule that `|` inside a cell
+ *   must be escaped as `\|` so it's not treated as a cell separator.
+ * - Splits on `|` (now only real cell-separator pipes remain).
  * - Trims each cell (GFM trims cell whitespace per the spec).
- * - Does NOT escape `\|` (escaped pipes inside cells) — the LLM is
- *   unlikely to emit escaped pipes in our use case, and adding escape
- *   handling complicates the parser. If this becomes a problem, add
- *   a pre-pass that replaces `\|` with a placeholder, splits, then
- *   restores.
+ *
+ * Example:
+ *   `| Mango \| Alphonso | 450 |` → ["Mango | Alphonso", "450"]
  */
 function splitRow(line: string): string[] {
   let s = line.trim();
   // Strip leading/trailing pipe if present.
   if (s.startsWith("|")) s = s.slice(1);
   if (s.endsWith("|")) s = s.slice(0, -1);
-  return s.split("|").map((c) => c.trim());
+  // v6.2 Part 8 (Gap I fix): replace `\|` with the sentinel before
+  // splitting so escaped pipes inside cells aren't treated as separators.
+  s = s.replace(ESCAPED_PIPE_REGEX, ESCAPED_PIPE_SENTINEL);
+  return s.split("|").map((c) => {
+    // Restore the sentinel back to a literal pipe in each cell.
+    const restored = c.replace(new RegExp(ESCAPED_PIPE_SENTINEL, "g"), "|");
+    return restored.trim();
+  });
 }
 
 /**
