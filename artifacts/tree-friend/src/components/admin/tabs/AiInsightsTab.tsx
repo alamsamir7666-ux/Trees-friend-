@@ -35,6 +35,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronDown,
+  DollarSign,
+  Send,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -196,6 +198,22 @@ interface AttackLogItem {
   createdAt: string;
 }
 
+// ─── v6.0: Cost budget circuit breaker types ──────────────────────────────
+
+interface BudgetStatus {
+  enabled: boolean;
+  budgetUsd: number;
+  spendUsd: number;
+  remainingUsd: number;
+  spendPct: number;
+  circuitOpen: boolean;
+  warningThresholdPct: number;
+  warningSent: boolean;
+  alertSent: boolean;
+  byProvider: Record<string, number>;
+  date: string;
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export function AiInsightsTab() {
@@ -218,6 +236,14 @@ export function AiInsightsTab() {
   const [searchHealth, setSearchHealth] = useState<SearchHealth | null>(null);
   const [recentAttacks, setRecentAttacks] = useState<AttackLogItem[]>([]);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
+
+  // v6.0: Cost budget circuit breaker state.
+  // Polls /api/ai/admin/cost/budget every 30s while the tab is open (the
+  // admin needs to see the circuit trip in real time so they can investigate
+  // + reset before UTC midnight if needed).
+  const [budgetStatus, setBudgetStatus] = useState<BudgetStatus | null>(null);
+  const [circuitResetting, setCircuitResetting] = useState(false);
+  const [testAlertSending, setTestAlertSending] = useState(false);
 
   const PAGE_SIZE = 10;
 
@@ -258,12 +284,13 @@ export function AiInsightsTab() {
       }
     };
 
-    const [secHealth, topHealth, topMetrics, search, attacks] = await Promise.all([
+    const [secHealth, topHealth, topMetrics, search, attacks, budget] = await Promise.all([
       safeFetch<SecurityHealth>("/api/ai/admin/security/health"),
       safeFetch<TopicHealth>("/api/ai/admin/topic/health"),
       safeFetch<TopicMetrics>("/api/ai/admin/topic/metrics?hours=24"),
       safeFetch<SearchHealth>("/api/ai/admin/kb/search/health"),
       safeFetch<{ attacks: AttackLogItem[] }>("/api/ai/admin/security/attack-log?limit=5"),
+      safeFetch<BudgetStatus>("/api/ai/admin/cost/budget"),
     ]);
 
     setSecurityHealth(secHealth);
@@ -271,6 +298,7 @@ export function AiInsightsTab() {
     setTopicMetrics(topMetrics);
     setSearchHealth(search);
     setRecentAttacks(attacks?.attacks ?? []);
+    setBudgetStatus(budget);
   }, [getToken]);
 
   useEffect(() => {
@@ -294,6 +322,47 @@ export function AiInsightsTab() {
       await fetchAll();
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  // v6.0: Manually reset the cost circuit breaker. Called from the "Reset
+  // Circuit" button in the Cost Budget section. Hits POST /api/ai/admin/
+  // cost/circuit/reset which clears the circuit-open Redis key. The daily
+  // spend counter is NOT cleared (the spend is still real — we just un-trip
+  // the breaker so new LLM calls are allowed again).
+  const handleResetCircuit = async () => {
+    const token = await getToken();
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    setCircuitResetting(true);
+    try {
+      const res = await fetch(`${API}/api/ai/admin/cost/circuit/reset`, {
+        method: "POST",
+        headers,
+      });
+      if (res.ok) {
+        const status = (await res.json()) as BudgetStatus;
+        setBudgetStatus(status);
+      }
+    } finally {
+      setCircuitResetting(false);
+    }
+  };
+
+  // v6.0: Send a test cost alert via all configured channels (email +
+  // webhook + in-app event). Useful for verifying the admin's
+  // RESEND_API_KEY + ADMIN_EMAIL + AI_COST_ALERT_WEBHOOK_URL are set up
+  // correctly.
+  const handleSendTestAlert = async () => {
+    const token = await getToken();
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    setTestAlertSending(true);
+    try {
+      await fetch(`${API}/api/ai/admin/cost/test-alert`, {
+        method: "POST",
+        headers,
+      });
+    } finally {
+      setTestAlertSending(false);
     }
   };
 
@@ -722,6 +791,183 @@ export function AiInsightsTab() {
           )}
         </CollapsibleSection>
       </div>
+
+      {/* ─── v6.0: Cost Budget Circuit Breaker ────────────────────────────── */}
+      <CollapsibleSection
+        id="cost"
+        title="AI Cost Budget (today, UTC)"
+        icon={<DollarSign className="h-4 w-4 text-muted-foreground" />}
+        expanded={expandedSection === "cost"}
+        onToggle={() => setExpandedSection(expandedSection === "cost" ? null : "cost")}
+      >
+        {!budgetStatus ? (
+          <EmptyList text="Cost budget unavailable (deploy v6.0+ + Redis required)." />
+        ) : !budgetStatus.enabled ? (
+          <div className="text-xs text-muted-foreground">
+            Circuit disabled. Set{" "}
+            <code className="bg-muted px-1 py-0.5 rounded">AI_DAILY_BUDGET_USD</code> in your env
+            vars to enable. Set to <code className="bg-muted px-1 py-0.5 rounded">0</code>{" "}
+            explicitly to disable permanently (unlimited spend).
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {/* Circuit status banner */}
+            {budgetStatus.circuitOpen ? (
+              <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3 flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-destructive">
+                    Circuit OPEN — LLM calls throttled
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    Daily budget exceeded. New chat requests return a "throttled" response. Cache
+                    hits still serve. Auto-resets at UTC midnight, or click below to reset now.
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleResetCircuit}
+                  disabled={circuitResetting}
+                  className="flex-shrink-0"
+                >
+                  {circuitResetting ? (
+                    <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                  ) : (
+                    <Zap className="h-3 w-3 mr-1" />
+                  )}
+                  Reset Circuit
+                </Button>
+              </div>
+            ) : budgetStatus.spendPct >= budgetStatus.warningThresholdPct ? (
+              <div className="bg-warning/10 border border-warning/30 rounded-lg p-3 flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-sm font-semibold text-warning">Approaching budget limit</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    Spend crossed {Math.round(budgetStatus.warningThresholdPct * 100)}% of the daily
+                    budget. A warning alert has been sent. Investigate before the circuit trips.
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-success/10 border border-success/30 rounded-lg p-2 flex items-center gap-2">
+                <CheckCircle2 className="h-3 w-3 text-success" />
+                <span className="text-xs text-success">Circuit closed — all systems normal</span>
+              </div>
+            )}
+
+            {/* Budget progress bar */}
+            <div className="bg-muted/50 rounded-lg p-3">
+              <div className="flex justify-between items-baseline mb-2">
+                <span className="text-xs text-muted-foreground">
+                  Today&apos;s spend ({budgetStatus.date})
+                </span>
+                <span className="text-lg font-bold">
+                  ${budgetStatus.spendUsd.toFixed(4)}{" "}
+                  <span className="text-xs text-muted-foreground font-normal">
+                    / ${budgetStatus.budgetUsd.toFixed(2)}
+                  </span>
+                </span>
+              </div>
+              <div className="h-3 bg-muted rounded-full overflow-hidden relative">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    budgetStatus.circuitOpen
+                      ? "bg-destructive"
+                      : budgetStatus.spendPct >= budgetStatus.warningThresholdPct
+                        ? "bg-warning"
+                        : "bg-success"
+                  }`}
+                  style={{ width: `${Math.min(100, budgetStatus.spendPct * 100)}%` }}
+                />
+                {/* Warning threshold marker */}
+                <div
+                  className="absolute top-0 bottom-0 w-px bg-foreground/30"
+                  style={{ left: `${budgetStatus.warningThresholdPct * 100}%` }}
+                  title={`Warning threshold (${Math.round(budgetStatus.warningThresholdPct * 100)}%)`}
+                />
+              </div>
+              <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                <span>Used: {Math.round(budgetStatus.spendPct * 100)}%</span>
+                <span>Remaining: ${budgetStatus.remainingUsd.toFixed(4)}</span>
+              </div>
+            </div>
+
+            {/* Per-provider breakdown */}
+            {Object.keys(budgetStatus.byProvider).length > 0 && (
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">Spend by provider</div>
+                <div className="space-y-1">
+                  {Object.entries(budgetStatus.byProvider).map(([provider, amount]) => (
+                    <div
+                      key={provider}
+                      className="flex items-center justify-between text-xs bg-muted/30 rounded px-2 py-1"
+                    >
+                      <span className="font-mono">{provider}</span>
+                      <span className="font-semibold">${amount.toFixed(4)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Alert status indicators */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="bg-muted/50 rounded p-2">
+                <div className="text-muted-foreground">Warning alert</div>
+                <div className="font-semibold flex items-center gap-1">
+                  {budgetStatus.warningSent ? (
+                    <>
+                      <CheckCircle2 className="h-3 w-3 text-success" /> Sent
+                    </>
+                  ) : (
+                    <>
+                      <div className="h-3 w-3 rounded-full border border-muted-foreground/30" /> Not
+                      sent
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="bg-muted/50 rounded p-2">
+                <div className="text-muted-foreground">Circuit-open alert</div>
+                <div className="font-semibold flex items-center gap-1">
+                  {budgetStatus.alertSent ? (
+                    <>
+                      <CheckCircle2 className="h-3 w-3 text-success" /> Sent
+                    </>
+                  ) : (
+                    <>
+                      <div className="h-3 w-3 rounded-full border border-muted-foreground/30" /> Not
+                      sent
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Test alert button */}
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-xs text-muted-foreground">
+                Verify your email + webhook alert channels are configured correctly.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSendTestAlert}
+                disabled={testAlertSending}
+              >
+                {testAlertSending ? (
+                  <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <Send className="h-3 w-3 mr-1" />
+                )}
+                Send Test Alert
+              </Button>
+            </div>
+          </div>
+        )}
+      </CollapsibleSection>
 
       {/* ─── v5.4: Search Health (BM25 + Reranker) ─────────────────────── */}
       <CollapsibleSection

@@ -10,6 +10,7 @@ import { runAiSessionCleanup } from "./jobs/aiSessionCleanup";
 import { runKbEmbeddingJob } from "./jobs/kbEmbeddingJob";
 import { runKbToneProfileJob } from "./jobs/kbToneProfileJob";
 import { startBm25StatsJob } from "./jobs/bm25StatsJob";
+import { runCostDailyReset } from "./jobs/costDailyReset";
 
 // Note: ensureConversationsTables() is invoked from app.ts at module load,
 // so it runs on every cold start (including Vercel serverless). We do NOT
@@ -71,6 +72,14 @@ app.listen(port, (err) => {
   // common term weighting drifts. On Vercel (serverless), this runs via
   // POST /api/cron/kb-bm25-stats instead.
   startBm25StatsJob();
+
+  // v6.0: Cost daily reset + summary — runs once at startup, then every 24h.
+  // Fires the previous day's cost summary email + in-app event log entry so
+  // the admin gets a daily "yesterday's AI spend was $X" report even on
+  // quiet days. The cost circuit auto-resets at UTC midnight (Redis keys
+  // are date-keyed); this scheduler is only for the summary alert.
+  // On Vercel (serverless), this runs via POST /api/cron/ai-cost-daily-reset.
+  scheduleCostDailyReset();
 });
 
 // ─── Keep-alive: ping self every 14 min so Render free tier never sleeps ─────
@@ -236,4 +245,37 @@ function scheduleKbToneProfileJob() {
   }, STARTUP_DELAY_MS);
 
   logger.info("KB tone profile scheduler started (runs every 5 min, first run in 2 min)");
+}
+
+/**
+ * Cost daily reset + summary scheduler (Render long-lived process).
+ * Runs every 24h — fires the previous day's cost summary email + in-app
+ * event log entry. The cost circuit auto-resets at UTC midnight (the
+ * Redis keys are date-keyed), so this scheduler is ONLY for the summary
+ * alert — not for clearing state.
+ *
+ * On Vercel (serverless), this runs via POST /api/cron/ai-cost-daily-reset
+ * (see routes/cron.ts).
+ *
+ * The first run is scheduled 5 minutes after server start to:
+ *   - Avoid competing with the cold-start migration (ensureAiTables).
+ *   - Avoid the first-run burst of the other background jobs.
+ *   - Give Redis time to initialize if it's slow.
+ */
+function scheduleCostDailyReset() {
+  const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+  const STARTUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+
+  setTimeout(() => {
+    runCostDailyReset().catch((err) => {
+      logger.warn({ err }, "Cost daily reset job failed at startup");
+    });
+    setInterval(() => {
+      runCostDailyReset().catch((err) => {
+        logger.warn({ err }, "Cost daily reset job failed");
+      });
+    }, CHECK_INTERVAL_MS);
+  }, STARTUP_DELAY_MS);
+
+  logger.info("Cost daily reset scheduler started (runs every 24h, first run in 5 min)");
 }

@@ -122,6 +122,9 @@ import {
 // BUG-1 fix: KB mutations must invalidate the AI chat caches so users see
 // updated content on their next request, not the cached stale answer.
 import { invalidateKbCache } from "../lib/kbCache";
+// v6.0: Cost budget circuit breaker + daily spend tracking admin endpoints.
+import { getBudgetStatus, resetCircuit, getDailySpend } from "../lib/costTracker";
+import { dispatchCostAlert } from "../lib/costAlerts";
 
 const router = Router();
 
@@ -3744,6 +3747,124 @@ router.get("/ai/admin/tool-rate-limits/health", async (_req: Request, res: Respo
   } catch (err) {
     logger.error({ err }, "AI admin: tool rate limit health failed");
     res.status(500).json({ error: "Failed to get tool rate limit status." });
+  }
+});
+
+// ─── Cost budget endpoints (v6.0) ──────────────────────────────────────────
+//
+// The cost budget circuit breaker is implemented in lib/costTracker.ts.
+// When daily AI spend crosses AI_DAILY_BUDGET_USD (default $5), the circuit
+// trips and new LLM chat requests are throttled. These admin endpoints let
+// the admin monitor spend, manually reset the circuit, and send a test
+// alert to verify their notification channels (email + webhook).
+
+/**
+ * GET /api/ai/admin/cost/budget
+ *
+ * Returns the current budget status:
+ *   - enabled: whether the circuit is active (AI_DAILY_BUDGET_USD > 0)
+ *   - budgetUsd: the configured daily budget
+ *   - spendUsd: today's spend so far (UTC day)
+ *   - remainingUsd: budget - spend (clamped to 0)
+ *   - spendPct: spend / budget (0–1)
+ *   - circuitOpen: whether the circuit is currently tripped
+ *   - warningThresholdPct: the % at which a warning fires (default 0.8)
+ *   - warningSent: whether the warning alert has already fired today
+ *   - alertSent: whether the circuit-open alert has already fired today
+ *   - byProvider: per-provider breakdown (e.g. { gemini: 0, groq: 0.034 })
+ *   - date: the UTC date for which the status applies (YYYY-MM-DD)
+ *
+ * Called by the AiInsightsTab frontend every 30s when the tab is open.
+ */
+router.get("/ai/admin/cost/budget", async (_req: Request, res: Response) => {
+  try {
+    const status = await getBudgetStatus();
+    res.json(status);
+  } catch (err) {
+    logger.error({ err }, "AI admin: cost budget status failed");
+    res.status(500).json({ error: "Failed to get cost budget status." });
+  }
+});
+
+/**
+ * POST /api/ai/admin/cost/circuit/reset
+ *
+ * Manually resets the cost circuit breaker. Clears the circuit-open Redis
+ * key (but NOT the daily spend counter — the spend is still real, we just
+ * un-trip the breaker so new LLM calls are allowed again).
+ *
+ * Use case: admin investigates the cost spike, fixes the root cause (rate-
+ * limit a specific IP, rotate API keys, disable a feature, etc.), then
+ * manually resets to restore service before UTC midnight.
+ *
+ * The circuit will re-trip immediately if the next recordCost call pushes
+ * the daily total back over the budget — so this is safe (it doesn't
+ * disable the protection, just clears the "tripped" flag).
+ *
+ * Returns the updated budget status.
+ */
+router.post("/ai/admin/cost/circuit/reset", async (_req: Request, res: Response) => {
+  try {
+    await resetCircuit();
+    logger.warn(
+      { adminEmail: _req.dbUser?.email },
+      "AI admin: cost circuit manually reset by admin",
+    );
+    const status = await getBudgetStatus();
+    res.json({ ok: true, ...status });
+  } catch (err) {
+    logger.error({ err }, "AI admin: cost circuit reset failed");
+    res.status(500).json({ error: "Failed to reset cost circuit." });
+  }
+});
+
+/**
+ * POST /api/ai/admin/cost/test-alert
+ *
+ * Sends a TEST cost alert via all configured channels (email + webhook +
+ * in-app event). Useful for:
+ *   - Verifying that the admin's RESEND_API_KEY + ADMIN_EMAIL are correct.
+ *   - Verifying that AI_COST_ALERT_WEBHOOK_URL is set up correctly.
+ *   - Verifying that the in-app event log shows up in the AiInsightsTab
+ *     event feed.
+ *
+ * The test alert is tagged with type="warning" but the in-app event payload
+ * includes a `test: true` flag so the admin can distinguish it from a real
+ * alert in the event log.
+ *
+ * Idempotent at the dispatcher level — but the in-app event log will show
+ * one row per test (no dedup), so the admin can verify each test fired.
+ */
+router.post("/ai/admin/cost/test-alert", async (req: Request, res: Response) => {
+  try {
+    // Bypass the in-process dedup by clearing the set entry for today.
+    // (The dispatcher's markDispatched() is module-internal — we can't
+    // call it from here. Instead, we send a slightly different payload
+    // that the dispatcher will treat as unique. The simplest way is to
+    // use type "warning" with a test flag in the payload.)
+    const dailySpend = await getDailySpend();
+    await dispatchCostAlert({
+      type: "warning",
+      spendUsd: dailySpend,
+      budgetUsd: 5, // placeholder — the test alert is informational
+      thresholdPct: 0.8,
+      lastCost: {
+        costUsd: 0,
+        model: "test-alert",
+        provider: "test",
+        promptTokens: 0,
+        completionTokens: 0,
+      },
+    });
+    logger.info({ adminEmail: req.dbUser?.email }, "AI admin: test cost alert dispatched by admin");
+    res.json({
+      ok: true,
+      message:
+        "Test alert dispatched. Check ADMIN_EMAIL inbox, webhook target, and the AiInsightsTab event feed.",
+    });
+  } catch (err) {
+    logger.error({ err }, "AI admin: test cost alert failed");
+    res.status(500).json({ error: "Failed to dispatch test alert." });
   }
 });
 

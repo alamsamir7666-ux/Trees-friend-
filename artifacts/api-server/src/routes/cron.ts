@@ -10,6 +10,7 @@ import { runAiFeedbackDigest } from "../jobs/aiFeedbackDigest";
 import { runAiSessionCleanup } from "../jobs/aiSessionCleanup";
 import { runKbEmbeddingJob } from "../jobs/kbEmbeddingJob";
 import { runKbToneProfileJob } from "../jobs/kbToneProfileJob";
+import { runCostDailyReset } from "../jobs/costDailyReset";
 import { archiveLastMonth } from "./monthlyRecords";
 import { runAbandonedCartJob } from "./abandonedCart";
 import type { ApiRequest } from "../types/apiRequest";
@@ -314,6 +315,28 @@ router.post("/cron/kb-bm25-stats", async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     logger.error({ err }, "Cron: BM25 stats refresh failed");
+    res.status(500).json({ error: "Cron job failed" });
+  }
+});
+
+/**
+ * POST /api/cron/ai-cost-daily-reset
+ * Daily at 9 AM UTC. Fires the previous day's cost summary email + in-app
+ * event log entry. The circuit auto-resets at UTC midnight because the
+ * Redis keys are date-keyed — this cron is only for the summary alert, not
+ * for clearing state.
+ *
+ * Skipped silently if RESEND_API_KEY + ADMIN_EMAIL are both unset AND
+ * AI_COST_ALERT_WEBHOOK_URL is unset (no alert channels configured).
+ */
+router.post("/cron/ai-cost-daily-reset", async (req, res) => {
+  if (!requireCronAuth(req, res)) return;
+  try {
+    logger.info("Cron: running AI cost daily reset + summary");
+    await runCostDailyReset();
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Cron: AI cost daily reset failed");
     res.status(500).json({ error: "Cron job failed" });
   }
 });

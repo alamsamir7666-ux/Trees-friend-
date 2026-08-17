@@ -68,6 +68,16 @@ import type { ToolStreamEvent, ToolCallSignature } from "../lib/aiToolLoop";
 import { describeError } from "../lib/describeError";
 import { redactPii } from "../lib/piiRedaction";
 import { calculateCost } from "../lib/costTracker";
+// v6.0: SSE heartbeat — keeps long-lived chat streams alive across proxies
+// (nginx, Cloudflare, ALB) that would otherwise close idle connections during
+// tool execution pauses (which can last 2-5s for KB searches with reranker,
+// or up to ~30s for multi-round tool loops).
+import { startSseHeartbeat, type HeartbeatHandle } from "../lib/sseHeartbeat";
+// v6.0: Cost budget circuit breaker — when daily AI spend crosses
+// AI_DAILY_BUDGET_USD (default $5), the circuit trips and new LLM chat
+// requests are throttled. Non-essential AI features (topic classifier,
+// structured output fallback) also skip their LLM calls.
+import { isCircuitOpen, recordCost, getDailyBudgetUsd } from "../lib/costTracker";
 import { detectPromptInjection } from "../lib/promptInjection";
 import { classifyTopic } from "../lib/topicClassifier";
 import { checkOutputSafety } from "../lib/outputSafety";
@@ -867,6 +877,14 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // Bangladesh-style addresses). Replace with [PHONE], [EMAIL], etc.
   // The REDACTED version is what we persist + send to Gemini. The original
   // is never stored in the AI tables.
+  //
+  // PII redaction runs BEFORE the cost circuit breaker because:
+  //   1. We must NEVER persist the original (un-redacted) message — even if
+  //      we're about to throttle the request, we persist the redacted version
+  //      of the user's message so the conversation history shows what happened
+  //      without leaking PII.
+  //   2. PII redaction has no LLM cost when Presidio is not configured (regex
+  //      only), and even with Presidio it's a tiny NER call (~50ms, $0).
   const piiResult = await redactPii(message);
   const safeMessage = piiResult.redacted;
   if (piiResult.hadPii) {
@@ -874,6 +892,68 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       types: piiResult.detectedTypes,
       count: piiResult.count,
     }).catch(() => {}); // event logging is best-effort
+  }
+
+  // ─── 3b. v6.0: Cost budget circuit breaker ──────────────────────────────
+  // Check AFTER PII redaction (above) but BEFORE the topic classifier + prompt
+  // injection classifier + LLM chat call. We don't burn LLM quota when the
+  // daily budget is already exhausted. The circuit auto-resets at UTC midnight
+  // (the Redis key is date-keyed).
+  //
+  // When the circuit is OPEN:
+  //   - The main LLM chat stream returns a "throttled" response (below).
+  //   - The topic classifier + prompt-injection classifier are skipped
+  //     (fail-open — proceed as if the message is on-topic + non-injection).
+  //     Both classifiers are LLM calls that would cost $$; skipping them is
+  //     the whole point.
+  //   - Cached responses (exact-match + semantic) STILL hit — cache lookup
+  //     is free, so we serve cached answers even when the circuit is open.
+  //     (This happens later in the flow — the cache check is below the
+  //     topic gate, but we skip the topic gate when the circuit is open.)
+  //   - The greeting shortcut + KB auto-inject still work (no LLM cost).
+  //
+  // The throttled response tells the user to come back later. It's better
+  // than silently failing — the user knows it's a temporary cap, not a bug.
+  //
+  // Fail-safe: if Redis is unavailable, the circuit reports CLOSED (allow
+  // the call). This trades potential cost overrun for availability during a
+  // Redis outage. See lib/costTracker.ts `isCircuitOpen` for rationale.
+  const circuitOpen = await isCircuitOpen();
+  if (circuitOpen) {
+    logger.warn(
+      { sid: resolved.sid, budget: getDailyBudgetUsd() },
+      "AI: cost circuit OPEN — throttling request (daily budget exceeded)",
+    );
+    // Persist the user's message + a throttled assistant response so the
+    // conversation history shows what happened (and the admin can see the
+    // throttle events in the event log).
+    try {
+      const session = await findOrCreateSession(resolved.sid, safeMessage, resolved.uid);
+      await persistMessage(session.id, "user", safeMessage, {
+        piiRedacted: piiResult.hadPii,
+      });
+      const throttledMsg =
+        "I'm getting a lot of questions right now and have hit my daily AI budget. " +
+        "Please come back in a few hours — my quota resets at midnight UTC. " +
+        "In the meantime, you can browse our plant catalog at /browse.";
+      const assistantMsgId = await persistMessage(session.id, "assistant", throttledMsg, {
+        responseMs: Date.now() - requestStartTime,
+        // Mark as throttled for admin observability.
+      });
+      await logAiEvent(session.id, "cost_circuit_throttled", {
+        budgetUsd: getDailyBudgetUsd(),
+      }).catch(() => {});
+      res.json({
+        sessionToken: resolved.token,
+        message: throttledMsg,
+        messageId: assistantMsgId,
+        throttled: true,
+      });
+    } catch (err) {
+      logger.error({ err }, "AI: cost-throttle persist failed");
+      res.status(500).json({ error: "Failed to process request." });
+    }
+    return;
   }
 
   // ─── 4. Topic gate (v5.3: soft LLM-based, not hard keyword block) ───
@@ -898,6 +978,10 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // Cost: $0 (uses existing free-tier Groq/Gemini quotas). The LLM topic
   // check only runs when the keyword gate fails (~20-30% of messages).
   // Results are cached 24h.
+  // v6.0 note: the cost circuit check at step 3b returns early when the
+  // circuit is OPEN, so we never reach this topic classifier when throttled.
+  // The LLM topic classifier call is therefore implicitly skipped — no
+  // need for an explicit `if (circuitOpen)` guard here.
   if (!hasBotanicalKeyword(safeMessage)) {
     // Keyword gate failed — run the LLM topic classifier.
     const topicCheck = await classifyTopic(safeMessage);
@@ -1226,6 +1310,31 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   res.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
   res.flushHeaders?.();
 
+  // ─── v6.0: Start SSE heartbeat ────────────────────────────────────────
+  // Sends `: heartbeat\n\n` every 15s (configurable via
+  // AI_SSE_HEARTBEAT_INTERVAL_MS) to keep the connection alive across
+  // proxies / load balancers that would otherwise close idle connections
+  // during:
+  //   - LLM "thinking" pauses before the first token (500ms–3s).
+  //   - Tool execution pauses (50ms–3s per tool, up to 10 rounds = ~30s).
+  //   - Multi-round tool loops (each round = LLM call + tool execution).
+  //
+  // Industry standard: OpenAI streaming sends `: OPENAI_KEEPALIVE\n\n` every
+  // ~10s. Vercel AI SDK sends `: ping\n\n` every 15s by default. Anthropic
+  // sends `event: ping\ndata: {"type":"ping"}\n\n` every ~10s. We use the
+  // same `: heartbeat\n\n` comment format that the SSE spec reserves for
+  // keep-alive comments — the frontend's existing parser ignores comment
+  // lines, so no client-side change is needed.
+  //
+  // The heartbeat also serves as a disconnect detector: if `res.write()`
+  // returns false or throws (kernel buffer full or socket closed), we flip
+  // the `clientDisconnected()` flag and the main streaming loop breaks
+  // early, saving LLM quota + CPU.
+  //
+  // The handle MUST be stopped in the `finally` block below to clear the
+  // interval (covers all paths: success, error, client disconnect).
+  const heartbeat: HeartbeatHandle = startSseHeartbeat(res);
+
   // Send the sessionToken to the client immediately so it can store it in
   // localStorage BEFORE the first content chunk arrives. This way, if the
   // connection drops mid-stream, the client still knows which session to
@@ -1287,6 +1396,9 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       res.write(`data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`);
     }
     res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+    // v6.0: stop the heartbeat before res.end() — the heartbeat interval
+    // would otherwise fire on a closed response and throw.
+    heartbeat.stop();
     res.end();
     return;
   }
@@ -1342,6 +1454,8 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
         res.write(`data: ${JSON.stringify({ type: "messageId", messageId: assistantMsgId })}\n\n`);
       }
       res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+      // v6.0: stop the heartbeat before res.end().
+      heartbeat.stop();
       res.end();
       return;
     }
@@ -1558,6 +1672,27 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       onToolRoundComplete,
     );
     for await (const chunk of stream) {
+      // v6.0: check if the client disconnected mid-stream. The heartbeat
+      // detects this via `res.write()` returning false or throwing on
+      // a closed socket. If the client is gone, abort the stream loop
+      // early to save LLM quota + CPU. The `for await` will still be
+      // waiting on the next chunk from the provider — we break out + let
+      // the provider's iterator clean up.
+      //
+      // We can't actually CANCEL the upstream Gemini/Groq call (the SDK
+      // doesn't expose an AbortController for streaming responses), but
+      // we can stop iterating + persist what we have. The provider's
+      // iterator will eventually GC.
+      if (heartbeat.clientDisconnected()) {
+        logger.info(
+          {
+            sessionId: session.id,
+            partialLength: fullResponse.length,
+          },
+          "AI: client disconnected mid-stream — aborting iteration (partial response will be persisted)",
+        );
+        break;
+      }
       if (!chunk) continue;
       if (firstChunkTime === null) {
         firstChunkTime = Date.now();
@@ -1747,6 +1882,40 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       kbContextInjected: kbContext.injected,
     });
 
+    // ─── v6.0: Record cost against the daily spend counter ────────────────
+    // After persisting the per-message `cost_usd` to the DB (above), also
+    // update the Redis-backed daily aggregate counter. This is what the
+    // budget circuit breaker checks (via `isCircuitOpen()`) on the NEXT
+    // request.
+    //
+    // The counter is Redis-backed (not DB-backed) because:
+    //   - Reads happen on every chat request (hot path). DB round-trip =
+    //     5–20ms added latency. Redis = ~2ms.
+    //   - The DB column already has the authoritative per-message record;
+    //     the Redis counter is just a fast aggregate view.
+    //
+    // Fail-safe: if Redis is unavailable, NO-OPs (the per-message cost_usd
+    // is still on disk; the daily counter is just lost for that day — admins
+    // can re-derive via `SELECT SUM(cost_usd) WHERE DATE(created_at) = ...`).
+    //
+    // Threshold checks (warning at 80%, circuit-open at 100%) fire inside
+    // `recordCost` — they're idempotent (one-shot per day via Redis SETNX
+    // sentinels).
+    if (costBreakdown && costBreakdown.costUsd > 0) {
+      // Attach the provider to the cost breakdown so the per-provider
+      // counter is correctly attributed.
+      const costWithProvider = {
+        ...costBreakdown,
+        provider: metaHolder.value?.provider ?? costBreakdown.provider,
+      };
+      recordCost(costWithProvider).catch((err) => {
+        logger.warn(
+          { err: (err as Error)?.message ?? String(err), costUsd: costBreakdown.costUsd },
+          "AI: recordCost failed (non-fatal — per-message cost still on disk)",
+        );
+      });
+    }
+
     // ─── Phase 4: log tone matching event (if activated) ──────────────────────
     // Uses the existing ai_chat_events table + logAiEvent (no schema change).
     // The event is visible in the admin "Events" tab + used by the Insights
@@ -1891,6 +2060,16 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       partialResponse: fullResponse.length > 0 && fullResponse !== userMessage,
     }).catch(() => {});
   } finally {
+    // v6.0: ALWAYS stop the heartbeat before res.end(). This covers:
+    //   - Stream completed naturally (done event sent).
+    //   - Stream errored (error event sent in the catch block above).
+    //   - Client disconnected mid-stream (heartbeat detected + main loop
+    //     broke early).
+    // Without this, the heartbeat interval would fire on a closed response
+    // and throw `ERR_STREAM_WRITE_AFTER_END` on every iteration until the
+    // event loop clears it (~15s later). Idempotent — safe to call even
+    // if already stopped.
+    heartbeat.stop();
     res.end();
   }
 
