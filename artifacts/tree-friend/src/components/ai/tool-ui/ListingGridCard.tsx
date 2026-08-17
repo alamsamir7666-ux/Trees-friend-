@@ -36,7 +36,7 @@
  *     productImage (string | null), variants: [...], hasInStockVariant,
  *     hasPreOrderVariant, minPrice }
  */
-import { useState, useMemo } from "react";
+import { useState, useMemo, memo } from "react";
 import { ShoppingBag, MapPin, Star, BadgeCheck, Truck, Plus, Check, Loader2 } from "lucide-react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -482,7 +482,13 @@ function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () 
   );
 }
 
-export function ListingGridCard({ data, onClose }: { data: unknown; onClose?: () => void }) {
+export const ListingGridCard = memo(function ListingGridCard({
+  data,
+  onClose,
+}: {
+  data: unknown;
+  onClose?: () => void;
+}) {
   const result = data as SearchResult;
 
   if (!result || !result.listings || result.listings.length === 0) {
@@ -526,4 +532,4 @@ export function ListingGridCard({ data, onClose }: { data: unknown; onClose?: ()
       </div>
     </div>
   );
-}
+});

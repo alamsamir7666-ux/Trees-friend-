@@ -18,6 +18,18 @@
  *   - get_user_orders → OrderListCard
  *   - search_seller_listings → ListingGridCard
  *   - get_product_care → CareGuideCard
+ *
+ * v6.2 Part 6 changes:
+ *   - P2-16: Each tool card is wrapped in <ToolCardErrorBoundary> so a
+ *     malformed payload crashes only that one card, not the whole chat.
+ *   - P2-14: All cards (OrderDetailCard, OrderListCard, ListingGridCard,
+ *     CareGuideCard) are now wrapped in React.memo — they don't re-render
+ *     when the parent's SSE deltas arrive (only their own data prop
+ *     changes triggers re-render).
+ *   - P2-11: KbCitations rendered at the end of the stack — extracts
+ *     source info from any `search_knowledge_base` tool results in this
+ *     message's toolResults and renders them as numbered citation chips
+ *     (Perplexity/Bing Chat pattern).
  */
 import type { ToolResultEntry } from "@/hooks/useAiChat";
 import { AlertCircle } from "lucide-react";
@@ -25,6 +37,8 @@ import { OrderDetailCard } from "./OrderDetailCard";
 import { OrderListCard } from "./OrderListCard";
 import { ListingGridCard } from "./ListingGridCard";
 import { CareGuideCard } from "./CareGuideCard";
+import { KbCitations } from "./KbCitations";
+import { ToolCardErrorBoundary } from "./ToolCardErrorBoundary";
 
 // ─── Component registry ───────────────────────────────────────────────────
 
@@ -94,14 +108,32 @@ export function ToolComponentRenderer({
     }
 
     // v6.2 Part 3: CSS animation (smooth fade-in + slide-up).
+    // v6.2 Part 6 (P2-16): wrap each card in ToolCardErrorBoundary so a
+    // malformed payload crashes only this card, not the whole chat.
+    // The boundary's `toolName` prop is used in the fallback UI so the
+    // user knows which tool failed.
     components.push(
-      <div
+      <ToolCardErrorBoundary
         key={`${result.name}-${result.durationMs ?? 0}`}
-        className="animate-in fade-in slide-in-from-bottom-2 duration-300"
+        toolName={result.name}
       >
-        <Component data={result.data} onClose={onClose} />
-      </div>,
+        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <Component data={result.data} onClose={onClose} />
+        </div>
+      </ToolCardErrorBoundary>,
     );
+  }
+
+  // v6.2 Part 6 (P2-11): render KB source citations at the end of the
+  // stack — they reference all `search_knowledge_base` tool results in
+  // this message. Rendered AFTER the rich cards so the user reads the
+  // answer first, then sees where it came from (matches the natural
+  // reading order; matches Perplexity/Bing Chat layout).
+  const hasKbCitations = toolResults.some(
+    (r) => r.name === "search_knowledge_base" && r.ok && r.data != null,
+  );
+  if (hasKbCitations) {
+    components.push(<KbCitations key="kb-citations" toolResults={toolResults} />);
   }
 
   if (components.length === 0) return null;

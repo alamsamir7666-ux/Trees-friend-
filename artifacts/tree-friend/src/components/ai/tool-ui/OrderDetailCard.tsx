@@ -19,6 +19,7 @@
  * If the tool returned an error or "not signed in", the card shows a
  * friendly message instead of the order details.
  */
+import { memo } from "react";
 import { Package, Truck, CheckCircle2, Clock, MapPin, XCircle } from "lucide-react";
 import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
@@ -89,7 +90,13 @@ function formatPrice(price: number | string): string {
 
 // ─── Component ────────────────────────────────────────────────────────────
 
-export function OrderDetailCard({ data, onClose }: { data: unknown; onClose?: () => void }) {
+export const OrderDetailCard = memo(function OrderDetailCard({
+  data,
+  onClose,
+}: {
+  data: unknown;
+  onClose?: () => void;
+}) {
   const [, navigate] = useLocation();
   const result = data as OrderResult;
 
@@ -241,4 +248,4 @@ export function OrderDetailCard({ data, onClose }: { data: unknown; onClose?: ()
       </div>
     </div>
   );
-}
+});

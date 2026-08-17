@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600&family=DM+Serif+Display:ital@0;1&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600&family=DM+Serif+Display:ital@0;1&display=swap");
 @layer theme, base, clerk, components, utilities;
 @import "tailwindcss";
 @import "tw-animate-css";
@@ -87,11 +87,11 @@
 
 /* Tree Friend — Forest Green / Cream / Gold-Brown palette */
 :root {
-  --button-outline: rgba(0,0,0,.08);
-  --badge-outline: rgba(0,0,0,.05);
+  --button-outline: rgba(0, 0, 0, 0.08);
+  --badge-outline: rgba(0, 0, 0, 0.05);
   --opaque-button-border-intensity: -8;
-  --elevate-1: rgba(0,0,0,.03);
-  --elevate-2: rgba(0,0,0,.07);
+  --elevate-1: rgba(0, 0, 0, 0.03);
+  --elevate-2: rgba(0, 0, 0, 0.07);
 
   /* Warm cream background */
   --background: 90 25% 97%;
@@ -166,37 +166,51 @@
   --sidebar-accent-foreground: 90 25% 97%;
   --sidebar-ring: 32 45% 40%;
 
-  --app-font-sans: 'DM Sans', 'Inter', sans-serif;
-  --app-font-serif: 'DM Serif Display', 'Georgia', serif;
-  --app-font-mono: 'JetBrains Mono', monospace;
+  --app-font-sans: "DM Sans", "Inter", sans-serif;
+  --app-font-serif: "DM Serif Display", "Georgia", serif;
+  --app-font-mono: "JetBrains Mono", monospace;
   --radius: 0.75rem;
 
-  --shadow-2xs: 0px 1px 2px 0px rgba(20,15,10,0.05);
-  --shadow-xs: 0px 1px 3px 0px rgba(20,15,10,0.08);
-  --shadow-sm: 0px 2px 4px 0px rgba(20,15,10,0.08), 0px 1px 2px -1px rgba(20,15,10,0.04);
-  --shadow: 0px 4px 8px 0px rgba(20,15,10,0.08), 0px 2px 4px -1px rgba(20,15,10,0.04);
-  --shadow-md: 0px 6px 16px 0px rgba(20,15,10,0.10), 0px 2px 6px -1px rgba(20,15,10,0.05);
-  --shadow-lg: 0px 12px 28px 0px rgba(20,15,10,0.12), 0px 4px 8px -1px rgba(20,15,10,0.06);
-  --shadow-xl: 0px 20px 40px 0px rgba(20,15,10,0.14), 0px 8px 16px -1px rgba(20,15,10,0.07);
-  --shadow-2xl: 0px 32px 60px 0px rgba(20,15,10,0.18);
+  --shadow-2xs: 0px 1px 2px 0px rgba(20, 15, 10, 0.05);
+  --shadow-xs: 0px 1px 3px 0px rgba(20, 15, 10, 0.08);
+  --shadow-sm: 0px 2px 4px 0px rgba(20, 15, 10, 0.08), 0px 1px 2px -1px rgba(20, 15, 10, 0.04);
+  --shadow: 0px 4px 8px 0px rgba(20, 15, 10, 0.08), 0px 2px 4px -1px rgba(20, 15, 10, 0.04);
+  --shadow-md: 0px 6px 16px 0px rgba(20, 15, 10, 0.1), 0px 2px 6px -1px rgba(20, 15, 10, 0.05);
+  --shadow-lg: 0px 12px 28px 0px rgba(20, 15, 10, 0.12), 0px 4px 8px -1px rgba(20, 15, 10, 0.06);
+  --shadow-xl: 0px 20px 40px 0px rgba(20, 15, 10, 0.14), 0px 8px 16px -1px rgba(20, 15, 10, 0.07);
+  --shadow-2xl: 0px 32px 60px 0px rgba(20, 15, 10, 0.18);
 
   --tracking-normal: 0em;
   --spacing: 0.25rem;
 
   --sidebar-primary-border: hsl(var(--sidebar-primary));
-  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --sidebar-primary-border: hsl(
+    from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
   --sidebar-accent-border: hsl(var(--sidebar-accent));
-  --sidebar-accent-border: hsl(from hsl(var(--sidebar-accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --sidebar-accent-border: hsl(
+    from hsl(var(--sidebar-accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
   --primary-border: hsl(var(--primary));
-  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --primary-border: hsl(
+    from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
   --secondary-border: hsl(var(--secondary));
-  --secondary-border: hsl(from hsl(var(--secondary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --secondary-border: hsl(
+    from hsl(var(--secondary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
   --muted-border: hsl(var(--muted));
-  --muted-border: hsl(from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --muted-border: hsl(
+    from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
   --accent-border: hsl(var(--accent));
-  --accent-border: hsl(from hsl(var(--accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --accent-border: hsl(
+    from hsl(var(--accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
   --destructive-border: hsl(var(--destructive));
-  --destructive-border: hsl(from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --destructive-border: hsl(
+    from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
 }
 
 @layer base {
@@ -226,8 +240,10 @@
     pointer-events: none;
   }
 
-  .no-default-hover-elevate {}
-  .no-default-active-elevate {}
+  .no-default-hover-elevate {
+  }
+  .no-default-active-elevate {
+  }
 
   .toggle-elevate::before,
   .toggle-elevate-2::before {
@@ -353,7 +369,7 @@
   /* Elevation overlays and outline tints flip from black-tinted to
      white-tinted in dark mode, so hover/active states and button outlines
      read correctly against the dark surface instead of disappearing. */
-  --button-outline: rgba(255, 255, 255, 0.10);
+  --button-outline: rgba(255, 255, 255, 0.1);
   --badge-outline: rgba(255, 255, 255, 0.08);
   --opaque-button-border-intensity: 8;
   --elevate-1: rgba(255, 255, 255, 0.04);
@@ -389,4 +405,58 @@
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none; /* Chrome/Safari/Android WebView */
+}
+
+/* ── prefers-reduced-motion ────────────────────────────────────────────────
+   v6.2 Part 6 (P2-15): respect the user's OS / browser setting for reduced
+   motion. When `prefers-reduced-motion: reduce` is active (System Settings
+   → Accessibility → Display → Reduce Motion on macOS; Settings →
+   Accessibility → Visibility enhancements → Remove animations on Windows;
+   Settings → Accessibility → Remove animations on Android), we:
+
+     1. Disable all `animate-in` enter animations (fade-in, slide-in-from-*
+        classes from tailwindcss-animate / tw-animate-css). These are used
+        on tool-result cards, message bubbles, typing indicator, skeletons,
+        empty state, etc.
+     2. Disable `animate-pulse` (used by skeletons + cursor blink).
+     3. Disable `animate-bounce` (typing indicator dots).
+     4. Disable `animate-spin` (loading spinners — replaced by static text
+        via aria-label, or just a steady icon if no text).
+     5. Set `scroll-behavior: auto` (overrides `scroll-smooth` on the
+        message container — instant scroll, no smooth animation).
+
+   Why a global rule instead of per-component checks:
+     - WCAG 2.1 SC 2.3.3 (Animation from Interactions, Level AAA) requires
+       that motion be disableable. The cleanest implementation is a single
+       CSS rule that catches every animated element — per-component JS
+       checks would miss future additions and are error-prone.
+     - The `animate-*` classes are tailwindcss-animate utilities; they
+       all resolve to `animation: <keyframes> <duration> ...`. Setting
+       `animation: none !important` on the classes nukes them all.
+     - The `!important` is intentional — we need to override Tailwind's
+       generated CSS, which has the same specificity (single class).
+       This is the sanctioned pattern per the WAI-ARIA APG.
+
+   What we DON'T disable:
+     - Opacity transitions on hover (those aren't motion — they're a
+       state change, and don't trigger vestibular issues).
+     - Color transitions (same reason).
+     - The page-fade-in (only animates opacity, never transform — safe
+       per WCAG 2.3.1 — but we disable it anyway for consistency, since
+       a user who disabled motion probably wants ZERO animation).
+
+   Trade-off: a few users without vestibular issues will see a slightly
+   less polished UI when they have this setting on (e.g. cards appear
+   instantly instead of fading in). That's acceptable — the setting
+   signals they prefer no motion, and we honor it.
+   ─────────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

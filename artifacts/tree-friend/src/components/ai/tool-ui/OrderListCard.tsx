@@ -13,6 +13,7 @@
  *
  * If not signed in, shows a friendly message prompting sign-in.
  */
+import { memo } from "react";
 import { Package, ChevronRight, LogIn } from "lucide-react";
 import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
@@ -141,7 +142,13 @@ function OrderRow({ order, onClose }: { order: OrderItem; onClose?: () => void }
   );
 }
 
-export function OrderListCard({ data, onClose }: { data: unknown; onClose?: () => void }) {
+export const OrderListCard = memo(function OrderListCard({
+  data,
+  onClose,
+}: {
+  data: unknown;
+  onClose?: () => void;
+}) {
   const result = data as OrdersResult;
 
   // Not signed in.
@@ -186,4 +193,4 @@ export function OrderListCard({ data, onClose }: { data: unknown; onClose?: () =
       </div>
     </div>
   );
-}
+});

@@ -12,6 +12,7 @@
  *     bloom_season, key_benefits, best_for, care_tips, images,
  *     product_status } | null, error?: string }
  */
+import { memo } from "react";
 import { Sun, Droplets, Mountain, Ruler, Wind, TrendingUp, Flower, Leaf } from "lucide-react";
 
 interface ProductData {
@@ -45,7 +46,7 @@ interface CareField {
   color: string;
 }
 
-export function CareGuideCard({ data }: { data: unknown }) {
+export const CareGuideCard = memo(function CareGuideCard({ data }: { data: unknown }) {
   const result = data as CareResult;
 
   if (!result || !result.product) {
@@ -161,4 +162,4 @@ export function CareGuideCard({ data }: { data: unknown }) {
       )}
     </div>
   );
-}
+});

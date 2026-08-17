@@ -28,7 +28,7 @@
  *   - Responsive max-width on bubbles.
  *   - Accessible focus states.
  */
-import { useEffect, useRef, useState, type FormEvent, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo, type FormEvent, useCallback } from "react";
 import { useAuth, useUser } from "@clerk/react";
 import {
   Sparkles,
@@ -235,6 +235,41 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
     !lastMsg?.content &&
     activeToolCalls.length === 0;
 
+  // v6.2 Part 6 (P2-17): ARIA live region announcement text.
+  //
+  // Industry standard for chat UIs with tool calls (ChatGPT, Claude, Bing
+  // Chat): screen readers should announce tool execution status so blind
+  // users know what's happening (sighted users see the spinner + skeleton;
+  // blind users currently get nothing).
+  //
+  // The announcement text changes based on `activeToolCalls`:
+  //   - 1 tool running: "Searching listings…" (the friendly label from
+  //     TOOL_LABELS, defined in ToolCallChips below).
+  //   - 2+ tools running: "Running 2 tools…" (parallel calls).
+  //   - 0 tools + typing: "TreeBot is thinking…" (the pre-delta phase).
+  //   - 0 tools + not typing + loading: "" (silent — the streaming text
+  //     itself is announced via the message container's aria-live=polite).
+  //
+  // The live region is `aria-live="assertive"` (interrupts current
+  // announcement) so tool status takes priority over streaming text.
+  // Placed in a visually-hidden div so sighted users don't see duplicate
+  // info (the ToolCallChips component already shows the visual equivalent).
+  //
+  // `useMemo` so the string identity is stable when nothing changed —
+  // prevents redundant screen-reader announcements.
+  const announcement = useMemo(() => {
+    if (activeToolCalls.length > 0) {
+      if (activeToolCalls.length === 1) {
+        const call = activeToolCalls[0];
+        const label = TOOL_LABELS[call.name]?.label ?? "Working";
+        return `${label}…`;
+      }
+      return `Running ${activeToolCalls.length} tools…`;
+    }
+    if (isTyping) return "TreeBot is thinking…";
+    return "";
+  }, [activeToolCalls, isTyping]);
+
   const charCount = input.length;
   const overSoftLimit = charCount > INPUT_SOFT_LIMIT;
 
@@ -397,6 +432,16 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
 
       {/* ─── Messages ─────────────────────────────────────────────────── */}
       <div className="relative flex-1 overflow-hidden">
+        {/* v6.2 Part 6 (P2-17): Visually-hidden ARIA live region for tool
+            execution status. Sighted users see the ToolCallChips + skeleton;
+            blind users get nothing without this live region. The region is
+            `assertive` (interrupts current speech) so tool status takes
+            priority over streaming text. The visually-hidden utility class
+            (Tailwind's `sr-only`) hides it from sighted users while keeping
+            it accessible to screen readers. */}
+        <div aria-live="assertive" aria-atomic="true" className="sr-only">
+          {announcement}
+        </div>
         <div
           ref={scrollRef}
           onScroll={handleScroll}
