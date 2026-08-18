@@ -44,6 +44,11 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getToken } from "@/lib/getToken";
+// v6.2 Part 12 (Gap Fix #2): import ToolName + isToolName so the SSE parser
+// narrows raw strings from the wire before storing them on ActiveToolCall.
+// Downstream maps (TOOL_LABELS, TOOLS_WITH_SKELETONS, TOOL_DISPLAY_NAMES)
+// are now `Record<ToolName, ...>` and get compile-time type safety.
+import { isToolName, type ToolName } from "@/components/ai/tool-ui/toolNames";
 
 const SESSION_TOKEN_KEY = "treebot.sessionToken";
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -102,8 +107,14 @@ export interface ChatMessage {
  * v6.2 Part 1: A captured tool result stored on a ChatMessage.
  */
 export interface ToolResultEntry {
-  /** The tool name (e.g. "get_order_details", "search_seller_listings"). */
-  name: string;
+  /**
+   * The tool name (e.g. "get_order_details", "search_seller_listings").
+   *
+   * v6.2 Part 12 (Gap Fix #2): typed as `ToolName` (string-literal union).
+   * The SSE parser narrows raw strings via `isToolName()` before storing;
+   * unknown names are logged + the result is dropped.
+   */
+  name: ToolName;
   /** Whether the tool succeeded. */
   ok: boolean;
   /** The structured result data (present only for tools with UI components). */
@@ -124,8 +135,21 @@ export interface ToolResultEntry {
 export interface ActiveToolCall {
   /** Unique ID (server sends `name` only; we synthesize `${name}-${n}`). */
   id: string;
-  /** The tool name (e.g. `search_catalog`, `get_user_orders`). */
-  name: string;
+  /**
+   * The tool name (e.g. `search_catalog`, `get_user_orders`).
+   *
+   * v6.2 Part 12 (Gap Fix #2): typed as `ToolName` (string-literal union)
+   * instead of `string`. The SSE parser uses `isToolName()` to narrow
+   * the raw string from the wire before pushing to `activeToolCalls`.
+   * Unknown tool names (typos, future tools not yet in TOOL_NAMES) are
+   * logged + dropped — they can't reach this field.
+   *
+   * Downstream consumers (AssistantPanel's TOOL_LABELS, TOOLS_WITH_SKELETONS)
+   * now get compile-time type safety: a typo in their key, or a tool
+   * added to toolNames.ts without a corresponding map entry, is caught
+   * at build time.
+   */
+  name: ToolName;
   /**
    * v5.1: Partial tool-call args as they stream in (Groq only).
    * Accumulated from `tool_call_delta` SSE events. The UI can render
@@ -539,6 +563,18 @@ export function useAiChat(): UseAiChatResult {
             // so the UI can render a "Looking up..." chip. We synthesize a
             // unique id because the server only sends `name` (the same tool
             // can be called multiple times across rounds).
+            //
+            // v6.2 Part 12 (Gap Fix #2): narrow the raw `payload.name`
+            // string from the SSE wire via `isToolName`. Unknown names
+            // (typos, future tools not yet in TOOL_NAMES) are logged +
+            // dropped — they can't reach the typed `ActiveToolCall.name`
+            // field, which keeps downstream maps (TOOL_LABELS etc.) type-safe.
+            if (!isToolName(payload.name)) {
+              console.warn(
+                `[useAiChat] SSE "tool_call" event: unknown tool name "${payload.name}" — dropping`,
+              );
+              continue;
+            }
             const counter = ++toolCallCounterRef.current;
             const toolId = `${payload.name}-${counter}`;
             setActiveToolCalls((prev) => [...prev, { id: toolId, name: payload.name }]);
@@ -610,8 +646,22 @@ export function useAiChat(): UseAiChatResult {
             // We remove the FIRST matching entry (oldest) — if the same tool
             // was called multiple times, the oldest in-flight call is the one
             // most likely to have just completed.
+            //
+            // v6.2 Part 12 (Gap Fix #2): narrow the raw `payload.name` string
+            // from the SSE wire via `isToolName`. Unknown names are logged +
+            // dropped — they can't reach the typed `ToolResultEntry.name`
+            // field. This is critical for the ToolComponentRenderer, which
+            // does `TOOL_UI_MAP[result.name]` (a `Partial<Record<ToolName, FC>>`
+            // lookup) — passing an unknown name would silently miss.
+            if (!isToolName(payload.name)) {
+              console.warn(
+                `[useAiChat] SSE "tool_result" event: unknown tool name "${payload.name}" — dropping`,
+              );
+              continue;
+            }
+            const toolName = payload.name;
             setActiveToolCalls((prev) => {
-              const idx = prev.findIndex((t) => t.name === payload.name);
+              const idx = prev.findIndex((t) => t.name === toolName);
               if (idx === -1) return prev;
               return [...prev.slice(0, idx), ...prev.slice(idx + 1)];
             });
@@ -632,7 +682,7 @@ export function useAiChat(): UseAiChatResult {
                     toolResults: [
                       ...toolResults,
                       {
-                        name: payload.name!,
+                        name: toolName,
                         ok: payload.ok ?? true,
                         data: payload.result,
                         durationMs: payload.durationMs,

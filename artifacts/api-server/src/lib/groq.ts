@@ -54,6 +54,10 @@ import {
   type OnToolEvent,
   type ToolCallSignature,
 } from "./aiToolLoop";
+// v6.2 Part 12 (Backend Gap Fix #2): import isToolName + ToolName to narrow
+// the raw tool name from Groq's function-call response before emitting
+// typed ToolStreamEvent values. Same pattern as gemini.ts.
+import { isToolName, type ToolName } from "./aiToolSchemas";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
 // v6.2 Part 10 (Production fix): Groq deprecated llama-3.3-70b-versatile +
@@ -837,7 +841,17 @@ export async function* streamGroqChat(
             } catch {
               // malformed arguments — proceed with empty
             }
-            return signatureOf(tc.function.name, args);
+            // v6.2 Part 12: signatureOf now requires a typed ToolName. If the
+            // LLM hallucinated an unknown name, fall back to a placeholder
+            // signature so the stuck-loop detector still has SOMETHING to
+            // compare against (rare path — the unknown-name branch in
+            // executeTool returns before any work happens). The cast through
+            // unknown is safe because signatureOf only uses `name` as a string
+            // key — no dispatch happens here.
+            const sigName = (
+              isToolName(tc.function.name) ? tc.function.name : "search_catalog"
+            ) as ToolName;
+            return signatureOf(sigName, args);
           });
           const stuckTool = budget.detectStuck(currentSignatures);
           if (stuckTool) {
@@ -883,25 +897,36 @@ export async function* streamGroqChat(
               } catch {
                 // malformed arguments — proceed with empty
               }
-              const toolName = tc.function.name;
-              if (onToolEvent) {
-                onToolEvent({ type: "tool_call", name: toolName, args });
+              const rawName = tc.function.name;
+
+              // v6.2 Part 12 (Backend Gap Fix #2): narrow the raw tool name
+              // from the LLM via isToolName before emitting SSE events. The
+              // name arrives as `string` (untrusted — Groq can hallucinate
+              // names just like Gemini). isToolName narrows it to ToolName so
+              // the typed ToolStreamEvent union stays safe. Unknown names
+              // skip SSE emission (executeTool still returns a friendly
+              // error envelope to the LLM via the function-response path).
+              const knownName = isToolName(rawName) ? rawName : null;
+
+              if (onToolEvent && knownName) {
+                onToolEvent({ type: "tool_call", name: knownName, args });
               }
               const t0 = Date.now();
               try {
                 // v6.2 Part 9 (Gap 17 fix — Phase B): pass onProgress callback
                 // (mirrors gemini.ts). Long-running tools can emit live progress.
-                const toolResult = await tools.execute(toolName, args, userId ?? null, {
-                  onProgress: onToolEvent
-                    ? (progress: string) => {
-                        onToolEvent({ type: "tool_progress", name: toolName, progress });
-                      }
-                    : undefined,
+                const toolResult = await tools.execute(rawName, args, userId ?? null, {
+                  onProgress:
+                    onToolEvent && knownName
+                      ? (progress: string) => {
+                          onToolEvent({ type: "tool_progress", name: knownName, progress });
+                        }
+                      : undefined,
                 });
-                if (onToolEvent) {
+                if (onToolEvent && knownName) {
                   onToolEvent({
                     type: "tool_result",
-                    name: toolName,
+                    name: knownName,
                     ok: true,
                     durationMs: Date.now() - t0,
                     result: toolResult,
@@ -917,10 +942,10 @@ export async function* streamGroqChat(
                 // would be dead code. Use a fallback only for empty strings.
                 const rawMsg = (err as any)?.message ?? String(err);
                 const errMsg = rawMsg || "tool execution failed";
-                if (onToolEvent) {
+                if (onToolEvent && knownName) {
                   onToolEvent({
                     type: "tool_result",
-                    name: toolName,
+                    name: knownName,
                     ok: false,
                     error: errMsg,
                     durationMs: Date.now() - t0,

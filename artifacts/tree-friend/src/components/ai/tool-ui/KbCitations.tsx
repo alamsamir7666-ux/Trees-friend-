@@ -41,29 +41,11 @@
 import { memo } from "react";
 import { BookOpen, Video, FileText, ExternalLink, Link2 } from "lucide-react";
 import type { ToolResultEntry } from "@/hooks/useAiChat";
-
-/**
- * Shape of a single KB entry in the tool result. Mirrors the backend's
- * `searchKb` function return type (see aiTools.ts ~line 985). We keep
- * this loose (all fields optional except title) so a malformed payload
- * doesn't crash — the ToolCardErrorBoundary catches render errors, but
- * it's better to degrade gracefully.
- */
-interface KbEntry {
-  title?: string;
-  content?: string;
-  source?: {
-    type?: string;
-    title?: string;
-    url?: string | null;
-  } | null;
-  relevance_score?: number;
-}
-
-interface KbToolResult {
-  results?: KbEntry[];
-  count?: number;
-}
+// v6.2 Part 12 (Gap Fix #1): types flow from the Zod schema. The local
+// KbEntry / KbToolResult interfaces are gone — they're now inferred +
+// validated. validateKbResult runs safeParse at the boundary so
+// extractKbCitations consumes only typed data.
+import { validateKbResult } from "./schemas";
 
 /**
  * A deduped source ready to render as a chip.
@@ -96,8 +78,14 @@ export function extractKbCitations(toolResults: ToolResultEntry[]): Citation[] {
   for (const result of toolResults) {
     if (result.name !== "search_knowledge_base") continue;
     if (!result.ok || !result.data) continue;
-    const data = result.data as KbToolResult;
-    if (!data.results || !Array.isArray(data.results)) continue;
+    // v6.2 Part 12 (Gap Fix #1): validate the KB result with the Zod
+    // schema before consuming. If the backend drifts (e.g. results field
+    // renamed), we skip this entry instead of crashing. The KbCitations
+    // component is rendered by ToolComponentRenderer AFTER the rich cards
+    // and isn't wrapped in ToolCardErrorBoundary — so this safeParse is
+    // the primary defense (no boundary fallback).
+    const data = validateKbResult(result.data);
+    if (!data) continue;
 
     for (const entry of data.results) {
       const source = entry.source;

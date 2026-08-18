@@ -1,0 +1,162 @@
+feat(ai): typed tool-name registry + Zod schemas at trust boundaries (v6.2 Part 12)
+
+Industry-standard pattern (Vercel AI SDK streamUI + Zod): validate
+untrusted data at every trust boundary instead of relying on `as` casts
+that compile fine even when the runtime shape drifts.
+
+This closes two gaps identified in the v6.2 deep analysis:
+
+  Gap #1 — `data: unknown` typing
+    Before: tool-UI components received `data: unknown` and cast it via
+    `as OrderResult` / `as SearchResult`. Backend schema drift would
+    compile fine, crash at runtime, and only be caught reactively by
+    `ToolCardErrorBoundary` AFTER React tried to render.
+    After: every tool-result payload is validated with a Zod schema at
+    the boundary BEFORE the card mounts. On failure, the card shows a
+    deterministic error fallback (not a half-rendered crash). Each card
+    receives a typed prop — no more `as` casts inside the component.
+
+  Gap #2 — Tool-name string coupling
+    Before: four parallel `Record<string, ...>` maps (TOOL_UI_MAP,
+    TOOL_LABELS, TOOLS_WITH_SKELETONS, TOOL_DISPLAY_NAMES, SKELETONS)
+    keyed by raw `string`. A typo like `get_order_detail` (missing `s`)
+    was a silent runtime miss — the rich card just disappeared.
+    After: a single `TOOL_NAMES` const tuple + `ToolName` string-literal
+    union shared between frontend + backend. Every map is now typed
+    `Record<ToolName, ...>` (or `Partial<Record<ToolName, ...>>` for
+    optional maps) so typos + missing entries are caught at compile time.
+
+END-TO-END TYPE FLOW
+====================
+
+  LLM emits functionCall.name (string)
+    ↓ backend (gemini.ts/groq.ts): isToolName(name) → ToolName (or skip SSE)
+    ↓ executeTool: validateToolArgs(name, args) → typed args (or error)
+    ↓ tool implementation runs with typed args
+    ↓ executeTool: validateToolResult(name, result) → validated result (or fallback)
+    ↓ route emits SSE with typed ToolStreamEvent.name = ToolName
+    ↓ frontend (useAiChat): isToolName(payload.name) → ToolName (or skip + log)
+    ↓ ToolComponentRenderer: validateToolResult(name, data) → typed data (or error card)
+    ↓ card renders with typed props (no `as` casts)
+
+Unknown names / malformed args / drifted outputs are caught at every
+boundary — neither end can silently leak bad data to the other.
+
+NEW FILES
+=========
+
+  artifacts/api-server/src/lib/aiToolSchemas.ts (~470 lines)
+    Backend single source of truth: TOOL_NAMES const tuple + ToolName
+    type + isToolName() guard; input arg schemas (one per tool, validated
+    in executeTool); output result schemas (mirror frontend's schemas.ts);
+    validateToolArgs<N>() generic over tool name returning typed args;
+    validateToolResult() logs + replaces malformed output with friendly
+    error envelope before SSE serialization; TOOLS_WITH_UI ReadonlySet
+    shared with frontend.
+
+  artifacts/tree-friend/src/components/ai/tool-ui/toolNames.ts (~140 lines)
+    Frontend mirror of TOOL_NAMES + ToolName + isToolName + TOOLS_WITH_UI.
+    Kept manually in sync with the backend file (cross-reference comments
+    in both files point to each other).
+
+  artifacts/tree-friend/src/components/ai/tool-ui/schemas.ts (~340 lines)
+    Frontend consumer-side Zod schemas. Validate SSE wire data at the
+    React render edge (defense in depth on top of the backend validators).
+    Exports inferred TS types (OrderResult, OrdersResult, etc.) so cards
+    receive typed props — no more `as` casts inside components.
+
+  artifacts/api-server/test/aiToolSchemas.test.ts (34 tests)
+  artifacts/tree-friend/test/schemas.test.ts (23 tests)
+    Unit tests covering typed registry sanity, input validation happy
+    paths + drift detection (missing fields, wrong types, out-of-range,
+    invalid enums, LLM-hallucinated extra fields via passthrough),
+    output validation happy paths + drift detection, early-exit
+    envelopes (rate-limit + arg-validation-error) passing through
+    unchanged, and validateToolResult returning null (not throw) on
+    malformed input.
+
+MODIFIED FILES
+==============
+
+  artifacts/api-server/src/lib/aiTools.ts
+    executeTool now narrows `name: string` via isToolName at the top
+    (returns friendly error for unknown LLM-hallucinated names),
+    validates args per-case with a literal tool name so TypeScript
+    infers the specific Zod schema's output type, and validates the
+    result via validateToolResult before returning to the SSE pipe.
+    Replaces ad-hoc `typeof args.query === "string"` checks scattered
+    through tool implementations — they now receive typed args.
+    The unused `onProgress` parameter (placeholder for future slow
+    tools) is prefixed `_onProgress` to satisfy ESLint's no-unused-vars.
+
+  artifacts/api-server/src/lib/aiToolLoop.ts
+    ToolStreamEvent, ToolCallSignature, signatureOf() all use ToolName
+    instead of `string` for the `name` field.
+
+  artifacts/api-server/src/lib/gemini.ts + groq.ts
+    Both providers narrow the raw tool name from the LLM's functionCall
+    response via isToolName before emitting SSE events. Unknown names
+    skip SSE emission (executeTool still returns a friendly error
+    envelope to the LLM via the function-response path, but the typed
+    SSE pipe stays clean).
+
+  artifacts/api-server/src/routes/ai.ts
+    Imports typed TOOLS_WITH_UI from aiToolSchemas.ts (single source of
+    truth shared with frontend) instead of re-declaring a local Set.
+
+  artifacts/tree-friend/src/components/ai/tool-ui/ToolComponentRenderer.tsx
+    Runs validateToolResult(name, data) BEFORE rendering each card.
+    On validation failure, renders a destructive-styled error fallback
+    (deterministic, not a crash). ToolCardErrorBoundary stays as
+    defense-in-depth for render-phase errors Zod can't catch.
+
+  artifacts/tree-friend/src/components/ai/tool-ui/{OrderDetailCard,
+  OrderListCard,ListingGridCard,CareGuideCard,KbCitations}.tsx
+    Drop local interfaces + `as` casts. Each card now receives a typed
+    prop (OrderResult, OrdersResult, ListingSearchResult, CareResult)
+    inferred from the Zod schema — single source of truth.
+
+  artifacts/tree-friend/src/components/ai/tool-ui/{Skeletons,
+  ToolCardErrorBoundary}.tsx + AssistantPanel.tsx
+    TOOL_LABELS: Record<ToolName, ...> (required)
+    TOOLS_WITH_SKELETONS: Set<ToolName>
+    TOOL_DISPLAY_NAMES: Record<ToolName, string> (required)
+    SKELETONS: Partial<Record<ToolName, FC>>
+
+  artifacts/tree-friend/src/hooks/useAiChat.ts
+    ActiveToolCall.name + ToolResultEntry.name now typed as ToolName.
+    SSE parser narrows raw strings via isToolName before pushing to
+    state — unknown names are logged + dropped at the wire.
+
+TYPECHECK VERIFICATION
+======================
+
+Both packages were verified against the pre-existing baseline:
+
+  Frontend (tree-friend):
+    Before: 280 errors (all pre-existing — unbuilt api-client-react
+    workspace dep + implicit-any in unrelated src/pages/* files)
+    After:  280 errors  (zero new errors introduced)
+
+  Backend (api-server):
+    Before: 467 errors (all pre-existing — unbuilt lib/db workspace
+    dep + implicit-any in unrelated routes/* files)
+    After:  467 errors  (zero new errors introduced)
+
+  Scoped typecheck on the 12 touched AI files: 0 errors.
+
+NO DATABASE CHANGES REQUIRED
+============================
+
+This work is purely TypeScript + Zod schemas. No DB schema migrations
+are needed — the tool return shapes are unchanged; only the validation
+layer that checks them at runtime is new.
+
+NO BREAKING CHANGES
+==================
+
+The SSE wire format is unchanged — the same JSON payloads cross the
+wire. The only behavioral change for malformed data is now caught
+deterministically at the boundary instead of crashing React's render
+phase. Existing valid data flows through unchanged (Zod's `.passthrough()`
+keeps unknown fields for backward-compat with future backend additions).

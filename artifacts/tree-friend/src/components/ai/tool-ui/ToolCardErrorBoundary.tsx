@@ -46,11 +46,20 @@
  */
 import { Component, type ReactNode, type ErrorInfo } from "react";
 import { AlertCircle, X } from "lucide-react";
+// v6.2 Part 12 (Gap Fix #2): toolName is now a typed string-literal union
+// (ToolName), and TOOL_DISPLAY_NAMES is a `Record<ToolName, string>` so a
+// missing entry is a compile-time error — not a silent runtime fallback
+// to the raw tool name.
+import type { ToolName } from "./toolNames";
 
 interface ToolCardErrorBoundaryProps {
   /** The tool name (e.g. "get_order_details") — shown in the fallback UI
-   *  so the user/developer knows which tool's render failed. */
-  toolName: string;
+   *  so the user/developer knows which tool's render failed.
+   *
+   *  v6.2 Part 12: typed as `ToolName` (string-literal union) instead of
+   *  `string`. The caller (ToolComponentRenderer) already narrows via
+   *  `isToolName`, so this prop always carries a known tool name. */
+  toolName: ToolName;
   children: ReactNode;
 }
 
@@ -64,11 +73,22 @@ interface ToolCardErrorBoundaryState {
 }
 
 /**
- * Friendly display names for known tools. Falls back to the raw tool name
- * if unmapped (defensive — new tools added to the backend without a
- * frontend label entry should still render gracefully).
+ * Friendly display names for known tools.
+ *
+ * v6.2 Part 12 (Gap Fix #2): typed as `Record<ToolName, string>` so EVERY
+ * tool in `TOOL_NAMES` MUST have an entry. When a new tool is added to
+ * toolNames.ts, the typecheck fails here until you add its display name.
+ * This eliminates the silent fallback to the raw tool name (which made
+ * the UI say "get_order_details couldn't be displayed" instead of
+ * "Order details couldn't be displayed" if the entry was missing).
+ *
+ * The `?? this.props.toolName` fallback below stays as a defensive
+ * measure — it shouldn't be reachable, but TypeScript's `Record<ToolName,
+ * string>` lookup can still return `undefined` at runtime if the JS
+ * object was tampered with (third-party script, dev-tools, etc.). Belt
+ * + suspenders.
  */
-const TOOL_DISPLAY_NAMES: Record<string, string> = {
+const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
   get_order_details: "Order details",
   get_user_orders: "Your orders",
   search_seller_listings: "Seller listings",

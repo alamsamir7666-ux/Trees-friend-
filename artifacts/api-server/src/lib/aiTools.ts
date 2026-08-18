@@ -40,6 +40,12 @@ import type { FunctionDeclaration } from "@google/genai";
 import { pool } from "@workspace/db";
 import { checkToolRateLimit } from "./toolRateLimiter";
 import { logger } from "./logger";
+// v6.2 Part 12 (Backend Gap Fix #1 + #2): import the typed tool-name
+// registry + Zod validators. validateToolArgs runs at the top of
+// executeTool (catches hallucinated arg types/missing required fields
+// from the LLM). validateToolResult runs at the bottom (catches
+// implementation drift before it crosses the SSE boundary).
+import { isToolName, type ToolName, validateToolArgs, validateToolResult } from "./aiToolSchemas";
 // BUG-I1 fix: import the unified retrieval config so the search_knowledge_base
 // tool uses the SAME minScore + content truncation as the auto-inject path
 // (getTopKbEntriesForPrompt in kbSearch.ts). Previously the tool used a
@@ -435,8 +441,27 @@ export async function executeTool(
   //
   // Backward compatible: existing tools don't accept this param + don't
   // call it. The fallback "Loading…" label renders in the frontend.
-  onProgress?: (progress: string) => void,
+  //
+  // v6.2 Part 12: prefixed with `_` because no current tool implementation
+  // calls it yet (all 6 tools are SQL-based + complete in <100ms). The
+  // parameter is a public API placeholder for future slow tools (YouTube
+  // transcript fetch, multi-step pipelines) — the route handler still
+  // passes it through. ESLint's `args: "after-used"` rule ignores args
+  // after the last used one, but `onProgress` is the LAST param, so we
+  // need the `_` prefix to mark it as intentionally unused. When a future
+  // tool starts calling it, drop the `_` prefix.
+  _onProgress?: (progress: string) => void,
 ): Promise<unknown> {
+  // v6.2 Part 12 (Backend Gap Fix #2): narrow `name` via isToolName before
+  // any dispatch. Unknown names (LLM hallucination, future tools) are
+  // caught here + return a friendly error. The downstream code can assume
+  // `name` is a known ToolName — typed-map lookups can't silently miss.
+  if (!isToolName(name)) {
+    logger.warn({ name }, "AI tool: unknown function called (not in TOOL_NAMES)");
+    return { error: `Unknown function: ${name}` };
+  }
+  const toolName: ToolName = name;
+
   // v5.6: per-tool rate limit check (before execution)
   // The IP is not available in this context (executeTool is called from
   // the streaming generator, not an Express middleware). We use userId
@@ -447,15 +472,15 @@ export async function executeTool(
   // streaming pipeline. The global chat rate limiter (30 req/hour/IP)
   // already provides IP-level protection.
   const identity = userId ?? "anon";
-  const rateLimit = await checkToolRateLimit(name, userId, identity);
+  const rateLimit = await checkToolRateLimit(toolName, userId, identity);
   if (!rateLimit.allowed) {
     logger.warn(
-      { name, tier: rateLimit.tier, limit: rateLimit.limit },
+      { name: toolName, tier: rateLimit.tier, limit: rateLimit.limit },
       "AI tool: rate limited — returning friendly error",
     );
     return {
       error:
-        `This action (${name}) has been called too many times. ` +
+        `This action (${toolName}) has been called too many times. ` +
         `Please try again in ${Math.ceil(rateLimit.retryAfterSeconds / 60)} minutes. ` +
         `Limit: ${rateLimit.limit} calls per hour.`,
       rateLimited: true,
@@ -464,41 +489,134 @@ export async function executeTool(
   }
 
   try {
-    switch (name) {
-      case "search_catalog":
-        return await searchCatalog(args);
-      case "get_product_care":
-        return await getProductCare(args);
-      case "get_user_orders":
-        return await getUserOrders(userId);
-      case "get_order_details":
-        return await getOrderDetails(args, userId);
-      case "search_knowledge_base":
+    let result: unknown;
+
+    // v6.2 Part 12 (Backend Gap Fix #1, input): per-case arg validation.
+    //
+    // Each branch calls `validateToolArgs` with a LITERAL tool name (e.g.
+    // "search_catalog") — TypeScript infers the specific Zod schema's
+    // output type, so the validated args have known field types (no
+    // `unknown` everywhere). On failure, a friendly error is returned
+    // to the LLM (it can retry with corrected args).
+    //
+    // This replaces the ad-hoc `typeof args.query === "string"` checks
+    // that were scattered through each tool implementation. The
+    // implementations now receive a typed, validated args object.
+    switch (toolName) {
+      case "search_catalog": {
+        const v = validateToolArgs("search_catalog", args);
+        if (!v.success) {
+          logger.info(
+            { validationError: v.error, rawArgs: args },
+            "AI tool: args failed validation",
+          );
+          return { error: v.error };
+        }
+        result = await searchCatalog(v.args);
+        break;
+      }
+      case "get_product_care": {
+        const v = validateToolArgs("get_product_care", args);
+        if (!v.success) {
+          logger.info(
+            { validationError: v.error, rawArgs: args },
+            "AI tool: args failed validation",
+          );
+          return { error: v.error };
+        }
+        result = await getProductCare(v.args);
+        break;
+      }
+      case "get_user_orders": {
+        // No args needed — but validate anyway for symmetry (the schema
+        // accepts an empty object, which is the common case).
+        const v = validateToolArgs("get_user_orders", args);
+        if (!v.success) {
+          logger.info(
+            { validationError: v.error, rawArgs: args },
+            "AI tool: args failed validation",
+          );
+          return { error: v.error };
+        }
+        result = await getUserOrders(userId);
+        break;
+      }
+      case "get_order_details": {
+        const v = validateToolArgs("get_order_details", args);
+        if (!v.success) {
+          logger.info(
+            { validationError: v.error, rawArgs: args },
+            "AI tool: args failed validation",
+          );
+          return { error: v.error };
+        }
+        result = await getOrderDetails(v.args, userId);
+        break;
+      }
+      case "search_knowledge_base": {
         // BUG-I4 fix: pass the tool context so searchKb can include
         // `tone_locked_creator` in the response envelope.
-        return await searchKb(args, userId, context);
-      case "search_seller_listings":
+        const v = validateToolArgs("search_knowledge_base", args);
+        if (!v.success) {
+          logger.info(
+            { validationError: v.error, rawArgs: args },
+            "AI tool: args failed validation",
+          );
+          return { error: v.error };
+        }
+        result = await searchKb(v.args, userId, context);
+        break;
+      }
+      case "search_seller_listings": {
         // v6.1: pass the buyer's location (from their default address) so
         // the search can sort by distance. Null for anonymous users → no
         // distance sort (just rating + price). See loadBuyerLocation in
         // routes/ai.ts for the privacy rationale.
         // v6.1 Part 4: pass careSummary if the LLM requested it (or if the
         // chat route auto-passes it for MIXED intent — see routes/ai.ts).
-        return await searchSellerListings({
-          query: typeof args.query === "string" ? args.query : "",
-          max_price: typeof args.max_price === "number" ? args.max_price : undefined,
-          form: typeof args.form === "string" ? args.form : undefined,
-          limit: typeof args.limit === "number" ? args.limit : undefined,
+        const v = validateToolArgs("search_seller_listings", args);
+        if (!v.success) {
+          logger.info(
+            { validationError: v.error, rawArgs: args },
+            "AI tool: args failed validation",
+          );
+          return { error: v.error };
+        }
+        // Zod's inferred type for this schema is { query: string; max_price?: number;
+        // form?: string; limit?: number; care_summary?: boolean } — assignable to
+        // SellerListingSearchParams (structurally compatible). The context
+        // fields (userCity, userDistrict) come from the request context, not args.
+        result = await searchSellerListings({
+          query: v.args.query,
+          max_price: v.args.max_price,
+          form: v.args.form,
+          limit: v.args.limit,
           userCity: context?.userCity ?? null,
           userDistrict: context?.userDistrict ?? null,
-          careSummary: args.care_summary === true,
+          careSummary: v.args.care_summary === true,
         });
+        break;
+      }
       default:
-        logger.warn({ name }, "AI tool: unknown function called");
-        return { error: `Unknown function: ${name}` };
+        // Unreachable — isToolName guard above already returned for
+        // unknown names. TypeScript's exhaustiveness check on the union
+        // ensures this branch exists only for compile-time safety.
+        logger.warn({ name: toolName }, "AI tool: unknown function called (unreachable)");
+        return { error: `Unknown function: ${toolName}` };
     }
+
+    // v6.2 Part 12 (Backend Gap Fix #1, output): validate the tool's
+    // return value BEFORE returning to the caller (the SSE pipe). Catches
+    // implementation drift (a SQL column renamed, a refactor forgetting
+    // to update one field) at the source — the frontend never sees
+    // malformed data + the React render phase stays clean.
+    //
+    // On failure: logs the validation error + returns a friendly error
+    // envelope. The LLM gets a clear "tool failed" message + can retry
+    // or answer without the data.
+    return validateToolResult(toolName, result);
   } catch (err) {
-    logger.error({ err, name, args }, "AI tool: execution failed");
+    logger.error({ err, name: toolName, args }, "AI tool: execution failed");
     return { error: "Tool execution failed. Try answering without this data." };
   }
 }

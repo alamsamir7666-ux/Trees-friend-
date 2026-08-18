@@ -15,30 +15,9 @@
 import { memo } from "react";
 import { Sun, Droplets, Mountain, Ruler, Wind, TrendingUp, Flower, Leaf } from "lucide-react";
 import { useStaggeredReveal } from "@/hooks/useStaggeredReveal";
-
-interface ProductData {
-  name: string;
-  slug: string;
-  scientific_name: string | null;
-  description: string | null;
-  sunlight: string | null;
-  watering: string | null;
-  soil_type: string | null;
-  mature_height: string | null;
-  climate_zone: string | null;
-  growth_rate: string | null;
-  bloom_season: string | null;
-  key_benefits: string[] | null;
-  best_for: string[] | null;
-  care_tips: string[] | null;
-  images: string[] | null;
-  product_status: string | null;
-}
-
-interface CareResult {
-  product: ProductData | null;
-  error?: string;
-}
+// v6.2 Part 12 (Gap Fix #1): types flow from the Zod schema. No local
+// ProductData / CareResult interfaces — they're now inferred + validated.
+import type { CareResult } from "./schemas";
 
 interface CareField {
   icon: typeof Sun;
@@ -47,8 +26,11 @@ interface CareField {
   color: string;
 }
 
-export const CareGuideCard = memo(function CareGuideCard({ data }: { data: unknown }) {
-  const result = data as CareResult;
+export const CareGuideCard = memo(function CareGuideCard({ data }: { data: CareResult }) {
+  // v6.2 Part 12 (Gap Fix #1): data is now typed as CareResult from the
+  // Zod schema (validated upstream in ToolComponentRenderer). No more
+  // `as CareResult` cast — the type flows from the schema.
+  const result = data;
 
   // v6.2 Part 9 (Gap 17 fix — Phase A): pre-compute fields + tips before
   // the early return so we can call useStaggeredReveal unconditionally
@@ -66,8 +48,7 @@ export const CareGuideCard = memo(function CareGuideCard({ data }: { data: unkno
         { icon: Flower, label: "Bloom Season", value: p.bloom_season, color: "text-pink-500" },
       ].filter((f) => f.value)
     : [];
-  const tips =
-    p && Array.isArray(p.care_tips) ? p.care_tips.slice(0, 4) : [];
+  const tips = p && Array.isArray(p.care_tips) ? p.care_tips.slice(0, 4) : [];
   // Staggered reveal styles for care fields (30ms apart — fields are small,
   // the user scans them quickly). Capped at 240ms (8 fields × 30ms).
   const fieldStyles = useStaggeredReveal(fields.length, 30, 240);
@@ -108,7 +89,9 @@ export const CareGuideCard = memo(function CareGuideCard({ data }: { data: unkno
         <div className="min-w-0">
           <h4 className="text-sm font-semibold truncate">{product.name}</h4>
           {product.scientific_name && (
-            <p className="text-[10px] text-muted-foreground italic truncate">{product.scientific_name}</p>
+            <p className="text-[10px] text-muted-foreground italic truncate">
+              {product.scientific_name}
+            </p>
           )}
         </div>
       </div>

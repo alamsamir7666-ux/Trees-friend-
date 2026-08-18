@@ -64,6 +64,11 @@ import { MarkdownText } from "./MarkdownText";
 import { ProductChips } from "./ProductChips";
 import { ListingChips } from "./ListingChip";
 import { ToolComponentRenderer } from "./tool-ui/ToolComponentRenderer";
+// v6.2 Part 12 (Gap Fix #2): import the ToolName union + isToolName guard
+// so the local maps (TOOL_LABELS, TOOLS_WITH_SKELETONS) are typed against
+// the same string-literal union as TOOL_NAMES in toolNames.ts. A typo or
+// missing entry is now a compile-time error.
+import type { ToolName } from "./tool-ui/toolNames";
 import { FollowupChips } from "./FollowupChips";
 import { FeedbackButtons } from "./FeedbackButtons";
 import {
@@ -644,7 +649,9 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
               }
             }}
             rows={1}
-            placeholder={editingMessage ? "Edit your message…" : "Ask about plants, care, gardening…"}
+            placeholder={
+              editingMessage ? "Edit your message…" : "Ask about plants, care, gardening…"
+            }
             disabled={loading}
             className="flex-1 resize-none bg-transparent border-0 outline-none text-sm placeholder:text-muted-foreground/60 disabled:opacity-60 max-h-[120px] py-1"
             maxLength={INPUT_MAX_LENGTH}
@@ -1115,7 +1122,17 @@ function TypingIndicator() {
 // v6.2 Part 1: also imported getToolSkeleton for skeleton loading states.
 import { getToolSkeleton } from "./tool-ui/Skeletons";
 
-const TOOL_LABELS: Record<string, { label: string; Icon: typeof Search }> = {
+/**
+ * v6.2 Part 12 (Gap Fix #2): typed as `Record<ToolName, ...>` so every
+ * tool in TOOL_NAMES MUST have an entry. A new tool added to toolNames.ts
+ * without an entry here fails typecheck — no more silent fallback to
+ * the generic "Working" label + HelpCircle icon.
+ *
+ * The `?? { label: "Working", Icon: HelpCircle }` fallback below stays
+ * as a defensive measure (TS Record lookup can return undefined at
+ * runtime if the object was tampered with).
+ */
+const TOOL_LABELS: Record<ToolName, { label: string; Icon: typeof Search }> = {
   search_catalog: { label: "Searching catalog", Icon: Search },
   get_product_care: { label: "Loading care guide", Icon: Leaf },
   get_user_orders: { label: "Looking up your orders", Icon: ShoppingCart },
@@ -1126,7 +1143,12 @@ const TOOL_LABELS: Record<string, { label: string; Icon: typeof Search }> = {
 
 // v6.2 Part 1: tools that have rich skeleton loading states.
 // While in-flight, these tools show a skeleton card instead of just a chip.
-const TOOLS_WITH_SKELETONS = new Set([
+//
+// v6.2 Part 12 (Gap Fix #2): typed as `Set<ToolName>` so adding a tool to
+// toolNames.ts and using it in a `.has(name)` call without adding it here
+// is caught at compile time (the call site narrows `name` to ToolName first;
+// the Set itself is typed so only known ToolName values can be added).
+const TOOLS_WITH_SKELETONS = new Set<ToolName>([
   "get_order_details",
   "get_user_orders",
   "search_seller_listings",

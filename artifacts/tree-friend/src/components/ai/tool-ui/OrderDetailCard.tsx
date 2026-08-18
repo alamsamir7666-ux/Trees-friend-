@@ -25,31 +25,9 @@ import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useStaggeredReveal } from "@/hooks/useStaggeredReveal";
-
-// ─── Types matching the backend tool result ──────────────────────────────
-
-interface OrderData {
-  order_number: number;
-  tracking_id: string;
-  status: string;
-  payment_status: string;
-  payment_method: string;
-  total: string | number;
-  placed_at: string;
-  confirmed_at: string | null;
-  shipped_at: string | null;
-  delivered_at: string | null;
-  cancelled_at: string | null;
-  items: { name: string; qty: number; price: number }[];
-  location: string | null;
-}
-
-interface OrderResult {
-  order: OrderData | null;
-  error?: string;
-  signed_in?: boolean;
-  message?: string;
-}
+// v6.2 Part 12 (Gap Fix #1): types flow from the Zod schema (single source
+// of truth). No more local interfaces that could drift from the backend.
+import type { OrderResult } from "./schemas";
 
 // ─── Status timeline ─────────────────────────────────────────────────────
 
@@ -95,11 +73,17 @@ export const OrderDetailCard = memo(function OrderDetailCard({
   data,
   onClose,
 }: {
-  data: unknown;
+  data: OrderResult;
   onClose?: () => void;
 }) {
   const [, navigate] = useLocation();
-  const result = data as OrderResult;
+  // v6.2 Part 12 (Gap Fix #1): `data` is now typed as `OrderResult` from
+  // the Zod schema (validated upstream in ToolComponentRenderer). The
+  // old `const result = data as OrderResult` cast is gone — the type
+  // flows from the schema, so a backend shape change updates the type
+  // automatically (and any code referencing a removed field fails at
+  // compile time).
+  const result = data;
 
   // v6.2 Part 9 (Gap 17 fix — Phase A): pre-compute item + step counts
   // before the early return so we can call useStaggeredReveal unconditionally
