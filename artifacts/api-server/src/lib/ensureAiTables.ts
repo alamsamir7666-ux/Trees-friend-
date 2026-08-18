@@ -1115,6 +1115,84 @@ export async function ensureAiTables(): Promise<void> {
       );
     }
 
+    // ─── v1.5.0: USER PREFERENCE DETECTION + sort_by picker ───────────────
+    // Adds the "USER PREFERENCE DETECTION + sort_by PICKER" block to the
+    // system prompt. This is the FINAL Part (Part 4 of 4) of the
+    // industry-standard premium-intent support:
+    //
+    //   Part 1 (commit 89ec562): backend sort_by logic in
+    //     sellerListingSearch.ts (weight matrix per sortBy) + Zod schema
+    //     field + LLM-visible tool declaration.
+    //   Part 2 (commit 9a29a39): frontend Zod schema field (camelCase
+    //     sortBy echoed back) + casing fix on the backend.
+    //   Part 3 (commit f459a35): frontend FactCallout picker rewrite
+    //     (4 branches based on sortBy — no keyword matching).
+    //   Part 4 (THIS): system prompt v1.5.0 — instructs the LLM to
+    //     detect the user's stated preference + pick the matching
+    //     sort_by + echo the constraint + bold the top recommendation
+    //     + premium-aware followup chips.
+    //
+    // After v1.5.0 is activated + the API server picks it up (cache TTL
+    // ~60s), the end-to-end flow is:
+    //   user: "i need grafted mango tree i dont care about price"
+    //   → LLM picks sort_by: "maturity_desc" (per the prompt instructions)
+    //   → backend searchSellerListings executes with the maturity_desc
+    //     weight matrix (largest height variant first)
+    //   → result envelope echoes sortBy: "maturity_desc"
+    //   → frontend FactCallout renders "Most mature: <listing> from
+    //     <seller>, ৳<price>. <count> listings near <district>."
+    //     (TreePine icon, per Part 3's pickListingCallout)
+    //   → LLM text reply: "Since price isn't a concern, here are 3
+    //     grafted mango trees sorted by maturity. The **Keitt Mango
+    //     (4-6 ft) from Green Enterprise** is the most mature option..."
+    //
+    // Single source of truth: the LLM's sort_by decision. No keyword
+    // classifier anywhere in the pipeline.
+    //
+    // Seeded as INACTIVE — activate via POST /api/ai/admin/prompts/<id>/activate
+    // OR via SQL: UPDATE ai_prompt_versions SET is_active = (version = '1.5.0');
+    //
+    // IMPORTANT: do NOT activate until the API server has been redeployed
+    // with Parts 1-3 (commits 89ec562, 9a29a39, f459a35). The old running
+    // API server's tool declaration doesn't include sort_by, so the LLM
+    // can't pass it even if the prompt tells it to. Activating v1.5.0
+    // before the redeploy would make the LLM try to call
+    // search_seller_listings(sort_by=...) and get arg-validation drift
+    // (the old schema uses .passthrough() so it'd silently drop sort_by).
+    // Result: the LLM text reply would promise "sorted by maturity" but
+    // the cards would still be sorted cheapest-first. BAD UX.
+    try {
+      const { SYSTEM_PROMPT_TEMPLATE_V1 } = await import("./aiContext");
+      await pool.query(
+        `INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
+         SELECT $1, $2, $3, FALSE, $4
+         WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = $1)`,
+        [
+          "1.5.0",
+          SYSTEM_PROMPT_TEMPLATE_V1,
+          "v1.5.0: USER PREFERENCE DETECTION + sort_by picker. The model " +
+            "now detects the user's stated preference ('i dont care about " +
+            "price' / 'most mature' / 'best quality' / 'highest rated' / " +
+            "'cheapest' / 'most expensive') and picks the matching sort_by " +
+            "arg on search_seller_listings. The text reply echoes the " +
+            "constraint in the first sentence + leads with the top " +
+            "recommendation (bold). Followup chips match the intent. " +
+            "Pairs with frontend FactCallout (Part 3) that reads sortBy " +
+            "from the tool result envelope — single source of truth = " +
+            "the LLM's sort_by decision. NO keyword classifier anywhere. " +
+            "ACTIVATE ONLY AFTER the API server is redeployed with Parts " +
+            "1-3 (commits 89ec562, 9a29a39, f459a35).",
+          "system",
+        ],
+      );
+    } catch (seedErr) {
+      // Non-fatal.
+      logger.warn(
+        { err: seedErr },
+        "AI: failed to seed prompt v1.5.0 (admin can create manually via UI)",
+      );
+    }
+
     // ─── Phase 1: Knowledge Base seed data ────────────────────────────────
     // Seed one default creator ("Manual") + three root categories so the
     // admin UI has something to show on first load. Idempotent via
