@@ -187,6 +187,17 @@ export const searchKbArgsSchema = z
 
 /**
  * Input args for `search_seller_listings`. Mirrors AI_TOOL_DECLARATIONS ~line 341.
+ *
+ * v6.2 Part 16 (industry-standard premium-intent support):
+ *   - Added `sort_by` enum. The LLM picks the value based on the user's
+ *     stated preference (e.g. "i dont care about price" → maturity_desc,
+ *     "best quality" → rating_desc, "most expensive" → price_desc).
+ *   - The choice is the model's, NOT a keyword classifier — the model has
+ *     the full conversation context + handles paraphrases/languages natively.
+ *   - The tool description in aiTools.ts explains when to use each value.
+ *   - The chosen value is echoed back in the tool RESULT envelope (see
+ *     listingSearchResultSchema below) so the frontend can render the
+ *     matching FactCallout without re-classifying the user's intent.
  */
 export const searchSellerListingsArgsSchema = z
   .object({
@@ -195,6 +206,14 @@ export const searchSellerListingsArgsSchema = z
     form: z.string().optional(),
     limit: z.number().int().min(1).max(8).optional(),
     care_summary: z.boolean().optional(),
+    sort_by: z
+      .enum([
+        "price_asc", // default — cheapest first
+        "price_desc", // most expensive first — "premium", "top-end"
+        "maturity_desc", // largest height variant first — "i dont care about price", "most mature", "largest"
+        "rating_desc", // highest seller rating first — "best quality", "top rated", "highest rated"
+      ])
+      .optional(),
   })
   .passthrough();
 
@@ -368,6 +387,14 @@ export const listingSearchResultSchema = z
     buyerCity: z.string().nullable().optional(),
     buyerDistrict: z.string().nullable().optional(),
     careSummary: careSummarySchema.nullable().optional(),
+    // v6.2 Part 16: echoes back the sort_by the LLM chose, so the
+    // frontend FactCallout can render the matching summary (e.g.
+    // maturity_desc → "Most mature: ...") WITHOUT re-classifying the
+    // user's intent via brittle keyword matching on the frontend.
+    // Undefined when sort_by was not passed (defaults to price_asc on
+    // the backend, but we don't synthesize a value here — the frontend
+    // treats undefined === price_asc).
+    sort_by: z.enum(["price_asc", "price_desc", "maturity_desc", "rating_desc"]).optional(),
     error: z.string().optional(),
   })
   .passthrough();

@@ -146,6 +146,16 @@ export interface SellerListingSearchResult {
   /** The buyer's district (for transparency). */
   buyerDistrict: string | null;
   /**
+   * v6.2 Part 16: echoes back the `sort_by` value the LLM chose (or
+   * undefined when not passed, meaning the default price_asc was used).
+   *
+   * The frontend FactCallout reads this to render the matching summary
+   * (e.g. maturity_desc → "Most mature: <listing>") WITHOUT re-classifying
+   * the user's intent via keyword matching — the LLM already did that
+   * when it set sort_by on the call.
+   */
+  sortBy?: "price_asc" | "price_desc" | "maturity_desc" | "rating_desc";
+  /**
    * v6.1 Part 4: 1-line KB care summary, included when careSummary=true
    * was passed to the search params. Null when:
    *   - careSummary was not requested (PURCHASE intent — no need).
@@ -191,6 +201,28 @@ export interface SellerListingSearchParams {
   userCity?: string | null;
   /** Buyer's district. Null for anonymous users. */
   userDistrict?: string | null;
+  /**
+   * v6.2 Part 16: controls the ranking weights in `rankListings`. The LLM
+   * chooses this value based on the user's stated preference:
+   *
+   *   - undefined / "price_asc"  (default): cheapest first. Existing
+   *     behavior. Used when the user is price-conscious ("cheapest",
+   *     "under ৳X", "budget").
+   *   - "price_desc": most expensive first. Used when the user said
+   *     "most expensive", "highest price", "top-end".
+   *   - "maturity_desc": largest height variant first. Used when the
+   *     user signaled price-insensitivity + quality focus ("i dont
+   *     care about price", "most mature", "largest", "premium"). This
+   *     is the canonical "premium intent" branch.
+   *   - "rating_desc": highest seller rating first. Used when the user
+   *     explicitly asked about seller quality ("best quality",
+   *     "highest rated", "top rated").
+   *
+   * The chosen value is ECHOED BACK in the result envelope so the
+   * frontend can render the matching FactCallout without re-classifying
+   * intent (industry standard — single source of truth is the LLM).
+   */
+  sortBy?: "price_asc" | "price_desc" | "maturity_desc" | "rating_desc";
   /**
    * v6.1 Part 4: when true, the search ALSO fetches the top KB entry
    * (1 result, higher threshold 0.5, skip reranker for speed) and
@@ -251,6 +283,9 @@ export async function searchSellerListings(
       : null;
   const buyerCity = params.userCity ?? null;
   const buyerDistrict = params.userDistrict ?? null;
+  // v6.2 Part 16: sort_by picked by the LLM based on the user's stated
+  // preference. Undefined falls through to the legacy price_asc default.
+  const sortBy = params.sortBy;
 
   if (query.length === 0) {
     return {
@@ -474,11 +509,14 @@ export async function searchSellerListings(
     }
 
     // Rank listings (see module doc for the full algorithm).
+    // v6.2 Part 16: pass sortBy through so the weight matrix picks the
+    // right distribution (maturity_desc → maturity-first, etc.).
     const ranked = rankListings(
       Array.from(listingsMap.values()),
       listingTextRanks,
       formFilter,
       buyerDistrict,
+      sortBy,
     );
 
     // Truncate to `limit`.
@@ -557,6 +595,10 @@ export async function searchSellerListings(
       query,
       buyerCity,
       buyerDistrict,
+      // v6.2 Part 16: echo sortBy back so the frontend FactCallout can
+      // render the matching summary (e.g. maturity_desc → "Most mature: ...")
+      // WITHOUT re-classifying the user's intent via keyword matching.
+      sortBy,
       careSummary,
     };
   } catch (err) {
@@ -576,6 +618,79 @@ export async function searchSellerListings(
 }
 
 // ─── Ranking ─────────────────────────────────────────────────────────────────
+
+// ─── v6.2 Part 16: height-string parsing helper ─────────────────────────────
+//
+// Parses seller_listing_variants.height strings into a numeric "max height"
+// for the maturity score. Examples (from real production data):
+//   "1-3 ft"    -> 3   (range, max)
+//   "4-6 ft"    -> 6
+//   "8-12 m"    -> 12  (meters, treated same as ft — we only compare
+//                       within the same unit implicitly; the data is
+//                       consistently ft for mango trees)
+//   "3 ft"      -> 3   (single value)
+//   "mature"    -> 999 (word "mature" always ranks highest — implies
+//                       the largest possible size)
+//   "" / null   -> 0   (unrankable)
+//   "sapling"   -> 0   (a sapling is the smallest form)
+//
+// The number returned is used ONLY for relative ranking within the same
+// search call — it's not surfaced to the user. So we tolerate the
+// unit ambiguity (ft vs m) because all variants of the same product
+// type typically use the same unit.
+//
+// Industry standard: this is a deterministic, locale-aware parser. No
+// LLM call needed for parsing — too expensive + too slow for a ranking
+// signal. The model already DECIDED to use maturity_desc; we just need
+// to execute that decision deterministically.
+export function parseHeightToMaxValue(height: string | null | undefined): number {
+  if (!height || typeof height !== "string") return 0;
+  const trimmed = height.trim().toLowerCase();
+  if (trimmed.length === 0) return 0;
+
+  // Word-form markers — "mature" always ranks highest.
+  if (trimmed.includes("mature")) return 999;
+  if (trimmed.includes("sapling")) return 1;
+  if (trimmed.includes("seed")) return 0.5;
+
+  // Numeric range form: "4-6 ft", "1-3 ft", "8-12 m". Take the MAX of the
+  // range (the upper bound) so a "4-6 ft" tree ranks above a "1-3 ft" tree.
+  // Regex: optional space, number, optional decimal, dash or en-dash,
+  // optional space, number, optional decimal, optional unit.
+  const rangeMatch = trimmed.match(/(\d+(?:\.\d+)?)\s*[-–—]\s*(\d+(?:\.\d+)?)/);
+  if (rangeMatch) {
+    const high = parseFloat(rangeMatch[2]);
+    if (Number.isFinite(high)) return high;
+  }
+
+  // Single value form: "3 ft", "12 m", "5". Take the value directly.
+  const singleMatch = trimmed.match(/(\d+(?:\.\d+)?)/);
+  if (singleMatch) {
+    const v = parseFloat(singleMatch[1]);
+    if (Number.isFinite(v)) return v;
+  }
+
+  return 0;
+}
+
+/**
+ * Returns the maximum height across all variants of a listing. Used as
+ * the "maturity score" input — a listing with a 4-6 ft variant ranks
+ * above one whose largest variant is 1-3 ft.
+ *
+ * Returns 0 when the listing has no variants or none have a parseable
+ * height string (graceful degradation — the listing still ranks by
+ * other factors like rating, distance, etc.).
+ */
+function computeMaxHeight(listing: SellerListingResult): number {
+  if (!listing.variants || listing.variants.length === 0) return 0;
+  let max = 0;
+  for (const v of listing.variants) {
+    const h = parseHeightToMaxValue(v.height);
+    if (h > max) max = h;
+  }
+  return max;
+}
 
 /**
  * Ranks listings by the weighted composite score.
@@ -602,12 +717,42 @@ export async function searchSellerListings(
  *
  * When the buyer's district is unknown (anonymous user, or no default
  * address), distance scoring is skipped (no penalty for far-away sellers).
+ *
+ * v6.2 Part 16: `sortBy` controls the weight distribution. The LLM picks
+ * the value based on the user's stated preference ("i dont care about
+ * price" → maturity_desc, "best quality" → rating_desc, etc.). The
+ * weight matrix is:
+ *
+ *   sortBy         | price | maturity | rating | distance | in-stock | form
+ *   ---------------+-------+----------+--------+----------+----------+-----
+ *   price_asc      | 0.4 ↓ | 0        | 0.3    | 0.3      | 1.0      | 0.8
+ *   price_desc     | 0.4 ↑ | 0        | 0.3    | 0.3      | 1.0      | 0.8
+ *   maturity_desc  | 0     | 0.4 ↑    | 0.3    | 0.2      | 1.0      | 0.8
+ *   rating_desc    | 0     | 0        | 0.7    | 0.2      | 1.0      | 0.8
+ *
+ *   ↑ = higher value = higher score (positive direction)
+ *   ↓ = lower value = higher score (inverted)
+ *
+ * Design notes:
+ *   - In-stock + form-match bonuses are INVARIANT across sortBy — they're
+ *     hard constraints (an out-of-stock listing is always worse; a form
+ *     match is always better). Only the SOFT signals (price, maturity,
+ *     rating, distance) get re-weighted.
+ *   - When `sortBy === undefined` or "price_asc", behavior is IDENTICAL to
+ *     pre-Part-16 (zero-risk backward compatibility).
+ *   - Distance weight is reduced (not zeroed) for non-price sorts because
+ *     proximity still matters — a 4-6 ft tree 500km away is still worse
+ *     than one in the buyer's district, even when prioritizing maturity.
+ *   - Text-relevance weight (the BM25 score from the first-pass tsvector
+ *     search) is fixed at 0.5 across all sort modes — we never want
+ *     irrelevant listings to rank high regardless of the sort preference.
  */
 function rankListings(
   listings: SellerListingResult[],
   textRanks: Map<number, number>,
   formFilter: string | null,
   buyerDistrict: string | null,
+  sortBy: "price_asc" | "price_desc" | "maturity_desc" | "rating_desc" | undefined,
 ): SellerListingResult[] {
   if (listings.length === 0) return [];
 
@@ -618,6 +763,8 @@ function rankListings(
   let minRating = Infinity;
   let maxTextRank = -Infinity;
   let minTextRank = Infinity;
+  let maxHeight = -Infinity;
+  let minHeight = Infinity;
 
   for (const l of listings) {
     if (l.minPrice !== null) {
@@ -629,12 +776,58 @@ function rankListings(
     const tr = textRanks.get(l.listingId) ?? 0;
     if (tr > maxTextRank) maxTextRank = tr;
     if (tr < minTextRank) minTextRank = tr;
+    // v6.2 Part 16: pre-compute maturity range for maturity_desc sort.
+    const mh = computeMaxHeight(l);
+    if (mh > maxHeight) maxHeight = mh;
+    if (mh < minHeight) minHeight = mh;
   }
 
   // Avoid divide-by-zero.
   const priceRange = maxPrice - minPrice || 1;
   const ratingRange = maxRating - minRating || 1;
   const textRankRange = maxTextRank - minTextRank || 1;
+  const heightRange = maxHeight - minHeight || 1;
+
+  // v6.2 Part 16: pick the weight matrix based on sortBy. The matrix is
+  // documented in the function header above. `undefined` and "price_asc"
+  // both use the legacy default (zero behavior change for existing callers).
+  const weights = (() => {
+    switch (sortBy) {
+      case "price_desc":
+        return {
+          price: DEFAULT_PRICE_WEIGHT, // higher price = higher score (non-inverted below)
+          maturity: 0,
+          rating: DEFAULT_RATING_WEIGHT,
+          distance: DEFAULT_DISTANCE_WEIGHT,
+          priceInverted: false, // false = higher price wins
+        };
+      case "maturity_desc":
+        return {
+          price: 0,
+          maturity: DEFAULT_PRICE_WEIGHT, // re-use 0.4 weight slot
+          rating: DEFAULT_RATING_WEIGHT,
+          distance: 0.2,
+          priceInverted: true,
+        };
+      case "rating_desc":
+        return {
+          price: 0,
+          maturity: 0,
+          rating: 0.7, // boosted from 0.3 to 0.7 — primary signal
+          distance: 0.2,
+          priceInverted: true,
+        };
+      case "price_asc":
+      default:
+        return {
+          price: DEFAULT_PRICE_WEIGHT,
+          maturity: 0,
+          rating: DEFAULT_RATING_WEIGHT,
+          distance: DEFAULT_DISTANCE_WEIGHT,
+          priceInverted: true, // true = lower price wins (legacy behavior)
+        };
+    }
+  })();
 
   // v6.1 Part 3: pre-compute seller district + distance from buyer.
   // This avoids re-computing the Haversine for each scoring pass.
@@ -659,16 +852,18 @@ function rankListings(
     let score = 0;
 
     // Text relevance (from the first-pass tsvector search). Weight = 0.5
-    // (high — we want the most relevant varieties first).
+    // (high — we want the most relevant varieties first). INVARIANT across
+    // sortBy — we never want irrelevant listings to rank high.
     const tr = textRanks.get(l.listingId) ?? 0;
     score += 0.5 * ((tr - minTextRank) / textRankRange);
 
-    // In-stock bonus.
+    // In-stock bonus. INVARIANT across sortBy.
     if (l.hasInStockVariant) {
       score += DEFAULT_INSTOCK_WEIGHT;
     }
 
     // Form match bonus (only when the user asked for a specific form).
+    // INVARIANT across sortBy.
     if (formFilter !== null) {
       const hasFormMatch = l.variants.some(
         (v) => v.form !== null && v.form.toLowerCase() === formFilter,
@@ -678,29 +873,42 @@ function rankListings(
       }
     }
 
-    // Price score (lower price = higher score). Inverted.
-    if (l.minPrice !== null) {
-      const priceScore = 1 - (l.minPrice - minPrice) / priceRange;
-      score += DEFAULT_PRICE_WEIGHT * priceScore;
+    // Price score. Direction depends on sortBy:
+    //   - price_asc  → lower price wins (inverted: 1 - normalized)
+    //   - price_desc → higher price wins (non-inverted: normalized)
+    //   - maturity_desc / rating_desc → price weight = 0 (skip entirely)
+    if (weights.price > 0 && l.minPrice !== null) {
+      const normalizedPrice = (l.minPrice - minPrice) / priceRange;
+      const priceScore = weights.priceInverted ? 1 - normalizedPrice : normalizedPrice;
+      score += weights.price * priceScore;
     }
 
-    // Rating score.
-    const ratingScore = (l.rating - minRating) / ratingRange;
-    score += DEFAULT_RATING_WEIGHT * ratingScore;
+    // v6.2 Part 16: Maturity score (largest height variant). Only active
+    // when sortBy === "maturity_desc". Higher height wins (non-inverted).
+    if (weights.maturity > 0) {
+      const h = computeMaxHeight(l);
+      const maturityScore = (h - minHeight) / heightRange;
+      score += weights.maturity * maturityScore;
+    }
 
-    // Verified seller boost.
+    // Rating score. Weight is 0.3 for price_asc / price_desc / maturity_desc,
+    // boosted to 0.7 for rating_desc.
+    const ratingScore = (l.rating - minRating) / ratingRange;
+    score += weights.rating * ratingScore;
+
+    // Verified seller boost. INVARIANT across sortBy.
     if (l.sellerIsVerified) {
       score += DEFAULT_VERIFIED_BOOST;
     }
 
-    // Distance score (v6.1 Part 3: Haversine).
-    // Linear scale: 0km = 1.0 (full bonus), DISTANCE_MAX_KM = 0.0 (no bonus).
-    // > DISTANCE_MAX_KM or Infinity (unknown district) = 0.0.
-    if (buyerDistrict !== null) {
+    // Distance score (v6.1 Part 3: Haversine). Weight is 0.3 for the
+    // price_asc default, reduced to 0.2 for non-price sorts (proximity
+    // still matters but isn't the primary signal).
+    if (weights.distance > 0 && buyerDistrict !== null) {
       const dist = distancesByListingId.get(l.listingId) ?? Infinity;
       if (Number.isFinite(dist)) {
         const distanceScore = Math.max(0, 1 - dist / DISTANCE_MAX_KM);
-        score += DEFAULT_DISTANCE_WEIGHT * distanceScore;
+        score += weights.distance * distanceScore;
       }
       // Infinity (unknown seller district) → no distance bonus. The
       // listing still ranks by other factors (rating, price, etc.).
@@ -709,13 +917,16 @@ function rankListings(
     return { listing: l, score };
   });
 
-  // Sort by score DESC. Tie-break by minPrice ASC (cheaper first when
-  // scores are equal).
+  // Sort by score DESC. Tie-break depends on sortBy so the tie-break is
+  // consistent with the user's intent (e.g. maturity_desc ties broken by
+  // larger height; price_asc ties broken by lower price).
+  const tieBreakDirection = sortBy === "price_desc" ? -1 : sortBy === "maturity_desc" ? -1 : 1;
   scored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    // Price tie-break (default direction = lower price first = +1).
     const aPrice = a.listing.minPrice ?? Number.MAX_SAFE_INTEGER;
     const bPrice = b.listing.minPrice ?? Number.MAX_SAFE_INTEGER;
-    return aPrice - bPrice;
+    return tieBreakDirection * (aPrice - bPrice);
   });
 
   return scored.map((s) => s.listing);

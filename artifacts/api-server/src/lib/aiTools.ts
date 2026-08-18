@@ -396,6 +396,29 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
             "Use this for MIXED-intent queries where the user wants both care info AND buyable listings. " +
             "The chat route auto-passes this for MIXED intent — you usually don't need to set it manually.",
         },
+        sort_by: {
+          type: Type.STRING,
+          description:
+            "v6.2 Part 16: ranking strategy for the results. Pick this based on the " +
+            "user's STATED PREFERENCE — the model decides, not a keyword classifier. " +
+            "Allowed values:\n" +
+            "  - 'price_asc'    (default): cheapest first. Use when the user is " +
+            "price-conscious ('cheapest', 'under ৳X', 'budget', 'affordable').\n" +
+            "  - 'price_desc':   most expensive first. Use when the user said " +
+            "'most expensive', 'highest price', 'top-end', 'premium price'.\n" +
+            "  - 'maturity_desc': largest height variant first. Use when the user " +
+            "signaled price-insensitivity + quality focus ('i dont care about " +
+            "price', 'most mature', 'largest', 'biggest', 'oldest', 'best " +
+            "quality', 'premium'). This is the canonical 'premium intent' branch.\n" +
+            "  - 'rating_desc':  highest seller rating first. Use when the user " +
+            "explicitly asked about seller quality ('highest rated', 'top rated',\n" +
+            "    'best seller', 'most reviewed').\n" +
+            "When in doubt or the user has no stated preference, OMIT this arg " +
+            "(defaults to price_asc).\n" +
+            "The chosen value is echoed back in the result envelope so the " +
+            "frontend can render the matching summary card WITHOUT re-classifying\n" +
+            "your intent — your sort_by choice is the single source of truth.",
+        },
       },
       required: ["query"],
     },
@@ -574,6 +597,13 @@ export async function executeTool(
         // routes/ai.ts for the privacy rationale.
         // v6.1 Part 4: pass careSummary if the LLM requested it (or if the
         // chat route auto-passes it for MIXED intent — see routes/ai.ts).
+        // v6.2 Part 16: pass sort_by if the LLM picked one. Undefined falls
+        // through to the legacy price_asc default inside searchSellerListings.
+        // The LLM chooses this value based on the user's stated preference
+        // (e.g. "i dont care about price" → maturity_desc, "best quality" →
+        // rating_desc). The choice is ECHOED BACK in the result envelope
+        // (searchSellerListings returns sortBy) so the frontend FactCallout
+        // can render the matching summary without re-classifying intent.
         const v = validateToolArgs("search_seller_listings", args);
         if (!v.success) {
           logger.info(
@@ -583,9 +613,11 @@ export async function executeTool(
           return { error: v.error };
         }
         // Zod's inferred type for this schema is { query: string; max_price?: number;
-        // form?: string; limit?: number; care_summary?: boolean } — assignable to
-        // SellerListingSearchParams (structurally compatible). The context
-        // fields (userCity, userDistrict) come from the request context, not args.
+        // form?: string; limit?: number; care_summary?: boolean;
+        // sort_by?: 'price_asc' | 'price_desc' | 'maturity_desc' | 'rating_desc' }
+        // — assignable to SellerListingSearchParams (structurally compatible).
+        // The context fields (userCity, userDistrict) come from the request
+        // context, not args.
         result = await searchSellerListings({
           query: v.args.query,
           max_price: v.args.max_price,
@@ -594,6 +626,7 @@ export async function executeTool(
           userCity: context?.userCity ?? null,
           userDistrict: context?.userDistrict ?? null,
           careSummary: v.args.care_summary === true,
+          sortBy: v.args.sort_by,
         });
         break;
       }
