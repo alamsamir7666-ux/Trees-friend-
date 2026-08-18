@@ -18,24 +18,9 @@ import { Package, ChevronRight, LogIn } from "lucide-react";
 import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { useStaggeredReveal } from "@/hooks/useStaggeredReveal";
-
-interface OrderItem {
-  order_number: number;
-  tracking_id: string;
-  status: string;
-  payment_status: string;
-  total: string | number;
-  date: string;
-  delivered: string | null;
-  items: string[];
-  location: string | null;
-}
-
-interface OrdersResult {
-  signed_in: boolean;
-  orders: OrderItem[];
-  message?: string;
-}
+// v6.2 Part 12 (Gap Fix #1): types flow from the Zod schema. No local
+// OrderItem / OrdersResult interfaces — they're now inferred + validated.
+import type { OrdersResult, OrderListItem } from "./schemas";
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-warning/10 text-warning border-warning/30",
@@ -59,7 +44,7 @@ function formatPrice(price: string | number): string {
   return `৳${n.toLocaleString()}`;
 }
 
-function OrderRow({ order, onClose }: { order: OrderItem; onClose?: () => void }) {
+function OrderRow({ order, onClose }: { order: OrderListItem; onClose?: () => void }) {
   const [, navigate] = useLocation();
   const itemsSummary = order.items?.slice(0, 2).join(", ") ?? "";
   const extraCount = (order.items?.length ?? 0) - 2;
@@ -147,10 +132,13 @@ export const OrderListCard = memo(function OrderListCard({
   data,
   onClose,
 }: {
-  data: unknown;
+  data: OrdersResult;
   onClose?: () => void;
 }) {
-  const result = data as OrdersResult;
+  // v6.2 Part 12 (Gap Fix #1): data is now typed as OrdersResult from the
+  // Zod schema (validated upstream in ToolComponentRenderer). No more
+  // `as OrdersResult` cast — the type flows from the schema.
+  const result = data;
 
   // v6.2 Part 9 (Gap 17 fix — Phase A): staggered reveal of order rows.
   // Each row fades in 40ms after the previous (capped at 400ms — tighter

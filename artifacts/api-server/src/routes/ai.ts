@@ -66,6 +66,11 @@ import {
   ACCOUNT_KEYWORDS,
 } from "../lib/aiContext";
 import { AI_TOOL_DECLARATIONS, executeTool, USER_SCOPED_TOOLS } from "../lib/aiTools";
+// v6.2 Part 12 (Backend Gap Fix #2): import the typed TOOLS_WITH_UI set
+// from aiToolSchemas.ts (single source of truth — same set as the
+// frontend's toolNames.ts). Replaces the local `new Set([...])` that
+// could drift from the frontend's mirror.
+import { TOOLS_WITH_UI } from "../lib/aiToolSchemas";
 import { streamChat, isAnyProviderConfigured } from "../lib/aiRouter";
 import type { ToolStreamEvent, ToolCallSignature } from "../lib/aiToolLoop";
 import { describeError } from "../lib/describeError";
@@ -1872,14 +1877,14 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
           // events from blocking the stream.
           //
           // Only send results for tools that have registered UI components.
-          // Other tools (search_knowledge_base, search_catalog) don't need
+          // Other tools (search_catalog, search_knowledge_base) don't need
           // the data on the frontend — the LLM already processed it.
-          const TOOLS_WITH_UI = new Set([
-            "get_order_details",
-            "get_user_orders",
-            "search_seller_listings",
-            "get_product_care",
-          ]);
+          //
+          // v6.2 Part 12 (Backend Gap Fix #2): import TOOLS_WITH_UI from
+          // aiToolSchemas.ts (typed `ReadonlySet<ToolName>`) instead of
+          // re-declaring it locally as `Set<string>`. Drift between this set
+          // and the frontend's `TOOLS_WITH_UI` would have silently caused
+          // missing SSE payloads — now they share the same source-of-truth.
           let resultPayload: unknown = undefined;
           if (event.ok && event.result !== undefined && TOOLS_WITH_UI.has(event.name)) {
             try {

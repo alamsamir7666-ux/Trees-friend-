@@ -37,6 +37,10 @@
  * free-tier budget).
  */
 import { logger } from "./logger";
+// v6.2 Part 12 (Backend Gap Fix #2): import ToolName so ToolStreamEvent,
+// ToolCallSignature, and signatureOf() carry typed tool names instead of
+// bare strings. A typo or unknown name is now a compile-time error.
+import type { ToolName } from "./aiToolSchemas";
 
 // ─── Max rounds configuration ───────────────────────────────────────────────
 
@@ -143,11 +147,11 @@ export function getMaxToolRounds(): number {
  * because it's the model's generated text, not user input.
  */
 export type ToolStreamEvent =
-  | { type: "tool_call"; name: string; args: unknown }
-  | { type: "tool_result"; name: string; ok: true; durationMs: number; result?: unknown }
+  | { type: "tool_call"; name: ToolName; args: unknown }
+  | { type: "tool_result"; name: ToolName; ok: true; durationMs: number; result?: unknown }
   | {
       type: "tool_result";
-      name: string;
+      name: ToolName;
       ok: false;
       error: string;
       durationMs: number;
@@ -178,7 +182,7 @@ export type ToolStreamEvent =
   // falls back to the static "Loading…" label. No migration needed.
   | {
       type: "tool_progress";
-      name: string;
+      name: ToolName;
       progress: string;
     };
 
@@ -202,7 +206,13 @@ export type OnToolEvent = (event: ToolStreamEvent) => void;
  * case, just a quirk).
  */
 export interface ToolCallSignature {
-  name: string;
+  /**
+   * v6.2 Part 12 (Backend Gap Fix #2): typed as `ToolName` (string-literal
+   * union) instead of `string`. The signature is built from a tool call's
+   * name + args — and the name always comes from `executeTool`, which now
+   * narrows to `ToolName` via `isToolName` before dispatch.
+   */
+  name: ToolName;
   /** Stable JSON serialization of args (sorted keys). */
   argsKey: string;
 }
@@ -212,8 +222,13 @@ export interface ToolCallSignature {
  * name + same args (in any key order) produce the same signature.
  *
  * Used by `isStuckAfterRound` to detect loops.
+ *
+ * v6.2 Part 12: parameter typed as `ToolName`. Callers (gemini.ts,
+ * groq.ts) receive the name from `executeTool`'s callback, which now
+ * carries a typed `ToolName`. The narrowing happens at the SSE edge
+ * in routes/ai.ts.
  */
-export function signatureOf(name: string, args: unknown): ToolCallSignature {
+export function signatureOf(name: ToolName, args: unknown): ToolCallSignature {
   let argsKey: string;
   try {
     // Normalize null/undefined/non-object args to a stable empty form.

@@ -9,6 +9,10 @@
  * Uses the existing shadcn `Skeleton` component (animate-pulse rounded-md).
  */
 import { Skeleton } from "@/components/ui/skeleton";
+// v6.2 Part 12 (Gap Fix #2): SKELETONS is now keyed by ToolName — a typo
+// in a tool name is a compile-time error, not a silent fallback to the
+// generic skeleton.
+import type { ToolName } from "./toolNames";
 
 /**
  * Skeleton for OrderDetailCard — mimics the card layout:
@@ -76,15 +80,27 @@ export function GenericToolSkeleton({ label }: { label: string }) {
 /**
  * Maps tool names → skeleton components.
  * Falls back to GenericToolSkeleton for unmapped tools.
+ *
+ * v6.2 Part 12 (Gap Fix #2): typed as `Partial<Record<ToolName, React.FC>>`
+ * so the keys are checked at compile time. A typo like `get_order_detail`
+ * (missing `s`) is now a compile error, not a silent miss. New tools
+ * added to toolNames.ts that don't need a skeleton are simply omitted —
+ * `Partial<>` allows that.
  */
 export function getToolSkeleton(toolName: string): React.FC {
-  const SKELETONS: Record<string, React.FC> = {
+  // The function accepts `string` (not ToolName) because AssistantPanel
+  // passes the raw `call.name` from ActiveToolCall — which is already
+  // typed as ToolName upstream, but the `string` parameter keeps this
+  // helper usable from non-typed call sites (e.g. tests, future callers).
+  const SKELETONS: Partial<Record<ToolName, React.FC>> = {
     get_order_details: OrderCardSkeleton,
     get_user_orders: OrderListSkeleton,
     search_seller_listings: ListingGridSkeleton,
     get_product_care: CareGuideSkeleton,
   };
-  return SKELETONS[toolName] ?? (() => <GenericToolSkeleton label="Loading" />);
+  // Cast through `string` for the lookup — Partial<Record> returns
+  // `FC | undefined`, which we default to GenericToolSkeleton.
+  return SKELETONS[toolName as ToolName] ?? (() => <GenericToolSkeleton label="Loading" />);
 }
 
 /**

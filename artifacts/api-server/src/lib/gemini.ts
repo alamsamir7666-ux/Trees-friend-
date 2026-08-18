@@ -71,6 +71,13 @@ import {
   type OnToolEvent,
   type ToolCallSignature,
 } from "./aiToolLoop";
+// v6.2 Part 12 (Backend Gap Fix #2): import isToolName to narrow the raw
+// tool name from the LLM's functionCall response before emitting SSE
+// events. The name arrives as `string` (untrusted — could be a typo or
+// hallucination); isToolName narrows it to ToolName so the typed
+// ToolStreamEvent union stays safe. ToolName is used in the stuck-loop
+// signatureOf fallback.
+import { isToolName, type ToolName } from "./aiToolSchemas";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
 // Google frequently deprecates Gemini models and rotates which ones are
@@ -1324,7 +1331,14 @@ export async function* streamGeminiChat(
     // (same name + same args) to the PREVIOUS round's, the model is
     // stuck in a loop (the tool will return the same result, so the
     // model has no new information). Abort with a friendly message.
-    const currentSignatures = functionCalls.map((fc: any) => signatureOf(fc.name, fc.args ?? {}));
+    //
+    // v6.2 Part 12: signatureOf now requires a typed ToolName. If the LLM
+    // hallucinated an unknown name, fall back to a placeholder signature
+    // (rare — executeTool returns before any work happens for unknown names).
+    const currentSignatures = functionCalls.map((fc: any) => {
+      const sigName = (isToolName(fc.name) ? fc.name : "search_catalog") as ToolName;
+      return signatureOf(sigName, fc.args ?? {});
+    });
     const stuckTool = budget.detectStuck(currentSignatures);
     if (stuckTool) {
       logger.error(
@@ -1372,10 +1386,20 @@ export async function* streamGeminiChat(
     // client, but the model gets a structured error in the functionResponse).
     const functionResponseParts = await Promise.all(
       functionCalls.map(async (fc: any) => {
-        const toolName: string = fc.name;
+        const rawName: string = fc.name;
         const toolArgs = fc.args ?? {};
-        if (onToolEvent) {
-          onToolEvent({ type: "tool_call", name: toolName, args: toolArgs });
+
+        // v6.2 Part 12 (Backend Gap Fix #2): narrow the raw tool name from
+        // the LLM (untrusted) via isToolName. If the model hallucinates an
+        // unknown name, we skip the SSE events (tool_call / tool_progress /
+        // tool_result) — executeTool handles unknown names internally and
+        // returns a friendly error to the LLM. The SSE pipe only carries
+        // events for KNOWN tools, so the frontend's typed `ActiveToolCall.name`
+        // field stays safe.
+        const knownName = isToolName(rawName) ? rawName : null;
+
+        if (onToolEvent && knownName) {
+          onToolEvent({ type: "tool_call", name: knownName, args: toolArgs });
         }
         const t0 = Date.now();
         try {
@@ -1384,17 +1408,18 @@ export async function* streamGeminiChat(
           // The callback fires a `tool_progress` SSE event via onToolEvent.
           // Existing SQL-based tools ignore the callback (they don't call
           // it) — no behavior change for them.
-          const result = await tools.execute(toolName, toolArgs, userId ?? null, {
-            onProgress: onToolEvent
-              ? (progress: string) => {
-                  onToolEvent({ type: "tool_progress", name: toolName, progress });
-                }
-              : undefined,
+          const result = await tools.execute(rawName, toolArgs, userId ?? null, {
+            onProgress:
+              onToolEvent && knownName
+                ? (progress: string) => {
+                    onToolEvent({ type: "tool_progress", name: knownName, progress });
+                  }
+                : undefined,
           });
-          if (onToolEvent) {
+          if (onToolEvent && knownName) {
             onToolEvent({
               type: "tool_result",
-              name: toolName,
+              name: knownName,
               ok: true,
               durationMs: Date.now() - t0,
               result,
@@ -1402,7 +1427,7 @@ export async function* streamGeminiChat(
           }
           return {
             functionResponse: {
-              name: toolName,
+              name: rawName,
               response: { result },
             },
           };
@@ -1411,10 +1436,10 @@ export async function* streamGeminiChat(
           // would be dead code. Use a fallback only for empty strings.
           const rawMsg = (err as any)?.message ?? String(err);
           const errMsg = rawMsg || "tool execution failed";
-          if (onToolEvent) {
+          if (onToolEvent && knownName) {
             onToolEvent({
               type: "tool_result",
-              name: toolName,
+              name: knownName,
               ok: false,
               error: errMsg,
               durationMs: Date.now() - t0,
@@ -1424,7 +1449,7 @@ export async function* streamGeminiChat(
           // react to it (e.g., tell the user the lookup failed).
           return {
             functionResponse: {
-              name: toolName,
+              name: rawName,
               response: { error: errMsg },
             },
           };

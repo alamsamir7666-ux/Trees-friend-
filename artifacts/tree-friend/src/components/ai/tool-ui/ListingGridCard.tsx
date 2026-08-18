@@ -52,53 +52,10 @@ import {
   shouldShowVariantPicker,
   type ChatListingVariant,
 } from "./ChatVariantPickerDialog";
-
-interface ListingVariant {
-  variantId: number;
-  form: string | null;
-  height: string | null;
-  price: number;
-  discountPrice: number | null;
-  availableQuantity: number;
-  deliveryCharge: number;
-  isPreOrder: boolean;
-}
-
-interface ListingData {
-  listingId: number;
-  productId: number;
-  productName: string;
-  productSlug: string;
-  sellerName: string;
-  sellerLocation: string | null;
-  sellerIsVerified: boolean;
-  rating: number;
-  reviewCount: number;
-  deliveryTimeDays: number | null;
-  warrantyDays: number | null;
-  paymentMethod: string;
-  certification: string | null;
-  /**
-   * v6.2 Part 4 (Bug 1 fix): representative thumbnail URL, or NULL when
-   * both the seller-listing and product image arrays are empty. In the
-   * NULL case we render an SVG leaf placeholder (FALLBACK_THUMBNAIL).
-   */
-  productImage?: string | null;
-  variants: ListingVariant[];
-  hasInStockVariant: boolean;
-  hasPreOrderVariant: boolean;
-  minPrice: number | null;
-}
-
-interface SearchResult {
-  listings: ListingData[];
-  totalCount: number;
-  query: string;
-  buyerCity: string | null;
-  buyerDistrict: string | null;
-  careSummary?: { content: string; sourceTitle?: string } | null;
-  error?: string;
-}
+// v6.2 Part 12 (Gap Fix #1): types flow from the Zod schema. The local
+// interfaces (ListingVariant, ListingData, SearchResult) are gone — they're
+// now inferred + validated at the ToolComponentRenderer boundary.
+import type { ListingSearchResult, ListingData, ListingVariant } from "./schemas";
 
 function formatPrice(price: number | null): string {
   if (price === null || price === undefined) return "—";
@@ -191,8 +148,7 @@ function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () 
         // no stale closure). Shows the variant the buyer actually picked
         // (from the picker dialog), not always topVariant.
         const addedVariant = lastAddedVariantRef.current;
-        const addedPrice =
-          addedVariant?.discountPrice ?? addedVariant?.price ?? effectivePrice;
+        const addedPrice = addedVariant?.discountPrice ?? addedVariant?.price ?? effectivePrice;
         toast.success(`${listing.productName} added to cart`, {
           description: `${addedVariant?.form ?? "Variant"} · ${formatPrice(addedPrice)}`,
           action: {
@@ -509,10 +465,13 @@ export const ListingGridCard = memo(function ListingGridCard({
   data,
   onClose,
 }: {
-  data: unknown;
+  data: ListingSearchResult;
   onClose?: () => void;
 }) {
-  const result = data as SearchResult;
+  // v6.2 Part 12 (Gap Fix #1): data is now typed as ListingSearchResult from
+  // the Zod schema (validated upstream in ToolComponentRenderer). No more
+  // `as SearchResult` cast — the type flows from the schema.
+  const result = data;
 
   // v6.2 Part 9 (Gap 17 fix — Phase A): compute staggered reveal styles
   // BEFORE the early return (Rules of Hooks — hooks can't be conditional).
