@@ -95,7 +95,26 @@ export const ordersTable = pgTable(
     // sequential assignment — started at 1001 so the first order is
     // #1001 (matches Shopify convention, avoids single-digit order
     // numbers that look unprofessional).
-    orderNumber: integer("order_number"),
+    //
+    // Defense-in-depth (v6.2 Part 14):
+    //   - The INSERT paths at routes/orders.ts:367,960 explicitly set
+    //     `orderNumber: sql\`nextval('order_number_seq')\``. But production
+    //     data showed 10 orders with NULL order_number despite this line
+    //     being present in the code — the deployed version may not have
+    //     had it, OR the SQL template wasn't emitted by Drizzle for some
+    //     INSERT paths. Root cause was never fully isolated.
+    //   - The column-level `.default(sql\`nextval('order_number_seq')\`)`
+    //     is defense-in-depth: even if a future INSERT forgets to set
+    //     orderNumber (or the explicit value gets stripped by a Drizzle
+    //     bug), the column default kicks in + assigns a fresh sequence
+    //     value. The explicit INSERT value (when present) wins over the
+    //     default — no double-nextval waste.
+    //   - `.notNull()` enforces the invariant at the DB layer. Combined
+    //     with the backfill (assign nextval() to existing NULL rows), the
+    //     column is now guaranteed non-NULL going forward.
+    orderNumber: integer("order_number")
+      .notNull()
+      .default(sql`nextval('order_number_seq')`),
     userId: text("user_id")
       .notNull()
       .references(() => usersTable.clerkId, { onDelete: "restrict" }),
