@@ -87,10 +87,23 @@ const orderDataSchema = z
 
 export const orderResultSchema = z
   .object({
-    order: orderDataSchema.nullable(),
+    // `.nullable().optional()` (not just `.nullable()`) to match the backend
+    // (aiToolSchemas.ts:273). executeTool returns early-exit error envelopes
+    // that omit `order` entirely:
+    //   - arg validation failure: { error: "Invalid args: ..." }
+    //   - rate limit:             { error: "...", rateLimited: true, retryAfterSeconds: 600 }
+    //   - execution failure:       { error: "Tool execution failed. Try answering without this data." }
+    //   - backend output validation failure: { error: "Tool returned malformed data...", _validationFailed: true }
+    // All four paths skip the tool implementation, so `order` is never set.
+    // Without `.optional()`, the schema would reject these + render the
+    // misleading "data may have changed" fallback card — masking the real,
+    // useful error message from the backend.
+    order: orderDataSchema.nullable().optional(),
     error: z.string().optional(),
     signed_in: z.boolean().optional(),
     message: z.string().optional(),
+    rateLimited: z.boolean().optional(),
+    retryAfterSeconds: z.number().optional(),
   })
   .passthrough();
 
@@ -119,9 +132,18 @@ const orderListItemSchema = z
 
 export const ordersResultSchema = z
   .object({
-    signed_in: z.boolean(),
-    orders: z.array(orderListItemSchema),
+    // `.optional()` (not required) to match the backend (aiToolSchemas.ts:301).
+    // executeTool returns early-exit error envelopes (arg validation failure,
+    // rate limit, execution failure, output-validation failure) that omit
+    // both `signed_in` AND `orders`. Requiring them here would reject these
+    // envelopes → "data may have changed" fallback card → user loses the
+    // actual error message. See orderResultSchema comment for the full list.
+    signed_in: z.boolean().optional(),
+    orders: z.array(orderListItemSchema).optional(),
     message: z.string().optional(),
+    error: z.string().optional(),
+    rateLimited: z.boolean().optional(),
+    retryAfterSeconds: z.number().optional(),
   })
   .passthrough();
 
@@ -182,11 +204,15 @@ const careSummarySchema = z
 
 export const listingSearchResultSchema = z
   .object({
-    listings: z.array(listingDataSchema),
-    totalCount: z.number(),
-    query: z.string(),
-    buyerCity: z.string().nullable(),
-    buyerDistrict: z.string().nullable(),
+    // All top-level fields `.optional()` to match the backend
+    // (aiToolSchemas.ts:360-373). executeTool returns early-exit error
+    // envelopes that include none of the success-path fields. See
+    // orderResultSchema comment for the full list of envelope shapes.
+    listings: z.array(listingDataSchema).optional(),
+    totalCount: z.number().optional(),
+    query: z.string().optional(),
+    buyerCity: z.string().nullable().optional(),
+    buyerDistrict: z.string().nullable().optional(),
     careSummary: careSummarySchema.nullable().optional(),
     error: z.string().optional(),
   })
@@ -227,7 +253,11 @@ const productDataSchema = z
 
 export const careResultSchema = z
   .object({
-    product: productDataSchema.nullable(),
+    // `.nullable().optional()` (not just `.nullable()`) to match the backend
+    // (aiToolSchemas.ts:399). executeTool returns early-exit error envelopes
+    // that omit `product` entirely. See orderResultSchema comment for the
+    // full list of envelope shapes.
+    product: productDataSchema.nullable().optional(),
     error: z.string().optional(),
   })
   .passthrough();

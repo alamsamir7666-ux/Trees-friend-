@@ -97,6 +97,26 @@ const TOOL_UI_MAP: Partial<Record<ToolName, ToolComponent>> = {
   // end of the stack), not by a dedicated card component.
 };
 
+// ─── Error-envelope detection helper ──────────────────────────────────────
+//
+// The success-path response shape for each tool has ONE primary field that
+// is ALWAYS present when the tool succeeded (even on "no data" outcomes like
+// "order not found" returns `{ order: null, error: "Product not found" }`).
+//
+// executeTool's catch block (aiTools.ts:618-621) returns `{ error: "..." }`
+// with NO primary field. We use this map to distinguish a real error envelope
+// from a success-path response that happens to include an `error` message.
+//
+// Kept as `Partial<Record<ToolName, string>>` because tools without UI
+// entries (search_catalog, search_knowledge_base) aren't dispatched through
+// this code path — no need to specify their primary field.
+const TOOL_PRIMARY_SUCCESS_FIELD: Partial<Record<ToolName, string>> = {
+  get_order_details: "order",
+  get_user_orders: "signed_in",
+  search_seller_listings: "listings",
+  get_product_care: "product",
+};
+
 /**
  * Renders all tool-result components for a given message.
  *
@@ -217,6 +237,63 @@ export function ToolComponentRenderer({
       continue;
     }
 
+    // ─── Error-envelope detection (ok:true but data is actually an error) ──
+    //
+    // Bug context: when executeTool's catch block fires (DB connection error,
+    // tool implementation threw, etc.), it returns `{ error: "Tool execution
+    // failed..." }` — an envelope with NO success-path fields (no signed_in,
+    // no orders, no order, no product, no listings).
+    //
+    // The SSE pipe (routes/ai.ts:1889) checks `event.ok` — which is `true`
+    // here (gemini.ts:1423 / groq.ts:930 set ok=true whenever executeTool
+    // returned any value, even an error envelope). So the envelope is sent
+    // over the wire as `{ ok: true, result: { error: "..." } }`.
+    //
+    // Without this branch, the frontend would render the success-path card
+    // component with `data = { error: "..." }`. The card would access
+    // `data.signed_in` (undefined), `data.orders` (undefined), etc. — and
+    // either crash or render an empty state that misleads the user (e.g.
+    // "Sign in to view your orders" when the real cause was a backend
+    // execution failure).
+    //
+    // Detection: the envelope has `error` set (string) AND the success-path
+    // primary field for this tool is absent. The primary field is per-tool:
+    //   - get_order_details:    `order`
+    //   - get_user_orders:      `signed_in`
+    //   - search_seller_listings: `listings`
+    //   - get_product_care:     `product`
+    //
+    // We use the primary-field lookup so we DON'T false-positive on success-
+    // path responses that legitimately include `error` alongside the primary
+    // data (e.g. OrderDetailCard's success-path shape is
+    // `{ order: <data|null>, error?: "Product not found" }`).
+    const validatedData = validationResult.data as Record<string, unknown>;
+    const primaryField = TOOL_PRIMARY_SUCCESS_FIELD[result.name];
+    const isErrorEnvelope =
+      typeof validatedData?.error === "string" &&
+      (primaryField === undefined || validatedData[primaryField as string] === undefined);
+
+    if (isErrorEnvelope) {
+      components.push(
+        <div
+          key={`error-env-${result.name}-${result.durationMs ?? 0}`}
+          className="border rounded-lg p-3 bg-destructive/5 border-destructive/20 flex items-start gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300"
+          role="alert"
+        >
+          <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-xs text-destructive font-medium">
+              {String(validatedData.error) || `${result.name} failed`}
+            </p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              Try asking again — the AI can retry the lookup.
+            </p>
+          </div>
+        </div>,
+      );
+      continue;
+    }
+
     // ─── Render the validated card ───────────────────────────────────────
     //
     // The data is now typed (via the Zod schema's inferred type) — but
@@ -232,7 +309,6 @@ export function ToolComponentRenderer({
     //    render-phase crash (a code bug NOT caught by Zod validation,
     //    e.g. a card referencing a schema-optional field as if required)
     //    doesn't take down the whole chat.
-    const validatedData = validationResult.data;
     components.push(
       <ToolCardErrorBoundary
         key={`${result.name}-${result.durationMs ?? 0}`}

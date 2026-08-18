@@ -1012,6 +1012,54 @@ export async function ensureAiTables(): Promise<void> {
       );
     }
 
+    // ─── v1.3.0: backend-failure disclosure fix ──────────────────────────
+    // Adds a "TOOL RESULT HANDLING" block to the system prompt instructing
+    // the model how to respond when a tool returns ONLY `{ error: "..." }`
+    // (no `signed_in`, no `orders`, no `order`, no `product`, no `listings`).
+    //
+    // Bug context: when executeTool's catch block fired (DB error, timeout,
+    // internal exception), it returned `{ error: "Tool execution failed..." }`.
+    // The model saw this + the user's "Show my recent order" question, and
+    // HALLUCINATED that the cause was sign-in — telling the user to "make
+    // sure you are signed in" when the actual cause was a backend execution
+    // failure. This caused user confusion (the user WAS signed in).
+    //
+    // The fix has two parts:
+    //   1. Frontend (schemas.ts + ToolComponentRenderer.tsx): accept error
+    //      envelopes at the Zod edge + render the actual backend error in a
+    //      friendly UI (instead of the misleading "data may have changed"
+    //      fallback card).
+    //   2. THIS PROMPT: instruct the model to quote the `error` verbatim
+    //      and NOT speculate about the cause. The user now sees BOTH the
+    //      honest text response AND the honest error card.
+    //
+    // Seeded as INACTIVE — activate via POST /api/ai/admin/prompts/<id>/activate
+    // after redeploying both frontend + API server.
+    try {
+      const { SYSTEM_PROMPT_TEMPLATE_V1 } = await import("./aiContext");
+      await pool.query(
+        `INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
+         SELECT $1, $2, $3, FALSE, $4
+         WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = $1)`,
+        [
+          "1.3.0",
+          SYSTEM_PROMPT_TEMPLATE_V1,
+          "v1.3.0: Tool-result handling block added. Model now distinguishes " +
+            '`signed_in: false` (auth) from `{ error: "..." }` (backend failure) ' +
+            "and quotes the error verbatim instead of speculating. Pairs with " +
+            "frontend fix (schemas.ts + ToolComponentRenderer.tsx) that accepts " +
+            "error envelopes + renders the actual backend error message.",
+          "system",
+        ],
+      );
+    } catch (seedErr) {
+      // Non-fatal.
+      logger.warn(
+        { err: seedErr },
+        "AI: failed to seed prompt v1.3.0 (admin can create manually via UI)",
+      );
+    }
+
     // ─── Phase 1: Knowledge Base seed data ────────────────────────────────
     // Seed one default creator ("Manual") + three root categories so the
     // admin UI has something to show on first load. Idempotent via
