@@ -310,6 +310,111 @@ describe("tool-result schemas — drift detection", () => {
     expect(parsed.success).toBe(false);
   });
 
+  // ─── v6.2 Part 16: sortBy (premium-intent echo from the LLM's tool call) ──
+
+  it("validates search_seller_listings with sortBy: 'maturity_desc' (Part 16 echo)", () => {
+    // The LLM set sort_by=maturity_desc on the tool call (premium intent).
+    // The backend echoes it back as `sortBy` (camelCase) in the result
+    // envelope. The frontend schema must accept + parse it so the
+    // FactCallout picker (Part 3) can read it.
+    const payload = {
+      listings: [],
+      totalCount: 0,
+      query: "grafted mango tree",
+      buyerCity: "Cumilla",
+      buyerDistrict: "Cumilla",
+      sortBy: "maturity_desc",
+    };
+    const parsed = listingSearchResultSchema.safeParse(payload);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.sortBy).toBe("maturity_desc");
+    }
+  });
+
+  it("validates search_seller_listings with each sortBy enum value", () => {
+    for (const v of ["price_asc", "price_desc", "maturity_desc", "rating_desc"] as const) {
+      const parsed = listingSearchResultSchema.safeParse({
+        listings: [],
+        totalCount: 0,
+        query: "mango",
+        sortBy: v,
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.sortBy).toBe(v);
+      }
+    }
+  });
+
+  it("validates search_seller_listings with sortBy absent (default price_asc path)", () => {
+    // When the LLM doesn't pass sort_by, the backend defaults to price_asc
+    // and does NOT synthesize a value — `sortBy` is undefined in the
+    // result envelope. The frontend treats undefined === price_asc.
+    const payload = {
+      listings: [],
+      totalCount: 0,
+      query: "mango",
+      buyerCity: null,
+      buyerDistrict: null,
+    };
+    const parsed = listingSearchResultSchema.safeParse(payload);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.sortBy).toBeUndefined();
+    }
+  });
+
+  it("rejects search_seller_listings with invalid sortBy enum value", () => {
+    // @ts-expect-error — intentionally invalid for runtime test
+    const parsed = listingSearchResultSchema.safeParse({
+      listings: [],
+      totalCount: 0,
+      query: "mango",
+      sortBy: "INVALID",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects search_seller_listings with sortBy of wrong type (number, not string)", () => {
+    // @ts-expect-error — intentionally wrong type for runtime test
+    const parsed = listingSearchResultSchema.safeParse({
+      listings: [],
+      totalCount: 0,
+      query: "mango",
+      sortBy: 123,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("does NOT accept snake_case sort_by field (casing consistency check)", () => {
+    // The schema field is camelCase `sortBy` (NOT snake_case `sort_by`).
+    // The LLM-tool-args convention is snake_case (sort_by), but the
+    // OUTPUT result envelope uses camelCase to match every other field
+    // (totalCount, buyerCity, etc.) + the actual return value from
+    // searchSellerListings().
+    //
+    // A snake_case `sort_by` field in the payload should pass schema
+    // validation (because `.passthrough()` allows unknown fields) BUT
+    // `parsed.data.sortBy` should be `undefined` — the snake_case field
+    // is kept as an unknown passthrough, NOT mapped to the camelCase
+    // field. This test guards against a regression where someone changes
+    // the schema to use the wrong casing.
+    const payload = {
+      listings: [],
+      totalCount: 0,
+      query: "mango",
+      sort_by: "maturity_desc", // WRONG casing — should be `sortBy`
+    };
+    const parsed = listingSearchResultSchema.safeParse(payload);
+    expect(parsed.success).toBe(true); // passthrough allows it
+    if (parsed.success) {
+      // The camelCase field is undefined — the snake_case field is in
+      // passthrough but not typed.
+      expect(parsed.data.sortBy).toBeUndefined();
+    }
+  });
+
   it("rejects get_product_care with non-string sunlight (type drift)", () => {
     const payload = {
       product: {

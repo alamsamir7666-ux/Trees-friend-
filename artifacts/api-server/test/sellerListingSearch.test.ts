@@ -280,20 +280,20 @@ describe("sort_by: input args schema (v6.2 Part 16)", () => {
 });
 
 describe("sort_by: output result schema echoes back (v6.2 Part 16)", () => {
-  it("listingSearchResultSchema accepts sort_by in the result envelope", () => {
+  it("listingSearchResultSchema accepts sortBy in the result envelope", () => {
     const parsed = listingSearchResultSchema.safeParse({
       listings: [],
       totalCount: 0,
       query: "mango",
-      sort_by: "maturity_desc",
+      sortBy: "maturity_desc",
     });
     expect(parsed.success).toBe(true);
     if (parsed.success) {
-      expect(parsed.data.sort_by).toBe("maturity_desc");
+      expect(parsed.data.sortBy).toBe("maturity_desc");
     }
   });
 
-  it("listingSearchResultSchema accepts undefined sort_by (default price_asc path)", () => {
+  it("listingSearchResultSchema accepts undefined sortBy (default price_asc path)", () => {
     const parsed = listingSearchResultSchema.safeParse({
       listings: [],
       totalCount: 0,
@@ -301,17 +301,17 @@ describe("sort_by: output result schema echoes back (v6.2 Part 16)", () => {
     });
     expect(parsed.success).toBe(true);
     if (parsed.success) {
-      expect(parsed.data.sort_by).toBeUndefined();
+      expect(parsed.data.sortBy).toBeUndefined();
     }
   });
 
-  it("listingSearchResultSchema rejects invalid sort_by in the result envelope", () => {
+  it("listingSearchResultSchema rejects invalid sortBy in the result envelope", () => {
     // @ts-expect-error — intentionally invalid
     const parsed = listingSearchResultSchema.safeParse({
       listings: [],
       totalCount: 0,
       query: "mango",
-      sort_by: "INVALID",
+      sortBy: "INVALID",
     });
     expect(parsed.success).toBe(false);
   });

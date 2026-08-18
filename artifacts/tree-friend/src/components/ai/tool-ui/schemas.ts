@@ -214,6 +214,19 @@ export const listingSearchResultSchema = z
     buyerCity: z.string().nullable().optional(),
     buyerDistrict: z.string().nullable().optional(),
     careSummary: careSummarySchema.nullable().optional(),
+    // v6.2 Part 16: echoes back the sortBy value the LLM chose on the
+    // tool call. Used by ListingGridCard's FactCallout picker (Part 3)
+    // to render the matching summary (e.g. maturity_desc → "Most mature:
+    // <listing>") WITHOUT re-classifying the user's intent via keyword
+    // matching — the LLM already did that when it set sort_by.
+    //
+    // Field name is camelCase `sortBy` (NOT snake_case `sort_by`) to
+    // match every other field in this schema (totalCount, buyerCity,
+    // etc.) + the actual return value from the backend
+    // searchSellerListings() function. The LLM-tool-args convention is
+    // snake_case (sort_by), but the OUTPUT result envelope uses camelCase
+    // to match the JS object that flows through the SSE pipe.
+    sortBy: z.enum(["price_asc", "price_desc", "maturity_desc", "rating_desc"]).optional(),
     error: z.string().optional(),
   })
   .passthrough();

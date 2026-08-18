@@ -387,14 +387,24 @@ export const listingSearchResultSchema = z
     buyerCity: z.string().nullable().optional(),
     buyerDistrict: z.string().nullable().optional(),
     careSummary: careSummarySchema.nullable().optional(),
-    // v6.2 Part 16: echoes back the sort_by the LLM chose, so the
+    // v6.2 Part 16: echoes back the sortBy value the LLM chose, so the
     // frontend FactCallout can render the matching summary (e.g.
     // maturity_desc → "Most mature: ...") WITHOUT re-classifying the
     // user's intent via brittle keyword matching on the frontend.
     // Undefined when sort_by was not passed (defaults to price_asc on
     // the backend, but we don't synthesize a value here — the frontend
     // treats undefined === price_asc).
-    sort_by: z.enum(["price_asc", "price_desc", "maturity_desc", "rating_desc"]).optional(),
+    //
+    // Field name is camelCase `sortBy` (NOT snake_case `sort_by`) to match
+    // (a) the actual return value from searchSellerListings() in
+    //     sellerListingSearch.ts, which uses TS-idiomatic camelCase, and
+    // (b) every other field in this schema (totalCount, buyerCity, etc.).
+    // The INPUT args schema (searchSellerListingsArgsSchema) uses
+    // snake_case `sort_by` because that's the LLM-tool-arg convention
+    // (OpenAI/Anthropic/Gemini function-calling all use snake_case for
+    // args). The OUTPUT schema uses camelCase to match the JS object
+    // the search function actually returns.
+    sortBy: z.enum(["price_asc", "price_desc", "maturity_desc", "rating_desc"]).optional(),
     error: z.string().optional(),
   })
   .passthrough();
