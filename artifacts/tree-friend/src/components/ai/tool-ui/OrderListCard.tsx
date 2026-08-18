@@ -5,6 +5,15 @@
  * list — order number, status badge, date, item summary, total, and a
  * "View" button that deep-links to the order detail page.
  *
+ * v6.2 Part 15 (UI vs text dedup — industry-standard pattern):
+ *   - Adds a `FactCallout` at the TOP of the card that surfaces a
+ *     one-sentence summary of the user's order history, picked by
+ *     inspecting the user's question (e.g. 'how many' -> count,
+ *     'recent'/'latest' -> most recent order date, default -> count).
+ *   - Pairs with the system-prompt v1.4.0 change: model now writes
+ *     ONLY the direct 1-2 sentence answer; it does NOT restate the
+ *     structured fields this card already shows.
+ *
  * Data shape (from aiTools.ts getUserOrders):
  *   { signed_in: boolean, orders: [{
  *     order_number, tracking_id, status, payment_status, total, date,
@@ -14,13 +23,14 @@
  * If not signed in, shows a friendly message prompting sign-in.
  */
 import { memo } from "react";
-import { Package, ChevronRight, LogIn } from "lucide-react";
+import { Package, ChevronRight, LogIn, ClipboardList, Truck, CheckCircle2 } from "lucide-react";
 import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { useStaggeredReveal } from "@/hooks/useStaggeredReveal";
 // v6.2 Part 12 (Gap Fix #1): types flow from the Zod schema. No local
 // OrderItem / OrdersResult interfaces — they're now inferred + validated.
 import type { OrdersResult, OrderListItem } from "./schemas";
+import { FactCallout, matchesAnyKeyword } from "./FactCallout";
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-warning/10 text-warning border-warning/30",
@@ -42,6 +52,63 @@ function formatDate(iso: string): string {
 function formatPrice(price: string | number): string {
   const n = typeof price === "string" ? Number(price) : price;
   return `৳${n.toLocaleString()}`;
+}
+
+// ─── v6.2 Part 15: question-driven callout picker ─────────────────────────────
+//
+// Returns { icon, text } for the FactCallout, or null if no rule matches.
+// The summary always references real fields from the orders list so the
+// user gets a concrete number + date — never a vague phrase.
+function pickOrderListCallout(
+  userQuestion: string | undefined,
+  orders: OrderListItem[],
+): { icon: typeof Package; text: string } | null {
+  if (orders.length === 0) return null;
+  const latest = orders[0]; // orders are sorted DESC by created_at in the SQL
+  const deliveredCount = orders.filter((o) => o.status === "delivered").length;
+  const inTransitCount = orders.filter((o) =>
+    ["confirmed", "processing", "shipped"].includes(o.status),
+  ).length;
+
+  // 'how many' / 'count' -> numeric summary
+  if (matchesAnyKeyword(userQuestion, ["how many", "count", "number of"])) {
+    return {
+      icon: ClipboardList,
+      text: `You have ${orders.length} recent order${orders.length === 1 ? "" : "s"}${deliveredCount > 0 ? `, ${deliveredCount} delivered` : ""}.`,
+    };
+  }
+
+  // 'recent' / 'latest' / 'last' -> most recent order date + number
+  if (matchesAnyKeyword(userQuestion, ["recent", "latest", "last", "newest"])) {
+    return {
+      icon: Package,
+      text: `Most recent: order #${latest.order_number}, placed ${formatDate(latest.date)}, currently ${latest.status}.`,
+    };
+  }
+
+  // 'delivery' / 'shipping' / 'track' -> in-transit count + which ones
+  if (
+    matchesAnyKeyword(userQuestion, ["deliver", "shipping", "ship", "track", "arrive", "transit"])
+  ) {
+    if (inTransitCount > 0) {
+      return {
+        icon: Truck,
+        text: `${inTransitCount} order${inTransitCount === 1 ? " is" : "s are"} currently in transit. Tap any row to track.`,
+      };
+    }
+    if (deliveredCount > 0) {
+      return {
+        icon: CheckCircle2,
+        text: `${deliveredCount} order${deliveredCount === 1 ? "" : "s"} delivered, none currently in transit.`,
+      };
+    }
+  }
+
+  // Default: numeric summary (covers the open-ended 'show my orders' case).
+  return {
+    icon: ClipboardList,
+    text: `Showing ${orders.length} recent order${orders.length === 1 ? "" : "s"}${deliveredCount > 0 ? `, ${deliveredCount} delivered` : ""}.`,
+  };
 }
 
 function OrderRow({ order, onClose }: { order: OrderListItem; onClose?: () => void }) {
@@ -130,9 +197,16 @@ function OrderRow({ order, onClose }: { order: OrderListItem; onClose?: () => vo
 
 export const OrderListCard = memo(function OrderListCard({
   data,
+  userQuestion,
   onClose,
 }: {
   data: OrdersResult;
+  /**
+   * v6.2 Part 15: the user's most recent question, used by
+   * pickOrderListCallout to surface the single most relevant summary
+   * in the FactCallout at the top of the card.
+   */
+  userQuestion?: string;
   onClose?: () => void;
 }) {
   // v6.2 Part 12 (Gap Fix #1): data is now typed as OrdersResult from the
@@ -147,6 +221,12 @@ export const OrderListCard = memo(function OrderListCard({
   // Computed before early returns (Rules of Hooks).
   const visibleOrders = result?.orders ?? [];
   const rowStyles = useStaggeredReveal(visibleOrders.length, 40, 400);
+  // v6.2 Part 15: pick the callout to feature at the top of the card.
+  // Computed here (after early returns is fine since this isn't a hook).
+  const callout =
+    result?.signed_in && visibleOrders.length > 0
+      ? pickOrderListCallout(userQuestion, visibleOrders)
+      : null;
 
   // Not signed in.
   if (!result || !result.signed_in) {
@@ -181,6 +261,13 @@ export const OrderListCard = memo(function OrderListCard({
           View all
         </a>
       </div>
+
+      {/* v6.2 Part 15: Fact callout (top of card) */}
+      {callout && (
+        <div className="px-3 pt-3">
+          <FactCallout icon={callout.icon} text={callout.text} accent="primary" />
+        </div>
+      )}
 
       {/* Order rows */}
       <div className="divide-y">

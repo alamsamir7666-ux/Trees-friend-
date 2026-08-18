@@ -37,7 +37,19 @@
  *     hasPreOrderVariant, minPrice }
  */
 import { useState, useMemo, useRef, memo } from "react";
-import { ShoppingBag, MapPin, Star, BadgeCheck, Truck, Plus, Check, Loader2 } from "lucide-react";
+import {
+  ShoppingBag,
+  MapPin,
+  Star,
+  BadgeCheck,
+  Truck,
+  Plus,
+  Check,
+  Loader2,
+  Search,
+  Tag,
+  MapPinned,
+} from "lucide-react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -56,10 +68,66 @@ import {
 // interfaces (ListingVariant, ListingData, SearchResult) are gone — they're
 // now inferred + validated at the ToolComponentRenderer boundary.
 import type { ListingSearchResult, ListingData, ListingVariant } from "./schemas";
+import { FactCallout, matchesAnyKeyword } from "./FactCallout";
 
 function formatPrice(price: number | null): string {
   if (price === null || price === undefined) return "—";
   return `৳${price.toLocaleString()}`;
+}
+
+// ─── v6.2 Part 15: question-driven callout picker ─────────────────────────────
+//
+// Returns { icon, text } for the FactCallout, or null if no rule matches.
+// The summary references real fields (count + minPrice + buyerDistrict)
+// so the user gets a concrete actionable statement, never vague prose.
+function pickListingCallout(
+  userQuestion: string | undefined,
+  listings: ListingData[],
+  totalCount: number | undefined,
+  minPrice: number | null | undefined,
+  buyerDistrict: string | null | undefined,
+): { icon: typeof Search; text: string } | null {
+  if (listings.length === 0) return null;
+  const count = totalCount ?? listings.length;
+  const priceText = minPrice != null ? `, starting at ৳${minPrice.toLocaleString()}` : "";
+  const nearText = buyerDistrict ? ` near ${buyerDistrict}` : "";
+
+  // 'price' / 'cost' / 'cheap' -> price-led summary
+  if (matchesAnyKeyword(userQuestion, ["price", "cost", "cheap", "afford", "budget", "how much"])) {
+    if (minPrice != null) {
+      return {
+        icon: Tag,
+        text: `Found ${count} listing${count === 1 ? "" : "s"}${nearText}, starting at ৳${minPrice.toLocaleString()}.`,
+      };
+    }
+  }
+
+  // 'near' / 'nearby' / 'location' -> location-led summary
+  if (matchesAnyKeyword(userQuestion, ["near", "nearby", "location", "close", "around"])) {
+    if (buyerDistrict) {
+      return {
+        icon: MapPinned,
+        text: `${count} listing${count === 1 ? "" : "s"} near ${buyerDistrict}${priceText}.`,
+      };
+    }
+  }
+
+  // 'seller' / 'rating' / 'review' -> rating-led summary (uses the top listing's rating)
+  if (matchesAnyKeyword(userQuestion, ["seller", "rating", "review", "best", "top"])) {
+    const topRated = [...listings].sort((a, b) => b.rating - a.rating)[0];
+    if (topRated) {
+      return {
+        icon: Star,
+        text: `Top-rated: ${topRated.sellerName} (${topRated.rating}★)${priceText}.`,
+      };
+    }
+  }
+
+  // Default: count + price + location summary.
+  return {
+    icon: Search,
+    text: `Found ${count} listing${count === 1 ? "" : "s"}${nearText}${priceText}.`,
+  };
 }
 
 function formatStock(listing: ListingData): string {
@@ -463,9 +531,16 @@ function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () 
 
 export const ListingGridCard = memo(function ListingGridCard({
   data,
+  userQuestion,
   onClose,
 }: {
   data: ListingSearchResult;
+  /**
+   * v6.2 Part 15: the user's most recent question, used by
+   * pickListingCallout to surface the single most relevant summary
+   * in the FactCallout at the top of the card.
+   */
+  userQuestion?: string;
   onClose?: () => void;
 }) {
   // v6.2 Part 12 (Gap Fix #1): data is now typed as ListingSearchResult from
@@ -480,6 +555,22 @@ export const ListingGridCard = memo(function ListingGridCard({
   // memoized style array identity is stable too.
   const visibleListings = result?.listings?.slice(0, 5) ?? [];
   const cardStyles = useStaggeredReveal(visibleListings.length, 50, 600);
+  // v6.2 Part 15: pick the callout to feature at the top of the card.
+  // Computed here (after early returns is fine since this isn't a hook).
+  // minPrice across all listings (not just visibleListings) for accuracy.
+  const allMinPrices =
+    result?.listings?.map((l) => l.minPrice).filter((p): p is number => p != null) ?? [];
+  const overallMinPrice = allMinPrices.length > 0 ? Math.min(...allMinPrices) : null;
+  const callout =
+    visibleListings.length > 0
+      ? pickListingCallout(
+          userQuestion,
+          visibleListings,
+          result?.totalCount,
+          overallMinPrice,
+          result?.buyerDistrict,
+        )
+      : null;
 
   if (!result || !result.listings || result.listings.length === 0) {
     return (
@@ -495,6 +586,9 @@ export const ListingGridCard = memo(function ListingGridCard({
 
   return (
     <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+      {/* ─── v6.2 Part 15: Fact callout (top of card) ───────────── */}
+      {callout && <FactCallout icon={callout.icon} text={callout.text} accent="primary" />}
+
       {/* ─── Care summary (if present — MIXED intent) ─────────────────── */}
       {result.careSummary?.content && (
         <div className="border-l-2 border-success/40 pl-3 py-1 text-xs text-muted-foreground">

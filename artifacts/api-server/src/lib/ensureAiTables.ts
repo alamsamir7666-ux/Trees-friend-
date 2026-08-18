@@ -1060,6 +1060,61 @@ export async function ensureAiTables(): Promise<void> {
       );
     }
 
+    // ─── v1.4.0: UI vs text deduplication (industry-standard pattern) ─────
+    // Adds the "RESPONSE LENGTH + STRUCTURE" block to the system prompt.
+    //
+    // Bug context: before this, the model called `get_product_care` for
+    // "What is the growth rate of Himsagor mango tree?" and wrote a long
+    // paragraph restating sunlight, watering, soil, height, bloom season,
+    // etc. — the SAME fields the CareGuideCard below the text bubble
+    // already rendered as a structured icon grid. The user read the same
+    // facts twice (wasted tokens, wasted screen real estate, felt less
+    // polished than ChatGPT/Perplexity/Claude).
+    //
+    // The fix has two parts:
+    //   1. Frontend (FactCallout + per-card picker): surfaces the SINGLE
+    //      most relevant fact for the user's specific question at the
+    //      top of each card. Question-driven (growth → height, watering
+    //      → watering schedule, etc.). Color-coded for OrderDetailCard
+    //      (delivered=green, cancelled=red). CareGuideCard also gets a
+    //      "View full care guide" CTA button.
+    //   2. THIS PROMPT: constrains the model's text reply to the DIRECT
+    //      answer (1-2 short sentences) + bold the key term. Explicitly
+    //      tells the model which fields each card already renders so it
+    //      doesn't restate them. Includes a good vs bad example using the
+    //      exact Himsagor-mango-growth-rate question from the bug report.
+    //
+    // Seeded as INACTIVE — activate via POST /api/ai/admin/prompts/<id>/activate
+    // after redeploying both frontend + API server.
+    try {
+      const { SYSTEM_PROMPT_TEMPLATE_V1 } = await import("./aiContext");
+      await pool.query(
+        `INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
+         SELECT $1, $2, $3, FALSE, $4
+         WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = $1)`,
+        [
+          "1.4.0",
+          SYSTEM_PROMPT_TEMPLATE_V1,
+          "v1.4.0: UI vs text deduplication (industry-standard pattern). " +
+            "When a tool returns structured data the frontend renders as a UI " +
+            "card (get_product_care, get_user_orders, get_order_details, " +
+            "search_seller_listings), the model now writes ONLY the direct " +
+            "1-2 sentence answer to the specific question + bolds the key term. " +
+            "Does NOT restate fields the card already shows. Pairs with " +
+            "frontend FactCallout component + per-card question-driven picker " +
+            "that surfaces the single most relevant fact at the top of each " +
+            "card. CareGuideCard also gets a 'View full care guide' CTA button.",
+          "system",
+        ],
+      );
+    } catch (seedErr) {
+      // Non-fatal.
+      logger.warn(
+        { err: seedErr },
+        "AI: failed to seed prompt v1.4.0 (admin can create manually via UI)",
+      );
+    }
+
     // ─── Phase 1: Knowledge Base seed data ────────────────────────────────
     // Seed one default creator ("Manual") + three root categories so the
     // admin UI has something to show on first load. Idempotent via

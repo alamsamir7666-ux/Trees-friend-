@@ -77,6 +77,12 @@ import { validateToolResult } from "./schemas";
 interface ToolComponentProps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: any;
+  /**
+   * v6.2 Part 15: the user's most recent question, threaded through to
+   * each card's callout picker so the FactCallout can surface the single
+   * most relevant fact for what the user actually asked.
+   */
+  userQuestion?: string;
   onClose?: () => void;
 }
 
@@ -137,9 +143,18 @@ const TOOL_PRIMARY_SUCCESS_FIELD: Partial<Record<ToolName, string>> = {
  */
 export function ToolComponentRenderer({
   toolResults,
+  userQuestion,
   onClose,
 }: {
   toolResults: ToolResultEntry[];
+  /**
+   * v6.2 Part 15: the user's most recent question, threaded through to
+   * each card's callout picker so the FactCallout surfaces the single
+   * most relevant fact for what the user actually asked. Optional —
+   * if absent, no callout is rendered (graceful degradation to the
+   * pre-Part-15 behavior: just the structured grid).
+   */
+  userQuestion?: string;
   onClose?: () => void;
 }) {
   if (!toolResults || toolResults.length === 0) return null;
@@ -315,7 +330,9 @@ export function ToolComponentRenderer({
         toolName={result.name}
       >
         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <Component data={validatedData} onClose={onClose} />
+          {/* v6.2 Part 15: thread userQuestion through to each card so */}
+          {/* its FactCallout can pick the most relevant fact.          */}
+          <Component data={validatedData} userQuestion={userQuestion} onClose={onClose} />
         </div>
       </ToolCardErrorBoundary>,
     );

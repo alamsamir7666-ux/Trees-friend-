@@ -6,6 +6,17 @@
  * care tips) as a clean card — instead of the AI re-typing all this
  * info in prose.
  *
+ * v6.2 Part 15 (UI vs text dedup — industry-standard pattern):
+ *   - Adds a `FactCallout` at the TOP of the card that surfaces the single
+ *     most relevant fact for the user's specific question (e.g. if they
+ *     asked about growth rate, the callout shows the mature height;
+ *     if they asked about watering, it shows the watering schedule).
+ *   - Adds a 'View full care guide' CTA button at the bottom that
+ *     deep-links to /products/<slug> (the existing product detail page).
+ *   - Pairs with the system-prompt v1.4.0 change: model now writes ONLY
+ *     the direct 1-2 sentence answer to the specific question; it
+ *     does NOT restate the structured fields this card already shows.
+ *
  * Data shape (from aiTools.ts getProductCare):
  *   { product: { name, slug, scientific_name, description, sunlight,
  *     watering, soil_type, mature_height, climate_zone, growth_rate,
@@ -13,11 +24,103 @@
  *     product_status } | null, error?: string }
  */
 import { memo } from "react";
-import { Sun, Droplets, Mountain, Ruler, Wind, TrendingUp, Flower, Leaf } from "lucide-react";
+import {
+  Sun,
+  Droplets,
+  Mountain,
+  Ruler,
+  Wind,
+  TrendingUp,
+  Flower,
+  Leaf,
+  ArrowRight,
+} from "lucide-react";
+import { useLocation } from "wouter";
 import { useStaggeredReveal } from "@/hooks/useStaggeredReveal";
 // v6.2 Part 12 (Gap Fix #1): types flow from the Zod schema. No local
 // ProductData / CareResult interfaces — they're now inferred + validated.
-import type { CareResult } from "./schemas";
+import type { CareResult, ProductData } from "./schemas";
+import { FactCallout, matchesAnyKeyword } from "./FactCallout";
+
+// ─── v6.2 Part 15: question-driven callout picker ───────────────────────────
+//
+// Returns { icon, text } for the FactCallout, or null if no rule matches.
+// The rule list is ordered by priority — the first matching rule wins.
+//
+// Keyword matching is case-insensitive + word-boundary aware (so 'soil'
+// doesn't false-match inside 'despoil'). See matchesAnyKeyword in
+// FactCallout.tsx.
+//
+// When the user's question is open-ended ('tell me about X mango') with
+// no specific keyword, returns null → no callout rendered → just the
+// 'At a glance' grid below. Graceful degradation.
+function pickCareCallout(
+  userQuestion: string | undefined,
+  product: ProductData,
+): { icon: typeof Sun; text: string } | null {
+  // Growth-related → feature mature_height (the quantitative fact the
+  // user is most likely to act on). Falls back to growth_rate if height
+  // isn't populated for this variety.
+  if (matchesAnyKeyword(userQuestion, ["growth", "grow", "fast", "slow", "rate"])) {
+    if (product.mature_height) {
+      return {
+        icon: Ruler,
+        text: `It typically reaches ${product.mature_height} under ideal growing conditions.`,
+      };
+    }
+    if (product.growth_rate) {
+      return { icon: TrendingUp, text: `Growth rate: ${product.growth_rate}.` };
+    }
+  }
+
+  // Watering-related → feature the watering schedule + drainage warning
+  // (drainage is the most common failure mode for mango trees).
+  if (matchesAnyKeyword(userQuestion, ["water", "irrigat", "moisture", "rain"])) {
+    if (product.watering) {
+      return {
+        icon: Droplets,
+        text: `Watering: ${product.watering}. Proper drainage is crucial — root rot is the most common failure.`,
+      };
+    }
+  }
+
+  // Soil-related → feature the soil_type + pH.
+  if (matchesAnyKeyword(userQuestion, ["soil", "dirt", "ground", "ph", "compost"])) {
+    if (product.soil_type) {
+      return { icon: Mountain, text: `Soil: ${product.soil_type}.` };
+    }
+  }
+
+  // Sunlight-related → feature the sunlight requirement with hours/day.
+  if (matchesAnyKeyword(userQuestion, ["sun", "light", "shade", "uv"])) {
+    if (product.sunlight) {
+      return { icon: Sun, text: `Sunlight: ${product.sunlight}.` };
+    }
+  }
+
+  // Height/size-related → feature mature_height.
+  if (matchesAnyKeyword(userQuestion, ["height", "tall", "big", "size", "meter", "feet"])) {
+    if (product.mature_height) {
+      return { icon: Ruler, text: `Mature height: ${product.mature_height}.` };
+    }
+  }
+
+  // Climate-related → feature climate_zone.
+  if (matchesAnyKeyword(userQuestion, ["climate", "zone", "weather", "temperature", "humid"])) {
+    if (product.climate_zone) {
+      return { icon: Wind, text: `Climate: ${product.climate_zone}.` };
+    }
+  }
+
+  // Bloom/fruit-related → feature bloom_season (which mentions fruiting).
+  if (matchesAnyKeyword(userQuestion, ["bloom", "flower", "fruit", "ripe", "harvest", "season"])) {
+    if (product.bloom_season) {
+      return { icon: Flower, text: `Bloom season: ${product.bloom_season}.` };
+    }
+  }
+
+  return null;
+}
 
 interface CareField {
   icon: typeof Sun;
@@ -26,7 +129,20 @@ interface CareField {
   color: string;
 }
 
-export const CareGuideCard = memo(function CareGuideCard({ data }: { data: CareResult }) {
+export const CareGuideCard = memo(function CareGuideCard({
+  data,
+  userQuestion,
+}: {
+  data: CareResult;
+  /**
+   * v6.2 Part 15: the user's most recent question, used by
+   * pickCareCallout to surface the single most relevant fact in the
+   * FactCallout at the top of the card. Optional — if absent (e.g. the
+   * tool was called without a corresponding user question, like a
+   * pre-warm call), no callout is rendered, just the at-a-glance grid.
+   */
+  userQuestion?: string;
+}) {
   // v6.2 Part 12 (Gap Fix #1): data is now typed as CareResult from the
   // Zod schema (validated upstream in ToolComponentRenderer). No more
   // `as CareResult` cast — the type flows from the schema.
@@ -71,6 +187,13 @@ export const CareGuideCard = memo(function CareGuideCard({ data }: { data: CareR
   const product = result.product;
   const image = Array.isArray(product.images) ? product.images[0] : null;
 
+  // v6.2 Part 15: pick the callout to feature at the top of the card.
+  // Returns null if no rule matches the user's question — in that case
+  // the FactCallout component itself returns null (renders nothing) and
+  // the card flows straight to the header + grid below.
+  const callout = pickCareCallout(userQuestion, product);
+  const [, navigate] = useLocation();
+
   return (
     <div className="border rounded-lg overflow-hidden bg-card shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
       {/* ─── Header: name + scientific name + image ────────────── */}
@@ -95,6 +218,15 @@ export const CareGuideCard = memo(function CareGuideCard({ data }: { data: CareR
           )}
         </div>
       </div>
+
+      {/* ─── v6.2 Part 15: Fact callout (top of card) ───────────── */}
+      {/* The single most relevant fact for the user's specific question, */}
+      {/* picked by pickCareCallout above. Null when no rule matches.   */}
+      {callout && (
+        <div className="px-3 pt-3">
+          <FactCallout icon={callout.icon} text={callout.text} accent="primary" />
+        </div>
+      )}
 
       {/* ─── Care fields grid ────────────────────────────────────── */}
       {fields.length > 0 && (
@@ -175,6 +307,22 @@ export const CareGuideCard = memo(function CareGuideCard({ data }: { data: CareR
           ))}
         </div>
       )}
+
+      {/* ─── v6.2 Part 15: CTA button — View full care guide ─────── */}
+      {/* Deep-links to /products/<slug> (the existing product detail  */}
+      {/* page). One click to the full care guide + seller listings.  */}
+      <div className="px-3 pb-3 pt-1 border-t bg-muted/20">
+        <button
+          type="button"
+          onClick={() => navigate(`/products/${product.slug}`)}
+          className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 hover:border-primary/40 transition-colors text-xs font-medium text-primary"
+          aria-label={`View full care guide for ${product.name}`}
+        >
+          <Leaf className="h-3.5 w-3.5" />
+          View full care guide
+          <ArrowRight className="h-3 w-3" />
+        </button>
+      </div>
     </div>
   );
 });

@@ -5,6 +5,17 @@
  * items with thumbnails, status timeline, nursery name, payment info, and
  * interactive buttons (Track Order, View Details).
  *
+ * v6.2 Part 15 (UI vs text dedup — industry-standard pattern):
+ *   - Adds a `FactCallout` at the TOP of the card that surfaces a
+ *     one-sentence status summary, picked by inspecting the user's
+ *     question (e.g. 'delivery'/'arrive' -> estimated/actual delivery,
+ *     'status'/'where' -> current status + step, 'cancel' ->
+ *     cancellation date + reason). Color-coded by status (delivered=
+ *     success green, cancelled=destructive red, in-transit=primary green).
+ *   - Pairs with the system-prompt v1.4.0 change: model now writes
+ *     ONLY the direct 1-2 sentence answer; it does NOT restate the
+ *     structured fields this card already shows.
+ *
  * The "building" animation: while the tool is executing (activeToolCalls
  * contains "get_order_details"), the frontend shows OrderCardSkeleton (a
  * shimmer placeholder). When the tool_result SSE event arrives with the
@@ -27,7 +38,8 @@ import { Button } from "@/components/ui/button";
 import { useStaggeredReveal } from "@/hooks/useStaggeredReveal";
 // v6.2 Part 12 (Gap Fix #1): types flow from the Zod schema (single source
 // of truth). No more local interfaces that could drift from the backend.
-import type { OrderResult } from "./schemas";
+import type { OrderResult, OrderData } from "./schemas";
+import { FactCallout, matchesAnyKeyword } from "./FactCallout";
 
 // ─── Status timeline ─────────────────────────────────────────────────────
 
@@ -67,13 +79,119 @@ function formatPrice(price: number | string): string {
   return `৳${n.toLocaleString()}`;
 }
 
+// ─── v6.2 Part 15: question-driven callout picker ─────────────────────────────
+//
+// Returns { icon, text, accent } for the FactCallout, or null if no rule
+// matches. The accent is color-coded by status so the callout visually
+// signals the state at a glance (green=delivered, red=cancelled,
+// primary=in-transit, warning=pending).
+function pickOrderDetailCallout(
+  userQuestion: string | undefined,
+  order: OrderData,
+): {
+  icon: typeof Clock;
+  text: string;
+  accent: "primary" | "info" | "warning" | "success" | "destructive";
+} | null {
+  const cancelled = order.status === "cancelled";
+  const deliveredAt = order.delivered_at ? formatDate(order.delivered_at) : null;
+  const shippedAt = order.shipped_at ? formatDate(order.shipped_at) : null;
+
+  // 'cancel' / 'refund' -> cancellation date
+  if (matchesAnyKeyword(userQuestion, ["cancel", "refund", "refund"])) {
+    if (cancelled) {
+      return {
+        icon: XCircle,
+        text: `Order #${order.order_number} was cancelled${order.cancelled_at ? ` on ${formatDate(order.cancelled_at)}` : ""}.`,
+        accent: "destructive",
+      };
+    }
+  }
+
+  // 'delivery' / 'arrive' / 'shipping' -> delivery info (delivered or in-transit)
+  if (
+    matchesAnyKeyword(userQuestion, ["deliver", "arrive", "shipping", "ship", "transit", "track"])
+  ) {
+    if (deliveredAt) {
+      return {
+        icon: CheckCircle2,
+        text: `Order #${order.order_number} was delivered on ${deliveredAt}.`,
+        accent: "success",
+      };
+    }
+    if (shippedAt) {
+      return {
+        icon: Truck,
+        text: `Order #${order.order_number} shipped on ${shippedAt}. In transit — track for live updates.`,
+        accent: "primary",
+      };
+    }
+    return {
+      icon: Truck,
+      text: `Order #${order.order_number} is currently ${order.status}. Not yet shipped.`,
+      accent: "info",
+    };
+  }
+
+  // 'status' / 'where' / 'when' -> current status + step
+  if (matchesAnyKeyword(userQuestion, ["status", "where", "when", "what", "update"])) {
+    if (cancelled) {
+      return {
+        icon: XCircle,
+        text: `Order #${order.order_number}: cancelled.`,
+        accent: "destructive",
+      };
+    }
+    if (deliveredAt) {
+      return {
+        icon: CheckCircle2,
+        text: `Order #${order.order_number}: delivered on ${deliveredAt}.`,
+        accent: "success",
+      };
+    }
+    return {
+      icon: Clock,
+      text: `Order #${order.order_number}: currently ${order.status}.`,
+      accent: order.status === "pending" ? "warning" : "info",
+    };
+  }
+
+  // Default: status summary (covers the open-ended 'where is my order' case).
+  if (cancelled) {
+    return {
+      icon: XCircle,
+      text: `Order #${order.order_number}: cancelled.`,
+      accent: "destructive",
+    };
+  }
+  if (deliveredAt) {
+    return {
+      icon: CheckCircle2,
+      text: `Order #${order.order_number}: delivered on ${deliveredAt}.`,
+      accent: "success",
+    };
+  }
+  return {
+    icon: Clock,
+    text: `Order #${order.order_number}: currently ${order.status}.`,
+    accent: order.status === "pending" ? "warning" : "info",
+  };
+}
+
 // ─── Component ────────────────────────────────────────────────────────────
 
 export const OrderDetailCard = memo(function OrderDetailCard({
   data,
+  userQuestion,
   onClose,
 }: {
   data: OrderResult;
+  /**
+   * v6.2 Part 15: the user's most recent question, used by
+   * pickOrderDetailCallout to surface the single most relevant status
+   * fact in the FactCallout at the top of the card.
+   */
+  userQuestion?: string;
   onClose?: () => void;
 }) {
   const [, navigate] = useLocation();
@@ -116,6 +234,8 @@ export const OrderDetailCard = memo(function OrderDetailCard({
     shipped: order.shipped_at,
     delivered: order.delivered_at,
   };
+  // v6.2 Part 15: pick the callout to feature at the top of the card.
+  const callout = pickOrderDetailCallout(userQuestion, order);
 
   return (
     <div className="border rounded-lg overflow-hidden bg-card shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -130,6 +250,13 @@ export const OrderDetailCard = memo(function OrderDetailCard({
         </div>
         <span className="text-[10px] text-muted-foreground">{formatDate(order.placed_at)}</span>
       </div>
+
+      {/* ─── v6.2 Part 15: Fact callout (top of card) ───────────── */}
+      {callout && (
+        <div className="p-3">
+          <FactCallout icon={callout.icon} text={callout.text} accent={callout.accent} />
+        </div>
+      )}
 
       {/* ─── Items ────────────────────────────────────────────────── */}
       <div className="p-3 space-y-2">

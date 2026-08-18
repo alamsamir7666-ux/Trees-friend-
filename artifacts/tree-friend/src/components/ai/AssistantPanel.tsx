@@ -566,6 +566,23 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
                         !!m.content
                       }
                       isLast={i === messages.length - 1}
+                      // v6.2 Part 15: find the most recent USER message
+                      // preceding this ASSISTANT message, so the FactCallout
+                      // in each card can pick the most relevant fact for
+                      // what the user actually asked. Undefined for user
+                      // messages themselves + the first message.
+                      userQuestion={
+                        m.role === "assistant"
+                          ? (() => {
+                              for (let j = i - 1; j >= 0; j--) {
+                                if (messages[j].role === "user") {
+                                  return messages[j].content;
+                                }
+                              }
+                              return undefined;
+                            })()
+                          : undefined
+                      }
                       onRegenerate={regenerate}
                       onStartEdit={handleStartEdit}
                       isEditing={editingMessage?.id === m.id}
@@ -720,6 +737,7 @@ function MessageRow({
   message,
   isStreaming,
   isLast,
+  userQuestion,
   onRegenerate,
   onStartEdit,
   isEditing,
@@ -737,6 +755,14 @@ function MessageRow({
    * every message after it, which is confusing UX).
    */
   isLast: boolean;
+  /**
+   * v6.2 Part 15: the most recent user message preceding this assistant
+   * message (undefined for user messages themselves, and for the first
+   * message in the conversation). Threaded through to ToolComponentRenderer
+   * so each card's FactCallout can pick the most relevant fact for what
+   * the user actually asked.
+   */
+  userQuestion?: string;
   /**
    * v6.2 Part 5 (P1-7): callback to regenerate this assistant message.
    * The hook finds the user message preceding this one, removes both,
@@ -968,8 +994,14 @@ function MessageRow({
         )}
 
         {/* v6.2 Part 1: Rich tool-result components (OrderDetailCard, etc.) */}
+        {/* v6.2 Part 15: pass userQuestion through to ToolComponentRenderer  */}
+        {/* so each card's FactCallout can pick the most relevant fact.       */}
         {!isStreaming && message.toolResults && message.toolResults.length > 0 && (
-          <ToolComponentRenderer toolResults={message.toolResults} onClose={onClose} />
+          <ToolComponentRenderer
+            toolResults={message.toolResults}
+            userQuestion={userQuestion}
+            onClose={onClose}
+          />
         )}
 
         {/* BUG-I7 fix: "Generating suggestions…" spinner when the backend */}
