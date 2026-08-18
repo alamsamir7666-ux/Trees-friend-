@@ -967,6 +967,17 @@ async function getUserOrders(userId: string | null): Promise<{
     };
   }
 
+  // Filter `order_number IS NOT NULL` because the `orders.order_number`
+  // column is nullable in the schema (lib/db/src/schema/orders.ts:98) — the
+  // SEQUENCE-based assignment is correct in the checkout path
+  // (routes/orders.ts:367, 960 both call nextval('order_number_seq')) but
+  // legacy rows / rows from other insert paths (test fixtures, manual SQL,
+  // a since-fixed bug in an older deployment) can have NULL. Without this
+  // filter, validateToolResult on the backend rejects the row (Zod schema
+  // requires order_number: z.number()) → the chat tool fails with
+  // "Tool returned malformed data" → user sees the misleading error card.
+  // Filter is a defensive guard; backfill NULL rows with nextval() in the
+  // DB to make the filter a no-op.
   const result = await pool.query(
     `SELECT
        order_number,
@@ -980,7 +991,7 @@ async function getUserOrders(userId: string | null): Promise<{
        (shipping_address->>'city')::text AS city,
        (shipping_address->>'district')::text AS district
      FROM orders
-     WHERE user_id = $1
+     WHERE user_id = $1 AND order_number IS NOT NULL
      ORDER BY created_at DESC
      LIMIT 5`,
     [userId],
