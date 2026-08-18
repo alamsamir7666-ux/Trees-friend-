@@ -47,8 +47,8 @@ import {
   Check,
   Loader2,
   Search,
-  Tag,
-  MapPinned,
+  TreePine,
+  Crown,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -68,20 +68,29 @@ import {
 // interfaces (ListingVariant, ListingData, SearchResult) are gone — they're
 // now inferred + validated at the ToolComponentRenderer boundary.
 import type { ListingSearchResult, ListingData, ListingVariant } from "./schemas";
-import { FactCallout, matchesAnyKeyword } from "./FactCallout";
+import { FactCallout } from "./FactCallout";
+import { pickLargestListing } from "./heightUtils";
 
 function formatPrice(price: number | null): string {
   if (price === null || price === undefined) return "—";
   return `৳${price.toLocaleString()}`;
 }
 
-// ─── v6.2 Part 15: question-driven callout picker ─────────────────────────────
+// ─── v6.2 Part 16: sortBy-driven callout picker (industry standard) ────────
 //
-// Returns { icon, text } for the FactCallout, or null if no rule matches.
-// The summary references real fields (count + minPrice + buyerDistrict)
-// so the user gets a concrete actionable statement, never vague prose.
+// The picker reads `sortBy` from the tool result envelope (echoed back by
+// the backend from the LLM's `sort_by` arg). NO keyword matching on the
+// user's question — the LLM already did that classification when it set
+// sort_by. Single source of truth: the model's decision.
+//
+// Each sortBy value gets its own callout that surfaces the TOP
+// recommendation (not just a count) — the industry-standard pattern
+// from ChatGPT Shopping / Perplexity / Amazon Rufus.
+//
+// Fallback: when sortBy is undefined (LLM didn't pass it), defaults to
+// the legacy "Found N listings, starting at ৳X" summary.
 function pickListingCallout(
-  userQuestion: string | undefined,
+  sortBy: "price_asc" | "price_desc" | "maturity_desc" | "rating_desc" | undefined,
   listings: ListingData[],
   totalCount: number | undefined,
   minPrice: number | null | undefined,
@@ -89,44 +98,68 @@ function pickListingCallout(
 ): { icon: typeof Search; text: string } | null {
   if (listings.length === 0) return null;
   const count = totalCount ?? listings.length;
-  const priceText = minPrice != null ? `, starting at ৳${minPrice.toLocaleString()}` : "";
-  const nearText = buyerDistrict ? ` near ${buyerDistrict}` : "";
+  const near = buyerDistrict ? ` near ${buyerDistrict}` : "";
+  const countText = `${count} listing${count === 1 ? "" : "s"}${near}`;
 
-  // 'price' / 'cost' / 'cheap' -> price-led summary
-  if (matchesAnyKeyword(userQuestion, ["price", "cost", "cheap", "afford", "budget", "how much"])) {
-    if (minPrice != null) {
+  // LLM chose maturity_desc → surface the most mature listing.
+  // Uses pickLargestListing (parses height variants like "4-6 ft" → 6).
+  if (sortBy === "maturity_desc") {
+    const mostMature = pickLargestListing(listings);
+    if (mostMature && mostMature.minPrice != null) {
       return {
-        icon: Tag,
-        text: `Found ${count} listing${count === 1 ? "" : "s"}${nearText}, starting at ৳${minPrice.toLocaleString()}.`,
+        icon: TreePine,
+        text: `Most mature: ${mostMature.productName} from ${mostMature.sellerName}, ৳${mostMature.minPrice.toLocaleString()}. ${countText}.`,
+      };
+    }
+    if (mostMature) {
+      return {
+        icon: TreePine,
+        text: `Most mature: ${mostMature.productName} from ${mostMature.sellerName}. ${countText}.`,
       };
     }
   }
 
-  // 'near' / 'nearby' / 'location' -> location-led summary
-  if (matchesAnyKeyword(userQuestion, ["near", "nearby", "location", "close", "around"])) {
-    if (buyerDistrict) {
-      return {
-        icon: MapPinned,
-        text: `${count} listing${count === 1 ? "" : "s"} near ${buyerDistrict}${priceText}.`,
-      };
-    }
-  }
-
-  // 'seller' / 'rating' / 'review' -> rating-led summary (uses the top listing's rating)
-  if (matchesAnyKeyword(userQuestion, ["seller", "rating", "review", "best", "top"])) {
+  // LLM chose rating_desc → surface the top-rated seller.
+  // Sort by rating DESC; first wins on ties (stable sort).
+  if (sortBy === "rating_desc") {
     const topRated = [...listings].sort((a, b) => b.rating - a.rating)[0];
     if (topRated) {
       return {
         icon: Star,
-        text: `Top-rated: ${topRated.sellerName} (${topRated.rating}★)${priceText}.`,
+        text: `Top-rated: ${topRated.sellerName} (${topRated.rating}★). ${countText}.`,
       };
     }
   }
 
-  // Default: count + price + location summary.
+  // LLM chose price_desc → surface the most expensive listing.
+  // ("most expensive" = "most premium" in user-facing copy.)
+  if (sortBy === "price_desc") {
+    const priciest = [...listings].sort((a, b) => (b.minPrice ?? 0) - (a.minPrice ?? 0))[0];
+    if (priciest && priciest.minPrice != null) {
+      return {
+        icon: Crown,
+        text: `Most premium: ${priciest.productName} from ${priciest.sellerName}, ৳${priciest.minPrice.toLocaleString()}. ${countText}.`,
+      };
+    }
+    if (priciest) {
+      return {
+        icon: Crown,
+        text: `Most premium: ${priciest.productName} from ${priciest.sellerName}. ${countText}.`,
+      };
+    }
+  }
+
+  // Default (price_asc or undefined) — legacy "starting at ৳X" summary.
+  // This is the pre-Part-16 behavior, preserved for backward compat.
+  if (minPrice != null) {
+    return {
+      icon: Search,
+      text: `Found ${countText}, starting at ৳${minPrice.toLocaleString()}.`,
+    };
+  }
   return {
     icon: Search,
-    text: `Found ${count} listing${count === 1 ? "" : "s"}${nearText}${priceText}.`,
+    text: `Found ${countText}.`,
   };
 }
 
@@ -531,14 +564,27 @@ function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () 
 
 export const ListingGridCard = memo(function ListingGridCard({
   data,
-  userQuestion,
   onClose,
 }: {
   data: ListingSearchResult;
   /**
-   * v6.2 Part 15: the user's most recent question, used by
-   * pickListingCallout to surface the single most relevant summary
-   * in the FactCallout at the top of the card.
+   * v6.2 Part 15 → Part 16: the user's most recent question. NOW UNUSED
+   * by this card's FactCallout picker — Part 16 rewrote the picker to
+   * read `sortBy` from the tool result envelope (the LLM's sort_by arg
+   * echoed back) instead of keyword-matching the user's question.
+   *
+   * Kept in the component signature because it's part of the shared
+   * ToolComponentProps interface (ToolComponentRenderer.tsx) — every
+   * card component accepts it. Removing it here would require either
+   * narrowing the interface (breaks the dispatcher's generic lookup)
+   * or making it card-specific (clutter). Easier to keep the prop in
+   * the type signature + simply NOT destructure it — the prop is
+   * received by the component (ToolComponentRenderer passes it) but
+   * ignored. This satisfies ESLint's no-unused-vars rule (no unused
+   * destructured binding) + keeps the type contract intact. The other
+   * cards (CareGuideCard, OrderListCard, OrderDetailCard) still use
+   * `userQuestion` for their own pickers — this card migrated to
+   * sortBy, those will follow in a future Part.
    */
   userQuestion?: string;
   onClose?: () => void;
@@ -555,16 +601,17 @@ export const ListingGridCard = memo(function ListingGridCard({
   // memoized style array identity is stable too.
   const visibleListings = result?.listings?.slice(0, 5) ?? [];
   const cardStyles = useStaggeredReveal(visibleListings.length, 50, 600);
-  // v6.2 Part 15: pick the callout to feature at the top of the card.
-  // Computed here (after early returns is fine since this isn't a hook).
-  // minPrice across all listings (not just visibleListings) for accuracy.
+  // v6.2 Part 16: pick the callout to feature at the top of the card.
+  // Reads `sortBy` from the tool result envelope (echoed back from the
+  // LLM's sort_by arg) — NO keyword matching on the user's question.
+  // Single source of truth: the LLM's decision.
   const allMinPrices =
     result?.listings?.map((l) => l.minPrice).filter((p): p is number => p != null) ?? [];
   const overallMinPrice = allMinPrices.length > 0 ? Math.min(...allMinPrices) : null;
   const callout =
     visibleListings.length > 0
       ? pickListingCallout(
-          userQuestion,
+          result?.sortBy,
           visibleListings,
           result?.totalCount,
           overallMinPrice,
