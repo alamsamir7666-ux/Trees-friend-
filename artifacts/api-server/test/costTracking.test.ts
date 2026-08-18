@@ -20,6 +20,9 @@ import { describe, it, expect } from "vitest";
 process.env.AI_SESSION_SECRET ??= "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
 
 import { calculateCost, getModelPricing, getAllPricing } from "../src/lib/costTracker";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 describe("Bug #9 fix: costTracker has real per-model pricing", () => {
   it("Groq llama-3.3-70b-versatile has non-zero pricing (kept for historical records)", () => {
@@ -172,7 +175,7 @@ describe("Bug #9 fix: Groq sends usage via stream_options.include_usage", () => 
   it("GroqChatRequest interface has stream_options field", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/groq.ts`,
       "utf8",
     );
     expect(source).toContain("stream_options?:");
@@ -182,7 +185,7 @@ describe("Bug #9 fix: Groq sends usage via stream_options.include_usage", () => 
   it("streamGroqCompletion sets stream_options.include_usage = true", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/groq.ts`,
       "utf8",
     );
     expect(source).toContain("stream_options: { include_usage: true }");
@@ -191,7 +194,7 @@ describe("Bug #9 fix: Groq sends usage via stream_options.include_usage", () => 
   it("StreamResult interface has usage field", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/groq.ts`,
       "utf8",
     );
     // Find the StreamResult interface body.
@@ -206,7 +209,7 @@ describe("Bug #9 fix: Groq sends usage via stream_options.include_usage", () => 
   it("streamGroqCompletion captures usage from payload", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/groq.ts`,
       "utf8",
     );
     expect(source).toContain('if (payload.usage && typeof payload.usage === "object")');
@@ -216,7 +219,7 @@ describe("Bug #9 fix: Groq sends usage via stream_options.include_usage", () => 
   it("both return paths include usage in StreamResult", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/groq.ts`,
       "utf8",
     );
     // The [DONE] path + the no-[DONE] fallback path.
@@ -228,7 +231,7 @@ describe("Bug #9 fix: Groq sends usage via stream_options.include_usage", () => 
   it("onMetadata maps Groq usage to Gemini field names", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/groq.ts`,
       "utf8",
     );
     // The onMetadata call should map prompt_tokens → promptTokenCount etc.
@@ -244,7 +247,7 @@ describe("Bug #9 fix: Groq sends usage via stream_options.include_usage", () => 
   it("onMetadata no longer hardcodes usage: undefined", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/groq.ts`,
       "utf8",
     );
     // The old code had: usage: undefined, // Groq streaming doesn't return usage
@@ -257,7 +260,7 @@ describe("Bug #10 fix: route derives token count correctly", () => {
   it("no longer falls back from totalTokenCount to candidatesTokenCount", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // The old code: tokenCount = usage.totalTokenCount ?? usage.candidatesTokenCount;
@@ -271,7 +274,7 @@ describe("Bug #10 fix: route derives token count correctly", () => {
   it("uses totalTokenCount when provided", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain('if (typeof usage.totalTokenCount === "number")');
@@ -281,7 +284,7 @@ describe("Bug #10 fix: route derives token count correctly", () => {
   it("sums prompt + completion when total is missing", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("tokenCount = promptTokens + completionTokens");
@@ -290,7 +293,7 @@ describe("Bug #10 fix: route derives token count correctly", () => {
   it("only falls back to completion as lower bound (rare case)", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // The fallback-to-completion path is still there, but ONLY when prompt
@@ -302,7 +305,7 @@ describe("Bug #10 fix: route derives token count correctly", () => {
   it("has a comment explaining the Bug #10 fix", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("Bug #10 fix");

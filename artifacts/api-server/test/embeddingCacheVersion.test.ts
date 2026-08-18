@@ -16,8 +16,9 @@
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
+import * as path from "node:path";
 
-const REPO_ROOT = "/home/z/my-project/Trees-friend-";
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 function readSource(rel: string): string {
   return fs.readFileSync(`${REPO_ROOT}/${rel}`, "utf8");

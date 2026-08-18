@@ -69,6 +69,9 @@
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 // Ensure the AI_SESSION_SECRET is set (required by sessionToken.ts which is
 // transitively imported). setupEnv.ts handles this for the rest of the suite.
@@ -76,7 +79,7 @@ process.env.AI_SESSION_SECRET ??=
   "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
 
 const aiRouteSource = fs.readFileSync(
-  "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+  `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
   "utf8",
 );
 
@@ -268,7 +271,7 @@ describe("Bug #7 fix: signed tokens use HMAC (can't be forged)", () => {
   // token bound to the victim's uid without knowing AI_SESSION_SECRET.
   it("sessionToken.ts uses HMAC-SHA256", () => {
     const sessionTokenSource = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/sessionToken.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sessionToken.ts`,
       "utf8",
     );
     expect(sessionTokenSource).toContain("createHmac");
@@ -277,7 +280,7 @@ describe("Bug #7 fix: signed tokens use HMAC (can't be forged)", () => {
 
   it("sessionToken.ts uses constant-time comparison (timingSafeEqual)", () => {
     const sessionTokenSource = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/sessionToken.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sessionToken.ts`,
       "utf8",
     );
     expect(sessionTokenSource).toContain("timingSafeEqual");
@@ -285,7 +288,7 @@ describe("Bug #7 fix: signed tokens use HMAC (can't be forged)", () => {
 
   it("AI_SESSION_SECRET is required in production (fail-fast)", () => {
     const sessionTokenSource = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/sessionToken.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sessionToken.ts`,
       "utf8",
     );
     expect(sessionTokenSource).toContain("AI_SESSION_SECRET");

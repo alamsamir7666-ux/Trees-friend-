@@ -14,6 +14,9 @@
  * Run: cd artifacts/api-server && pnpm vitest run test/intentRouting.test.ts
  */
 import { describe, it, expect } from "vitest";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 process.env.AI_SESSION_SECRET ??= "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
 
@@ -283,7 +286,7 @@ describe("v6.1 Part 3: chat route auto-calls search_seller_listings for PURCHASE
   it("routes/ai.ts imports searchSellerListings + formatSellerListingContextForPrompt", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain('import { searchSellerListings } from "../lib/sellerListingSearch"');
@@ -293,7 +296,7 @@ describe("v6.1 Part 3: chat route auto-calls search_seller_listings for PURCHASE
   it("the chat route conditionally auto-calls search_seller_listings for PURCHASE/MIXED intent", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // The auto-call must be gated on the intent being PURCHASE or MIXED.
@@ -310,7 +313,7 @@ describe("v6.1 Part 3: chat route auto-calls search_seller_listings for PURCHASE
   it("the chat route passes listingsBlock to renderPromptTemplate + buildSystemPrompt", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("listingsBlock");
@@ -325,7 +328,7 @@ describe("v6.1 Part 3: intent admin endpoints declared in aiAdmin.ts", () => {
   it("declares GET /ai/admin/intent/health", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain('router.get("/ai/admin/intent/health"');
@@ -334,7 +337,7 @@ describe("v6.1 Part 3: intent admin endpoints declared in aiAdmin.ts", () => {
   it("declares GET /ai/admin/intent/metrics", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain('router.get("/ai/admin/intent/metrics"');
@@ -345,7 +348,7 @@ describe("v6.1 Part 3: intent admin endpoints declared in aiAdmin.ts", () => {
   it("declares POST /ai/admin/intent/test", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain('router.post("/ai/admin/intent/test"');
@@ -354,7 +357,7 @@ describe("v6.1 Part 3: intent admin endpoints declared in aiAdmin.ts", () => {
   it("declares POST /ai/admin/intent/clear-cache", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain('router.post("/ai/admin/intent/clear-cache"');
@@ -365,7 +368,7 @@ describe("v6.1 Part 3: AiInsightsTab renders intent distribution UI", () => {
   it("imports the new intent types (IntentHealth + IntentMetrics)", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/tree-friend/src/components/admin/tabs/AiInsightsTab.tsx",
+      `${REPO_ROOT}/artifacts/tree-friend/src/components/admin/tabs/AiInsightsTab.tsx`,
       "utf8",
     );
     expect(source).toContain("interface IntentHealth");
@@ -375,7 +378,7 @@ describe("v6.1 Part 3: AiInsightsTab renders intent distribution UI", () => {
   it("fetches the intent health + metrics in the parallel Promise.all", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/tree-friend/src/components/admin/tabs/AiInsightsTab.tsx",
+      `${REPO_ROOT}/artifacts/tree-friend/src/components/admin/tabs/AiInsightsTab.tsx`,
       "utf8",
     );
     expect(source).toContain('"/api/ai/admin/intent/health"');
@@ -385,7 +388,7 @@ describe("v6.1 Part 3: AiInsightsTab renders intent distribution UI", () => {
   it("has a collapsible Intent Classifier section", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/tree-friend/src/components/admin/tabs/AiInsightsTab.tsx",
+      `${REPO_ROOT}/artifacts/tree-friend/src/components/admin/tabs/AiInsightsTab.tsx`,
       "utf8",
     );
     expect(source).toContain('id="intent"');

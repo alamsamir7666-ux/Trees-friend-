@@ -102,6 +102,9 @@ const mockedPoolQuery = pool.query as ReturnType<typeof vi.fn>;
 // internal exports if available — otherwise, we test the route's
 // observable behavior.
 import { signSessionToken, mintAnonymousSessionToken, mintAuthenticatedSessionToken } from "../src/lib/sessionToken";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 // Helper: build a fake Express Request for testing.
 function makeFakeRequest(opts: {
@@ -222,7 +225,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
       // file contains it.
       const fs = await import("node:fs");
       const aiRouteSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
         "utf8",
       );
       expect(expectedSql.test(aiRouteSource)).toBe(true);
@@ -234,7 +237,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
       // anonymous raters since their rater_user_id is NULL).
       const fs = await import("node:fs");
       const aiRouteSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
         "utf8",
       );
       expect(aiRouteSource).toContain("IS NOT DISTINCT FROM");
@@ -245,7 +248,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("INSERT includes both rater_user_id and rater_session_sid columns", async () => {
       const fs = await import("node:fs");
       const aiRouteSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
         "utf8",
       );
       expect(aiRouteSource).toContain(
@@ -256,7 +259,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("catches Postgres unique violation (SQLSTATE 23505) and returns 409", async () => {
       const fs = await import("node:fs");
       const aiRouteSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
         "utf8",
       );
       expect(aiRouteSource).toContain("23505");
@@ -266,7 +269,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("rate limiter is applied to the feedback route", async () => {
       const fs = await import("node:fs");
       const aiRouteSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
         "utf8",
       );
       expect(aiRouteSource).toContain("aiFeedbackLimiter");
@@ -276,7 +279,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("audit logs feedback_created, feedback_updated, feedback_deleted events", async () => {
       const fs = await import("node:fs");
       const aiRouteSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
         "utf8",
       );
       expect(aiRouteSource).toContain('"feedback_created"');
@@ -289,7 +292,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("adds rater_user_id and rater_session_sid columns", async () => {
       const fs = await import("node:fs");
       const ensureAiTablesSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
         "utf8",
       );
       expect(ensureAiTablesSource).toContain("ADD COLUMN IF NOT EXISTS rater_user_id TEXT");
@@ -299,7 +302,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("drops the old unique index on message_id alone", async () => {
       const fs = await import("node:fs");
       const ensureAiTablesSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
         "utf8",
       );
       expect(ensureAiTablesSource).toContain("DROP INDEX IF EXISTS ai_chat_feedback_message_unique");
@@ -308,7 +311,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("creates partial unique index for authenticated ratings", async () => {
       const fs = await import("node:fs");
       const ensureAiTablesSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
         "utf8",
       );
       expect(ensureAiTablesSource).toContain("ai_chat_feedback_msg_user_unique");
@@ -318,7 +321,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("creates partial unique index for anonymous ratings", async () => {
       const fs = await import("node:fs");
       const ensureAiTablesSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
         "utf8",
       );
       expect(ensureAiTablesSource).toContain("ai_chat_feedback_msg_session_unique");
@@ -328,7 +331,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("backfills legacy rows' rater_session_sid from anonymous sessions", async () => {
       const fs = await import("node:fs");
       const ensureAiTablesSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+        `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
         "utf8",
       );
       // The backfill UPDATE only touches rows where BOTH rater columns
@@ -345,7 +348,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("uses credentials: 'include' on the fetch call", async () => {
       const fs = await import("node:fs");
       const feedbackButtonsSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/tree-friend/src/components/ai/FeedbackButtons.tsx",
+        `${REPO_ROOT}/artifacts/tree-friend/src/components/ai/FeedbackButtons.tsx`,
         "utf8",
       );
       expect(feedbackButtonsSource).toContain('credentials: "include"');
@@ -354,7 +357,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("handles 401 (no identity) gracefully", async () => {
       const fs = await import("node:fs");
       const feedbackButtonsSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/tree-friend/src/components/ai/FeedbackButtons.tsx",
+        `${REPO_ROOT}/artifacts/tree-friend/src/components/ai/FeedbackButtons.tsx`,
         "utf8",
       );
       expect(feedbackButtonsSource).toContain("res.status === 401");
@@ -363,7 +366,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("handles 403 (ownership failure) gracefully", async () => {
       const fs = await import("node:fs");
       const feedbackButtonsSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/tree-friend/src/components/ai/FeedbackButtons.tsx",
+        `${REPO_ROOT}/artifacts/tree-friend/src/components/ai/FeedbackButtons.tsx`,
         "utf8",
       );
       expect(feedbackButtonsSource).toContain("res.status === 403");
@@ -372,7 +375,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("handles 429 (rate limit) gracefully", async () => {
       const fs = await import("node:fs");
       const feedbackButtonsSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/tree-friend/src/components/ai/FeedbackButtons.tsx",
+        `${REPO_ROOT}/artifacts/tree-friend/src/components/ai/FeedbackButtons.tsx`,
         "utf8",
       );
       expect(feedbackButtonsSource).toContain("res.status === 429");
@@ -381,7 +384,7 @@ describe("feedback security helpers (Bug #2 fix)", () => {
     it("retries once on 409 (concurrent insert conflict)", async () => {
       const fs = await import("node:fs");
       const feedbackButtonsSource = fs.readFileSync(
-        "/home/z/my-project/Trees-friend-/artifacts/tree-friend/src/components/ai/FeedbackButtons.tsx",
+        `${REPO_ROOT}/artifacts/tree-friend/src/components/ai/FeedbackButtons.tsx`,
         "utf8",
       );
       expect(feedbackButtonsSource).toContain("res.status === 409");

@@ -22,6 +22,9 @@
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 // Ensure the AI_SESSION_SECRET is set (required by sessionToken.ts which is
 // transitively imported). setupEnv.ts handles this for the rest of the suite.
@@ -29,7 +32,7 @@ process.env.AI_SESSION_SECRET ??=
   "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
 
 const aiRouteSource = fs.readFileSync(
-  "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+  `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
   "utf8",
 );
 
@@ -112,7 +115,7 @@ describe("Legacy UUID history migration (Bug #1 backward compat)", () => {
 
 describe("Frontend useAiChat.ts sends legacy UUID in URL for migration", () => {
   const frontendSource = fs.readFileSync(
-    "/home/z/my-project/Trees-friend-/artifacts/tree-friend/src/hooks/useAiChat.ts",
+    `${REPO_ROOT}/artifacts/tree-friend/src/hooks/useAiChat.ts`,
     "utf8",
   );
 

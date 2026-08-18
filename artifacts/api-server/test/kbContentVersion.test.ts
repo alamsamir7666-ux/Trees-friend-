@@ -41,7 +41,8 @@ import {
 
 // We also need access to the source for source-shape tests.
 import * as fs from "node:fs";
-const REPO_ROOT = "/home/z/my-project/Trees-friend-";
+import * as path from "node:path";
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 function readSource(rel: string): string {
   return fs.readFileSync(`${REPO_ROOT}/${rel}`, "utf8");
 }

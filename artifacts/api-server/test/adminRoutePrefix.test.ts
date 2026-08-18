@@ -19,10 +19,13 @@
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 describe("Bug #6 fix: no admin routes use double /api/ prefix", () => {
   const source = fs.readFileSync(
-    "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+    `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
     "utf8",
   );
 
@@ -81,7 +84,7 @@ describe("Bug #6 fix: app.ts mounts router at /api and /api/v1", () => {
   // Verify the mount points haven't changed (they're the reason the
   // /api/ prefix in route registrations caused the double-/api/ bug).
   const source = fs.readFileSync(
-    "/home/z/my-project/Trees-friend-/artifacts/api-server/src/app.ts",
+    `${REPO_ROOT}/artifacts/api-server/src/app.ts`,
     "utf8",
   );
 

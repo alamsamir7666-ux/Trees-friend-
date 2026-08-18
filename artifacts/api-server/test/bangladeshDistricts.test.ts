@@ -12,6 +12,9 @@
  * Run: cd artifacts/api-server && pnpm vitest run test/bangladeshDistricts.test.ts
  */
 import { describe, it, expect } from "vitest";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 import {
   getDistrictCoords,
@@ -205,7 +208,7 @@ describe("bangladeshDistricts: integration with sellerListingSearch ranking", ()
   it("sellerListingSearch.ts imports the bangladeshDistricts module", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/sellerListingSearch.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sellerListingSearch.ts`,
       "utf8",
     );
     expect(source).toContain('from "./bangladeshDistricts"');
@@ -216,7 +219,7 @@ describe("bangladeshDistricts: integration with sellerListingSearch ranking", ()
   it("sellerListingSearch.ts uses Haversine distance (not same-district heuristic)", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/sellerListingSearch.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sellerListingSearch.ts`,
       "utf8",
     );
     // The Haversine distance is computed via distanceBetweenDistricts.

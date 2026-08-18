@@ -21,6 +21,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 process.env.AI_SESSION_SECRET ??= "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
 
 import { classifyIntent, clearIntentCache, getIntentCacheStats } from "../src/lib/intentClassifier";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 describe("intentClassifier: PURCHASE intent detection", () => {
   beforeEach(() => {
@@ -423,7 +426,7 @@ describe("intentClassifier: latent bug fix verification (sl.deleted_at)", () => 
   it("ACTIVE_LISTING_FILTER no longer references deleted_at", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/aiTools.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/aiTools.ts`,
       "utf8",
     );
     // The ACTIVE_LISTING_FILTER constant should be defined. It must NOT
@@ -446,7 +449,7 @@ describe("intentClassifier: latent bug fix verification (sl.deleted_at)", () => 
   it("products-by-slug route no longer references sl.is_active or sl.deleted_at", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // The products-by-slug SQL subquery should NOT reference sl.is_active

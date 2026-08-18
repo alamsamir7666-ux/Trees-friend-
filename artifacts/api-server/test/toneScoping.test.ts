@@ -12,8 +12,9 @@
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
+import * as path from "node:path";
 
-const REPO_ROOT = "/home/z/my-project/Trees-friend-";
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 function readSource(rel: string): string {
   return fs.readFileSync(`${REPO_ROOT}/${rel}`, "utf8");
@@ -152,8 +153,12 @@ describe("BUG-I4 fix: routes/ai.ts passes tone context into tools closure (inter
   });
 
   it("wraps executeTool in a closure that adds the context as the 4th arg", () => {
+    // v6.2 Part 9 update: the execute wrapper now accepts a 4th `options`
+    // param (for onProgress). The regex is loosened to match either the
+    // old 3-param form or the new 4-param form — both call executeTool
+    // with the context object as the 4th positional arg.
     expect(source).toMatch(
-      /execute:\s*\(name,\s*args,\s*uid\)\s*=>\s*executeTool\(name,\s*args,\s*uid,\s*\{/,
+      /execute:\s*\(name,\s*args,\s*uid(?:,\s*options)?\)\s*=>\s*executeTool\(\s*name,\s*args,\s*uid,\s*\{/,
     );
   });
 });
@@ -188,11 +193,18 @@ describe("BUG-I4 fix: gemini.ts + groq.ts do NOT need changes (closure approach)
   const geminiSource = readSource("artifacts/api-server/src/lib/gemini.ts");
   const groqSource = readSource("artifacts/api-server/src/lib/groq.ts");
 
-  it("gemini.ts calls tools.execute with 3 args (name, args, userId)", () => {
-    expect(geminiSource).toMatch(/tools\.execute\(toolName,\s*toolArgs,\s*userId\s*\?\?\s*null\)/);
+  it("gemini.ts calls tools.execute with the signature (name, args, userId, options?)", () => {
+    // v6.2 Part 9 update: gemini.ts now passes an options object as the
+    // 4th arg (for onProgress). The regex is loosened to match either
+    // the old 3-arg call or the new 4-arg call. The first 3 args
+    // (toolName, toolArgs, userId ?? null) are unchanged.
+    expect(geminiSource).toMatch(
+      /tools\.execute\(\s*toolName,\s*toolArgs,\s*userId\s*\?\?\s*null/,
+    );
   });
 
-  it("groq.ts calls tools.execute with 3 args (name, args, userId)", () => {
+  it("groq.ts calls tools.execute with the signature (name, args, userId, options?)", () => {
+    // v6.2 Part 9 update: same as gemini.ts — 4th arg is the options object.
     expect(groqSource).toMatch(/tools\.execute\(/);
     expect(groqSource).toMatch(/userId\s*\?\?\s*null/);
   });

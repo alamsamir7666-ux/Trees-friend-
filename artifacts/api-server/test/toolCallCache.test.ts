@@ -22,6 +22,9 @@ process.env.AI_SESSION_SECRET ??=
 
 import { USER_SCOPED_TOOLS, CATALOG_TOOLS } from "../src/lib/aiTools";
 import { ACCOUNT_KEYWORDS } from "../src/lib/aiContext";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 describe("Bug #4 fix: tool classification sets", () => {
   describe("USER_SCOPED_TOOLS", () => {
@@ -100,7 +103,7 @@ describe("Bug #4 fix: ACCOUNT_KEYWORDS (broader isPrivateQuery)", () => {
 describe("Bug #4 fix: route tracks toolCalls from metadata", () => {
   it("metaHolder type includes toolCalls field", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("toolCalls?: string[]");
@@ -108,7 +111,7 @@ describe("Bug #4 fix: route tracks toolCalls from metadata", () => {
 
   it("imports USER_SCOPED_TOOLS from aiTools", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("USER_SCOPED_TOOLS");
@@ -117,7 +120,7 @@ describe("Bug #4 fix: route tracks toolCalls from metadata", () => {
 
   it("computes hadUserScopedTool from toolCalls", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("hadUserScopedTool");
@@ -126,7 +129,7 @@ describe("Bug #4 fix: route tracks toolCalls from metadata", () => {
 
   it("computes effectiveIsPrivate (isPrivateQuery OR hadUserScopedTool)", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("effectiveIsPrivate");
@@ -135,7 +138,7 @@ describe("Bug #4 fix: route tracks toolCalls from metadata", () => {
 
   it("passes hadAnyTool (not hardcoded false) to setCachedResponse", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // The old code hardcoded `false` as the 7th arg to setCachedResponse.
@@ -145,7 +148,7 @@ describe("Bug #4 fix: route tracks toolCalls from metadata", () => {
 
   it("no longer hardcodes false in setCachedResponse call", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // Find the setCachedResponse call and verify it doesn't have a
@@ -164,7 +167,7 @@ describe("Bug #4 fix: route tracks toolCalls from metadata", () => {
 
   it("no longer hardcodes false in setSemanticCachedResponse call", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     const setSemanticMatch = source.match(
@@ -180,7 +183,7 @@ describe("Bug #4 fix: route tracks toolCalls from metadata", () => {
 describe("Bug #4 fix: cache modules use short TTL for tool calls", () => {
   it("semanticCache.ts has TOOL_CACHE_TTL_SECONDS constant", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/semanticCache.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/semanticCache.ts`,
       "utf8",
     );
     expect(source).toContain("TOOL_CACHE_TTL_SECONDS");
@@ -189,7 +192,7 @@ describe("Bug #4 fix: cache modules use short TTL for tool calls", () => {
 
   it("semanticCache.ts setCachedResponse uses short TTL when hadToolCalls=true", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/semanticCache.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/semanticCache.ts`,
       "utf8",
     );
     expect(source).toContain("const ttl = hadToolCalls ? TOOL_CACHE_TTL_SECONDS : CACHE_TTL_SECONDS");
@@ -197,7 +200,7 @@ describe("Bug #4 fix: cache modules use short TTL for tool calls", () => {
 
   it("semanticCache.ts skips cache when hadToolCalls=true AND TTL=0", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/semanticCache.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/semanticCache.ts`,
       "utf8",
     );
     expect(source).toContain("if (hadToolCalls && TOOL_CACHE_TTL_SECONDS <= 0) return");
@@ -205,7 +208,7 @@ describe("Bug #4 fix: cache modules use short TTL for tool calls", () => {
 
   it("semanticCache.ts cache key includes tool-call segment", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/semanticCache.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/semanticCache.ts`,
       "utf8",
     );
     expect(source).toContain('const toolSegment = hasToolCalls ? ":t:1" : ""');
@@ -213,7 +216,7 @@ describe("Bug #4 fix: cache modules use short TTL for tool calls", () => {
 
   it("semanticCache.ts getCachedResponse checks both tool + non-tool keys", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/semanticCache.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/semanticCache.ts`,
       "utf8",
     );
     expect(source).toContain("nonToolKey");
@@ -225,7 +228,7 @@ describe("Bug #4 fix: cache modules use short TTL for tool calls", () => {
 describe("Bug #4 fix: embeddingCache.ts (semantic cache) tool-call tracking", () => {
   it("has TOOL_CACHE_TTL_SECONDS constant", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/embeddingCache.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/embeddingCache.ts`,
       "utf8",
     );
     expect(source).toContain("TOOL_CACHE_TTL_SECONDS");
@@ -234,7 +237,7 @@ describe("Bug #4 fix: embeddingCache.ts (semantic cache) tool-call tracking", ()
 
   it("getSemanticCachedResponse uses CASE expression for TTL-aware filtering", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/embeddingCache.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/embeddingCache.ts`,
       "utf8",
     );
     expect(source).toContain("CASE");
@@ -244,7 +247,7 @@ describe("Bug #4 fix: embeddingCache.ts (semantic cache) tool-call tracking", ()
 
   it("setSemanticCachedResponse stores the had_tool_calls flag", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/embeddingCache.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/embeddingCache.ts`,
       "utf8",
     );
     expect(source).toContain("had_tool_calls");
@@ -253,7 +256,7 @@ describe("Bug #4 fix: embeddingCache.ts (semantic cache) tool-call tracking", ()
 
   it("setSemanticCachedResponse skips cache when hadToolCalls=true AND TTL=0", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/embeddingCache.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/embeddingCache.ts`,
       "utf8",
     );
     expect(source).toContain("if (hadToolCalls && TOOL_CACHE_TTL_SECONDS <= 0) return");
@@ -261,7 +264,7 @@ describe("Bug #4 fix: embeddingCache.ts (semantic cache) tool-call tracking", ()
 
   it("has a legacy fallback for when had_tool_calls column doesn't exist", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/embeddingCache.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/embeddingCache.ts`,
       "utf8",
     );
     expect(source).toContain("getSemanticCachedResponseLegacy");
@@ -271,7 +274,7 @@ describe("Bug #4 fix: embeddingCache.ts (semantic cache) tool-call tracking", ()
 describe("Bug #4 fix: schema migration (ensureAiTables.ts)", () => {
   it("adds had_tool_calls column to ai_response_cache", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
       "utf8",
     );
     expect(source).toContain("ADD COLUMN IF NOT EXISTS had_tool_calls BOOLEAN");
@@ -279,7 +282,7 @@ describe("Bug #4 fix: schema migration (ensureAiTables.ts)", () => {
 
   it("backfills legacy rows (had_tool_calls IS NULL) to FALSE", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
       "utf8",
     );
     expect(source).toContain("SET had_tool_calls = FALSE");
@@ -288,7 +291,7 @@ describe("Bug #4 fix: schema migration (ensureAiTables.ts)", () => {
 
   it("creates a partial index for tool-call entries", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
       "utf8",
     );
     expect(source).toContain("ai_response_cache_tool_calls_idx");
@@ -299,7 +302,7 @@ describe("Bug #4 fix: schema migration (ensureAiTables.ts)", () => {
 describe("Bug #4 fix: provider metadata surfaces toolCalls", () => {
   it("aiRouter.ts onMetadata type includes toolCalls field", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/aiRouter.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/aiRouter.ts`,
       "utf8",
     );
     expect(source).toContain("toolCalls?: string[]");
@@ -307,7 +310,7 @@ describe("Bug #4 fix: provider metadata surfaces toolCalls", () => {
 
   it("gemini.ts onMetadata type includes toolCalls field", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/gemini.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/gemini.ts`,
       "utf8",
     );
     expect(source).toContain("toolCalls?: string[]");
@@ -315,7 +318,7 @@ describe("Bug #4 fix: provider metadata surfaces toolCalls", () => {
 
   it("groq.ts onMetadata type includes toolCalls field", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/groq.ts`,
       "utf8",
     );
     expect(source).toContain("toolCalls?: string[]");
@@ -323,7 +326,7 @@ describe("Bug #4 fix: provider metadata surfaces toolCalls", () => {
 
   it("gemini.ts tracks toolCallsCalled array across rounds", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/gemini.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/gemini.ts`,
       "utf8",
     );
     expect(source).toContain("toolCallsCalled");
@@ -332,7 +335,7 @@ describe("Bug #4 fix: provider metadata surfaces toolCalls", () => {
 
   it("groq.ts tracks toolCallsCalled array across rounds", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/groq.ts`,
       "utf8",
     );
     expect(source).toContain("toolCallsCalled");
@@ -341,7 +344,7 @@ describe("Bug #4 fix: provider metadata surfaces toolCalls", () => {
 
   it("gemini.ts emits final metadata with toolCalls after streaming", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/gemini.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/gemini.ts`,
       "utf8",
     );
     expect(source).toContain("toolCalls: toolCallsCalled");
@@ -349,7 +352,7 @@ describe("Bug #4 fix: provider metadata surfaces toolCalls", () => {
 
   it("groq.ts emits final metadata with toolCalls after streaming", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/groq.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/groq.ts`,
       "utf8",
     );
     expect(source).toContain("toolCalls: toolCallsCalled");
@@ -359,7 +362,7 @@ describe("Bug #4 fix: provider metadata surfaces toolCalls", () => {
 describe("Bug #4 fix: isPrivateQuery uses ACCOUNT_KEYWORDS (not old regex)", () => {
   it("imports ACCOUNT_KEYWORDS from aiContext", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("ACCOUNT_KEYWORDS");
@@ -368,7 +371,7 @@ describe("Bug #4 fix: isPrivateQuery uses ACCOUNT_KEYWORDS (not old regex)", () 
 
   it("uses ACCOUNT_KEYWORDS.some() for isPrivateQuery check", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("ACCOUNT_KEYWORDS.some((kw) =>");
@@ -377,7 +380,7 @@ describe("Bug #4 fix: isPrivateQuery uses ACCOUNT_KEYWORDS (not old regex)", () 
 
   it("no longer uses the old 4-phrase regex in executable code", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // The old regex was: /my order|where is my order|what did i buy|my orders/i
@@ -395,7 +398,7 @@ describe("Bug #4 fix: isPrivateQuery uses ACCOUNT_KEYWORDS (not old regex)", () 
 describe("Bug #4 fix: ACCOUNT_KEYWORDS exported from aiContext", () => {
   it("aiContext.ts exports ACCOUNT_KEYWORDS", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/aiContext.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/aiContext.ts`,
       "utf8",
     );
     expect(source).toContain("export const ACCOUNT_KEYWORDS");

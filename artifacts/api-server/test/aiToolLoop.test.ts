@@ -45,8 +45,12 @@ describe("aiToolLoop: max rounds configuration", () => {
     }
   });
 
-  it("DEFAULT_MAX_TOOL_ROUNDS is 10 (industry-standard default; was 4)", () => {
-    expect(DEFAULT_MAX_TOOL_ROUNDS).toBe(10);
+  it("DEFAULT_MAX_TOOL_ROUNDS is 5 (v6.1 reduced from 10 — KB+listings auto-inject makes 0-tool-call responses the common case)", () => {
+    // v6.2 Part 11: the test expected 10, but the source was reduced to 5
+    // in v6.1 (auto-injected KB + listings context mean the LLM rarely needs
+    // to call tools — 5 rounds is plenty). Updated the test to match the
+    // intentional value + document the rationale.
+    expect(DEFAULT_MAX_TOOL_ROUNDS).toBe(5);
   });
 
   it("HARD_MAX_TOOL_ROUNDS_CAP is 25 (runaway-loop protection)", () => {

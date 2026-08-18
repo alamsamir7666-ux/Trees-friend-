@@ -20,6 +20,9 @@ process.env.AI_SESSION_SECRET ??= "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90L
 
 import { AI_TOOL_DECLARATIONS, CATALOG_TOOLS, type ToolContext } from "../src/lib/aiTools";
 import { TOOL_TIERS } from "../src/lib/toolRateLimiter";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 import {
   searchSellerListings,
   type SellerListingSearchResult,
@@ -187,7 +190,7 @@ describe("executeTool: search_seller_listings routing (source-shape)", () => {
     // v6.2 Part 4: replaced hardcoded absolute path with a repo-relative
     // resolve so the test runs in any checkout location (CI, fresh clone,
     // different developer machine). Previously the test hardcoded
-    // "/home/z/my-project/repos/Trees-friend-/..." which only worked on
+    // `${REPO_ROOT}/...` which only worked on
     // one developer's machine.
     const source = fs.readFileSync(path.resolve(__dirname, "../src/lib/aiTools.ts"), "utf8");
     // The switch must include a case for search_seller_listings that calls

@@ -21,6 +21,9 @@ process.env.AI_SESSION_SECRET ??= "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90L
 
 import { AI_TOOL_DECLARATIONS } from "../src/lib/aiTools";
 import { formatSellerListingContextForPrompt } from "../src/lib/aiContext";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 describe("v6.1 Part 4: search_seller_listings tool declaration includes care_summary", () => {
   it("declares the care_summary boolean parameter", () => {
@@ -48,7 +51,7 @@ describe("v6.1 Part 4: executeTool passes careSummary from args.care_summary", (
   it("the executeTool switch reads args.care_summary + passes it as careSummary", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/aiTools.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/aiTools.ts`,
       "utf8",
     );
     // The executeTool switch must read args.care_summary (boolean) and
@@ -139,7 +142,7 @@ describe("v6.1 Part 4: chat route skips KB auto-inject for MIXED intent", () => 
   it("routes/ai.ts declares skipKbAutoInject for MIXED+PURCHASE intent", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // v6.1 Part 5 (Gap #4): changed from `const` to `let` so the
@@ -160,7 +163,7 @@ describe("v6.1 Part 4: chat route skips KB auto-inject for MIXED intent", () => 
   it("the chat route passes careSummary=isMixedIntent to searchSellerListings", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain('const isMixedIntent = intentClassification.intent === "MIXED"');
@@ -170,7 +173,7 @@ describe("v6.1 Part 4: chat route skips KB auto-inject for MIXED intent", () => 
   it("the chat route passes careSummary to formatSellerListingContextForPrompt", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // The formatSellerListingContextForPrompt call must pass the careSummary
@@ -184,7 +187,7 @@ describe("v6.1 Part 4: v1.2.0 prompt seed declared in ensureAiTables.ts", () => 
   it("seeds the v1.2.0 row idempotently", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
       "utf8",
     );
     expect(source).toContain('"1.2.0"');
@@ -199,7 +202,7 @@ describe("v6.1 Part 4: sellerListingSearch.ts careSummary fetch logic", () => {
   it("imports searchKnowledgeBase from kbSearch", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/sellerListingSearch.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sellerListingSearch.ts`,
       "utf8",
     );
     expect(source).toContain('import { searchKnowledgeBase } from "./kbSearch"');
@@ -208,7 +211,7 @@ describe("v6.1 Part 4: sellerListingSearch.ts careSummary fetch logic", () => {
   it("the careSummary fetch is gated on params.careSummary === true + truncated.length > 0", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/sellerListingSearch.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sellerListingSearch.ts`,
       "utf8",
     );
     expect(source).toContain("params.careSummary === true && truncated.length > 0");
@@ -217,7 +220,7 @@ describe("v6.1 Part 4: sellerListingSearch.ts careSummary fetch logic", () => {
   it("uses lightweight KB params (maxResults=1, minScore=0.5, skipRerank=true)", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/sellerListingSearch.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sellerListingSearch.ts`,
       "utf8",
     );
     expect(source).toContain("maxResults: 1");
@@ -228,7 +231,7 @@ describe("v6.1 Part 4: sellerListingSearch.ts careSummary fetch logic", () => {
   it("truncates care summary content to ~200 chars (sentence boundary preferred)", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/sellerListingSearch.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sellerListingSearch.ts`,
       "utf8",
     );
     expect(source).toContain("CARE_SUMMARY_MAX_CHARS = 200");
@@ -238,7 +241,7 @@ describe("v6.1 Part 4: sellerListingSearch.ts careSummary fetch logic", () => {
   it("the careSummary field is included in the result type", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/sellerListingSearch.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sellerListingSearch.ts`,
       "utf8",
     );
     expect(source).toContain("careSummary?:");
@@ -249,7 +252,7 @@ describe("v6.1 Part 4: sellerListingSearch.ts careSummary fetch logic", () => {
   it("the careSummary is included in the return statement", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/sellerListingSearch.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sellerListingSearch.ts`,
       "utf8",
     );
     expect(source).toMatch(/return \{[\s\S]*?careSummary,/);
@@ -258,7 +261,7 @@ describe("v6.1 Part 4: sellerListingSearch.ts careSummary fetch logic", () => {
   it("the careSummary fetch is wrapped in try/catch (fail-safe)", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/repos/Trees-friend-/artifacts/api-server/src/lib/sellerListingSearch.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/sellerListingSearch.ts`,
       "utf8",
     );
     // The careSummary fetch must not crash the search — if it fails, the

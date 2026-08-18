@@ -16,6 +16,9 @@ process.env.AI_SESSION_SECRET ??=
   "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
 
 import { ACCOUNT_KEYWORDS } from "../src/lib/aiContext";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 /**
  * Replicates the route's isPrivateQuery check (routes/ai.ts).
@@ -228,7 +231,7 @@ describe("Bug #5 fix: route uses ACCOUNT_KEYWORDS (not old regex)", () => {
   it("routes/ai.ts imports ACCOUNT_KEYWORDS", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("ACCOUNT_KEYWORDS");
@@ -237,7 +240,7 @@ describe("Bug #5 fix: route uses ACCOUNT_KEYWORDS (not old regex)", () => {
   it("routes/ai.ts uses .some() for the check (not a regex)", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("ACCOUNT_KEYWORDS.some((kw) =>");
@@ -247,7 +250,7 @@ describe("Bug #5 fix: route uses ACCOUNT_KEYWORDS (not old regex)", () => {
   it("routes/ai.ts no longer uses the old 4-phrase regex in executable code", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // Strip comments before checking.

@@ -14,6 +14,9 @@
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 // Ensure the AI_SESSION_SECRET is set (required by sessionToken.ts which is
 // transitively imported). setupEnv.ts handles this for the rest of the suite.
@@ -185,7 +188,7 @@ describe("route uses DB prompt text (Bug #3 fix)", () => {
 
   it("routes/ai.ts imports renderPromptTemplate", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("renderPromptTemplate");
@@ -193,7 +196,7 @@ describe("route uses DB prompt text (Bug #3 fix)", () => {
 
   it("routes/ai.ts uses promptVersionInfo.text (not just .version)", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     expect(source).toContain("promptVersionInfo.text");
@@ -202,7 +205,7 @@ describe("route uses DB prompt text (Bug #3 fix)", () => {
 
   it("routes/ai.ts falls back to buildSystemPrompt when DB text is empty", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // The ternary: promptVersionInfo.text ? renderPromptTemplate(...) : buildSystemPrompt(...)
@@ -211,7 +214,7 @@ describe("route uses DB prompt text (Bug #3 fix)", () => {
 
   it("routes/ai.ts no longer has a duplicate getActivePrompt() call", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/ai.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
       "utf8",
     );
     // Count occurrences of "await getActivePrompt()" — should be exactly 1.
@@ -224,7 +227,7 @@ describe("route uses DB prompt text (Bug #3 fix)", () => {
 describe("promptVersioning.ts (Bug #3 fix + Bug #25 cache TTL)", () => {
   it("has a cache TTL constant", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/promptVersioning.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/promptVersioning.ts`,
       "utf8",
     );
     expect(source).toContain("PROMPT_CACHE_TTL_MS");
@@ -233,7 +236,7 @@ describe("promptVersioning.ts (Bug #3 fix + Bug #25 cache TTL)", () => {
 
   it("getActivePrompt checks cache freshness via TTL", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/promptVersioning.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/promptVersioning.ts`,
       "utf8",
     );
     expect(source).toContain("cacheFresh");
@@ -242,7 +245,7 @@ describe("promptVersioning.ts (Bug #3 fix + Bug #25 cache TTL)", () => {
 
   it("has deletePromptVersion with safeguards", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/promptVersioning.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/promptVersioning.ts`,
       "utf8",
     );
     expect(source).toContain("deletePromptVersion");
@@ -252,7 +255,7 @@ describe("promptVersioning.ts (Bug #3 fix + Bug #25 cache TTL)", () => {
 
   it("activatePromptVersion uses a transaction (BEGIN/COMMIT/ROLLBACK)", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/promptVersioning.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/promptVersioning.ts`,
       "utf8",
     );
     expect(source).toContain("BEGIN");
@@ -262,7 +265,7 @@ describe("promptVersioning.ts (Bug #3 fix + Bug #25 cache TTL)", () => {
 
   it("createPromptVersion validates semver format", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/promptVersioning.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/promptVersioning.ts`,
       "utf8",
     );
     expect(source).toContain("/^\\d+\\.\\d+\\.\\d+$/");
@@ -270,7 +273,7 @@ describe("promptVersioning.ts (Bug #3 fix + Bug #25 cache TTL)", () => {
 
   it("has getActivePromptVersion and getPromptVersion helpers", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/promptVersioning.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/promptVersioning.ts`,
       "utf8",
     );
     expect(source).toContain("export async function getActivePromptVersion");
@@ -281,7 +284,7 @@ describe("promptVersioning.ts (Bug #3 fix + Bug #25 cache TTL)", () => {
 describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
   it("imports prompt versioning functions", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain("listPromptVersions");
@@ -294,7 +297,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("imports eval harness functions", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain("getEvalCases");
@@ -305,7 +308,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("registers GET /ai/admin/prompts endpoint", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toMatch(/router\.get\(\s*["']\/ai\/admin\/prompts["']/);
@@ -313,7 +316,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("registers GET /ai/admin/prompts/active endpoint", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toMatch(/router\.get\(\s*["']\/ai\/admin\/prompts\/active["']/);
@@ -321,7 +324,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("registers GET /ai/admin/prompts/:id endpoint", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toMatch(/router\.get\(\s*["']\/ai\/admin\/prompts\/:id["']/);
@@ -329,7 +332,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("registers POST /ai/admin/prompts endpoint", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toMatch(/router\.post\(\s*["']\/ai\/admin\/prompts["']/);
@@ -337,7 +340,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("registers POST /ai/admin/prompts/:id/activate endpoint", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toMatch(/router\.post\(\s*["']\/ai\/admin\/prompts\/:id\/activate["']/);
@@ -345,7 +348,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("registers DELETE /ai/admin/prompts/:id endpoint", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toMatch(/router\.delete\(\s*["']\/ai\/admin\/prompts\/:id["']/);
@@ -353,7 +356,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("registers GET /ai/admin/eval/cases endpoint", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toMatch(/router\.get\(\s*["']\/ai\/admin\/eval\/cases["']/);
@@ -361,7 +364,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("registers POST /ai/admin/eval/run endpoint", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toMatch(/router\.post\(\s*["']\/ai\/admin\/eval\/run["']/);
@@ -369,7 +372,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("registers GET /ai/admin/eval/results endpoint", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toMatch(/router\.get\(\s*["']\/ai\/admin\/eval\/results["']/);
@@ -377,7 +380,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("POST /ai/admin/prompts validates semver format", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain("/^\\d+\\.\\d+\\.\\d+$/");
@@ -386,7 +389,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("POST /ai/admin/prompts caps prompt text at 50KB", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain("50_000");
@@ -395,7 +398,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("DELETE /ai/admin/prompts/:id returns 409 for safeguard violations", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain("409");
@@ -403,7 +406,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("POST /ai/admin/eval/run checks provider availability", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain("isAnyProviderConfigured");
@@ -411,7 +414,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("POST /ai/admin/eval/run generates a runId", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain("runId");
@@ -420,7 +423,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("POST /ai/admin/eval/run supports useJudge option", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain("useJudge");
@@ -428,7 +431,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 
   it("POST /ai/admin/eval/run supports category filter", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/routes/aiAdmin.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/routes/aiAdmin.ts`,
       "utf8",
     );
     expect(source).toContain("categoryFilter");
@@ -438,7 +441,7 @@ describe("aiAdmin.ts (Bug #3 fix: admin endpoints exist)", () => {
 describe("ensureAiTables.ts (Bug #3 fix: seed prompt text)", () => {
   it("seeds v1.0.0 with the actual prompt text (via parameterized query)", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
       "utf8",
     );
     expect(source).toContain("SYSTEM_PROMPT_TEMPLATE_V1");
@@ -449,7 +452,7 @@ describe("ensureAiTables.ts (Bug #3 fix: seed prompt text)", () => {
 
   it("seed is idempotent (WHERE NOT EXISTS)", () => {
     const source = fs.readFileSync(
-      "/home/z/my-project/Trees-friend-/artifacts/api-server/src/lib/ensureAiTables.ts",
+      `${REPO_ROOT}/artifacts/api-server/src/lib/ensureAiTables.ts`,
       "utf8",
     );
     expect(source).toContain("WHERE NOT EXISTS");

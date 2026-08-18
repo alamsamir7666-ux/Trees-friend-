@@ -25,10 +25,13 @@
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
+import * as path from "node:path";
+
+const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 describe("Bug #8 fix: history fetch merges (not replaces) in-flight messages", () => {
   const source = fs.readFileSync(
-    "/home/z/my-project/Trees-friend-/artifacts/tree-friend/src/hooks/useAiChat.ts",
+    `${REPO_ROOT}/artifacts/tree-friend/src/hooks/useAiChat.ts`,
     "utf8",
   );
 
@@ -60,7 +63,7 @@ describe("Bug #8 fix: history fetch merges (not replaces) in-flight messages", (
 
 describe("Bug #8 fix: ChatMessage.id type widened to number | string", () => {
   const source = fs.readFileSync(
-    "/home/z/my-project/Trees-friend-/artifacts/tree-friend/src/hooks/useAiChat.ts",
+    `${REPO_ROOT}/artifacts/tree-friend/src/hooks/useAiChat.ts`,
     "utf8",
   );
 
@@ -82,7 +85,7 @@ describe("Bug #8 fix: ChatMessage.id type widened to number | string", () => {
 
 describe("Bug #16 fix: concurrent send race via loadingRef", () => {
   const source = fs.readFileSync(
-    "/home/z/my-project/Trees-friend-/artifacts/tree-friend/src/hooks/useAiChat.ts",
+    `${REPO_ROOT}/artifacts/tree-friend/src/hooks/useAiChat.ts`,
     "utf8",
   );
 
@@ -117,7 +120,7 @@ describe("Bug #16 fix: concurrent send race via loadingRef", () => {
 
 describe("Bug #18 fix: crypto.randomUUID no longer used in AI chat (cookie-based)", () => {
   const source = fs.readFileSync(
-    "/home/z/my-project/Trees-friend-/artifacts/tree-friend/src/hooks/useAiChat.ts",
+    `${REPO_ROOT}/artifacts/tree-friend/src/hooks/useAiChat.ts`,
     "utf8",
   );
 
