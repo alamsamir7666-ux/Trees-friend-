@@ -1258,6 +1258,78 @@ export async function ensureAiTables(): Promise<void> {
       );
     }
 
+    // ─── v1.7.0: industry-standard AI control over listing selection ─────
+    // Adds 5 new sections to the system prompt that give the LLM full
+    // control over which listings to show:
+    //
+    //   1. COUNT EXPANSION — granular 1-8 mapping (not binary 1 vs 5)
+    //      "the X" → 1, "a couple" → 2, "a few" → 3, "some" → 4-5,
+    //      "many" → 6-7, "all" → 8.
+    //
+    //   2. STRATEGIC QUERY PHRASING — soft filtering via the `query` field
+    //      Include use-case keywords (balcony, beginner, drought, indoor)
+    //      + trait keywords (compact, fast-growing, winter-fruiting) in
+    //      the query so the BM25 text-relevance surfaces matching listings.
+    //
+    //   3. MULTI-ARG COMBINATION — explicit examples showing how to
+    //      combine max_price + form + sort_by + limit + query for
+    //      compound requests.
+    //
+    //   4. POST-CALL VARIETY DIVERSITY — when the user wants "different
+    //      varieties", check productName across results + only cite
+    //      distinct values. Don't pad with duplicates if fewer distinct
+    //      varieties exist than the user asked for.
+    //
+    //   5. POST-CALL HARD-FILTER CHECK — for fields the tool doesn't
+    //      filter on (height range, bloom season, rating threshold,
+    //      delivery time), the LLM checks the field in results + only
+    //      cites listings that match. Doesn't cite listings that don't
+    //      match the user's hard constraints.
+    //
+    // Industry-standard pattern from ChatGPT Shopping, Perplexity, and
+    // Amazon Rufus — the AI makes 4 independent decisions: count, sort,
+    // hard filter, soft filter (via query). Plus post-call checks for
+    // variety diversity + hard-filter enforcement.
+    //
+    // NO code changes — uses the existing args (max_price, form, sort_by,
+    // limit, query). Safe to activate immediately.
+    //
+    // Seeded as INACTIVE — activate via POST /api/ai/admin/prompts/<id>/activate
+    // OR via SQL: UPDATE ai_prompt_versions SET is_active = (version = '1.7.0');
+    try {
+      const { SYSTEM_PROMPT_TEMPLATE_V1 } = await import("./aiContext");
+      await pool.query(
+        `INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
+         SELECT $1, $2, $3, FALSE, $4
+         WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = $1)`,
+        [
+          "1.7.0",
+          SYSTEM_PROMPT_TEMPLATE_V1,
+          "v1.7.0: industry-standard AI control over listing selection. " +
+            "5 new prompt sections: (1) COUNT EXPANSION — granular 1-8 " +
+            "mapping (not binary 1 vs 5); (2) STRATEGIC QUERY PHRASING — " +
+            "soft filtering via the query field (include use-case + " +
+            "trait keywords); (3) MULTI-ARG COMBINATION — explicit examples " +
+            "for compound requests; (4) POST-CALL VARIETY DIVERSITY — " +
+            "check productName for distinct varieties when user wants " +
+            "'different varieties'; (5) POST-CALL HARD-FILTER CHECK — " +
+            "deterministic filtering on height/bloom_season/rating/" +
+            "deliveryTime that the tool doesn't filter on. Pairs with " +
+            "v1.5.0 (sort_by) + v1.6.0 (singular vs plural). NO code " +
+            "changes — uses existing args. Industry-standard pattern " +
+            "from ChatGPT Shopping / Perplexity / Amazon Rufus. Safe " +
+            "to activate immediately.",
+          "system",
+        ],
+      );
+    } catch (seedErr) {
+      // Non-fatal.
+      logger.warn(
+        { err: seedErr },
+        "AI: failed to seed prompt v1.7.0 (admin can create manually via UI)",
+      );
+    }
+
     // ─── Phase 1: Knowledge Base seed data ────────────────────────────────
     // Seed one default creator ("Manual") + three root categories so the
     // admin UI has something to show on first load. Idempotent via
