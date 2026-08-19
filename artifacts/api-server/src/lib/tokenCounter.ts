@@ -35,6 +35,7 @@ const CONTEXT_WINDOWS: Record<string, number> = {
   "llama-4-scout-17b-16e-instruct": 131_072, // 17B active / 109B total MoE
   "llama-4-maverick-17b-128e-instruct": 131_072, // 17B active / 400B total MoE
   "openai/gpt-oss-120b": 131_072, // Groq's hosted GPT-OSS 120B
+  "openai/gpt-oss-20b": 131_072, // v6.2 Part 19: smaller GPT-OSS variant — same context window (same model family)
   // Groq — deprecated models (kept for backward compat with persisted messages)
   "llama-3.3-70b-versatile": 131_072,
   "llama-3.1-8b-instant": 131_072,
@@ -70,7 +71,9 @@ export function estimateTokens(text: string): number {
   if (!text || typeof text !== "string") return 0;
 
   // Count CJK + Bengali characters (multi-byte, tokenize less efficiently)
-  const cjkBengaliChars = (text.match(/[\u0980-\u09ff\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
+  const cjkBengaliChars = (
+    text.match(/[\u0980-\u09ff\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || []
+  ).length;
   const otherChars = text.length - cjkBengaliChars;
 
   // CJK/Bengali: ~2 chars/token. Other: ~4 chars/token.
@@ -139,7 +142,13 @@ export function truncateHistory(
 ): { history: { role: string; text: string }[]; truncated: boolean; droppedCount: number } {
   const contextWindow = getContextWindowSize(model);
   const responseBudget = getMaxOutputTokens();
-  const availableForHistory = contextWindow - responseBudget - estimateTokens(systemPrompt) - estimateTokens(userMessage) - (hasTools ? 200 : 0) - 50; // 50 = safety margin
+  const availableForHistory =
+    contextWindow -
+    responseBudget -
+    estimateTokens(systemPrompt) -
+    estimateTokens(userMessage) -
+    (hasTools ? 200 : 0) -
+    50; // 50 = safety margin
 
   if (availableForHistory <= 0) {
     // Even the system prompt + user message is too large — return empty history.

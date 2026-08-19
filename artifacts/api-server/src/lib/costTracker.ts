@@ -86,6 +86,9 @@ const PRICING: Record<string, { prompt: number; completion: number; tier: "free"
   "llama-4-scout-17b-16e-instruct": { prompt: 0.11, completion: 0.34, tier: "paid" },
   "llama-4-maverick-17b-128e-instruct": { prompt: 0.2, completion: 0.6, tier: "paid" },
   "openai/gpt-oss-120b": { prompt: 0.1, completion: 0.3, tier: "paid" },
+  // v6.2 Part 19: smaller GPT-OSS variant, likely cheaper on paid tier.
+  // Exact pricing TBD — using conservative estimates based on the 120B→20B ratio.
+  "openai/gpt-oss-20b": { prompt: 0.05, completion: 0.15, tier: "paid" },
 };
 
 // Bug #9 fix: default pricing for unknown models. The old default was

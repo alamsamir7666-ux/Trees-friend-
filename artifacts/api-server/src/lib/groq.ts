@@ -96,8 +96,9 @@ import { isToolName, type ToolName } from "./aiToolSchemas";
 // The deprecated Llama 4 models stay in the chain as fallbacks (in
 // case some Groq accounts still have access OR Groq re-enables them).
 const GROQ_MODEL_CHAIN = [
-  "openai/gpt-oss-120b", // GPT-OSS 120B (Groq's hosted version) — recommended migration target for Llama 4 Scout
-  "llama-4-maverick-17b-128e-instruct", // Llama 4 Maverick, MoE, function calling — fallback if Groq account still has access
+  "openai/gpt-oss-120b", // GPT-OSS 120B — Groq's recommended migration target for Llama 4 Scout. 120B params, best quality. Free tier TPM: 8000 (may 413 on large system prompts).
+  "openai/gpt-oss-20b", // GPT-OSS 20B — smaller + likely higher free-tier TPM. Used as the 413 fallback when 120B's TPM is exceeded. 20B params, still good quality.
+  "llama-4-maverick-17b-128e-instruct", // Llama 4 Maverick, MoE, function calling — fallback if Groq account still has access (deprecated Aug 2026)
   "llama-4-scout-17b-16e-instruct", // Llama 4 Scout, MoE, function calling — fallback (deprecated Aug 2026, may 404)
 ];
 
@@ -134,7 +135,10 @@ function getMaxAutoContinues(): number {
   return 2;
 }
 
-const COOLDOWN_MS = Number(process.env.AI_QUOTA_COOLDOWN_MS ?? 60_000);
+// v6.2 Part 19: COOLDOWN_MS was previously used for the cooldown log message
+// but the new isRetryableModelError catch block doesn't reference it. The
+// actual cooldown duration is managed by modelCooldown.ts's setCooldown()
+// function which has its own default (AI_QUOTA_COOLDOWN_MS env var, 60s).
 
 // v3.3: Per-model cooldown is now Redis-backed (see lib/modelCooldown.ts).
 // The isOnCooldown() and setCooldown() functions are imported from there.
@@ -578,6 +582,58 @@ function isQuotaExhaustedError(err: unknown): boolean {
   if (status === 429) return true;
   const msg = typeof e?.message === "string" ? e.message.toLowerCase() : "";
   if (/rate limit|quota|too many requests/i.test(msg)) return true;
+  // v6.2 Part 19: Groq's 413 TPM-exceeded error contains "rate_limit_exceeded"
+  // in the JSON body (as the `code` field) but NOT "rate limit" (with space)
+  // in the message text. The regex above misses it. Add the underscore form.
+  if (/rate_limit_exceeded/i.test(msg)) return true;
+  // The 413 message also says "tokens per minute" + "limit" — catch that too.
+  if (/tokens per minute.*limit/i.test(msg)) return true;
+  return false;
+}
+
+/**
+ * v6.2 Part 19 (Aug 19, 2026): checks whether an error is RETRYABLE —
+ * meaning the chain should try the NEXT model instead of rethrowing.
+ *
+ * Retryable errors:
+ *   - 429 (rate limit / quota exhausted) — handled by isQuotaExhaustedError
+ *   - 404 (model not found / deprecated) — the model is unavailable on this
+ *     Groq account, but the next model in the chain might work
+ *   - 413 (request too large / TPM exceeded) — this model's TPM limit is too
+ *     low for the request, but the next model (e.g. a smaller one) might have
+ *     a higher limit
+ *   - 503 (service unavailable) — temporary Groq-side issue
+ *   - 5xx (server errors) — temporary, might succeed on retry
+ *
+ * NON-retryable errors (rethrow to fail the request):
+ *   - 401/403 (auth/access) — account-wide, the next model won't help
+ *   - 400 (bad request) — malformed request, the next model won't help
+ *   - Other client errors (4xx except 404/413/429) — not model-specific
+ */
+function isRetryableModelError(err: unknown): boolean {
+  // 429 (quota) — always retryable
+  if (isQuotaExhaustedError(err)) return true;
+
+  const e = err as any;
+  const status = e?.status;
+  const msg = typeof e?.message === "string" ? e.message.toLowerCase() : "";
+
+  // 404 (model not found / deprecated) — retryable: next model might exist
+  if (status === 404) return true;
+  if (/does not exist|model_not_found|not found/i.test(msg)) return true;
+
+  // 413 (request too large / TPM exceeded) — retryable: smaller model might work
+  if (status === 413) return true;
+  if (/request too large|too large for model/i.test(msg)) return true;
+
+  // 503 (service unavailable) — retryable: temporary
+  if (status === 503) return true;
+  if (/service unavailable|overloaded/i.test(msg)) return true;
+
+  // 5xx (server errors) — retryable: temporary
+  if (typeof status === "number" && status >= 500) return true;
+
+  // Non-retryable: 401/403/400/other 4xx — account-wide or client error
   return false;
 }
 
@@ -1241,20 +1297,40 @@ export async function* streamGroqChat(
       const errorType = isQuotaExhaustedError(err) ? "429" : "other";
       await recordFailure("groq", modelName, errorType);
 
-      if (isQuotaExhaustedError(err)) {
-        await setCooldown("groq", modelName);
+      // v6.2 Part 19: check if the error is RETRYABLE (404 model not found,
+      // 413 TPM exceeded, 429 rate limit, 5xx server errors). If so, try
+      // the next model in the chain. If not (401/403/400), rethrow.
+      if (isRetryableModelError(err)) {
+        // For 429 (quota): set a cooldown so we don't retry this model
+        // immediately on the next request.
+        if (isQuotaExhaustedError(err)) {
+          await setCooldown("groq", modelName);
+        }
+        // For 404/413/5xx: DON'T set a cooldown (the model might work
+        // on the next request — e.g. Groq might re-enable it, or the
+        // request might be smaller). But DO clear the cached working
+        // model so the next request tries the chain from the top.
         const wasCached = _workingModel === modelName;
         if (wasCached) {
           _workingModel = null;
         }
+        const status = (err as any)?.status ?? "unknown";
+        const errType =
+          status === 404
+            ? "model not found (deprecated?)"
+            : status === 413
+              ? "request too large (TPM exceeded)"
+              : status === 429
+                ? "rate limited"
+                : `HTTP ${status}`;
         logger.warn(
-          { model: modelName, wasCached, cooldownMs: COOLDOWN_MS },
-          `Groq: model quota exhausted (429), ${wasCached ? "clearing cache + " : ""}on cooldown, trying next model`,
+          { model: modelName, status, wasCached, errType },
+          `Groq: ${errType} for model ${modelName}, ${wasCached ? "clearing cache + " : ""}trying next model in chain`,
         );
         continue;
       }
 
-      // Non-quota error — don't try other models, rethrow.
+      // Non-retryable error (401/403/400) — don't try other models, rethrow.
       throw err;
     }
   }

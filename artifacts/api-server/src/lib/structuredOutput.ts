@@ -88,6 +88,7 @@ const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
   "llama-4-scout-17b-16e-instruct",
   "llama-4-maverick-17b-128e-instruct",
   "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
   "llama-3.3-70b-versatile",
   "llama-3.1-8b-instant",
   "llama3-70b-8192",
