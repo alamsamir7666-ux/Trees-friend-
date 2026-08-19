@@ -109,11 +109,13 @@ AI's response to evaluate:
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 // Use GROQ_MODEL env var if set, otherwise default to the same model the chat
-// path uses. v6.2 Part 10 (Production fix): switched from the deprecated
-// llama-3.3-70b-versatile (decommissioned Aug 16, 2026) to llama-4-scout.
+// path uses. v6.2 Part 19 (Production fix Aug 19, 2026): switched from
+// llama-4-scout-17b-16e-instruct (deprecated Aug 2026 — Groq recommends
+// migrating to openai/gpt-oss-120b per https://console.groq.com/docs/deprecations)
+// to openai/gpt-oss-120b. Before that was llama-3.3-70b-versatile (deprecated June 17, 2026).
 // Both support json_schema per Groq's docs; we still implement a json_object
 // fallback below for forward-compat with future Groq model changes.
-const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-4-scout-17b-16e-instruct";
+const GROQ_MODEL = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
 const MAX_RESPONSE_CHARS = 2000;
 const MAX_QUESTION_CHARS = 500;
 const AI_TEMPERATURE = 0.1;

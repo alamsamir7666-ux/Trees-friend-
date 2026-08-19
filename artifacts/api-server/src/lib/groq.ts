@@ -18,20 +18,28 @@
  *   summarizeConversation(). This lets the provider router (aiRouter.ts)
  *   swap between them transparently.
  *
- * Model chain:
- *   - llama-4-scout-17b-16e-instruct — Llama 4 Scout, MoE (17B active / 109B total),
- *     supports function calling, 30 RPM free tier, 10M context. Best quality
- *     replacement for the deprecated llama-3.3-70b-versatile.
+ * Model chain (v6.2 Part 19, Aug 19, 2026 — reordered):
+ *   - openai/gpt-oss-120b — Groq's hosted GPT-OSS 120B. Groq's recommended
+ *     migration target for the deprecated Llama 4 Scout 17B (per
+ *     https://console.groq.com/docs/deprecations). Supports function calling
+ *     + json_schema. PRIMARY model in the chain.
  *   - llama-4-maverick-17b-128e-instruct — Llama 4 Maverick, MoE (17B active /
- *     400B total), supports function calling, 30 RPM free tier. Stronger than
- *     Scout for complex reasoning.
- *   - openai/gpt-oss-120b — Groq's hosted GPT-OSS 120B. Recommended by Groq
- *     as a migration target for some Llama 3.3 workloads.
+ *     400B total), supports function calling. Fallback if Groq account still
+ *     has access (deprecated Aug 2026 but may not be fully decommissioned yet).
+ *   - llama-4-scout-17b-16e-instruct — Llama 4 Scout, MoE (17B active / 109B total).
+ *     Fallback (deprecated Aug 2026 — may return 404 if user's Groq account
+ *     no longer has access).
  *
- * v6.2 Part 10 (Production fix): Groq deprecated llama-3.3-70b-versatile +
- * llama-3.1-8b-instant on June 17, 2026, with full decommission by August 16,
- * 2026. The old chain was returning 404 model_not_found errors in production.
- * Updated to the current Llama 4 family.
+ * v6.2 Part 10 (Production fix June 2026): Groq deprecated llama-3.3-70b-versatile
+ * + llama-3.1-8b-instant on June 17, 2026. The old chain returned 404
+ * model_not_found errors. Updated to the Llama 4 family.
+ * v6.2 Part 19 (Production fix Aug 2026): Groq ALSO deprecated the Llama 4
+ * family (llama-4-scout + llama-4-maverick). Production log showed:
+ *   "Groq API error 404: The model `llama-4-scout-17b-16e-instruct` does
+ *    not exist or you do not have access to it."
+ * The chain's fallback logic wasn't catching the 404 + the chat failed
+ * entirely. Reordered to put `openai/gpt-oss-120b` (Groq's recommended
+ * migration target) FIRST.
  *
  * Groq models are stable (no frequent deprecations like Gemini), so we
  * don't need model discovery. Just try them in order with 429 cooldown.
@@ -72,10 +80,25 @@ import { isToolName, type ToolName } from "./aiToolSchemas";
 //
 // Groq models are stable (unlike Gemini's frequent deprecations), so we
 // don't need ListModels discovery. Just try in order.
+//
+// v6.2 Part 19 (Aug 19, 2026): reordered the chain to put
+// `openai/gpt-oss-120b` FIRST. Per Groq's deprecation page
+// (https://console.groq.com/docs/deprecations), Groq is deprecating
+// the Llama 4 family (llama-4-scout-17b-16e-instruct +
+// llama-4-maverick-17b-128e-instruct) + recommends migrating to
+// `openai/gpt-oss-120b` (for Llama 4 Scout 17B). The user's production
+// log showed:
+//   "Groq API error 404: The model `llama-4-scout-17b-16e-instruct`
+//    does not exist or you do not have access to it."
+// The chain's fallback logic was NOT catching the 404 + trying the
+// next model — the 404 propagated up + the chat failed entirely.
+// Making `openai/gpt-oss-120b` the primary avoids this entirely.
+// The deprecated Llama 4 models stay in the chain as fallbacks (in
+// case some Groq accounts still have access OR Groq re-enables them).
 const GROQ_MODEL_CHAIN = [
-  "llama-4-scout-17b-16e-instruct", // Llama 4 Scout, MoE, function calling, 30 RPM
-  "llama-4-maverick-17b-128e-instruct", // Llama 4 Maverick, MoE, function calling, 30 RPM
-  "openai/gpt-oss-120b", // GPT-OSS 120B (Groq's hosted version)
+  "openai/gpt-oss-120b", // GPT-OSS 120B (Groq's hosted version) — recommended migration target for Llama 4 Scout
+  "llama-4-maverick-17b-128e-instruct", // Llama 4 Maverick, MoE, function calling — fallback if Groq account still has access
+  "llama-4-scout-17b-16e-instruct", // Llama 4 Scout, MoE, function calling — fallback (deprecated Aug 2026, may 404)
 ];
 
 // ─── Config ──────────────────────────────────────────────────────────────────

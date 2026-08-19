@@ -49,7 +49,7 @@ import {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-4-scout-17b-16e-instruct"; // v6.2 Part 10: was llama-3.1-8b-instant (deprecated Aug 16, 2026)
+const GROQ_MODEL = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b"; // v6.2 Part 19 (Aug 19, 2026): was llama-4-scout-17b-16e-instruct (deprecated Aug 2026 — Groq recommends migrating to openai/gpt-oss-120b per https://console.groq.com/docs/deprecations). Before that was llama-3.1-8b-instant (deprecated June 17, 2026).
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 // Use the discovered working Gemini model from the chat path. The previous
 // hardcoded `gemini-2.5-flash` returns 404 on new GCP projects (deprecated

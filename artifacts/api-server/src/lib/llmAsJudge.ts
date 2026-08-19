@@ -248,7 +248,7 @@ export async function judgeResponse(
   for (const provider of providers) {
     try {
       if (provider === "groq") {
-        const model = process.env.GROQ_MODEL ?? "llama-4-scout-17b-16e-instruct"; // v6.2 Part 10: was llama-3.3-70b-versatile (deprecated Aug 16, 2026)
+        const model = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b"; // v6.2 Part 19 (Aug 19, 2026): was llama-4-scout-17b-16e-instruct (deprecated Aug 2026 — Groq recommends migrating to openai/gpt-oss-120b). Before that was llama-3.3-70b-versatile (deprecated June 17, 2026).
         const score = await judgeWithGroq(question, response, model);
         logger.debug(
           { provider: "groq", model, overall: score.overall },
