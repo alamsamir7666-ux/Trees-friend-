@@ -1193,6 +1193,71 @@ export async function ensureAiTables(): Promise<void> {
       );
     }
 
+    // ─── v1.6.0: SINGULAR vs PLURAL INTENT ────────────────────────────────
+    // Adds the "SINGULAR vs PLURAL INTENT" block to the system prompt.
+    //
+    // Bug context: before this, when the user said "Show me most expensive
+    // mango grafted tree" (SINGULAR — they want ONE), the LLM correctly
+    // picked sort_by: "price_desc" but passed limit: 5 (default). The
+    // frontend then rendered 3 listing cards (৳1,100 + ৳450 + ৳200) even
+    // though the user wanted ONLY the ৳1,100 one.
+    //
+    // The fix: tell the LLM to pass limit: 1 when the user uses singular
+    // language ("the most expensive", "the cheapest", "the best", "the
+    // largest", "the highest-rated", "show me A [product]"). When the
+    // user uses plural language ("show me options", "what's available",
+    // plural nouns), keep the default limit: 5.
+    //
+    // Industry-standard pattern from ChatGPT Shopping, Perplexity, and
+    // Amazon Rufus — singular queries get ONE recommendation, plural
+    // queries get a list.
+    //
+    // When in doubt between singular + plural, default to PLURAL —
+    // showing 3 options when the user wanted 1 is mild over-delivery;
+    // showing 1 option when the user wanted options is under-delivery
+    // (worse — they have to re-ask).
+    //
+    // No code changes needed — the LLM already has the `limit` arg on
+    // search_seller_listings (max 8, default 5). This prompt change just
+    // tells the model when to use limit: 1.
+    //
+    // Seeded as INACTIVE — activate via POST /api/ai/admin/prompts/<id>/activate
+    // OR via SQL: UPDATE ai_prompt_versions SET is_active = (version = '1.6.0');
+    //
+    // Safe to activate immediately — no Parts 1-3 dependency (the limit
+    // arg has existed since v6.1 Part 2 of the original tool). The v1.6.0
+    // prompt is just an instruction addition; it doesn't require any new
+    // backend code.
+    try {
+      const { SYSTEM_PROMPT_TEMPLATE_V1 } = await import("./aiContext");
+      await pool.query(
+        `INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
+         SELECT $1, $2, $3, FALSE, $4
+         WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = $1)`,
+        [
+          "1.6.0",
+          SYSTEM_PROMPT_TEMPLATE_V1,
+          "v1.6.0: SINGULAR vs PLURAL INTENT. When the user uses singular " +
+            "language ('the most expensive', 'the cheapest', 'the best', " +
+            "'the largest', 'the highest-rated', 'show me A [product]'), " +
+            "the LLM now passes limit: 1 on search_seller_listings so only " +
+            "the top match is returned + rendered. Plural language keeps " +
+            "the default limit: 5. Pairs with v1.5.0's sort_by picker — " +
+            "singular + sort_by=maturity_desc returns exactly ONE most-" +
+            "mature listing. NO code changes — uses the existing limit " +
+            "arg. Industry-standard pattern from ChatGPT Shopping / " +
+            "Perplexity / Amazon Rufus. Safe to activate immediately.",
+          "system",
+        ],
+      );
+    } catch (seedErr) {
+      // Non-fatal.
+      logger.warn(
+        { err: seedErr },
+        "AI: failed to seed prompt v1.6.0 (admin can create manually via UI)",
+      );
+    }
+
     // ─── Phase 1: Knowledge Base seed data ────────────────────────────────
     // Seed one default creator ("Manual") + three root categories so the
     // admin UI has something to show on first load. Idempotent via
