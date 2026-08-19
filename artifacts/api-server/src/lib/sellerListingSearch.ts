@@ -224,6 +224,70 @@ export interface SellerListingSearchParams {
    */
   sortBy?: "price_asc" | "price_desc" | "maturity_desc" | "rating_desc";
   /**
+   * v1.8.0 (Part 17): DETERMINISTIC filter — exclude listings whose
+   * max height variant > max_height. Parsed via parseHeightToMaxValue()
+   * ("4-6 ft" → 6, "1-3 ft" → 3, "mature" → 999, etc.).
+   *
+   * Applied POST-SQL (in JS) because parsing the height string is JS-side.
+   * The SQL query returns all matching listings; this filter trims the
+   * list before ranking + truncation.
+   *
+   * Use case: "trees under 6 ft" / "compact mango for balcony".
+   */
+  maxHeight?: number;
+  /**
+   * v1.8.0 (Part 17): DETERMINISTIC filter — only include listings whose
+   * products.bloom_season contains this string (case-insensitive ILIKE).
+   * NULL bloom_season is EXCLUDED (conservative — if the variety has no
+   * recorded bloom season, we can't confirm it fruits in the requested
+   * season).
+   *
+   * Applied IN SQL (in the listing_variants CTE's WHERE clause) — joins
+   * to products.bloom_season which is already accessible.
+   *
+   * Use case: "fruits in winter" → bloom_season: "winter"
+   *            "fruits in summer" → bloom_season: "summer"
+   *            "fruits in December" → bloom_season: "Dec"
+   */
+  bloomSeason?: string;
+  /**
+   * v1.8.0 (Part 17): DETERMINISTIC filter — only include listings whose
+   * seller rating ≥ min_rating. Rating is computed from the reviews
+   * table (AVG of r.rating WHERE r.seller_listing_id = sl.id).
+   *
+   * Applied IN SQL (in the listing_variants CTE's WHERE clause as a
+   * subquery filter).
+   *
+   * Use case: "rated 4.5+" → min_rating: 4.5
+   *            "top-rated sellers" → min_rating: 4.0
+   */
+  minRating?: number;
+  /**
+   * v1.8.0 (Part 17): DETERMINISTIC filter — only include listings whose
+   * sl.delivery_time_days ≤ max_delivery_days. NULL delivery_time_days
+   * is EXCLUDED (conservative — if the seller didn't commit, we can't
+   * promise delivery within the window).
+   *
+   * Applied IN SQL (in the listing_variants CTE's WHERE clause).
+   *
+   * Use case: "delivered within 3 days" → max_delivery_days: 3
+   *            "fast delivery" → max_delivery_days: 5
+   */
+  maxDeliveryDays?: number;
+  /**
+   * v1.8.0 (Part 17): DETERMINISTIC filter — dedupe by productName.
+   * Returns only the highest-ranked listing per distinct productName
+   * value. Used when the user wants "different varieties" without
+   * padding with duplicates from the same seller.
+   *
+   * Applied POST-SQL (in JS) — after rankListings() runs (so we keep
+   * the top-ranked listing per productName), before truncation.
+   *
+   * Use case: "3 different grafted mango varieties" → distinct_products:
+   * true + limit: 5 (broader pool, then dedupe).
+   */
+  distinctProducts?: boolean;
+  /**
    * v6.1 Part 4: when true, the search ALSO fetches the top KB entry
    * (1 result, higher threshold 0.5, skip reranker for speed) and
    * includes it as `careSummary` in the result.
@@ -286,6 +350,24 @@ export async function searchSellerListings(
   // v6.2 Part 16: sort_by picked by the LLM based on the user's stated
   // preference. Undefined falls through to the legacy price_asc default.
   const sortBy = params.sortBy;
+  // v1.8.0 (Part 17): deterministic filters — picked by the LLM for
+  // hard constraints the v1.7.0 post-call checks would otherwise have
+  // to enforce. These compose with the existing SQL filters (max_price,
+  // form) + the post-SQL ranking (sort_by).
+  const maxHeight = params.maxHeight;
+  const bloomSeason =
+    typeof params.bloomSeason === "string" && params.bloomSeason.trim().length > 0
+      ? params.bloomSeason.trim().toLowerCase()
+      : null;
+  const minRating =
+    typeof params.minRating === "number" && params.minRating >= 0 && params.minRating <= 5
+      ? params.minRating
+      : null;
+  const maxDeliveryDays =
+    typeof params.maxDeliveryDays === "number" && params.maxDeliveryDays > 0
+      ? Math.floor(params.maxDeliveryDays)
+      : null;
+  const distinctProducts = params.distinctProducts === true;
 
   if (query.length === 0) {
     return {
@@ -338,6 +420,28 @@ export async function searchSellerListings(
   const formFilterClause =
     formFilter !== null ? `AND LOWER(slv.form) = '${formFilter.replace(/'/g, "''")}'` : "";
 
+  // v1.8.0 (Part 17): SQL-level deterministic filters. Applied in the
+  // listing_variants CTE's WHERE clause. NULL params skip the filter.
+  // bloom_season: filter on products.bloom_season (joined via cp).
+  // min_rating: filter on the seller's review-aggregate rating.
+  // max_delivery_days: filter on sl.delivery_time_days (conservative —
+  //   exclude NULL since the seller didn't commit).
+  //
+  // maxHeight + distinctProducts are post-SQL (parsing height is JS-side;
+  // dedup-by-productName needs the ranked order).
+  const bloomSeasonFilter =
+    bloomSeason !== null
+      ? `AND cp.product_bloom_season IS NOT NULL AND LOWER(cp.product_bloom_season) LIKE '%${bloomSeason.replace(/'/g, "''")}%'`
+      : "";
+  const minRatingFilter =
+    minRating !== null
+      ? `AND (SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.seller_listing_id = sl.id) >= ${minRating}`
+      : "";
+  const maxDeliveryDaysFilter =
+    maxDeliveryDays !== null
+      ? `AND sl.delivery_time_days IS NOT NULL AND sl.delivery_time_days <= ${maxDeliveryDays}`
+      : "";
+
   try {
     // Single big parameterized query — fetches all candidate rows
     // (product × listing × variant × seller × review aggregate) in one
@@ -356,6 +460,7 @@ export async function searchSellerListings(
         -- trigger (migration 0006) on title + description.
         SELECT p.id AS product_id, p.name AS product_name, p.slug AS product_slug,
                p.images AS product_images,
+               p.bloom_season AS product_bloom_season,
                ts_rank_cd(p.search_tsvector, websearch_to_tsquery('english', $1)) AS text_rank
         FROM products p
         WHERE p.deleted_at IS NULL
@@ -366,7 +471,8 @@ export async function searchSellerListings(
       listing_variants AS (
         -- JOIN candidate products → seller_listings → seller_listing_variants.
         -- Filtered to active listings + purchasable variants (in-stock or
-        -- pre-order) + optional price/form filters.
+        -- pre-order) + optional price/form/bloom_season/min_rating/
+        -- max_delivery_days filters.
         SELECT
           cp.product_id, cp.product_name, cp.product_slug, cp.product_images, cp.text_rank,
           sl.id AS listing_id, sl.seller_id, sl.delivery_time_days,
@@ -384,6 +490,9 @@ export async function searchSellerListings(
           AND ${VARIANT_FILTER}
           ${priceFilter}
           ${formFilterClause}
+          ${bloomSeasonFilter}
+          ${minRatingFilter}
+          ${maxDeliveryDaysFilter}
       )
       SELECT
         lv.*,
@@ -511,13 +620,34 @@ export async function searchSellerListings(
     // Rank listings (see module doc for the full algorithm).
     // v6.2 Part 16: pass sortBy through so the weight matrix picks the
     // right distribution (maturity_desc → maturity-first, etc.).
-    const ranked = rankListings(
+    let ranked = rankListings(
       Array.from(listingsMap.values()),
       listingTextRanks,
       formFilter,
       buyerDistrict,
       sortBy,
     );
+
+    // v1.8.0 (Part 17): post-SQL deterministic filters.
+    //   - maxHeight: filter by parsed variants[].height (JS-side parsing
+    //     via parseHeightToMaxValue). Applied AFTER ranking so the order
+    //     is preserved; the listings that don't match are dropped.
+    //   - distinctProducts: dedupe by productName, keep highest-ranked.
+    //     Applied AFTER ranking so we keep the best listing per variety.
+    // Both filters compose with the SQL-level filters (bloom_season,
+    // min_rating, max_delivery_days) — the SQL filters trim the candidate
+    // pool, these trim the ranked list.
+    if (maxHeight !== undefined && maxHeight !== null) {
+      ranked = ranked.filter((l) => computeMaxHeight(l) <= maxHeight);
+    }
+    if (distinctProducts) {
+      const seen = new Set<string>();
+      ranked = ranked.filter((l) => {
+        if (seen.has(l.productName)) return false;
+        seen.add(l.productName);
+        return true;
+      });
+    }
 
     // Truncate to `limit`.
     const truncated = ranked.slice(0, limit);

@@ -419,6 +419,58 @@ export const AI_TOOL_DECLARATIONS: FunctionDeclaration[] = [
             "frontend can render the matching summary card WITHOUT re-classifying\n" +
             "your intent — your sort_by choice is the single source of truth.",
         },
+        // v1.8.0 (Part 17): deterministic filter args. These let the LLM
+        // do DETERMINISTIC filtering in the SQL query (or post-SQL) instead
+        // of relying on the v1.7.0 post-call checks (which depend on the
+        // LLM correctly reading fields + only citing matches).
+        max_height: {
+          type: Type.NUMBER,
+          description:
+            "v1.8.0: filter — only include listings whose max height variant ≤ this " +
+            "value (in feet or meters, whichever unit the variants use). Parsed " +
+            "via parseHeightToMaxValue(): '4-6 ft' → 6, '1-3 ft' → 3, 'mature' → " +
+            "999 (always excluded by a finite max_height), 'sapling' → 1. Use for: " +
+            "'trees under 6 ft', 'compact mango for balcony', 'small mango tree'.",
+        },
+        bloom_season: {
+          type: Type.STRING,
+          description:
+            "v1.8.0: filter — only include listings whose products.bloom_season " +
+            "CONTAINS this string (case-insensitive ILIKE). NULL bloom_season is " +
+            "EXCLUDED (conservative — can't confirm it fruits in the requested " +
+            "season). Use for: 'fruits in winter' → 'winter', 'fruits in summer' → " +
+            "'summer', 'fruits in December' → 'Dec', 'fruits in March' → 'Mar'. " +
+            "Can also pass a month range like 'Jan-Mar' — the ILIKE will match " +
+            "products whose bloom_season contains that substring.",
+        },
+        min_rating: {
+          type: Type.NUMBER,
+          description:
+            "v1.8.0: filter — only include listings whose seller rating ≥ this " +
+            "value (0-5, rounded to 1 decimal). Use for: 'rated 4.5+' → 4.5, " +
+            "'top-rated sellers' → 4.0, 'highly reviewed' → 4.0. Listings with " +
+            "0 reviews (rating = 0) are excluded when this filter is set.",
+        },
+        max_delivery_days: {
+          type: Type.NUMBER,
+          description:
+            "v1.8.0: filter — only include listings whose seller-listing's " +
+            "delivery_time_days ≤ this value (positive integer). NULL " +
+            "delivery_time_days is EXCLUDED (conservative — if the seller " +
+            "didn't commit, we can't promise). Use for: 'delivered within 3 " +
+            "days' → 3, 'fast delivery' → 5, 'quick shipping' → 7.",
+        },
+        distinct_products: {
+          type: Type.BOOLEAN,
+          description:
+            "v1.8.0: filter — dedupe by productName, return only the highest-ranked " +
+            "listing per distinct productName value. Used when the user wants " +
+            "'different varieties' / 'distinct types' / 'compare varieties' — " +
+            "prevents padding with multiple listings of the same variety. " +
+            "Pairs with a BROADER limit (e.g. limit: 5 + distinct_products: true " +
+            "when the user asked for '3 different varieties') so the dedupe has " +
+            "a larger pool to draw from.",
+        },
       },
       required: ["query"],
     },
@@ -627,6 +679,13 @@ export async function executeTool(
           userDistrict: context?.userDistrict ?? null,
           careSummary: v.args.care_summary === true,
           sortBy: v.args.sort_by,
+          // v1.8.0 (Part 17): pass the 5 new deterministic filter args
+          // from the LLM-generated args to searchSellerListings.
+          maxHeight: v.args.max_height,
+          bloomSeason: v.args.bloom_season,
+          minRating: v.args.min_rating,
+          maxDeliveryDays: v.args.max_delivery_days,
+          distinctProducts: v.args.distinct_products,
         });
         break;
       }

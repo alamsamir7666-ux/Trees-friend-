@@ -520,3 +520,266 @@ describe("sort_by: end-to-end plumbing (v6.2 Part 16, source-shape)", () => {
     expect(returnSlice).toContain("sortBy,");
   });
 });
+
+// ─── v1.8.0 (Part 17): deterministic filter args tests ─────────────────────
+
+describe("v1.8.0: input args schema accepts the 5 new filter args", () => {
+  it("accepts max_height (positive number)", () => {
+    const parsed = searchSellerListingsArgsSchema.safeParse({
+      query: "mango",
+      max_height: 6,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.max_height).toBe(6);
+    }
+  });
+
+  it("rejects max_height <= 0 (must be positive)", () => {
+    const parsed = searchSellerListingsArgsSchema.safeParse({
+      query: "mango",
+      max_height: 0,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts bloom_season (non-empty string)", () => {
+    const parsed = searchSellerListingsArgsSchema.safeParse({
+      query: "mango",
+      bloom_season: "winter",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.bloom_season).toBe("winter");
+    }
+  });
+
+  it("rejects empty bloom_season", () => {
+    const parsed = searchSellerListingsArgsSchema.safeParse({
+      query: "mango",
+      bloom_season: "",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts min_rating (0-5 range)", () => {
+    for (const v of [0, 0.5, 1, 2.5, 4, 4.5, 5]) {
+      const parsed = searchSellerListingsArgsSchema.safeParse({
+        query: "mango",
+        min_rating: v,
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.min_rating).toBe(v);
+      }
+    }
+  });
+
+  it("rejects min_rating > 5 (out of range)", () => {
+    const parsed = searchSellerListingsArgsSchema.safeParse({
+      query: "mango",
+      min_rating: 5.5,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts max_delivery_days (positive integer)", () => {
+    const parsed = searchSellerListingsArgsSchema.safeParse({
+      query: "mango",
+      max_delivery_days: 3,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.max_delivery_days).toBe(3);
+    }
+  });
+
+  it("rejects max_delivery_days = 0 (must be positive)", () => {
+    const parsed = searchSellerListingsArgsSchema.safeParse({
+      query: "mango",
+      max_delivery_days: 0,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts distinct_products (boolean)", () => {
+    const parsed = searchSellerListingsArgsSchema.safeParse({
+      query: "mango",
+      distinct_products: true,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.distinct_products).toBe(true);
+    }
+  });
+
+  it("composes all 5 new args + the existing args (passthrough)", () => {
+    const parsed = searchSellerListingsArgsSchema.safeParse({
+      query: "grafted mango",
+      max_price: 500,
+      form: "grafted",
+      limit: 3,
+      sort_by: "maturity_desc",
+      max_height: 6,
+      bloom_season: "winter",
+      min_rating: 4.0,
+      max_delivery_days: 5,
+      distinct_products: true,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.max_height).toBe(6);
+      expect(parsed.data.bloom_season).toBe("winter");
+      expect(parsed.data.min_rating).toBe(4.0);
+      expect(parsed.data.max_delivery_days).toBe(5);
+      expect(parsed.data.distinct_products).toBe(true);
+    }
+  });
+});
+
+describe("v1.8.0: LLM-visible tool declaration includes the 5 new args", () => {
+  it("declares max_height as an optional NUMBER parameter", () => {
+    const tool = AI_TOOL_DECLARATIONS.find((t) => t.name === "search_seller_listings");
+    const props = tool!.parameters!.properties as Record<
+      string,
+      { type: string; description: string }
+    >;
+    expect(props.max_height).toBeDefined();
+    expect(props.max_height.type).toBe("NUMBER");
+    expect(props.max_height.description).toContain("max height variant");
+    expect(props.max_height.description).toContain("under 6 ft");
+  });
+
+  it("declares bloom_season as an optional STRING parameter", () => {
+    const tool = AI_TOOL_DECLARATIONS.find((t) => t.name === "search_seller_listings");
+    const props = tool!.parameters!.properties as Record<
+      string,
+      { type: string; description: string }
+    >;
+    expect(props.bloom_season).toBeDefined();
+    expect(props.bloom_season.type).toBe("STRING");
+    expect(props.bloom_season.description).toContain("fruits in winter");
+    expect(props.bloom_season.description).toContain("ILIKE");
+  });
+
+  it("declares min_rating as an optional NUMBER parameter", () => {
+    const tool = AI_TOOL_DECLARATIONS.find((t) => t.name === "search_seller_listings");
+    const props = tool!.parameters!.properties as Record<
+      string,
+      { type: string; description: string }
+    >;
+    expect(props.min_rating).toBeDefined();
+    expect(props.min_rating.type).toBe("NUMBER");
+    expect(props.min_rating.description).toContain("4.5+");
+  });
+
+  it("declares max_delivery_days as an optional NUMBER parameter", () => {
+    const tool = AI_TOOL_DECLARATIONS.find((t) => t.name === "search_seller_listings");
+    const props = tool!.parameters!.properties as Record<
+      string,
+      { type: string; description: string }
+    >;
+    expect(props.max_delivery_days).toBeDefined();
+    expect(props.max_delivery_days.type).toBe("NUMBER");
+    expect(props.max_delivery_days.description).toContain("delivered within 3");
+  });
+
+  it("declares distinct_products as an optional BOOLEAN parameter", () => {
+    const tool = AI_TOOL_DECLARATIONS.find((t) => t.name === "search_seller_listings");
+    const props = tool!.parameters!.properties as Record<
+      string,
+      { type: string; description: string }
+    >;
+    expect(props.distinct_products).toBeDefined();
+    expect(props.distinct_products.type).toBe("BOOLEAN");
+    expect(props.distinct_products.description).toContain("different varieties");
+  });
+
+  it("still only requires `query` (the 5 new args are all optional)", () => {
+    const tool = AI_TOOL_DECLARATIONS.find((t) => t.name === "search_seller_listings");
+    expect(tool!.parameters!.required).toEqual(["query"]);
+  });
+});
+
+describe("v1.8.0: SQL filter clauses + post-SQL filters (source-shape)", () => {
+  it("sellerListingSearch.ts builds bloomSeasonFilter when bloomSeason is set", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../src/lib/sellerListingSearch.ts"),
+      "utf8",
+    );
+    expect(source).toContain("bloomSeasonFilter");
+    expect(source).toContain("product_bloom_season IS NOT NULL");
+    expect(source).toContain("LIKE");
+  });
+
+  it("sellerListingSearch.ts builds minRatingFilter when minRating is set", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../src/lib/sellerListingSearch.ts"),
+      "utf8",
+    );
+    expect(source).toContain("minRatingFilter");
+    expect(source).toContain("AVG(r.rating)");
+  });
+
+  it("sellerListingSearch.ts builds maxDeliveryDaysFilter when maxDeliveryDays is set", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../src/lib/sellerListingSearch.ts"),
+      "utf8",
+    );
+    expect(source).toContain("maxDeliveryDaysFilter");
+    expect(source).toContain("sl.delivery_time_days IS NOT NULL");
+  });
+
+  it("sellerListingSearch.ts applies maxHeight post-SQL via computeMaxHeight", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../src/lib/sellerListingSearch.ts"),
+      "utf8",
+    );
+    expect(source).toContain("if (maxHeight !== undefined && maxHeight !== null)");
+    expect(source).toContain("computeMaxHeight(l) <= maxHeight");
+  });
+
+  it("sellerListingSearch.ts applies distinctProducts post-SQL via productName dedup", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../src/lib/sellerListingSearch.ts"),
+      "utf8",
+    );
+    expect(source).toContain("if (distinctProducts)");
+    expect(source).toContain("seen.has(l.productName)");
+  });
+
+  it("SQL query selects p.bloom_season AS product_bloom_season in candidate_products CTE", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../src/lib/sellerListingSearch.ts"),
+      "utf8",
+    );
+    expect(source).toContain("p.bloom_season AS product_bloom_season");
+  });
+
+  it("executeTool passes the 5 new args from v.args to searchSellerListings", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(path.resolve(__dirname, "../src/lib/aiTools.ts"), "utf8");
+    const caseIdx = source.indexOf('case "search_seller_listings"');
+    expect(caseIdx).toBeGreaterThan(-1);
+    const caseEnd = source.indexOf("break;", caseIdx);
+    const caseSlice = source.slice(caseIdx, caseEnd);
+    expect(caseSlice).toContain("maxHeight: v.args.max_height");
+    expect(caseSlice).toContain("bloomSeason: v.args.bloom_season");
+    expect(caseSlice).toContain("minRating: v.args.min_rating");
+    expect(caseSlice).toContain("maxDeliveryDays: v.args.max_delivery_days");
+    expect(caseSlice).toContain("distinctProducts: v.args.distinct_products");
+  });
+});

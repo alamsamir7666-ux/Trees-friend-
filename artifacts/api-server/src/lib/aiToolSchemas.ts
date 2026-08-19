@@ -198,6 +198,25 @@ export const searchKbArgsSchema = z
  *   - The chosen value is echoed back in the tool RESULT envelope (see
  *     listingSearchResultSchema below) so the frontend can render the
  *     matching FactCallout without re-classifying the user's intent.
+ *
+ * v6.2 Part 17 (v1.8.0 — deterministic filtering args):
+ *   - Added 5 new filter args so the LLM can do DETERMINISTIC filtering
+ *     instead of relying on the v1.7.0 post-call checks (which depend
+ *     on the LLM correctly reading fields + only citing matches).
+ *   - `max_height` (number): filter by variants[].height ≤ value. Parsed
+ *     via parseHeightToMaxValue() — "4-6 ft" → 6, "1-3 ft" → 3, etc.
+ *   - `bloom_season` (string): filter by products.bloom_season containing
+ *     the value (case-insensitive ILIKE). Use "winter", "summer", "Dec",
+ *     "Jan", etc.
+ *   - `min_rating` (number, 0-5): filter by seller rating ≥ value.
+ *   - `max_delivery_days` (number, positive int): filter by
+ *     sl.delivery_time_days ≤ value. NULL delivery_time_days is excluded
+ *     (conservative — if the seller didn't commit, we can't promise).
+ *   - `distinct_products` (boolean): dedupe by productName — return only
+ *     the highest-ranked listing per variety. Used when user wants
+ *     "different varieties" without padding with duplicates.
+ *   - These filters are applied IN ADDITION to the existing args (query,
+ *     max_price, form, sort_by, limit) — they compose.
  */
 export const searchSellerListingsArgsSchema = z
   .object({
@@ -214,6 +233,12 @@ export const searchSellerListingsArgsSchema = z
         "rating_desc", // highest seller rating first — "best quality", "top rated", "highest rated"
       ])
       .optional(),
+    // v1.8.0 deterministic filters
+    max_height: z.number().positive().optional(),
+    bloom_season: z.string().min(1).optional(),
+    min_rating: z.number().min(0).max(5).optional(),
+    max_delivery_days: z.number().int().positive().optional(),
+    distinct_products: z.boolean().optional(),
   })
   .passthrough();
 
