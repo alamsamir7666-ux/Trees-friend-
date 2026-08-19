@@ -564,7 +564,14 @@ export interface YoutubeSourceCreateResult {
   source: KbSource;
   /** Present only when the transcript was auto-fetched successfully. */
   transcript?: {
-    fetchedVia: "innertube-noauth" | "innertube-cookie" | "manual-fallback";
+    /**
+     * Which tier produced the transcript.
+     *   - `innertube-noauth`  — Tier 1: youtubei.js InnerTube API, no cookie
+     *   - `html-scrape`       — Tier 2: direct HTML scrape of /watch + timedtext
+     *   - `innertube-cookie`  — Tier 3: youtubei.js InnerTube API, with cookie
+     *   - `manual-fallback`   — Tier 4: metadata only, transcript empty
+     */
+    fetchedVia: "innertube-noauth" | "html-scrape" | "innertube-cookie" | "manual-fallback";
     segmentCount: number;
     detectedLanguage: string | null;
   };
@@ -597,6 +604,79 @@ export async function createKbSourceFromYoutube(
   });
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as YoutubeSourceCreateResult;
+}
+
+// ─── Upload .vtt/.srt file ──────────────────────────────────────────────────
+
+/**
+ * Input for the transcript-file upload route.
+ *
+ * The admin downloads a .vtt or .srt file from YouTube (via "Show transcript
+ * → 3-dot menu → Toggle timestamps → copy/paste", OR using a browser
+ * extension that exports captions), then uploads it. The server parses the
+ * structured format into plain text + creates a source row.
+ *
+ * `url` is optional but recommended — when provided, the server:
+ *   1. Dedups against existing sources (URL UNIQUE index)
+ *   2. Auto-fetches metadata via oEmbed (title, author, thumbnail) — no
+ *      auth, no bot detection, works from any IP
+ *
+ * If `url` is omitted, the filename is used as the title and "Unknown" as
+ * the author. The source still works fine for chunking + embedding.
+ */
+export interface TranscriptFileCreateInput {
+  /** Optional YouTube URL — for metadata enrichment + dedup. */
+  url?: string;
+  /** Original filename — used for format detection (.vtt vs .srt). */
+  filename: string;
+  /** The file's text contents (read via FileReader.readAsText in the UI). */
+  fileContent: string;
+  /** Optional creator ID. */
+  creatorId?: number | null;
+  /** Source language (defaults to "en"). */
+  sourceLanguage?: "en" | "bn" | "banglish";
+}
+
+/**
+ * Result of POST /api/ai/admin/kb/sources/transcript-file.
+ *
+ * Always returns a source + transcript info (the route either succeeds with
+ * 201, or fails with 4xx — there's no "manual fallback" path because the
+ * admin has already provided the transcript file directly).
+ */
+export interface TranscriptFileCreateResult {
+  source: KbSource;
+  transcript: {
+    /** Detected format ("vtt" or "srt"). */
+    format: "vtt" | "srt";
+    /** Number of cue blocks that contributed text. */
+    segmentCount: number;
+  };
+}
+
+/**
+ * Creates a KB source from an uploaded .vtt or .srt transcript file.
+ *
+ * This is the "third mode" of KB ingestion — used when the YouTube
+ * auto-fetcher fails (bot protection, age-restricted video, etc.). The
+ * admin downloads the transcript file manually and uploads it here.
+ *
+ * The server parses the structured format into plain text, then creates a
+ * `source_type = "youtube"` source row (so YouTube attribution is preserved
+ * if a URL was provided). The rest of the pipeline (chunk → embed →
+ * activate) is unchanged.
+ */
+export async function createKbSourceFromTranscriptFile(
+  apiFetch: ApiFetch,
+  input: TranscriptFileCreateInput,
+): Promise<TranscriptFileCreateResult> {
+  const res = await apiFetch("/api/ai/admin/kb/sources/transcript-file", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as TranscriptFileCreateResult;
 }
 
 export async function createKbEntriesBatch(

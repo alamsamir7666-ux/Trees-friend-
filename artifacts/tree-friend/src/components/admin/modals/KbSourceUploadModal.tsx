@@ -17,12 +17,21 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { AlertCircle, Youtube, Loader2, ExternalLink, CheckCircle2 } from "lucide-react";
+import {
+  AlertCircle,
+  Youtube,
+  Loader2,
+  ExternalLink,
+  CheckCircle2,
+  FileText,
+  Upload,
+} from "lucide-react";
 import { useApiFetch } from "@/lib/useApiFetch";
 import {
   createKbSource,
   createKbCreator,
   createKbSourceFromYoutube,
+  createKbSourceFromTranscriptFile,
   autoSlug,
   type KbCreator,
   type KbSource,
@@ -34,17 +43,21 @@ const RAW_TEXT_MAX = 100_000;
  * Upload mode — drives the form layout.
  *
  *   - "manual"     → the original flow: admin pastes raw text + fills metadata by hand
- *   - "youtube"    → the new auto-fetch flow: admin pastes a YouTube URL, the server
+ *   - "youtube"    → the auto-fetch flow: admin pastes a YouTube URL, the server
  *                    fetches title/channel/thumbnail (via oEmbed) + transcript (via
- *                    youtubei.js — InnerTube API). On bot-protection failure, the
- *                    server still creates a source row with metadata only and the
- *                    modal shows a "paste transcript manually" prompt.
+ *                    a 4-tier strategy: InnerTube → HTML scrape → InnerTube+cookie
+ *                    → manual fallback). On full failure, the modal shows a
+ *                    "upload .vtt/.srt file or paste manually" prompt.
+ *   - "file"       → the upload flow: admin downloads a .vtt or .srt file from
+ *                    YouTube (via "Show transcript" or a browser extension), then
+ *                    uploads it. The server parses the structured format into plain
+ *                    text. Used when auto-fetch fails (bot protection, age-restricted
+ *                    video, etc.).
  *
- * The YouTube mode is a strict superset of the manual mode (it just pre-fills
- * more fields), so the rest of the KB pipeline (chunk → entries → embeddings)
- * is unchanged.
+ * All three modes feed into the same chunk → entries → embeddings pipeline —
+ * they just differ in how the raw text gets into the source row.
  */
-type UploadMode = "manual" | "youtube";
+type UploadMode = "manual" | "youtube" | "file";
 
 /**
  * Source upload modal — Step 1 of the ingestion pipeline.
@@ -103,6 +116,19 @@ export function KbSourceUploadModal({
     thumbnailUrl: string | null;
   } | null>(null);
 
+  // File-upload mode state.
+  const [fileUrl, setFileUrl] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileContent, setFileContent] = useState("");
+  const [fileParseError, setFileParseError] = useState("");
+  const [fileResult, setFileResult] = useState<{
+    format: string;
+    segmentCount: number;
+  } | null>(null);
+
+  // Drag-and-drop highlight state.
+  const [dragOver, setDragOver] = useState(false);
+
   // Inline "create new creator" form.
   const [showNewCreator, setShowNewCreator] = useState(false);
   const [newCreatorName, setNewCreatorName] = useState("");
@@ -125,16 +151,22 @@ export function KbSourceUploadModal({
     setYoutubeUrl("");
     setYoutubeResult(null);
     setManualFallback(null);
+    setFileUrl("");
+    setSelectedFile(null);
+    setFileContent("");
+    setFileParseError("");
+    setFileResult(null);
+    setDragOver(false);
     setShowNewCreator(false);
     setNewCreatorName("");
     setNewCreatorSlug("");
     setNewCreatorSlugEdited(false);
   }, [open]);
 
-  // When the admin switches to YouTube mode, auto-set sourceType to "youtube"
-  // so the creator dropdown + dedup logic use the right context. When they
-  // switch back, restore "manual" (don't override if they had "blog" or
-  // "facebook" selected — only flip if it was "youtube").
+  // When the admin switches to YouTube mode or file-upload mode, auto-set
+  // sourceType to "youtube" so the creator dropdown + dedup logic use the
+  // right context. When they switch back, restore "manual" (don't override
+  // if they had "blog" or "facebook" selected — only flip if it was "youtube").
   //
   // We intentionally exclude `sourceType` from the deps array here: this
   // effect is a one-way sync FROM mode TO sourceType (when mode changes),
@@ -142,7 +174,7 @@ export function KbSourceUploadModal({
   // because we setSourceType() inside. The behavior is well-defined and
   // reviewed.
   useEffect(() => {
-    if (mode === "youtube") {
+    if (mode === "youtube" || mode === "file") {
       setSourceType("youtube");
     } else if (sourceType === "youtube") {
       setSourceType("manual");
@@ -150,6 +182,9 @@ export function KbSourceUploadModal({
     // Clear YouTube-specific state when switching modes.
     setYoutubeResult(null);
     setManualFallback(null);
+    // Clear file-upload-specific state when switching modes.
+    setFileResult(null);
+    setFileParseError("");
     setError("");
   }, [mode]);
 
@@ -182,6 +217,90 @@ export function KbSourceUploadModal({
       setError(err instanceof Error ? err.message : "Failed to create creator.");
     } finally {
       setCreatingCreator(false);
+    }
+  }
+
+  // ─── File-upload mode: file selection handler ───────────────────────────
+  // Reads the selected File via FileReader.readAsText + validates the
+  // extension. The actual parsing happens server-side.
+  function handleFileSelect(file: File | null) {
+    setFileParseError("");
+    setFileResult(null);
+
+    if (!file) {
+      setSelectedFile(null);
+      setFileContent("");
+      return;
+    }
+
+    // Validate extension.
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith(".vtt") && !lower.endsWith(".srt") && !lower.endsWith(".txt")) {
+      setFileParseError("File must be a .vtt, .srt, or .txt file.");
+      setSelectedFile(null);
+      setFileContent("");
+      return;
+    }
+
+    // Validate size (500KB cap — matches the server-side limit).
+    if (file.size > 500_000) {
+      setFileParseError(`File too large (${Math.round(file.size / 1000)}KB). Max 500KB.`);
+      setSelectedFile(null);
+      setFileContent("");
+      return;
+    }
+
+    setSelectedFile(file);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      setFileContent(result);
+    };
+    reader.onerror = () => {
+      setFileParseError("Failed to read the file. Try again.");
+      setSelectedFile(null);
+      setFileContent("");
+    };
+    reader.readAsText(file);
+  }
+
+  // ─── File-upload mode: submit handler ────────────────────────────────────
+  async function handleFileSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setFileResult(null);
+
+    if (!fileContent.trim()) {
+      setError("Please select a .vtt or .srt file first.");
+      return;
+    }
+    if (!selectedFile) {
+      setError("No file selected.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const result = await createKbSourceFromTranscriptFile(apiFetch, {
+        url: fileUrl.trim() || undefined,
+        filename: selectedFile.name,
+        fileContent,
+        creatorId: creatorId === "__none__" ? null : Number(creatorId),
+        sourceLanguage: sourceLanguage as "en" | "bn" | "banglish",
+      });
+      // Success — show the result briefly, then close + hand off to parent.
+      setFileResult({
+        format: result.transcript.format,
+        segmentCount: result.transcript.segmentCount,
+      });
+      setTimeout(() => {
+        onSourceCreated(result.source);
+        onOpenChange(false);
+      }, 800);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload transcript file.");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -363,11 +482,11 @@ export function KbSourceUploadModal({
         </DialogHeader>
 
         {/* Mode switcher (top of form, shared between modes) */}
-        <div className="flex gap-2 p-1 rounded-xl bg-muted/40">
+        <div className="flex gap-1 p-1 rounded-xl bg-muted/40">
           <button
             type="button"
             onClick={() => setMode("manual")}
-            className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition ${
+            className={`flex-1 px-2 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${
               mode === "manual"
                 ? "bg-background shadow-sm text-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -378,7 +497,7 @@ export function KbSourceUploadModal({
           <button
             type="button"
             onClick={() => setMode("youtube")}
-            className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition flex items-center justify-center gap-2 ${
+            className={`flex-1 px-2 py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center justify-center gap-1.5 ${
               mode === "youtube"
                 ? "bg-background shadow-sm text-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -386,6 +505,18 @@ export function KbSourceUploadModal({
           >
             <Youtube className="h-4 w-4" />
             YouTube URL
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("file")}
+            className={`flex-1 px-2 py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center justify-center gap-1.5 ${
+              mode === "file"
+                ? "bg-background shadow-sm text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Upload className="h-4 w-4" />
+            .vtt / .srt
           </button>
         </div>
 
@@ -468,15 +599,13 @@ export function KbSourceUploadModal({
                     <div className="text-[11px] mt-0.5 opacity-90">{manualFallback.reason}</div>
                   </div>
                 </div>
-                <div className="text-[12px] pl-6">
-                  <span className="opacity-80">
-                    The source was still created with the video's metadata saved.
-                  </span>
-                  <br />
-                  <span className="opacity-80">To complete it:</span>
-                  <ol className="list-decimal ml-4 mt-1 space-y-0.5">
+                <div className="text-[12px] pl-6 space-y-1">
+                  <div className="opacity-80 font-medium">
+                    Easier option — upload a transcript file:
+                  </div>
+                  <ol className="list-decimal ml-4 space-y-0.5 opacity-90">
                     <li>
-                      Open the video and copy the transcript:{" "}
+                      Open the video on YouTube:{" "}
                       <a
                         href={manualFallback.transcriptUrl}
                         target="_blank"
@@ -486,12 +615,25 @@ export function KbSourceUploadModal({
                         open on YouTube <ExternalLink className="h-3 w-3" />
                       </a>
                     </li>
-                    <li>Click "Create Source" below — the metadata will be saved.</li>
+                    <li>Click "Show transcript" below the description.</li>
                     <li>
-                      On the source detail page, click "Edit" and paste the transcript into the Raw
-                      Text field.
+                      Click the 3-dot menu in the transcript panel → toggle timestamps off → copy
+                      the text into a <code className="font-mono">.txt</code> file (or use a browser
+                      extension to download a <code className="font-mono">.vtt</code>/
+                      <code className="font-mono">.srt</code> file).
+                    </li>
+                    <li>
+                      Close this dialog → click "Upload KB Source" again → switch to{" "}
+                      <strong>Upload .vtt/.srt</strong> mode → upload the file.
                     </li>
                   </ol>
+                </div>
+                <div className="text-[12px] pl-6 opacity-80 border-t border-amber-200 dark:border-amber-800 pt-2 mt-2">
+                  <span className="opacity-80">
+                    The source was still created with the video's metadata saved — you can also just
+                    click "Create Source (metadata only)" below and edit it later to paste the
+                    transcript into the Raw Text field.
+                  </span>
                 </div>
               </div>
             )}
@@ -529,6 +671,198 @@ export function KbSourceUploadModal({
                   <>
                     <Youtube className="h-4 w-4 mr-2" />
                     Auto-fetch transcript
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        ) : mode === "file" ? (
+          // ─── File-upload mode (.vtt / .srt) ───
+          <form onSubmit={handleFileSubmit} className="space-y-4">
+            {/* Explanation banner */}
+            <div className="rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 px-3 py-2.5 text-xs text-blue-800 dark:text-blue-300 flex items-start gap-2">
+              <FileText className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-medium">When to use this mode</div>
+                <div className="opacity-90 mt-0.5">
+                  Use this when the YouTube auto-fetch fails (age-restricted video, aggressive bot
+                  protection, member-only content). Download the transcript file from YouTube ("Show
+                  transcript" → 3-dot menu → Toggle timestamps → copy into a .txt file, or use a
+                  browser extension that exports .vtt/.srt), then upload it here.
+                </div>
+              </div>
+            </div>
+
+            {/* YouTube URL (optional but recommended) */}
+            <div>
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                YouTube URL (optional — for metadata + dedup)
+              </Label>
+              <Input
+                value={fileUrl}
+                onChange={(e) => setFileUrl(e.target.value)}
+                className="mt-1.5 rounded-xl"
+                placeholder="https://youtube.com/watch?v=... — leave blank if you don't have it"
+                disabled={saving || !!fileResult}
+              />
+              <p className="text-[11px] text-muted-foreground/70 mt-1">
+                If provided, the server auto-fills the title, channel, and thumbnail from YouTube's
+                public oEmbed API (no auth needed, works from any IP). Used to dedup against
+                existing sources.
+              </p>
+            </div>
+
+            {/* Language picker */}
+            <div>
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Language
+              </Label>
+              <Select value={sourceLanguage} onValueChange={setSourceLanguage} disabled={saving}>
+                <SelectTrigger className="mt-1.5 rounded-xl">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="en">English</SelectItem>
+                  <SelectItem value="bn">Bengali (Unicode)</SelectItem>
+                  <SelectItem value="banglish">Banglish</SelectItem>
+                </SelectContent>
+              </Select>
+              {sourceLanguage !== "en" && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+                  AI chunking is English-only — you'll create entries manually for this language.
+                </p>
+              )}
+            </div>
+
+            {/* Creator picker (shared) */}
+            {renderCreatorPicker()}
+
+            {/* File drop zone */}
+            <div>
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Transcript file *
+              </Label>
+              <div
+                role="button"
+                tabIndex={0}
+                aria-label="Drop a .vtt or .srt file here, or press Enter to browse"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    if (saving || fileResult) return;
+                    const input = document.createElement("input");
+                    input.type = "file";
+                    input.accept = ".vtt,.srt,.txt";
+                    input.onchange = () => {
+                      const file = input.files?.[0];
+                      if (file) handleFileSelect(file);
+                    };
+                    input.click();
+                  }
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (!saving && !fileResult) setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  if (saving || fileResult) return;
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) handleFileSelect(file);
+                }}
+                className={`mt-1.5 rounded-xl border-2 border-dashed transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${
+                  dragOver
+                    ? "border-primary bg-primary/5"
+                    : selectedFile
+                      ? "border-green-400 dark:border-green-700 bg-green-50 dark:bg-green-950/20"
+                      : "border-muted-foreground/30 hover:border-muted-foreground/50"
+                }`}
+                onClick={() => {
+                  if (saving || fileResult) return;
+                  const input = document.createElement("input");
+                  input.type = "file";
+                  input.accept = ".vtt,.srt,.txt";
+                  input.onchange = () => {
+                    const file = input.files?.[0];
+                    if (file) handleFileSelect(file);
+                  };
+                  input.click();
+                }}
+              >
+                <div className="px-4 py-6 text-center">
+                  {selectedFile ? (
+                    <>
+                      <FileText className="h-8 w-8 mx-auto mb-2 text-green-600 dark:text-green-400" />
+                      <div className="text-sm font-medium text-foreground">{selectedFile.name}</div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5">
+                        {Math.round(selectedFile.size / 1000)}KB · click to choose a different file
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground/70" />
+                      <div className="text-sm font-medium text-foreground">
+                        Drop .vtt or .srt file here, or click to browse
+                      </div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5">
+                        Accepts .vtt, .srt, and .txt — max 500KB
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+              {fileParseError && (
+                <p className="text-xs text-destructive mt-1.5">{fileParseError}</p>
+              )}
+            </div>
+
+            {/* Success banner */}
+            {fileResult && (
+              <div className="rounded-xl bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 px-3 py-2.5 text-sm text-green-800 dark:text-green-300 flex items-start gap-2">
+                <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-medium">Transcript file parsed successfully</div>
+                  <div className="text-[11px] mt-0.5 opacity-90">
+                    {fileResult.segmentCount.toLocaleString()} segments · format:{" "}
+                    <code className="font-mono">{fileResult.format}</code>. Opening chunk review…
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="rounded-xl bg-destructive/10 border border-destructive/20 px-3 py-2 text-sm text-destructive flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={saving}
+                className="rounded-xl"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={saving || !selectedFile || !!fileResult}
+                className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground"
+              >
+                {saving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Uploading + parsing…
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4 mr-2" />
+                    Upload + create source
                   </>
                 )}
               </Button>

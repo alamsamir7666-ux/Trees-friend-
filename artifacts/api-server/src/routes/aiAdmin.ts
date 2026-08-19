@@ -89,9 +89,11 @@ import {
 } from "../lib/kbSources";
 import {
   fetchYoutubeTranscript,
+  fetchYoutubeMetadataOnly,
   parseYoutubeUrl,
   TRANSCRIPT_PLACEHOLDER_PREFIX,
 } from "../lib/youtubeTranscript";
+import { parseTranscriptFile } from "../lib/transcriptFileParser";
 import {
   listKbEntries,
   getKbEntry,
@@ -2211,9 +2213,17 @@ router.post(
     // Fetch transcript + metadata. This can take 2-5 seconds (two network
     // round-trips to YouTube + parsing). Never times out the request — the
     // admin UI shows a spinner.
+    //
+    // Pass the admin's chosen sourceLanguage through to the fetcher — Tier 2
+    // (HTML scrape) uses it to pick the right caption track when the video
+    // has multiple tracks (e.g. English + Bengali). Falls back to English →
+    // first track if not provided or no match.
     let fetchResult;
     try {
-      fetchResult = await fetchYoutubeTranscript(url);
+      fetchResult = await fetchYoutubeTranscript(
+        url,
+        typeof sourceLanguage === "string" ? sourceLanguage : null,
+      );
     } catch (err) {
       const msg = (err as Error)?.message ?? String(err);
       logger.error({ err, url }, "AI admin: YouTube fetch failed");
@@ -2348,6 +2358,278 @@ router.post(
         "AI admin: create YouTube KB source failed",
       );
       res.status(500).json({ error: "Failed to create YouTube KB source." });
+    }
+  },
+);
+
+// ─── POST /ai/admin/kb/sources/transcript-file ──────────────────────────────
+// Creates a KB source from an uploaded .vtt or .srt transcript file.
+//
+// This is the "third mode" of KB ingestion (alongside "manual paste" and
+// "YouTube URL auto-fetch"). It exists because the YouTube auto-fetcher has
+// 4 tiers but all of them can fail on:
+//   - Locked-down videos (age-restricted, region-locked, member-only)
+//   - Aggressive bot protection (rare but happens on some datacenter IPs)
+//   - Videos with no captions (lecture recordings, music videos)
+//
+// When auto-fetch fails, the admin can still download a .vtt/.srt file
+// manually (via YouTube's "Show transcript → 3-dot menu" or a browser
+// extension), then upload it here. We parse the structured format into plain
+// text and feed it into the same chunk → embed → activate pipeline.
+//
+// The route ALWAYS uses `source_type = "youtube"` (option (a) from the
+// design discussion) so the source still gets YouTube attribution — the
+// admin is expected to paste the YouTube URL too, which we use to:
+//   1. Dedup against existing sources (URL UNIQUE index)
+//   2. Auto-fetch metadata via oEmbed (title, author, thumbnail) — no auth,
+//      no bot detection, works from any IP
+//
+// If the admin doesn't have the YouTube URL (e.g. the file came from a
+// different source), they can leave it blank — we use the filename as the
+// title and skip the oEmbed call. The source still works fine, just without
+// the YouTube-specific thumbnail/channel link rendering in the UI.
+//
+// Reuses `youtubeFetchLimiter` (10/hour per admin) — same admin-only
+// workflow as the YouTube auto-fetch route.
+//
+// Request body (JSON — not multipart, since .vtt/.srt are plain text):
+//   {
+//     url?: string,           // optional YouTube URL for metadata + dedup
+//     filename: string,       // for format detection (.vtt vs .srt)
+//     fileContent: string,    // the file's text contents
+//     creatorId?: number | null,
+//     sourceLanguage?: "en" | "bn" | "banglish"
+//   }
+//
+// Response 201:
+//   { source: KbSource, transcript: { format: "vtt"|"srt", segmentCount: number } }
+//
+// Response 4xx:
+//   400 — missing filename or fileContent, or file too large (>500KB)
+//   422 — file is not a valid .vtt/.srt, or contains no readable text
+//   409 — a source with this YouTube URL already exists
+router.post(
+  "/ai/admin/kb/sources/transcript-file",
+  youtubeFetchLimiter,
+  async (req: Request, res: Response) => {
+    // Early body-size guard: reject requests with Content-Length > 600KB
+    // BEFORE JSON parsing wastes memory. The 500KB cap on fileContent is
+    // checked later, but a 100MB JSON body would still be parsed by Express
+    // before reaching the handler. This check prevents that.
+    // (Admin-only endpoint, but defense-in-depth — a compromised admin token
+    // shouldn't be able to OOM the server.)
+    const contentLengthHeader = req.headers["content-length"];
+    if (contentLengthHeader) {
+      const contentLength = Number(contentLengthHeader);
+      if (Number.isFinite(contentLength) && contentLength > 600_000) {
+        res.status(413).json({
+          error: `Request body too large (max 600KB, got ${Math.round(contentLength / 1000)}KB).`,
+        });
+        return;
+      }
+    }
+
+    const { url, filename, fileContent, creatorId, sourceLanguage } = (req.body ?? {}) as {
+      url?: string;
+      filename?: string;
+      fileContent?: string;
+      creatorId?: number | null;
+      sourceLanguage?: string;
+    };
+
+    // ─── Validate filename ───────────────────────────────────────────────
+    if (typeof filename !== "string" || filename.trim().length === 0) {
+      res.status(400).json({ error: "filename is required (for format detection)." });
+      return;
+    }
+    if (filename.length > 255) {
+      res.status(400).json({ error: "filename is too long (max 255 characters)." });
+      return;
+    }
+
+    // ─── Validate file content ───────────────────────────────────────────
+    if (typeof fileContent !== "string" || fileContent.trim().length === 0) {
+      res.status(400).json({ error: "fileContent is required (the file's text contents)." });
+      return;
+    }
+    // Cap at 500KB — a typical .vtt file is ~5KB/minute, so 500KB ≈ 100 minutes
+    // of dense speech. Larger files would be slow to parse + bloat the DB.
+    if (fileContent.length > 500_000) {
+      res
+        .status(400)
+        .json({ error: `File too large (max 500KB, got ${fileContent.length} chars).` });
+      return;
+    }
+
+    // ─── Validate URL (optional — for YouTube attribution + dedup) ────────
+    let videoId: string | null = null;
+    if (url && url.trim()) {
+      const parsed = parseYoutubeUrl(url);
+      if (!parsed) {
+        res.status(422).json({
+          error:
+            "Invalid YouTube URL. Expected youtube.com/watch?v=..., youtu.be/..., /embed/..., or /shorts/...",
+        });
+        return;
+      }
+      videoId = parsed.videoId;
+    }
+
+    // ─── Validate creatorId (optional) ───────────────────────────────────
+    let normalizedCreatorId: number | null = null;
+    if (creatorId !== undefined && creatorId !== null) {
+      normalizedCreatorId = Number(creatorId);
+      if (!Number.isInteger(normalizedCreatorId) || normalizedCreatorId <= 0) {
+        res.status(400).json({ error: "creatorId must be a positive integer or null." });
+        return;
+      }
+    }
+
+    // ─── Validate sourceLanguage (optional — defaults to "en") ──────────
+    if (
+      sourceLanguage !== undefined &&
+      sourceLanguage !== null &&
+      (typeof sourceLanguage !== "string" || !VALID_LANGUAGES.includes(sourceLanguage as never))
+    ) {
+      res.status(400).json({
+        error: `sourceLanguage must be one of: ${VALID_LANGUAGES.join(", ")}.`,
+      });
+      return;
+    }
+    const validatedLanguage = (sourceLanguage ?? "en") as string;
+
+    // ─── Parse the transcript file ──────────────────────────────────────
+    let parsed: ReturnType<typeof parseTranscriptFile>;
+    try {
+      parsed = parseTranscriptFile(filename, fileContent);
+    } catch (err) {
+      logger.error({ err, filename }, "AI admin: transcript file parse failed");
+      res.status(422).json({
+        error: `Failed to parse transcript file: ${(err as Error).message}`,
+      });
+      return;
+    }
+
+    if (!parsed.transcript.trim()) {
+      res.status(422).json({
+        error:
+          `Transcript file contained no readable text. ` +
+          `Detected format: ${parsed.format}. ` +
+          `Make sure the file is a valid .vtt or .srt file (downloaded from YouTube's ` +
+          `"Show transcript" menu, not the .mp4 video itself).`,
+      });
+      return;
+    }
+
+    // Truncate transcript if it exceeds RAW_TEXT_MAX_LENGTH (very long videos).
+    let rawText = parsed.transcript;
+    if (rawText.length > RAW_TEXT_MAX_LENGTH) {
+      rawText = rawText.slice(0, RAW_TEXT_MAX_LENGTH);
+      logger.warn(
+        { filename, originalLength: parsed.transcript.length, format: parsed.format },
+        "Transcript file: transcript truncated (exceeds RAW_TEXT_MAX_LENGTH)",
+      );
+    }
+
+    // ─── Build source metadata ───────────────────────────────────────────
+    // If we have a YouTube URL, fetch oEmbed metadata (title, author,
+    // thumbnail) — this is the same metadata-only path the auto-fetcher
+    // falls back to. It works from any IP, no auth, no bot detection.
+    let sourceTitle = filename.replace(/\.[^.]+$/, ""); // strip extension
+    const metadata: Record<string, unknown> = {
+      videoId: videoId ?? "unknown",
+      author: "Unknown",
+      authorUrl: null,
+      thumbnailUrl: null,
+      durationSeconds: null,
+      viewCount: null,
+      detectedLanguage: null,
+      fetchedVia: "file-upload",
+      fetchedAt: new Date().toISOString(),
+      // Track which format the file was in — useful for debugging parsing
+      // issues later (e.g. "this .srt file produced 0 segments").
+      fileFormat: parsed.format,
+    };
+
+    if (videoId) {
+      try {
+        const oembed = await fetchYoutubeMetadataOnly(videoId);
+        if (oembed) {
+          metadata.author = oembed.author;
+          metadata.authorUrl = oembed.authorUrl;
+          metadata.thumbnailUrl = oembed.thumbnailUrl;
+          if (oembed.title) {
+            sourceTitle = oembed.title;
+          }
+        }
+      } catch (err) {
+        // Non-fatal — metadata enrichment is best-effort. The source will
+        // still be created with the filename as the title + "Unknown" author.
+        logger.warn(
+          { err, videoId },
+          "AI admin: transcript-file route — oEmbed fetch failed (non-fatal)",
+        );
+      }
+    }
+
+    // Canonical URL for dedup (only set if we have a videoId).
+    const canonicalUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : null;
+
+    try {
+      const created = await createKbSource({
+        creatorId: normalizedCreatorId,
+        sourceType: "youtube",
+        sourceUrl: canonicalUrl,
+        sourceTitle,
+        sourceLanguage: validatedLanguage,
+        rawText,
+        rawMetadata: metadata,
+      });
+
+      if (!created) {
+        // Most common cause: duplicate source_url (admin already uploaded this video).
+        if (canonicalUrl) {
+          res.status(409).json({
+            error: "A KB source with this YouTube URL already exists.",
+          });
+        } else {
+          res.status(422).json({
+            error: "Failed to create KB source (validation error).",
+          });
+        }
+        return;
+      }
+
+      logger.info(
+        {
+          id: created.id,
+          videoId: videoId ?? null,
+          title: created.sourceTitle,
+          fileFormat: parsed.format,
+          segmentCount: parsed.segmentCount,
+          createdBy: req.dbUser?.email,
+        },
+        "AI admin: created KB source from transcript file upload",
+      );
+
+      // Invalidate caches (same as the YouTube auto-fetch route).
+      invalidateKbCache("source.create").catch((err) =>
+        logger.error(
+          { err, id: created.id },
+          "KB cache: invalidation failed after transcript-file upload",
+        ),
+      );
+
+      res.status(201).json({
+        source: created,
+        transcript: {
+          format: parsed.format,
+          segmentCount: parsed.segmentCount,
+        },
+      });
+    } catch (err) {
+      logger.error({ err, url, filename, videoId }, "AI admin: transcript-file upload failed");
+      res.status(500).json({ error: "Failed to create KB source from transcript file." });
     }
   },
 );
