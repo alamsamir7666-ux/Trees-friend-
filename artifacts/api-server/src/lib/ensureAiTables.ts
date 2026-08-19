@@ -1330,6 +1330,72 @@ export async function ensureAiTables(): Promise<void> {
       );
     }
 
+    // ─── v1.8.0: DETERMINISTIC FILTERING args ────────────────────────────
+    // Adds the "DETERMINISTIC FILTERING" block to the system prompt. Tells
+    // the LLM to use the 5 new tool args (max_height, bloom_season,
+    // min_rating, max_delivery_days, distinct_products) for DETERMINISTIC
+    // filtering instead of relying on the v1.7.0 post-call checks where
+    // possible.
+    //
+    // Pairs with Part 1 of v1.8.0 (commit 52a20b1) which added the 5 new
+    // args to the backend Zod schema + search implementation + LLM-visible
+    // tool declaration.
+    //
+    // After v1.8.0 is activated + the API server picks it up (cache TTL
+    // ~60s), the LLM starts passing the new args for hard constraints.
+    // The backend enforces them deterministically in SQL (bloom_season,
+    // min_rating, max_delivery_days) or post-SQL (max_height,
+    // distinct_products).
+    //
+    // The v1.7.0 post-call checks remain as a FALLBACK for hard constraints
+    // the tool doesn't have an explicit arg for (e.g. "seller in Cumilla"
+    // — soft filter via query, not a hard filter).
+    //
+    // Safe to activate immediately — Part 1 (commit 52a20b1) added the
+    // args to the running API server's code via the redeploy. The v1.8.0
+    // prompt is just an instruction addition that tells the LLM to use
+    // the new args.
+    //
+    // IMPORTANT: verify the API server has been redeployed with Part 1
+    // (commit 52a20b1) before activating v1.8.0. The old running server's
+    // tool declaration doesn't include the 5 new args, so the LLM can't
+    // pass them (the LLM follows the tool declaration, not the system
+    // prompt). Activating v1.8.0 before the redeploy would make the LLM
+    // try to call search_seller_listings(max_height=...) and get arg-
+    // validation drift (the old schema uses .passthrough() so it'd
+    // silently drop the arg). Result: the LLM text reply would promise
+    // "trees under 6 ft" but the backend wouldn't filter. BAD UX.
+    try {
+      const { SYSTEM_PROMPT_TEMPLATE_V1 } = await import("./aiContext");
+      await pool.query(
+        `INSERT INTO ai_prompt_versions (version, prompt_text, change_log, is_active, created_by)
+         SELECT $1, $2, $3, FALSE, $4
+         WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_versions WHERE version = $1)`,
+        [
+          "1.8.0",
+          SYSTEM_PROMPT_TEMPLATE_V1,
+          "v1.8.0: DETERMINISTIC FILTERING args. The LLM now uses the 5 " +
+            "new tool args (max_height, bloom_season, min_rating, " +
+            "max_delivery_days, distinct_products) for DETERMINISTIC " +
+            "filtering instead of relying on the v1.7.0 post-call checks " +
+            "where possible. The backend enforces them in SQL (bloom_" +
+            "season, min_rating, max_delivery_days) or post-SQL (max_" +
+            "height, distinct_products). The v1.7.0 post-call checks " +
+            "remain as a FALLBACK for hard constraints without an " +
+            "explicit arg. Pairs with Part 1 (commit 52a20b1) which " +
+            "added the args to the backend. ACTIVATE ONLY AFTER the " +
+            "API server is redeployed with Part 1.",
+          "system",
+        ],
+      );
+    } catch (seedErr) {
+      // Non-fatal.
+      logger.warn(
+        { err: seedErr },
+        "AI: failed to seed prompt v1.8.0 (admin can create manually via UI)",
+      );
+    }
+
     // ─── Phase 1: Knowledge Base seed data ────────────────────────────────
     // Seed one default creator ("Manual") + three root categories so the
     // admin UI has something to show on first load. Idempotent via
