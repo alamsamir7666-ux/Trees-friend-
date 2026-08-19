@@ -2213,17 +2213,9 @@ router.post(
     // Fetch transcript + metadata. This can take 2-5 seconds (two network
     // round-trips to YouTube + parsing). Never times out the request — the
     // admin UI shows a spinner.
-    //
-    // Pass the admin's chosen sourceLanguage through to the fetcher — Tier 2
-    // (HTML scrape) uses it to pick the right caption track when the video
-    // has multiple tracks (e.g. English + Bengali). Falls back to English →
-    // first track if not provided or no match.
     let fetchResult;
     try {
-      fetchResult = await fetchYoutubeTranscript(
-        url,
-        typeof sourceLanguage === "string" ? sourceLanguage : null,
-      );
+      fetchResult = await fetchYoutubeTranscript(url);
     } catch (err) {
       const msg = (err as Error)?.message ?? String(err);
       logger.error({ err, url }, "AI admin: YouTube fetch failed");

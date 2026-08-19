@@ -567,11 +567,10 @@ export interface YoutubeSourceCreateResult {
     /**
      * Which tier produced the transcript.
      *   - `innertube-noauth`  — Tier 1: youtubei.js InnerTube API, no cookie
-     *   - `html-scrape`       — Tier 2: direct HTML scrape of /watch + timedtext
-     *   - `innertube-cookie`  — Tier 3: youtubei.js InnerTube API, with cookie
-     *   - `manual-fallback`   — Tier 4: metadata only, transcript empty
+     *   - `innertube-cookie`  — Tier 2: youtubei.js InnerTube API, with cookie
+     *   - `manual-fallback`   — Tier 3: metadata only, transcript empty
      */
-    fetchedVia: "innertube-noauth" | "html-scrape" | "innertube-cookie" | "manual-fallback";
+    fetchedVia: "innertube-noauth" | "innertube-cookie" | "manual-fallback";
     segmentCount: number;
     detectedLanguage: string | null;
   };

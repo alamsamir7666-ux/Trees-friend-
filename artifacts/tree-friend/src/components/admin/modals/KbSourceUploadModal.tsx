@@ -44,9 +44,9 @@ const RAW_TEXT_MAX = 100_000;
  *
  *   - "manual"     → the original flow: admin pastes raw text + fills metadata by hand
  *   - "youtube"    → the auto-fetch flow: admin pastes a YouTube URL, the server
- *                    fetches title/channel/thumbnail (via oEmbed) + transcript (via
- *                    a 4-tier strategy: InnerTube → HTML scrape → InnerTube+cookie
- *                    → manual fallback). On full failure, the modal shows a
+ *                    fetches title/channel/thumbnail (via oEmbed) + transcript
+ *                    (via a 3-tier strategy: InnerTube → InnerTube+cookie →
+ *                    manual fallback). On full failure, the modal shows a
  *                    "upload .vtt/.srt file or paste manually" prompt.
  *   - "file"       → the upload flow: admin downloads a .vtt or .srt file from
  *                    YouTube (via "Show transcript" or a browser extension), then
