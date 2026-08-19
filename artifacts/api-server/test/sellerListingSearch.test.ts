@@ -783,3 +783,114 @@ describe("v1.8.0: SQL filter clauses + post-SQL filters (source-shape)", () => {
     expect(caseSlice).toContain("distinctProducts: v.args.distinct_products");
   });
 });
+
+// ─── v1.8.0 (Part 18): filtersApplied echo tests ──────────────────────────
+
+describe("v1.8.0 Part 18: listingSearchResultSchema accepts filtersApplied in the result envelope", () => {
+  it("accepts filtersApplied with all 8 fields", () => {
+    const parsed = listingSearchResultSchema.safeParse({
+      listings: [],
+      totalCount: 0,
+      query: "mango",
+      filtersApplied: {
+        max_price: 500,
+        form: "grafted",
+        limit: 3,
+        max_height: 6,
+        bloom_season: "winter",
+        min_rating: 4.0,
+        max_delivery_days: 5,
+        distinct_products: true,
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.filtersApplied).not.toBeNull();
+      expect(parsed.data.filtersApplied?.max_price).toBe(500);
+      expect(parsed.data.filtersApplied?.form).toBe("grafted");
+      expect(parsed.data.filtersApplied?.max_height).toBe(6);
+      expect(parsed.data.filtersApplied?.distinct_products).toBe(true);
+    }
+  });
+
+  it("accepts filtersApplied: null (no filters applied)", () => {
+    const parsed = listingSearchResultSchema.safeParse({
+      listings: [],
+      totalCount: 0,
+      query: "mango",
+      filtersApplied: null,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.filtersApplied).toBeNull();
+    }
+  });
+
+  it("accepts filtersApplied absent (undefined — pre-Part-18 backward compat)", () => {
+    const parsed = listingSearchResultSchema.safeParse({
+      listings: [],
+      totalCount: 0,
+      query: "mango",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.filtersApplied).toBeUndefined();
+    }
+  });
+
+  it("accepts filtersApplied with a single field (e.g. only max_height)", () => {
+    const parsed = listingSearchResultSchema.safeParse({
+      listings: [],
+      totalCount: 0,
+      query: "mango",
+      filtersApplied: { max_height: 6 },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.filtersApplied?.max_height).toBe(6);
+      expect(parsed.data.filtersApplied?.max_price).toBeUndefined();
+    }
+  });
+});
+
+describe("v1.8.0 Part 18: searchSellerListings echoes filtersApplied (source-shape)", () => {
+  it("sellerListingSearch.ts has a buildFiltersApplied function", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../src/lib/sellerListingSearch.ts"),
+      "utf8",
+    );
+    expect(source).toContain("function buildFiltersApplied");
+    expect(source).toContain("filtersApplied: buildFiltersApplied");
+  });
+
+  it("buildFiltersApplied returns null when no filters were applied", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../src/lib/sellerListingSearch.ts"),
+      "utf8",
+    );
+    // The function returns null when Object.keys(result).length === 0
+    expect(source).toContain("Object.keys(result).length > 0 ? result : null");
+  });
+
+  it("buildFiltersApplied echoes each of the 8 filter fields", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../src/lib/sellerListingSearch.ts"),
+      "utf8",
+    );
+    // All 8 fields must be checked + echoed
+    expect(source).toContain("result.max_price = maxPrice");
+    expect(source).toContain("result.form = formFilter");
+    expect(source).toContain("result.limit = limit");
+    expect(source).toContain("result.max_height = params.maxHeight");
+    expect(source).toContain("result.bloom_season");
+    expect(source).toContain("result.min_rating");
+    expect(source).toContain("result.max_delivery_days");
+    expect(source).toContain("result.distinct_products = true");
+  });
+});

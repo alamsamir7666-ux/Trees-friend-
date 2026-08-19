@@ -430,6 +430,28 @@ export const listingSearchResultSchema = z
     // args). The OUTPUT schema uses camelCase to match the JS object
     // the search function actually returns.
     sortBy: z.enum(["price_asc", "price_desc", "maturity_desc", "rating_desc"]).optional(),
+    // v1.8.0 (Part 18): echoes back the applied filter args so the
+    // frontend FactCallout can render "Filtered by: <list>". NULL when
+    // no filters were applied. Field name is camelCase `filtersApplied`
+    // to match `sortBy` + every other field in this schema.
+    //
+    // The object includes the existing hard-filter args (max_price, form,
+    // limit) + the 5 new v1.8.0 args (max_height, bloom_season, min_rating,
+    // max_delivery_days, distinct_products). Only the args the LLM
+    // explicitly passed are included — undefined args are omitted.
+    filtersApplied: z
+      .object({
+        max_price: z.number().optional(),
+        form: z.string().optional(),
+        limit: z.number().optional(),
+        max_height: z.number().optional(),
+        bloom_season: z.string().optional(),
+        min_rating: z.number().optional(),
+        max_delivery_days: z.number().optional(),
+        distinct_products: z.boolean().optional(),
+      })
+      .nullable()
+      .optional(),
     error: z.string().optional(),
   })
   .passthrough();

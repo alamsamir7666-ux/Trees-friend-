@@ -227,6 +227,24 @@ export const listingSearchResultSchema = z
     // snake_case (sort_by), but the OUTPUT result envelope uses camelCase
     // to match the JS object that flows through the SSE pipe.
     sortBy: z.enum(["price_asc", "price_desc", "maturity_desc", "rating_desc"]).optional(),
+    // v1.8.0 (Part 18): echoes back the applied filter args so the
+    // frontend FactCallout can append "Filtered by: <list>" to the
+    // callout text. NULL when no filters were applied (the FactCallout
+    // skips the suffix). Field name is camelCase `filtersApplied` to
+    // match `sortBy`.
+    filtersApplied: z
+      .object({
+        max_price: z.number().optional(),
+        form: z.string().optional(),
+        limit: z.number().optional(),
+        max_height: z.number().optional(),
+        bloom_season: z.string().optional(),
+        min_rating: z.number().optional(),
+        max_delivery_days: z.number().optional(),
+        distinct_products: z.boolean().optional(),
+      })
+      .nullable()
+      .optional(),
     error: z.string().optional(),
   })
   .passthrough();

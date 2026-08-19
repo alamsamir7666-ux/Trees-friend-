@@ -156,6 +156,31 @@ export interface SellerListingSearchResult {
    */
   sortBy?: "price_asc" | "price_desc" | "maturity_desc" | "rating_desc";
   /**
+   * v1.8.0 (Part 17/18): echoes back the deterministic filter args the
+   * LLM passed (max_height, bloom_season, min_rating, max_delivery_days,
+   * distinct_products) + the existing hard-filter args (max_price, form,
+   * limit) for completeness. NULL when no filters were applied.
+   *
+   * The frontend FactCallout reads this to append a "Filtered by: <list>"
+   * suffix to the callout text — industry-standard "filter chips"
+   * pattern from ChatGPT Shopping + Perplexity.
+   *
+   * Only includes the args the LLM explicitly passed — undefined args
+   * are omitted from the object (not set to undefined). This keeps the
+   * object small + lets the frontend iterate only over the applied
+   * filters.
+   */
+  filtersApplied?: {
+    max_price?: number;
+    form?: string;
+    limit?: number;
+    max_height?: number;
+    bloom_season?: string;
+    min_rating?: number;
+    max_delivery_days?: number;
+    distinct_products?: boolean;
+  } | null;
+  /**
    * v6.1 Part 4: 1-line KB care summary, included when careSummary=true
    * was passed to the search params. Null when:
    *   - careSummary was not requested (PURCHASE intent — no need).
@@ -313,6 +338,49 @@ export interface SellerListingSearchParams {
    * appropriate. We're trading recall for precision + speed.
    */
   careSummary?: boolean;
+}
+
+// ─── v1.8.0 (Part 18): build the filtersApplied echo object ────────────────
+//
+// Returns the object that gets echoed back in the result envelope so the
+// frontend FactCallout can render "Filtered by: <list>". Only includes
+// the args the LLM EXPLICITLY passed — undefined args are omitted from
+// the object (not set to undefined). Returns null when NO filters were
+// applied (the frontend FactCallout skips the "Filtered by" suffix).
+//
+// The `validated` args (maxPrice, formFilter, limit) are passed in
+// because the function `searchSellerListings` already validated them
+// at the top (maxPrice is null or a number > 0; formFilter is null or
+// a lowercased string; limit is the clamped value). We use these
+// validated values, not the raw params, to avoid echoing invalid args.
+function buildFiltersApplied(
+  params: SellerListingSearchParams,
+  maxPrice: number | null,
+  formFilter: string | null,
+  limit: number,
+): Exclude<SellerListingSearchResult["filtersApplied"], null | undefined> | null {
+  const result: NonNullable<
+    Exclude<SellerListingSearchResult["filtersApplied"], null | undefined>
+  > = {};
+  if (maxPrice !== null) result.max_price = maxPrice;
+  if (formFilter !== null) result.form = formFilter;
+  // Echo limit only if it differs from the default (DEFAULT_LIMIT = 5).
+  // If the LLM didn't pass limit, the validated `limit` is the default —
+  // we don't echo it (the frontend treats undefined as default).
+  if (params.limit !== undefined && limit !== DEFAULT_LIMIT) result.limit = limit;
+  if (params.maxHeight !== undefined && params.maxHeight > 0) result.max_height = params.maxHeight;
+  if (typeof params.bloomSeason === "string" && params.bloomSeason.trim().length > 0) {
+    result.bloom_season = params.bloomSeason.trim().toLowerCase();
+  }
+  if (typeof params.minRating === "number" && params.minRating >= 0 && params.minRating <= 5) {
+    result.min_rating = params.minRating;
+  }
+  if (typeof params.maxDeliveryDays === "number" && params.maxDeliveryDays > 0) {
+    result.max_delivery_days = Math.floor(params.maxDeliveryDays);
+  }
+  if (params.distinctProducts === true) result.distinct_products = true;
+  // Return null when no filters applied (saves the frontend an Object.keys check).
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 /**
@@ -729,6 +797,11 @@ export async function searchSellerListings(
       // render the matching summary (e.g. maturity_desc → "Most mature: ...")
       // WITHOUT re-classifying the user's intent via keyword matching.
       sortBy,
+      // v1.8.0 (Part 17/18): echo filtersApplied back so the frontend
+      // FactCallout can append "Filtered by: <list>" to the callout.
+      // Industry-standard "filter chips" pattern from ChatGPT Shopping +
+      // Perplexity. Only includes args the LLM explicitly passed.
+      filtersApplied: buildFiltersApplied(params, maxPrice, formFilter, limit),
       careSummary,
     };
   } catch (err) {

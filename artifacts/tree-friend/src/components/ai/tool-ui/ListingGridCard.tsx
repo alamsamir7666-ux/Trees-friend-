@@ -87,6 +87,10 @@ function formatPrice(price: number | null): string {
 // recommendation (not just a count) — the industry-standard pattern
 // from ChatGPT Shopping / Perplexity / Amazon Rufus.
 //
+// v1.8.0 (Part 18): when `filtersApplied` is non-null, appends a
+// "Filtered by: <list>" suffix to the callout text. Industry-standard
+// "filter chips" pattern from ChatGPT Shopping + Perplexity.
+//
 // Fallback: when sortBy is undefined (LLM didn't pass it), defaults to
 // the legacy "Found N listings, starting at ৳X" summary.
 function pickListingCallout(
@@ -95,11 +99,16 @@ function pickListingCallout(
   totalCount: number | undefined,
   minPrice: number | null | undefined,
   buyerDistrict: string | null | undefined,
+  filtersApplied: ListingSearchResult["filtersApplied"] | undefined,
 ): { icon: typeof Search; text: string } | null {
   if (listings.length === 0) return null;
   const count = totalCount ?? listings.length;
   const near = buyerDistrict ? ` near ${buyerDistrict}` : "";
   const countText = `${count} listing${count === 1 ? "" : "s"}${near}`;
+
+  // v1.8.0 (Part 18): build the "Filtered by: <list>" suffix once +
+  // append to whichever callout text the sortBy branch picks.
+  const filtersSuffix = formatFiltersApplied(filtersApplied);
 
   // LLM chose maturity_desc → surface the most mature listing.
   // Uses pickLargestListing (parses height variants like "4-6 ft" → 6).
@@ -108,13 +117,13 @@ function pickListingCallout(
     if (mostMature && mostMature.minPrice != null) {
       return {
         icon: TreePine,
-        text: `Most mature: ${mostMature.productName} from ${mostMature.sellerName}, ৳${mostMature.minPrice.toLocaleString()}. ${countText}.`,
+        text: `Most mature: ${mostMature.productName} from ${mostMature.sellerName}, ৳${mostMature.minPrice.toLocaleString()}. ${countText}.${filtersSuffix}`,
       };
     }
     if (mostMature) {
       return {
         icon: TreePine,
-        text: `Most mature: ${mostMature.productName} from ${mostMature.sellerName}. ${countText}.`,
+        text: `Most mature: ${mostMature.productName} from ${mostMature.sellerName}. ${countText}.${filtersSuffix}`,
       };
     }
   }
@@ -126,7 +135,7 @@ function pickListingCallout(
     if (topRated) {
       return {
         icon: Star,
-        text: `Top-rated: ${topRated.sellerName} (${topRated.rating}★). ${countText}.`,
+        text: `Top-rated: ${topRated.sellerName} (${topRated.rating}★). ${countText}.${filtersSuffix}`,
       };
     }
   }
@@ -138,13 +147,13 @@ function pickListingCallout(
     if (priciest && priciest.minPrice != null) {
       return {
         icon: Crown,
-        text: `Most premium: ${priciest.productName} from ${priciest.sellerName}, ৳${priciest.minPrice.toLocaleString()}. ${countText}.`,
+        text: `Most premium: ${priciest.productName} from ${priciest.sellerName}, ৳${priciest.minPrice.toLocaleString()}. ${countText}.${filtersSuffix}`,
       };
     }
     if (priciest) {
       return {
         icon: Crown,
-        text: `Most premium: ${priciest.productName} from ${priciest.sellerName}. ${countText}.`,
+        text: `Most premium: ${priciest.productName} from ${priciest.sellerName}. ${countText}.${filtersSuffix}`,
       };
     }
   }
@@ -154,13 +163,48 @@ function pickListingCallout(
   if (minPrice != null) {
     return {
       icon: Search,
-      text: `Found ${countText}, starting at ৳${minPrice.toLocaleString()}.`,
+      text: `Found ${countText}, starting at ৳${minPrice.toLocaleString()}.${filtersSuffix}`,
     };
   }
   return {
     icon: Search,
-    text: `Found ${countText}.`,
+    text: `Found ${countText}.${filtersSuffix}`,
   };
+}
+
+// ─── v1.8.0 (Part 18): format the filtersApplied object as a human-readable string ──
+//
+// Returns the " Filtered by: <list>" suffix (with leading space + trailing
+// period) when filtersApplied has at least one field. Returns "" when
+// filtersApplied is null/undefined or has no fields (the callout text is
+// unchanged — no suffix).
+//
+// Field formatting:
+//   max_price       → "price ≤ ৳X"
+//   form            → "form: X"
+//   limit           → "top N" (when limit < 5; the count is already in the main text)
+//   max_height      → "height ≤ X ft"
+//   bloom_season    → "fruits in X"
+//   min_rating      → "rating ≥ X"
+//   max_delivery_days → "delivery ≤ X days"
+//   distinct_products → "distinct varieties only"
+//
+// Order: matches the field order in the schema (max_price, form, limit,
+// max_height, bloom_season, min_rating, max_delivery_days, distinct_products).
+function formatFiltersApplied(filters: ListingSearchResult["filtersApplied"]): string {
+  if (!filters || typeof filters !== "object") return "";
+  const parts: string[] = [];
+  if (typeof filters.max_price === "number")
+    parts.push(`price ≤ ৳${filters.max_price.toLocaleString()}`);
+  if (typeof filters.form === "string") parts.push(`form: ${filters.form}`);
+  if (typeof filters.limit === "number" && filters.limit < 5) parts.push(`top ${filters.limit}`);
+  if (typeof filters.max_height === "number") parts.push(`height ≤ ${filters.max_height} ft`);
+  if (typeof filters.bloom_season === "string") parts.push(`fruits in ${filters.bloom_season}`);
+  if (typeof filters.min_rating === "number") parts.push(`rating ≥ ${filters.min_rating}`);
+  if (typeof filters.max_delivery_days === "number")
+    parts.push(`delivery ≤ ${filters.max_delivery_days} days`);
+  if (filters.distinct_products === true) parts.push("distinct varieties only");
+  return parts.length > 0 ? ` Filtered by: ${parts.join(", ")}.` : "";
 }
 
 function formatStock(listing: ListingData): string {
@@ -605,6 +649,8 @@ export const ListingGridCard = memo(function ListingGridCard({
   // Reads `sortBy` from the tool result envelope (echoed back from the
   // LLM's sort_by arg) — NO keyword matching on the user's question.
   // Single source of truth: the LLM's decision.
+  // v1.8.0 (Part 18): also reads `filtersApplied` to append the
+  // "Filtered by: <list>" suffix.
   const allMinPrices =
     result?.listings?.map((l) => l.minPrice).filter((p): p is number => p != null) ?? [];
   const overallMinPrice = allMinPrices.length > 0 ? Math.min(...allMinPrices) : null;
@@ -616,6 +662,7 @@ export const ListingGridCard = memo(function ListingGridCard({
           result?.totalCount,
           overallMinPrice,
           result?.buyerDistrict,
+          result?.filtersApplied,
         )
       : null;
 
