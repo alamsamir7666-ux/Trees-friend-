@@ -75,13 +75,9 @@ const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 // Ensure the AI_SESSION_SECRET is set (required by sessionToken.ts which is
 // transitively imported). setupEnv.ts handles this for the rest of the suite.
-process.env.AI_SESSION_SECRET ??=
-  "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
+process.env.AI_SESSION_SECRET ??= "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
 
-const aiRouteSource = fs.readFileSync(
-  `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-  "utf8",
-);
+const aiRouteSource = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
 
 describe("Bug #7 fix: findOrCreateSession no longer backfills user_id", () => {
   it("findOrCreateSession does NOT contain an UPDATE ... SET user_id statement", () => {
@@ -90,25 +86,81 @@ describe("Bug #7 fix: findOrCreateSession no longer backfills user_id", () => {
     // backfill hijack vector. After the fix, findOrCreateSession only does
     // SELECT + INSERT — no UPDATE at all.
     //
+    // P1 #7 fix: findOrCreateSession now uses `INSERT ... ON CONFLICT DO UPDATE
+    // SET session_token = EXCLUDED.session_token RETURNING *` (a single
+    // upsert query). The `DO UPDATE` is a TRUE NO-OP — it sets session_token
+    // to itself (a self-assignment), never touching user_id. This is the
+    // canonical PostgreSQL upsert pattern + is safe.
+    //
     // We extract just the findOrCreateSession function body to check.
-    const fnMatch = aiRouteSource.match(
-      /async function findOrCreateSession\([\s\S]*?\n\}/,
-    );
+    const fnMatch = aiRouteSource.match(/async function findOrCreateSession\([\s\S]*?\n\}/);
     expect(fnMatch).not.toBeNull();
     const fnBody = fnMatch![0];
+    // The hijack vector: `UPDATE ai_chat_sessions SET user_id` (standalone
+    // UPDATE statement that backfills user_id). Must NOT appear.
     expect(fnBody).not.toMatch(/UPDATE\s+ai_chat_sessions\s+SET\s+user_id/i);
   });
 
-  it("findOrCreateSession only does SELECT + INSERT (no UPDATE)", () => {
-    const fnMatch = aiRouteSource.match(
-      /async function findOrCreateSession\([\s\S]*?\n\}/,
-    );
+  it("findOrCreateSession does NOT have a standalone UPDATE statement (only ON CONFLICT DO UPDATE)", () => {
+    // P1 #7 fix: the only UPDATE in findOrCreateSession is the `ON CONFLICT
+    // DO UPDATE` clause (a no-op self-assignment). A standalone `UPDATE
+    // ai_chat_sessions SET ...` statement (without ON CONFLICT) would be
+    // the hijack vector — must NOT appear.
+    const fnMatch = aiRouteSource.match(/async function findOrCreateSession\([\s\S]*?\n\}/);
     expect(fnMatch).not.toBeNull();
     const fnBody = fnMatch![0];
-    // Should have SELECT and INSERT, but NOT UPDATE.
-    expect(fnBody).toMatch(/SELECT/i);
+    // Should have INSERT (the upsert pattern).
     expect(fnBody).toMatch(/INSERT INTO ai_chat_sessions/i);
-    expect(fnBody).not.toMatch(/UPDATE/i);
+    // The ON CONFLICT DO UPDATE clause is allowed (it's a no-op self-assignment).
+    expect(fnBody).toMatch(/ON CONFLICT.*DO UPDATE/i);
+    // A STANDALONE `UPDATE ai_chat_sessions SET` (without ON CONFLICT before
+    // it) is the hijack vector — must NOT appear. We check that any
+    // `UPDATE ai_chat_sessions` is preceded by `ON CONFLICT ... DO`.
+    const standaloneUpdate = fnBody.match(/UPDATE\s+ai_chat_sessions\s+SET/i);
+    if (standaloneUpdate) {
+      // If there's an UPDATE, it must be inside an ON CONFLICT clause.
+      // Find the position of the UPDATE + check the 50 chars before it.
+      const updateIdx = fnBody.indexOf(standaloneUpdate[0]);
+      const before = fnBody.slice(Math.max(0, updateIdx - 50), updateIdx);
+      expect(before).toMatch(/ON CONFLICT.*DO\s*$/i);
+    }
+  });
+
+  it("P1 #7: findOrCreateSession uses a single upsert query (no redundant SELECT)", () => {
+    // P1 #7 fix: the function should use ONE query (INSERT ... ON CONFLICT
+    // ... RETURNING) instead of the previous 3 queries (SELECT → INSERT →
+    // SELECT). We verify by counting `await pool.query` calls in the function
+    // body — should be exactly 1.
+    const fnMatch = aiRouteSource.match(/async function findOrCreateSession\([\s\S]*?\n\}/);
+    expect(fnMatch).not.toBeNull();
+    const fnBody = fnMatch![0];
+    const queryCalls = fnBody.match(/await\s+pool\.query/g);
+    expect(queryCalls).not.toBeNull();
+    expect(queryCalls!.length).toBe(1);
+  });
+
+  it("P1 #7: the upsert query has RETURNING id, session_token, title, user_id", () => {
+    // The single query must RETURN the row so we don't need a follow-up SELECT.
+    const fnMatch = aiRouteSource.match(/async function findOrCreateSession\([\s\S]*?\n\}/);
+    expect(fnMatch).not.toBeNull();
+    const fnBody = fnMatch![0];
+    expect(fnBody).toMatch(/RETURNING\s+id,\s*session_token,\s*title,\s*user_id/i);
+  });
+
+  it("P1 #7: the ON CONFLICT DO UPDATE is a no-op self-assignment (session_token = EXCLUDED.session_token)", () => {
+    // The DO UPDATE clause must NOT touch user_id, title, or any sensitive
+    // column. It sets session_token to itself (a no-op self-assignment that
+    // satisfies PostgreSQL's SET requirement + returns the row via RETURNING).
+    const fnMatch = aiRouteSource.match(/async function findOrCreateSession\([\s\S]*?\n\}/);
+    expect(fnMatch).not.toBeNull();
+    const fnBody = fnMatch![0];
+    expect(fnBody).toMatch(/DO UPDATE\s+SET\s+session_token\s*=\s*EXCLUDED\.session_token/i);
+    // The DO UPDATE clause must NOT set user_id (hijack vector).
+    const doUpdateMatch = fnBody.match(/DO UPDATE\s+SET\s+([^R]+)RETURNING/is);
+    if (doUpdateMatch) {
+      const setClause = doUpdateMatch[1];
+      expect(setClause).not.toMatch(/user_id/i);
+    }
   });
 });
 
@@ -146,9 +198,7 @@ describe("Bug #7 fix: the ONLY user_id UPDATE is in resolveSessionToken (safe)",
 
 describe("Bug #7 fix: resolveSessionToken blocks all 6 attack scenarios", () => {
   // Extract the resolveSessionToken function body for analysis.
-  const fnMatch = aiRouteSource.match(
-    /async function resolveSessionToken\([\s\S]*?\n\}/,
-  );
+  const fnMatch = aiRouteSource.match(/async function resolveSessionToken\([\s\S]*?\n\}/);
   expect(fnMatch).not.toBeNull();
   const fnBody = fnMatch![0];
 
@@ -189,7 +239,9 @@ describe("Bug #7 fix: resolveSessionToken blocks all 6 attack scenarios", () => 
     // This is the critical hijack block. The token is bound to the victim,
     // but the attacker (different user) presents it. The code detects the
     // mismatch and mints a fresh anonymous session for the attacker.
-    expect(fnBody).toContain("verified.uid !== null && clerkUserId !== null && verified.uid !== clerkUserId");
+    expect(fnBody).toContain(
+      "verified.uid !== null && clerkUserId !== null && verified.uid !== clerkUserId",
+    );
     expect(fnBody).toContain("possible hijack attempt");
     expect(fnBody).toContain("mintAnonymousSessionToken()");
   });
@@ -292,6 +344,6 @@ describe("Bug #7 fix: signed tokens use HMAC (can't be forged)", () => {
       "utf8",
     );
     expect(sessionTokenSource).toContain("AI_SESSION_SECRET");
-    expect(sessionTokenSource).toContain("NODE_ENV === \"production\"");
+    expect(sessionTokenSource).toContain('NODE_ENV === "production"');
   });
 });

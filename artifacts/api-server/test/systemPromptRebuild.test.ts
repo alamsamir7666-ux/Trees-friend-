@@ -155,7 +155,17 @@ describe("BUG-I5 fix: gemini.ts calls onToolRoundComplete after each round", () 
   });
 
   it("refreshes config.systemInstruction before each round (calls resolveSystemPrompt)", () => {
-    expect(source).toMatch(/config\.systemInstruction\s*=\s*resolveSystemPrompt\(\)/);
+    // P1 #5 fix: the assignment now goes through a local variable
+    // `currentPrompt` (so we can check if the context cache is still valid
+    // for the current prompt). The test accepts EITHER the direct assignment
+    // form OR the local-variable form.
+    expect(source).toMatch(
+      /(?:const\s+currentPrompt\s*=\s*resolveSystemPrompt\(\)|config\.systemInstruction\s*=\s*resolveSystemPrompt\(\))/,
+    );
+    // Verify config.systemInstruction is assigned (possibly via currentPrompt).
+    expect(source).toMatch(
+      /config\.systemInstruction\s*=\s*(?:resolveSystemPrompt\(\)|currentPrompt)/,
+    );
   });
 
   it("calls onToolRoundComplete(round + 1, currentSignatures) after budget.recordRound", () => {

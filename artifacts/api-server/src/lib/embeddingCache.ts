@@ -95,6 +95,30 @@ const CACHE_TTL_SECONDS = Number(process.env.AI_CACHE_TTL_SECONDS ?? 3600);
 const TOOL_CACHE_TTL_SECONDS = Number(process.env.AI_TOOL_CACHE_TTL_SECONDS ?? 300);
 const MIN_MESSAGE_LENGTH = 10;
 
+// P1 #6 fix: maximum message length for semantic cache lookup. Messages
+// longer than this are unlikely to have a semantic cache hit (they're
+// either very specific questions or long context the model is unlikely to
+// have seen before). Skipping the embedding call for these saves ~100-300ms
+// of Gemini API latency on obvious cache misses.
+//
+// Default 2000 chars (matches the chat route's max message length). Tunable
+// via AI_SEMANTIC_CACHE_MAX_MESSAGE_CHARS env var.
+const MAX_SEMANTIC_CACHE_MESSAGE_CHARS = Number(
+  process.env.AI_SEMANTIC_CACHE_MAX_MESSAGE_CHARS ?? 2000,
+);
+
+// P1 #6 fix: the minimum message length for semantic cache lookup. Messages
+// shorter than this (e.g. "hi", "ok", "thanks") are too short to have a
+// meaningful semantic match — the embedding vector for a 3-char string is
+// essentially noise. Skipping these saves ~100-300ms of Gemini API latency.
+//
+// Default 20 chars (slightly above the existing MIN_MESSAGE_LENGTH = 10 to be
+// more aggressive about skipping short queries). Tunable via
+// AI_SEMANTIC_CACHE_MIN_MESSAGE_CHARS env var.
+const MIN_SEMANTIC_CACHE_MESSAGE_CHARS = Number(
+  process.env.AI_SEMANTIC_CACHE_MIN_MESSAGE_CHARS ?? 20,
+);
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface SemanticCacheEntry {
@@ -200,6 +224,62 @@ async function generateEmbedding(text: string): Promise<number[] | null> {
  *   "unknown" (DB error), the caller should skip the cache lookup
  *   entirely (don't call this function).
  */
+
+/**
+ * P1 #6 fix (latency optimization): cheap pre-filter that decides whether to
+ * attempt the semantic cache lookup AT ALL.
+ *
+ * The semantic cache lookup calls `generateEmbedding()` which is a Gemini API
+ * call (~100-300ms). For obvious cache misses (too short, too long, or
+ * matches patterns that are extremely unlikely to have a semantic cache hit),
+ * we skip the embedding call entirely + return null immediately. The
+ * exact-match cache (Redis, ~2ms) still runs as a separate fast path.
+ *
+ * The pre-filter is INTENTIONALLY CONSERVATIVE — it only skips cases that are
+ * virtually guaranteed to be cache misses. False negatives (skipping a lookup
+ * that would have hit) are acceptable because the user just gets a fresh LLM
+ * response (no correctness impact, just no cache speedup). False positives
+ * (attempting a lookup that misses) cost ~100-300ms of wasted embedding
+ * latency — the original behavior.
+ *
+ * Industry standard: OpenAI's cached completions API skips caching for
+ * prompts shorter than 1024 tokens (not worth the embedding cost). Anthropic's
+ * prompt cache has a similar minimum-token threshold. We adopt the same
+ * pattern here.
+ *
+ * @param userMessage - The user's message (already PII-redacted).
+ * @returns true if the semantic cache lookup should be attempted; false to
+ *          skip (return null immediately, fall back to LLM call).
+ *
+ * @example
+ *   shouldAttemptSemanticCache("hi") // → false (too short, < 20 chars)
+ *   shouldAttemptSemanticCache("ok") // → false (too short)
+ *   shouldAttemptSemanticCache("a".repeat(3000)) // → false (too long, > 2000 chars)
+ *   shouldAttemptSemanticCache("how often should I water a mango tree?") // → true
+ */
+export function shouldAttemptSemanticCache(userMessage: string): boolean {
+  const trimmed = userMessage.trim();
+
+  // Skip if too short — the embedding vector for a sub-20-char string is
+  // essentially noise. The similarity threshold (0.92) is too high for such
+  // short queries to match anything useful.
+  if (trimmed.length < MIN_SEMANTIC_CACHE_MESSAGE_CHARS) {
+    return false;
+  }
+
+  // Skip if too long — messages longer than 2000 chars are either:
+  //   - Very specific questions (unlikely to have a semantic match).
+  //   - Long context the user pasted in (unlikely to repeat).
+  // The embedding call would be expensive (~200-300ms for 2000+ chars) and
+  // the cache hit rate is negligible.
+  if (trimmed.length > MAX_SEMANTIC_CACHE_MESSAGE_CHARS) {
+    return false;
+  }
+
+  // All checks passed — attempt the semantic cache lookup.
+  return true;
+}
+
 export async function getSemanticCachedResponse(
   userMessage: string,
   isPrivate: boolean,
@@ -207,6 +287,13 @@ export async function getSemanticCachedResponse(
 ): Promise<SemanticCacheEntry | null> {
   if (isPrivate) return null;
   if (userMessage.trim().length < MIN_MESSAGE_LENGTH) return null;
+
+  // P1 #6 fix: cheap pre-filter to skip the embedding call for obvious
+  // cache misses. Saves ~100-300ms of Gemini API latency on short/long
+  // messages that won't have a semantic cache hit anyway.
+  if (!shouldAttemptSemanticCache(userMessage)) {
+    return null;
+  }
 
   // Generate embedding
   const embedding = await generateEmbedding(userMessage);
@@ -382,6 +469,13 @@ export async function setSemanticCachedResponse(
 
   if (userMessage.trim().length < MIN_MESSAGE_LENGTH) return;
   if (response.length > 10_000) return;
+
+  // P1 #6 fix: don't WRITE cache entries for messages we'd never READ.
+  // If shouldAttemptSemanticCache returns false for a message, the READ side
+  // skips the embedding call + returns null immediately. Storing an entry
+  // for such a message would be wasted work (it'd never be matched).
+  // This is symmetric with the READ-side filter in getSemanticCachedResponse.
+  if (!shouldAttemptSemanticCache(userMessage)) return;
 
   // BUG-3 fix: never cache when the KB version is unknown (DB error during
   // version computation). Storing an "unknown" version would cause the

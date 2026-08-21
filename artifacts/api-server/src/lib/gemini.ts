@@ -78,6 +78,21 @@ import {
 // ToolStreamEvent union stays safe. ToolName is used in the stuck-loop
 // signatureOf fallback.
 import { isToolName, type ToolName } from "./aiToolSchemas";
+// P1 #5 fix: Gemini context caching for multi-round tool loops. Opt-in via
+// AI_GEMINI_CONTEXT_CACHING_ENABLED=true (default false). When enabled, the
+// tool loop attempts to create a context cache before round 1 + uses it for
+// rounds 2+. Falls back to non-cached on any failure.
+import {
+  maybeCreateGeminiContextCache,
+  isCacheStillValid,
+  type GeminiContextCache,
+} from "./geminiContextCache";
+// P1 #8 fix: compact older tool results between rounds. Opt-in via
+// AI_TOOL_COMPACTION_ENABLED=true (default false). When enabled,
+// search_catalog / search_seller_listings results from rounds 1 to N-2 are
+// replaced with short summaries (keeping the most recent round intact).
+// Saves ~1-3K tokens per round on 3+ round loops.
+import { compactOldToolResults } from "./toolResultCompaction";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
 // Google frequently deprecates Gemini models and rotates which ones are
@@ -1006,7 +1021,7 @@ export async function* streamGeminiChat(
 
   // The @google/genai SDK accepts an array of `contents` for history
   // plus the new message.
-  let contents: Record<string, unknown>[] = [
+  const initialContents: Record<string, unknown>[] = [
     ...history.map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
     { role: "user" as const, parts: [{ text: userMessage }] },
   ];
@@ -1020,6 +1035,62 @@ export async function* streamGeminiChat(
   };
   if (tools && tools.declarations.length > 0) {
     config.tools = [{ functionDeclarations: tools.declarations }];
+  }
+
+  // ─── P1 #5 fix: Gemini context caching for multi-round tool loops ──────────
+  //
+  // Attempt to create a context cache with the system prompt + initial
+  // contents + tools. If successful, we reference the cache in `config.cachedContent`
+  // for ALL rounds + only send the NEW contents (model parts + function responses
+  // from previous rounds). The cached prefix is billed at a lower rate.
+  //
+  // If cache creation fails (or is disabled via env var), we fall back to the
+  // existing non-cached behavior — no error surfaced to the user.
+  //
+  // The cache is deleted in a `finally` block after the loop completes (below).
+  // The TTL is a safety net in case the delete fails.
+  //
+  // System-prompt-stability-aware: if the system prompt changes between rounds
+  // (e.g., the BUG-I5 fix clears the {{knowledge}} block after the first
+  // search_knowledge_base call), we abandon the cache + fall back to non-cached.
+  // This is checked via `isCacheStillValid()` before each round.
+  let contextCache: GeminiContextCache | null = null;
+  try {
+    if (tools && tools.declarations.length > 0) {
+      contextCache = await maybeCreateGeminiContextCache(
+        getClient(),
+        _workingModel ?? "gemini-flash-latest",
+        resolveSystemPrompt(),
+        initialContents,
+        { functionDeclarations: tools.declarations },
+      );
+    }
+  } catch (err) {
+    // Non-fatal — fall back to non-cached.
+    logger.debug(
+      { err: (err as Error)?.message ?? String(err) },
+      "Gemini context cache: setup failed (falling back to non-cached — non-fatal)",
+    );
+    contextCache = null;
+  }
+
+  // P1 #5: when the cache is active, `contents` starts EMPTY (the initial
+  // contents are in the cache — Gemini prepends them automatically). When
+  // the cache is NOT active (disabled, creation failed, or abandoned mid-loop),
+  // `contents` starts with the full initial contents (history + user message).
+  //
+  // As the loop progresses, model parts + function responses are appended to
+  // `contents`. When the cache is active, these are the ONLY contents sent
+  // (the cached prefix is prepended by Gemini). When the cache is NOT active,
+  // these are appended to the initial contents (existing behavior).
+  let contents: Record<string, unknown>[] = contextCache ? [] : [...initialContents];
+  if (contextCache) {
+    // Reference the cache in the config. The system instruction + tools
+    // are in the cache, so we remove them from the config to avoid
+    // duplication (the SDK would error if both were set).
+    config.cachedContent = contextCache.name;
+    delete config.systemInstruction;
+    delete config.tools;
   }
 
   // ─── Multi-round function-calling loop (v3.6 streaming fix) ────────────
@@ -1054,256 +1125,555 @@ export async function* streamGeminiChat(
   //
   // Loop control (max rounds, stuck detection, graceful degradation) is
   // shared with groq.ts via the ToolRoundBudget helper in lib/aiToolLoop.ts.
-  const budget = new ToolRoundBudget();
-
-  // Bug #4 fix: track all tool calls across all rounds so we can emit them
-  // in the final metadata callback. The route uses this to decide cache
-  // policy (skip cache for user-scoped tools, short-TTL for catalog tools).
-  const toolCallsCalled: string[] = [];
-  let lastUsage: unknown = undefined;
-  let lastModel: string = _workingModel ?? "unknown";
-
-  // v3.6: helper that performs ONE streaming round against Gemini.
-  // Returns the accumulated function calls (empty array if none) so the
-  // caller can decide whether to loop or terminate.
   //
-  // The `forceNoTools` param is used by the graceful-degradation path:
-  // when we've hit the max-rounds budget, we call this with forceNoTools=true
-  // so Gemini is forced to produce a text answer instead of more tool calls.
-  const runOneStreamingRound = async function* (
-    roundContents: Record<string, unknown>[],
-    roundConfig: Record<string, unknown>,
-    forceNoTools: boolean,
-  ): AsyncGenerator<
-    string,
-    {
-      functionCalls: any[];
-      modelParts: any[];
-      finishReason: string | null;
-    },
-    unknown
-  > {
-    const effectiveConfig: Record<string, unknown> = { ...roundConfig };
-    if (forceNoTools) {
-      // Industry-standard "force final" pattern: remove tools from the
-      // config entirely + append a system instruction that tells the
-      // model to stop calling tools and produce a final answer.
-      delete effectiveConfig.tools;
-      const baseInstruction =
-        typeof effectiveConfig.systemInstruction === "string"
-          ? effectiveConfig.systemInstruction
-          : "";
-      effectiveConfig.systemInstruction = baseInstruction + buildForceFinalPromptSuffix();
-    }
+  // P1 #5 fix: the entire loop is wrapped in a try/finally to ensure the
+  // Gemini context cache (if created) is deleted after the loop completes
+  // (success, error, or early termination via consumer break). The `finally`
+  // block runs when the async generator is closed — this is the standard
+  // pattern for resource cleanup in async generators.
+  try {
+    const budget = new ToolRoundBudget();
 
-    // callWithFallback wraps the SDK call so a 404 (model deprecated for
-    // this API key) or 429 (quota exhausted) automatically retries with
-    // the next model in the fallback chain.
-    const stream: any = await callWithFallback((modelName) =>
-      client.models.generateContentStream({
-        model: modelName,
-        contents: roundContents,
-        config: effectiveConfig,
-      }),
-    );
+    // Bug #4 fix: track all tool calls across all rounds so we can emit them
+    // in the final metadata callback. The route uses this to decide cache
+    // policy (skip cache for user-scoped tools, short-TTL for catalog tools).
+    const toolCallsCalled: string[] = [];
+    let lastUsage: unknown = undefined;
+    let lastModel: string = _workingModel ?? "unknown";
 
-    const functionCalls: any[] = [];
-    let modelParts: any[] = [];
-    let finishReason: string | null = null;
-
-    for await (const chunk of stream) {
-      // Yield text deltas as they arrive (real streaming).
-      // chunk.text is a convenience accessor that concatenates all text
-      // parts in this chunk. May be empty for chunks that only contain
-      // functionCall parts.
-      const text: string | undefined = chunk.text;
-      if (typeof text === "string" && text.length > 0) {
-        yield text;
+    // v3.6: helper that performs ONE streaming round against Gemini.
+    // Returns the accumulated function calls (empty array if none) so the
+    // caller can decide whether to loop or terminate.
+    //
+    // The `forceNoTools` param is used by the graceful-degradation path:
+    // when we've hit the max-rounds budget, we call this with forceNoTools=true
+    // so Gemini is forced to produce a text answer instead of more tool calls.
+    const runOneStreamingRound = async function* (
+      roundContents: Record<string, unknown>[],
+      roundConfig: Record<string, unknown>,
+      forceNoTools: boolean,
+    ): AsyncGenerator<
+      string,
+      {
+        functionCalls: any[];
+        modelParts: any[];
+        finishReason: string | null;
+      },
+      unknown
+    > {
+      const effectiveConfig: Record<string, unknown> = { ...roundConfig };
+      if (forceNoTools) {
+        // Industry-standard "force final" pattern: remove tools from the
+        // config entirely + append a system instruction that tells the
+        // model to stop calling tools and produce a final answer.
+        delete effectiveConfig.tools;
+        // P1 #5 fix: when the context cache is active, the system instruction
+        // is in the cache (not in the config). We need to read the cached
+        // instruction + append the suffix. Abandon the cache first so the
+        // modified instruction is sent directly.
+        if (contextCache) {
+          const baseInstruction = contextCache.cachedSystemInstruction ?? "";
+          effectiveConfig.systemInstruction = baseInstruction + buildForceFinalPromptSuffix();
+          // Abandon the cache (will be cleaned up in the finally block).
+          // We DON'T restore initialContents here because this is the FINAL
+          // round (forceNoTools=true) — the model just needs to produce a
+          // text answer from whatever context it already has. The contents
+          // array already has the full conversation (model parts + function
+          // responses from previous rounds).
+          //
+          // Wait — when the cache is active, `contents` only has the NEW tokens
+          // (not the initial history + user message). If we abandon the cache
+          // here, we need to restore the initial contents so the model sees
+          // the full conversation.
+          contents = [...initialContents, ...contents];
+          delete effectiveConfig.cachedContent;
+          // Restore tools to the config (will be deleted by forceNoTools above,
+          // but we need them present so the cache abandonment is consistent).
+          if (tools && tools.declarations.length > 0) {
+            effectiveConfig.tools = [{ functionDeclarations: tools.declarations }];
+            delete effectiveConfig.tools; // forceNoTools removes them again
+          }
+          // Mark the cache as abandoned (so the finally block doesn't try to delete it twice).
+          const cacheToDelete = contextCache;
+          contextCache = null;
+          cacheToDelete.delete().catch((err) => {
+            logger.debug(
+              { err: (err as Error)?.message ?? String(err) },
+              "Gemini context cache: delete on forceNoTools failed (non-fatal — will expire via TTL)",
+            );
+          });
+        } else {
+          const baseInstruction =
+            typeof effectiveConfig.systemInstruction === "string"
+              ? effectiveConfig.systemInstruction
+              : "";
+          effectiveConfig.systemInstruction = baseInstruction + buildForceFinalPromptSuffix();
+        }
       }
 
-      // Accumulate function calls + preserve original parts.
-      // Gemini 2.5 thinking models emit a `thoughtSignature` on the
-      // function-call part that MUST be echoed back unchanged — otherwise
-      // the next generateContent call fails with
-      // "Function call is missing a thought_signature". So we collect
-      // the FULL parts array from the candidate, not just the functionCall
-      // objects.
-      const candidates: any[] = chunk.candidates ?? [];
-      for (const cand of candidates) {
-        const parts: any[] = cand?.content?.parts ?? [];
-        if (parts.length > 0) {
-          modelParts = modelParts.concat(parts);
+      // callWithFallback wraps the SDK call so a 404 (model deprecated for
+      // this API key) or 429 (quota exhausted) automatically retries with
+      // the next model in the fallback chain.
+      const stream: any = await callWithFallback((modelName) =>
+        client.models.generateContentStream({
+          model: modelName,
+          contents: roundContents,
+          config: effectiveConfig,
+        }),
+      );
+
+      const functionCalls: any[] = [];
+      let modelParts: any[] = [];
+      let finishReason: string | null = null;
+
+      for await (const chunk of stream) {
+        // Yield text deltas as they arrive (real streaming).
+        // chunk.text is a convenience accessor that concatenates all text
+        // parts in this chunk. May be empty for chunks that only contain
+        // functionCall parts.
+        const text: string | undefined = chunk.text;
+        if (typeof text === "string" && text.length > 0) {
+          yield text;
         }
-        if (typeof cand?.finishReason === "string" && cand.finishReason.length > 0) {
-          finishReason = cand.finishReason;
-        }
-        for (const part of parts) {
-          if (part?.functionCall && typeof part.functionCall.name === "string") {
-            functionCalls.push(part.functionCall);
+
+        // Accumulate function calls + preserve original parts.
+        // Gemini 2.5 thinking models emit a `thoughtSignature` on the
+        // function-call part that MUST be echoed back unchanged — otherwise
+        // the next generateContent call fails with
+        // "Function call is missing a thought_signature". So we collect
+        // the FULL parts array from the candidate, not just the functionCall
+        // objects.
+        const candidates: any[] = chunk.candidates ?? [];
+        for (const cand of candidates) {
+          const parts: any[] = cand?.content?.parts ?? [];
+          if (parts.length > 0) {
+            modelParts = modelParts.concat(parts);
+          }
+          if (typeof cand?.finishReason === "string" && cand.finishReason.length > 0) {
+            finishReason = cand.finishReason;
+          }
+          for (const part of parts) {
+            if (part?.functionCall && typeof part.functionCall.name === "string") {
+              functionCalls.push(part.functionCall);
+            }
           }
         }
+
+        // Track usage metadata (sent in the final chunk).
+        if (chunk?.usageMetadata) {
+          lastUsage = chunk.usageMetadata;
+        }
       }
 
-      // Track usage metadata (sent in the final chunk).
-      if (chunk?.usageMetadata) {
-        lastUsage = chunk.usageMetadata;
-      }
-    }
+      return { functionCalls, modelParts, finishReason };
+    };
 
-    return { functionCalls, modelParts, finishReason };
-  };
+    // ─── Main loop ─────────────────────────────────────────────────────────
+    // Loop until either:
+    //   - The model returns no function calls (final text answer streamed).
+    //   - We exhaust the round budget (graceful degradation kicks in).
+    //   - Stuck detection fires (same tool + same args twice in a row).
+    while (budget.hasBudget) {
+      const round = budget.currentRound;
 
-  // ─── Main loop ─────────────────────────────────────────────────────────
-  // Loop until either:
-  //   - The model returns no function calls (final text answer streamed).
-  //   - We exhaust the round budget (graceful degradation kicks in).
-  //   - Stuck detection fires (same tool + same args twice in a row).
-  while (budget.hasBudget) {
-    const round = budget.currentRound;
+      // BUG-I5 fix: refresh the system prompt before each round. If the
+      // route passed a getter (`() => currentSystemPrompt`), this calls
+      // the getter — which may have been updated by `onToolRoundComplete`
+      // in a previous round (e.g. to clear the {{knowledge}} block after
+      // the first search_knowledge_base call).
+      const currentPrompt = resolveSystemPrompt();
+      config.systemInstruction = currentPrompt;
 
-    // BUG-I5 fix: refresh the system prompt before each round. If the
-    // route passed a getter (`() => currentSystemPrompt`), this calls
-    // the getter — which may have been updated by `onToolRoundComplete`
-    // in a previous round (e.g. to clear the {{knowledge}} block after
-    // the first search_knowledge_base call).
-    config.systemInstruction = resolveSystemPrompt();
-
-    if (budget.shouldWarnAboutHighRounds) {
-      // Soft warning — operators should investigate. The loop continues
-      // (this is not necessarily a bug; some legitimate queries take 6+
-      // rounds when the model is paginating or refining searches).
-      logger.warn(
-        { round, maxRounds: budget.maxRoundsValue },
-        "TreeBot: tool loop exceeded soft warning threshold — investigate if this happens often",
-      );
-      budget.markWarned();
-    }
-
-    // Run one streaming round. Text deltas are yielded to the SSE
-    // response as they arrive (the generator below forwards them).
-    // The returned value gives us the accumulated function calls + parts.
-    const gen = runOneStreamingRound(contents, config, false);
-    let result: { functionCalls: any[]; modelParts: any[]; finishReason: string | null };
-    while (true) {
-      const { done, value } = await gen.next();
-      if (done) {
-        result = value as { functionCalls: any[]; modelParts: any[]; finishReason: string | null };
-        break;
-      }
-      if (typeof value === "string") {
-        yield value;
-      }
-    }
-
-    lastModel = _workingModel ?? "unknown";
-
-    // v3.0: detect truncation. If the response hit maxOutputTokens,
-    // finishReason will be "MAX_TOKENS".
-    //
-    // v3.9: auto-continue. When the model hits MAX_TOKENS with NO function
-    // calls (pure text response), we make up to AI_MAX_AUTO_CONTINUES
-    // additional calls, appending the partial text + a "continue" prompt,
-    // until the model finishes naturally (STOP) or we hit the limit.
-    //
-    // This fixes the v3.8 bug where long plant-care guides (with markdown
-    // formatting) got truncated at 2048 tokens, often cutting off the
-    // [followups] block — which then triggered the structuredOutput
-    // fallback LLM call (double cost). Now the response continues + the
-    // [followups] block lands in the natural stop.
-    //
-    // We do NOT auto-continue when there are function calls — those loop
-    // normally (the model will produce text in the next round after
-    // seeing the tool results).
-    const functionCalls = result.functionCalls;
-
-    if (functionCalls.length === 0 || !tools) {
-      // ─── No function calls — this was the final text response ────────
-      // v3.9: auto-continue if truncated.
-      if (result.finishReason === "MAX_TOKENS") {
-        let continueCount = 0;
-        const maxAutoContinues = getMaxAutoContinues();
-
-        while (
-          result.finishReason === "MAX_TOKENS" &&
-          continueCount < maxAutoContinues &&
-          !budget.hadStuckLoop
-        ) {
-          continueCount++;
-          logger.info(
-            { continueCount, maxAutoContinues, maxOutputTokens: getMaxOutputTokens() },
-            "TreeBot: auto-continuing truncated response (MAX_TOKENS)",
+      // P1 #5 fix: check if the context cache is still valid for the current
+      // system prompt. If the prompt changed (e.g., BUG-I5 fix cleared the
+      // {{knowledge}} block after the first search_knowledge_base call), the
+      // cached system instruction is STALE — we must abandon the cache +
+      // restore the system instruction + tools to the config (fall back to
+      // non-cached for subsequent rounds).
+      if (contextCache && !isCacheStillValid(contextCache, currentPrompt)) {
+        logger.info(
+          { round, cacheName: contextCache.name },
+          "Gemini context cache: abandoning (system prompt changed — BUG-I5 fix cleared the {{knowledge}} block)",
+        );
+        // Restore the system instruction + tools to the config.
+        config.systemInstruction = currentPrompt;
+        if (tools && tools.declarations.length > 0) {
+          config.tools = [{ functionDeclarations: tools.declarations }];
+        }
+        // Remove the cachedContent reference.
+        delete config.cachedContent;
+        // P1 #5: when abandoning the cache, we must RESTORE the initial contents
+        // to `contents` (so subsequent rounds send the full context, not just
+        // the new model parts + function responses). We prepend the initial
+        // contents to the current `contents` (which has the model parts +
+        // function responses from previous rounds).
+        //
+        // This is safe because the cache is being abandoned AFTER round 1 —
+        // `contents` at this point has [modelParts1, functionResponses1, ...]
+        // (the new tokens from previous rounds). Prepending `initialContents`
+        // gives the full context: [history, userMessage, modelParts1, ...].
+        contents = [...initialContents, ...contents];
+        // Delete the cache (best-effort — non-fatal if it fails).
+        contextCache.delete().catch((err) => {
+          logger.debug(
+            { err: (err as Error)?.message ?? String(err) },
+            "Gemini context cache: delete on abandon failed (non-fatal — will expire via TTL)",
           );
+        });
+        contextCache = null;
+      }
 
-          // Append the partial model text + a "continue" user prompt.
-          // The model sees its own partial output + knows to pick up
-          // mid-sentence. This is the standard "continue generation"
-          // pattern used by OpenAI, Anthropic, and LangChain.
-          //
-          // We use `result.modelParts` (the FULL parts array from the
-          // stream, including thought signatures for Gemini 2.5 thinking
-          // models) rather than reconstructing text — the SDK requires
-          // the original parts to be echoed back unchanged.
-          contents = [
-            ...contents,
-            {
-              role: "model" as const,
-              parts: result.modelParts,
-            },
-            {
-              role: "user" as const,
-              parts: [
-                {
-                  text: "Continue your previous response exactly from where it was cut off. Do not repeat what you already said — just complete the remaining content.",
-                },
-              ],
-            },
-          ];
+      if (budget.shouldWarnAboutHighRounds) {
+        // Soft warning — operators should investigate. The loop continues
+        // (this is not necessarily a bug; some legitimate queries take 6+
+        // rounds when the model is paginating or refining searches).
+        logger.warn(
+          { round, maxRounds: budget.maxRoundsValue },
+          "TreeBot: tool loop exceeded soft warning threshold — investigate if this happens often",
+        );
+        budget.markWarned();
+      }
 
-          // Run one more streaming round (no tools — we're continuing
-          // a text response, not calling more tools). The text deltas
-          // are yielded to the SSE stream as they arrive.
-          const continueGen = runOneStreamingRound(contents, config, true);
-          let continueResult: {
+      // P1 #8 fix: compact older tool results before this round. Starting at
+      // round TOOL_COMPACTION_MIN_ROUND (default 3), search_catalog /
+      // search_seller_listings results from rounds 1 to N-2 are replaced with
+      // short summaries. The most recent round's results are kept intact.
+      // No-op when AI_TOOL_COMPACTION_ENABLED=false (the default) or when the
+      // round is too early.
+      compactOldToolResults(contents, round + 1);
+
+      // Run one streaming round. Text deltas are yielded to the SSE
+      // response as they arrive (the generator below forwards them).
+      // The returned value gives us the accumulated function calls + parts.
+      const gen = runOneStreamingRound(contents, config, false);
+      let result: { functionCalls: any[]; modelParts: any[]; finishReason: string | null };
+      while (true) {
+        const { done, value } = await gen.next();
+        if (done) {
+          result = value as {
             functionCalls: any[];
             modelParts: any[];
             finishReason: string | null;
           };
-          while (true) {
-            const { done, value } = await continueGen.next();
-            if (done) {
-              continueResult = value as {
-                functionCalls: any[];
-                modelParts: any[];
-                finishReason: string | null;
-              };
-              break;
-            }
-            if (typeof value === "string") {
-              yield value;
-            }
-          }
-
-          // If the continue call finished naturally (not MAX_TOKENS),
-          // stop the loop. Otherwise, update result + loop again.
-          if (continueResult.finishReason !== "MAX_TOKENS") {
-            break;
-          }
-          result = continueResult;
+          break;
         }
-
-        if (result.finishReason === "MAX_TOKENS") {
-          logger.warn(
-            {
-              finishReason: result.finishReason,
-              maxOutputTokens: getMaxOutputTokens(),
-              continueCount,
-            },
-            "TreeBot: response still truncated after auto-continue limit. Consider raising AI_MAX_TOKENS or AI_MAX_AUTO_CONTINUES.",
-          );
+        if (typeof value === "string") {
+          yield value;
         }
       }
 
-      // The text was already streamed above. Emit metadata + return.
+      lastModel = _workingModel ?? "unknown";
+
+      // v3.0: detect truncation. If the response hit maxOutputTokens,
+      // finishReason will be "MAX_TOKENS".
+      //
+      // v3.9: auto-continue. When the model hits MAX_TOKENS with NO function
+      // calls (pure text response), we make up to AI_MAX_AUTO_CONTINUES
+      // additional calls, appending the partial text + a "continue" prompt,
+      // until the model finishes naturally (STOP) or we hit the limit.
+      //
+      // This fixes the v3.8 bug where long plant-care guides (with markdown
+      // formatting) got truncated at 2048 tokens, often cutting off the
+      // [followups] block — which then triggered the structuredOutput
+      // fallback LLM call (double cost). Now the response continues + the
+      // [followups] block lands in the natural stop.
+      //
+      // We do NOT auto-continue when there are function calls — those loop
+      // normally (the model will produce text in the next round after
+      // seeing the tool results).
+      const functionCalls = result.functionCalls;
+
+      if (functionCalls.length === 0 || !tools) {
+        // ─── No function calls — this was the final text response ────────
+        // v3.9: auto-continue if truncated.
+        if (result.finishReason === "MAX_TOKENS") {
+          let continueCount = 0;
+          const maxAutoContinues = getMaxAutoContinues();
+
+          while (
+            result.finishReason === "MAX_TOKENS" &&
+            continueCount < maxAutoContinues &&
+            !budget.hadStuckLoop
+          ) {
+            continueCount++;
+            logger.info(
+              { continueCount, maxAutoContinues, maxOutputTokens: getMaxOutputTokens() },
+              "TreeBot: auto-continuing truncated response (MAX_TOKENS)",
+            );
+
+            // Append the partial model text + a "continue" user prompt.
+            // The model sees its own partial output + knows to pick up
+            // mid-sentence. This is the standard "continue generation"
+            // pattern used by OpenAI, Anthropic, and LangChain.
+            //
+            // We use `result.modelParts` (the FULL parts array from the
+            // stream, including thought signatures for Gemini 2.5 thinking
+            // models) rather than reconstructing text — the SDK requires
+            // the original parts to be echoed back unchanged.
+            contents = [
+              ...contents,
+              {
+                role: "model" as const,
+                parts: result.modelParts,
+              },
+              {
+                role: "user" as const,
+                parts: [
+                  {
+                    text: "Continue your previous response exactly from where it was cut off. Do not repeat what you already said — just complete the remaining content.",
+                  },
+                ],
+              },
+            ];
+
+            // Run one more streaming round (no tools — we're continuing
+            // a text response, not calling more tools). The text deltas
+            // are yielded to the SSE stream as they arrive.
+            const continueGen = runOneStreamingRound(contents, config, true);
+            let continueResult: {
+              functionCalls: any[];
+              modelParts: any[];
+              finishReason: string | null;
+            };
+            while (true) {
+              const { done, value } = await continueGen.next();
+              if (done) {
+                continueResult = value as {
+                  functionCalls: any[];
+                  modelParts: any[];
+                  finishReason: string | null;
+                };
+                break;
+              }
+              if (typeof value === "string") {
+                yield value;
+              }
+            }
+
+            // If the continue call finished naturally (not MAX_TOKENS),
+            // stop the loop. Otherwise, update result + loop again.
+            if (continueResult.finishReason !== "MAX_TOKENS") {
+              break;
+            }
+            result = continueResult;
+          }
+
+          if (result.finishReason === "MAX_TOKENS") {
+            logger.warn(
+              {
+                finishReason: result.finishReason,
+                maxOutputTokens: getMaxOutputTokens(),
+                continueCount,
+              },
+              "TreeBot: response still truncated after auto-continue limit. Consider raising AI_MAX_TOKENS or AI_MAX_AUTO_CONTINUES.",
+            );
+          }
+        }
+
+        // The text was already streamed above. Emit metadata + return.
+        if (onMetadata) {
+          onMetadata({
+            model: lastModel,
+            usage: lastUsage,
+            toolCalls: toolCallsCalled,
+          });
+        }
+        return;
+      }
+
+      // ─── Function calls present — execute them and loop ─────────────────
+      // Bug #4 fix: record the tool names so we can emit them in the final
+      // metadata callback (used by the route for cache policy decisions).
+      for (const fc of functionCalls) {
+        if (typeof fc?.name === "string") {
+          toolCallsCalled.push(fc.name);
+        }
+      }
+      logger.info(
+        { round, calls: functionCalls.map((fc: any) => fc.name) },
+        "TreeBot: executing function calls",
+      );
+
+      // v3.6: Stuck detection — if this round's tool calls are identical
+      // (same name + same args) to the PREVIOUS round's, the model is
+      // stuck in a loop (the tool will return the same result, so the
+      // model has no new information). Abort with a friendly message.
+      //
+      // v6.2 Part 12: signatureOf now requires a typed ToolName. If the LLM
+      // hallucinated an unknown name, fall back to a placeholder signature
+      // (rare — executeTool returns before any work happens for unknown names).
+      const currentSignatures = functionCalls.map((fc: any) => {
+        const sigName = (isToolName(fc.name) ? fc.name : "search_catalog") as ToolName;
+        return signatureOf(sigName, fc.args ?? {});
+      });
+      const stuckTool = budget.detectStuck(currentSignatures);
+      if (stuckTool) {
+        logger.error(
+          { round, stuckTool, maxRounds: budget.maxRoundsValue },
+          "TreeBot: stuck loop detected — model called the same tool with the same args in consecutive rounds",
+        );
+        // v3.7 fix: mark stuck BEFORE break so shouldForceFinal returns true
+        // and the graceful-degradation path runs (was: falling through to
+        // the safety-net throw, giving users a hard error).
+        budget.markStuck();
+        // Don't throw — instead, fall through to the force-final path so
+        // the user gets SOMETHING. The stuck tool's results are already
+        // in `contents`, so the model can synthesize a best-effort answer.
+        break;
+      }
+      budget.recordRound(currentSignatures);
+
+      // BUG-I5 fix: notify the route handler that a tool round completed.
+      // If the callback returns a string, the route has updated
+      // `currentSystemPrompt` in its closure — the getter will return the
+      // new value on the next iteration (we re-read config.systemInstruction
+      // at the top of the loop). Used to clear the {{knowledge}} block after
+      // the first search_knowledge_base call so the LLM doesn't see stale
+      // auto-inject context mixed with fresh tool results.
+      if (onToolRoundComplete) {
+        // round is 0-indexed here (budget.currentRound starts at 0); pass
+        // 1-indexed to the callback for human-readability.
+        onToolRoundComplete(round + 1, currentSignatures);
+      }
+
+      // IMPORTANT: preserve the ORIGINAL parts from the model's response
+      // (not reconstructed ones). Gemini 2.5 thinking models emit a
+      // `thoughtSignature` on the function-call part that MUST be echoed
+      // back unchanged — otherwise the next generateContent call fails
+      // with "Function call is missing a thought_signature".
+      // result.modelParts contains the full original parts (including
+      // thought signatures, thought text, etc.) accumulated from the stream.
+      const modelParts: any[] = result.modelParts;
+
+      // v3.7: Execute tools one-by-one, firing onToolEvent before+after each.
+      // We fire `tool_call` BEFORE execute() so the UI can show "Looking up..."
+      // immediately, and `tool_result` AFTER (with durationMs) so the UI can
+      // clear the chip. If execute() throws, we fire a `tool_result` with
+      // ok=false + the error message (the route still surfaces this to the
+      // client, but the model gets a structured error in the functionResponse).
+      const functionResponseParts = await Promise.all(
+        functionCalls.map(async (fc: any) => {
+          const rawName: string = fc.name;
+          const toolArgs = fc.args ?? {};
+
+          // v6.2 Part 12 (Backend Gap Fix #2): narrow the raw tool name from
+          // the LLM (untrusted) via isToolName. If the model hallucinates an
+          // unknown name, we skip the SSE events (tool_call / tool_progress /
+          // tool_result) — executeTool handles unknown names internally and
+          // returns a friendly error to the LLM. The SSE pipe only carries
+          // events for KNOWN tools, so the frontend's typed `ActiveToolCall.name`
+          // field stays safe.
+          const knownName = isToolName(rawName) ? rawName : null;
+
+          if (onToolEvent && knownName) {
+            onToolEvent({ type: "tool_call", name: knownName, args: toolArgs });
+          }
+          const t0 = Date.now();
+          try {
+            // v6.2 Part 9 (Gap 17 fix — Phase B): pass an onProgress callback
+            // to tools.execute so long-running tools can emit live progress.
+            // The callback fires a `tool_progress` SSE event via onToolEvent.
+            // Existing SQL-based tools ignore the callback (they don't call
+            // it) — no behavior change for them.
+            const result = await tools.execute(rawName, toolArgs, userId ?? null, {
+              onProgress:
+                onToolEvent && knownName
+                  ? (progress: string) => {
+                      onToolEvent({ type: "tool_progress", name: knownName, progress });
+                    }
+                  : undefined,
+            });
+            if (onToolEvent && knownName) {
+              onToolEvent({
+                type: "tool_result",
+                name: knownName,
+                ok: true,
+                durationMs: Date.now() - t0,
+                result,
+              });
+            }
+            return {
+              functionResponse: {
+                name: rawName,
+                response: { result },
+              },
+            };
+          } catch (err) {
+            // String(err) always returns a string, so `?? "tool execution failed"`
+            // would be dead code. Use a fallback only for empty strings.
+            const rawMsg = (err as any)?.message ?? String(err);
+            const errMsg = rawMsg || "tool execution failed";
+            if (onToolEvent && knownName) {
+              onToolEvent({
+                type: "tool_result",
+                name: knownName,
+                ok: false,
+                error: errMsg,
+                durationMs: Date.now() - t0,
+              });
+            }
+            // Return the error as the function response so the model can
+            // react to it (e.g., tell the user the lookup failed).
+            return {
+              functionResponse: {
+                name: rawName,
+                response: { error: errMsg },
+              },
+            };
+          }
+        }),
+      );
+
+      // Append the model's ORIGINAL parts (with thought signatures) + our
+      // function responses to the conversation.
+      contents = [
+        ...contents,
+        {
+          role: "model" as const,
+          parts: modelParts,
+        },
+        {
+          role: "user" as const,
+          parts: functionResponseParts,
+        },
+      ];
+
+      budget.advance();
+    }
+
+    // ─── Graceful degradation: budget exhausted (or stuck loop) ───────────
+    //
+    // Instead of throwing an error (the old behavior), make ONE more call
+    // with tools DISABLED. This forces Gemini to produce a best-effort
+    // text answer using whatever information it already gathered from the
+    // tool calls. The user gets SOMETHING useful instead of a hard error.
+    //
+    // Industry references:
+    //   - Vercel AI SDK: emits a `tool-call-error` then continues the stream
+    //   - OpenAI Assistants: stops the run with `expired` status but keeps
+    //     partial output
+    //   - Anthropic: stops with `max_tokens` stop reason, keeps partial output
+    //
+    // We use the same streaming-round helper with forceNoTools=true so the
+    // behavior is identical to a normal final round (text deltas stream
+    // live, no extra API round-trip).
+    if (budget.shouldForceFinal) {
+      budget.markForceFinalEmitted();
+      logger.warn(
+        { rounds: budget.maxRoundsValue, hadStuckLoop: budget.hadStuckLoop },
+        "TreeBot: tool budget exhausted — making one force-final call with tools disabled (graceful degradation)",
+      );
+
+      const forceGen = runOneStreamingRound(contents, config, true);
+      while (true) {
+        const { done, value } = await forceGen.next();
+        if (done) break;
+        if (typeof value === "string") {
+          yield value;
+        }
+      }
+      lastModel = _workingModel ?? "unknown";
+
       if (onMetadata) {
         onMetadata({
           model: lastModel,
@@ -1314,199 +1684,10 @@ export async function* streamGeminiChat(
       return;
     }
 
-    // ─── Function calls present — execute them and loop ─────────────────
-    // Bug #4 fix: record the tool names so we can emit them in the final
-    // metadata callback (used by the route for cache policy decisions).
-    for (const fc of functionCalls) {
-      if (typeof fc?.name === "string") {
-        toolCallsCalled.push(fc.name);
-      }
-    }
-    logger.info(
-      { round, calls: functionCalls.map((fc: any) => fc.name) },
-      "TreeBot: executing function calls",
-    );
-
-    // v3.6: Stuck detection — if this round's tool calls are identical
-    // (same name + same args) to the PREVIOUS round's, the model is
-    // stuck in a loop (the tool will return the same result, so the
-    // model has no new information). Abort with a friendly message.
-    //
-    // v6.2 Part 12: signatureOf now requires a typed ToolName. If the LLM
-    // hallucinated an unknown name, fall back to a placeholder signature
-    // (rare — executeTool returns before any work happens for unknown names).
-    const currentSignatures = functionCalls.map((fc: any) => {
-      const sigName = (isToolName(fc.name) ? fc.name : "search_catalog") as ToolName;
-      return signatureOf(sigName, fc.args ?? {});
-    });
-    const stuckTool = budget.detectStuck(currentSignatures);
-    if (stuckTool) {
-      logger.error(
-        { round, stuckTool, maxRounds: budget.maxRoundsValue },
-        "TreeBot: stuck loop detected — model called the same tool with the same args in consecutive rounds",
-      );
-      // v3.7 fix: mark stuck BEFORE break so shouldForceFinal returns true
-      // and the graceful-degradation path runs (was: falling through to
-      // the safety-net throw, giving users a hard error).
-      budget.markStuck();
-      // Don't throw — instead, fall through to the force-final path so
-      // the user gets SOMETHING. The stuck tool's results are already
-      // in `contents`, so the model can synthesize a best-effort answer.
-      break;
-    }
-    budget.recordRound(currentSignatures);
-
-    // BUG-I5 fix: notify the route handler that a tool round completed.
-    // If the callback returns a string, the route has updated
-    // `currentSystemPrompt` in its closure — the getter will return the
-    // new value on the next iteration (we re-read config.systemInstruction
-    // at the top of the loop). Used to clear the {{knowledge}} block after
-    // the first search_knowledge_base call so the LLM doesn't see stale
-    // auto-inject context mixed with fresh tool results.
-    if (onToolRoundComplete) {
-      // round is 0-indexed here (budget.currentRound starts at 0); pass
-      // 1-indexed to the callback for human-readability.
-      onToolRoundComplete(round + 1, currentSignatures);
-    }
-
-    // IMPORTANT: preserve the ORIGINAL parts from the model's response
-    // (not reconstructed ones). Gemini 2.5 thinking models emit a
-    // `thoughtSignature` on the function-call part that MUST be echoed
-    // back unchanged — otherwise the next generateContent call fails
-    // with "Function call is missing a thought_signature".
-    // result.modelParts contains the full original parts (including
-    // thought signatures, thought text, etc.) accumulated from the stream.
-    const modelParts: any[] = result.modelParts;
-
-    // v3.7: Execute tools one-by-one, firing onToolEvent before+after each.
-    // We fire `tool_call` BEFORE execute() so the UI can show "Looking up..."
-    // immediately, and `tool_result` AFTER (with durationMs) so the UI can
-    // clear the chip. If execute() throws, we fire a `tool_result` with
-    // ok=false + the error message (the route still surfaces this to the
-    // client, but the model gets a structured error in the functionResponse).
-    const functionResponseParts = await Promise.all(
-      functionCalls.map(async (fc: any) => {
-        const rawName: string = fc.name;
-        const toolArgs = fc.args ?? {};
-
-        // v6.2 Part 12 (Backend Gap Fix #2): narrow the raw tool name from
-        // the LLM (untrusted) via isToolName. If the model hallucinates an
-        // unknown name, we skip the SSE events (tool_call / tool_progress /
-        // tool_result) — executeTool handles unknown names internally and
-        // returns a friendly error to the LLM. The SSE pipe only carries
-        // events for KNOWN tools, so the frontend's typed `ActiveToolCall.name`
-        // field stays safe.
-        const knownName = isToolName(rawName) ? rawName : null;
-
-        if (onToolEvent && knownName) {
-          onToolEvent({ type: "tool_call", name: knownName, args: toolArgs });
-        }
-        const t0 = Date.now();
-        try {
-          // v6.2 Part 9 (Gap 17 fix — Phase B): pass an onProgress callback
-          // to tools.execute so long-running tools can emit live progress.
-          // The callback fires a `tool_progress` SSE event via onToolEvent.
-          // Existing SQL-based tools ignore the callback (they don't call
-          // it) — no behavior change for them.
-          const result = await tools.execute(rawName, toolArgs, userId ?? null, {
-            onProgress:
-              onToolEvent && knownName
-                ? (progress: string) => {
-                    onToolEvent({ type: "tool_progress", name: knownName, progress });
-                  }
-                : undefined,
-          });
-          if (onToolEvent && knownName) {
-            onToolEvent({
-              type: "tool_result",
-              name: knownName,
-              ok: true,
-              durationMs: Date.now() - t0,
-              result,
-            });
-          }
-          return {
-            functionResponse: {
-              name: rawName,
-              response: { result },
-            },
-          };
-        } catch (err) {
-          // String(err) always returns a string, so `?? "tool execution failed"`
-          // would be dead code. Use a fallback only for empty strings.
-          const rawMsg = (err as any)?.message ?? String(err);
-          const errMsg = rawMsg || "tool execution failed";
-          if (onToolEvent && knownName) {
-            onToolEvent({
-              type: "tool_result",
-              name: knownName,
-              ok: false,
-              error: errMsg,
-              durationMs: Date.now() - t0,
-            });
-          }
-          // Return the error as the function response so the model can
-          // react to it (e.g., tell the user the lookup failed).
-          return {
-            functionResponse: {
-              name: rawName,
-              response: { error: errMsg },
-            },
-          };
-        }
-      }),
-    );
-
-    // Append the model's ORIGINAL parts (with thought signatures) + our
-    // function responses to the conversation.
-    contents = [
-      ...contents,
-      {
-        role: "model" as const,
-        parts: modelParts,
-      },
-      {
-        role: "user" as const,
-        parts: functionResponseParts,
-      },
-    ];
-
-    budget.advance();
-  }
-
-  // ─── Graceful degradation: budget exhausted (or stuck loop) ───────────
-  //
-  // Instead of throwing an error (the old behavior), make ONE more call
-  // with tools DISABLED. This forces Gemini to produce a best-effort
-  // text answer using whatever information it already gathered from the
-  // tool calls. The user gets SOMETHING useful instead of a hard error.
-  //
-  // Industry references:
-  //   - Vercel AI SDK: emits a `tool-call-error` then continues the stream
-  //   - OpenAI Assistants: stops the run with `expired` status but keeps
-  //     partial output
-  //   - Anthropic: stops with `max_tokens` stop reason, keeps partial output
-  //
-  // We use the same streaming-round helper with forceNoTools=true so the
-  // behavior is identical to a normal final round (text deltas stream
-  // live, no extra API round-trip).
-  if (budget.shouldForceFinal) {
-    budget.markForceFinalEmitted();
-    logger.warn(
-      { rounds: budget.maxRoundsValue, hadStuckLoop: budget.hadStuckLoop },
-      "TreeBot: tool budget exhausted — making one force-final call with tools disabled (graceful degradation)",
-    );
-
-    const forceGen = runOneStreamingRound(contents, config, true);
-    while (true) {
-      const { done, value } = await forceGen.next();
-      if (done) break;
-      if (typeof value === "string") {
-        yield value;
-      }
-    }
-    lastModel = _workingModel ?? "unknown";
-
+    // This branch is reached only if the force-final call already happened
+    // (shouldForceFinal was false) — meaning we already streamed a final
+    // answer above. Emit metadata as a safety net (it should have been
+    // emitted inside the force-final block).
     if (onMetadata) {
       onMetadata({
         model: lastModel,
@@ -1514,28 +1695,30 @@ export async function* streamGeminiChat(
         toolCalls: toolCallsCalled,
       });
     }
-    return;
-  }
 
-  // This branch is reached only if the force-final call already happened
-  // (shouldForceFinal was false) — meaning we already streamed a final
-  // answer above. Emit metadata as a safety net (it should have been
-  // emitted inside the force-final block).
-  if (onMetadata) {
-    onMetadata({
-      model: lastModel,
-      usage: lastUsage,
-      toolCalls: toolCallsCalled,
-    });
+    // If we somehow get here without having streamed anything, surface a
+    // clear error. The route will show the user a friendly fallback.
+    logger.error(
+      { rounds: budget.maxRoundsValue },
+      "TreeBot: tool loop ended without producing a final answer (this should not happen — force-final should have run)",
+    );
+    throw new Error(buildMaxRoundsErrorMessage(budget.maxRoundsValue));
+  } finally {
+    // P1 #5 fix: delete the Gemini context cache if one was created + not
+    // already abandoned mid-loop. This runs on every exit path: normal
+    // completion (return), error (throw), + early termination (consumer
+    // broke out of the `for await` loop, which calls `gen.return()`).
+    // The cache's `delete()` method is best-effort (catches its own errors)
+    // + is a no-op if the cache was already abandoned.
+    if (contextCache) {
+      await contextCache.delete().catch((err) => {
+        logger.debug(
+          { err: (err as Error)?.message ?? String(err) },
+          "Gemini context cache: delete in finally failed (non-fatal — will expire via TTL)",
+        );
+      });
+    }
   }
-
-  // If we somehow get here without having streamed anything, surface a
-  // clear error. The route will show the user a friendly fallback.
-  logger.error(
-    { rounds: budget.maxRoundsValue },
-    "TreeBot: tool loop ended without producing a final answer (this should not happen — force-final should have run)",
-  );
-  throw new Error(buildMaxRoundsErrorMessage(budget.maxRoundsValue));
 }
 
 /**

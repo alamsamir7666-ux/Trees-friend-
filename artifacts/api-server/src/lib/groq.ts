@@ -66,6 +66,15 @@ import {
 // the raw tool name from Groq's function-call response before emitting
 // typed ToolStreamEvent values. Same pattern as gemini.ts.
 import { isToolName, type ToolName } from "./aiToolSchemas";
+// P1 #8 fix: compact older tool results between rounds. Same module as
+// gemini.ts — but the compaction function expects Gemini's `contents` format
+// (functionResponse parts). Groq uses OpenAI-compatible `role: "tool"`
+// messages, so we apply compaction inline in the Groq loop (see below).
+import {
+  TOOL_COMPACTION_ENABLED,
+  TOOL_COMPACTION_MIN_ROUND,
+  COMPACTABLE_TOOLS,
+} from "./toolResultCompaction";
 
 // ─── Model fallback chain ───────────────────────────────────────────────────
 // v6.2 Part 10 (Production fix): Groq deprecated llama-3.3-70b-versatile +
@@ -790,6 +799,19 @@ export async function* streamGroqChat(
       while (budget.hasBudget) {
         const round = budget.currentRound;
 
+        // P1 #8 fix: compact older tool results before this round. Starting
+        // at round TOOL_COMPACTION_MIN_ROUND (default 3), search_catalog /
+        // search_seller_listings tool results from rounds 1 to N-2 are
+        // replaced with short summaries. The most recent round's results are
+        // kept intact. No-op when AI_TOOL_COMPACTION_ENABLED=false (default).
+        //
+        // Groq uses OpenAI-compatible `role: "tool"` messages (not Gemini's
+        // `functionResponse` parts), so we can't use the shared
+        // `compactOldToolResults` helper. We inline the compaction logic here.
+        if (TOOL_COMPACTION_ENABLED && round + 1 >= TOOL_COMPACTION_MIN_ROUND) {
+          compactGroqToolResults(messages, round + 1);
+        }
+
         if (budget.shouldWarnAboutHighRounds) {
           logger.warn(
             { round, maxRounds: budget.maxRoundsValue, model: modelName },
@@ -1381,4 +1403,160 @@ SUMMARY:`;
     throw new Error("Groq returned empty summary.");
   }
   return text.trim();
+}
+
+// ─── P1 #8 fix: Groq-specific tool result compaction ──────────────────────────
+
+/**
+ * P1 #8 fix (Groq-specific): compacts older tool results in the `messages`
+ * array. Same logic as `compactOldToolResults` in `toolResultCompaction.ts`,
+ * but adapted for Groq's OpenAI-compatible message format (`role: "tool"` +
+ * `content: JSON.stringify(result)` + `tool_call_id`).
+ *
+ * This function is called BEFORE each round (starting at
+ * `TOOL_COMPACTION_MIN_ROUND`). It scans the `messages` array for
+ * `role: "tool"` messages from `COMPACTABLE_TOOLS` that are NOT from the most
+ * recent round + replaces their `content` with a short summary.
+ *
+ * The "most recent round" is determined by finding the LAST `role: "tool"`
+ * message in the array — all `role: "tool"` messages BEFORE it are eligible
+ * for compaction.
+ *
+ * Idempotent: already-compacted messages (marked with a `__compacted: true`
+ * field in the content JSON) are skipped. Safe to call multiple times.
+ *
+ * @param messages The `messages` array from the Groq tool loop. Mutated in place.
+ * @param currentRound The current round number (1-indexed).
+ */
+function compactGroqToolResults(messages: GroqMessage[], currentRound: number): void {
+  // Find the index of the LAST `role: "tool"` message in the array.
+  let lastToolMsgIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "tool") {
+      lastToolMsgIdx = i;
+      break;
+    }
+  }
+
+  // No tool messages at all — nothing to compact.
+  if (lastToolMsgIdx === -1) return;
+
+  let compactedCount = 0;
+
+  // Iterate over all `role: "tool"` messages BEFORE the last one.
+  // Compact any eligible (search_catalog / search_seller_listings) messages
+  // that haven't already been compacted.
+  for (let i = 0; i < lastToolMsgIdx; i++) {
+    const msg = messages[i];
+    if (msg?.role !== "tool") continue;
+
+    // The tool name is NOT directly on the message — it's on the corresponding
+    // assistant message's `tool_calls` entry (matched by `tool_call_id`).
+    // We need to find the tool name by matching `tool_call_id`.
+    const toolCallId = msg.tool_call_id;
+    if (!toolCallId) continue;
+
+    // Find the matching assistant message with `tool_calls`.
+    let toolName: string | null = null;
+    for (let j = i - 1; j >= 0; j--) {
+      const prevMsg = messages[j];
+      if (prevMsg?.role !== "assistant" || !Array.isArray(prevMsg?.tool_calls)) continue;
+      const matchingCall = prevMsg.tool_calls.find((tc) => tc?.id === toolCallId);
+      if (matchingCall?.function?.name) {
+        toolName = matchingCall.function.name;
+        break;
+      }
+    }
+
+    if (!toolName || !COMPACTABLE_TOOLS.has(toolName)) continue;
+
+    // Parse the content to check if it's already compacted.
+    let parsedContent: unknown;
+    try {
+      parsedContent = JSON.parse(msg.content ?? "");
+    } catch {
+      continue; // not JSON — skip
+    }
+
+    // Skip already-compacted messages (idempotency).
+    if (
+      typeof parsedContent === "object" &&
+      parsedContent !== null &&
+      (parsedContent as Record<string, unknown>).__compacted === true
+    ) {
+      continue;
+    }
+
+    // Build the compacted summary.
+    const summary = buildGroqCompactedSummary(toolName, parsedContent);
+    msg.content = JSON.stringify(summary);
+    compactedCount++;
+  }
+
+  if (compactedCount > 0) {
+    logger.debug(
+      { compactedCount, currentRound, lastToolMsgIdx },
+      "P1 #8: Groq tool result compaction applied",
+    );
+  }
+}
+
+/**
+ * Builds a short summary object for a compacted Groq tool result.
+ * Same format as `buildCompactedSummary` in `toolResultCompaction.ts`,
+ * but returns an object (to be JSON-stringified) instead of a string.
+ */
+function buildGroqCompactedSummary(
+  toolName: string,
+  originalResult: unknown,
+): {
+  __compacted: true;
+  toolName: string;
+  summary: string;
+} {
+  if (originalResult == null) {
+    return {
+      __compacted: true,
+      toolName,
+      summary: `[no results (compacted from ${toolName})]`,
+    };
+  }
+
+  // Handle list-style results (search_catalog, search_seller_listings).
+  const resultObj = originalResult as Record<string, unknown>;
+  const list =
+    (Array.isArray(resultObj?.results) && (resultObj.results as unknown[])) ||
+    (Array.isArray(resultObj?.listings) && (resultObj.listings as unknown[])) ||
+    (Array.isArray(originalResult) ? originalResult : null);
+
+  if (list && list.length > 0) {
+    const names: string[] = [];
+    for (const item of list.slice(0, 8)) {
+      const itemObj = item as Record<string, unknown>;
+      const name =
+        (typeof itemObj?.name === "string" && itemObj.name) ||
+        (typeof itemObj?.productName === "string" && itemObj.productName) ||
+        (typeof itemObj?.title === "string" && itemObj.title) ||
+        null;
+      if (name) names.push(name);
+    }
+    if (names.length > 0) {
+      return {
+        __compacted: true,
+        toolName,
+        summary: `[${list.length} results found (compacted from ${toolName}): ${names.join(", ")}]`,
+      };
+    }
+    return {
+      __compacted: true,
+      toolName,
+      summary: `[${list.length} results found (compacted from ${toolName})]`,
+    };
+  }
+
+  return {
+    __compacted: true,
+    toolName,
+    summary: `[result compacted from ${toolName}]`,
+  };
 }
