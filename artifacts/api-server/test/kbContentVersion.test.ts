@@ -246,7 +246,12 @@ describe("BUG-3 fix: invalidateKbCache calls clearKbContentVersionCache", () => 
   const source = readSource("artifacts/api-server/src/lib/kbCache.ts");
 
   it("kbCache.ts imports clearKbContentVersionCache", () => {
-    expect(source).toContain('import { clearKbContentVersionCache } from "./kbContentVersion"');
+    // P2 #10 fix: the import is now multi-line (also imports
+    // incrementKbContentVersion). We accept any import shape that includes
+    // clearKbContentVersionCache from ./kbContentVersion.
+    expect(source).toMatch(
+      /import\s*\{[\s\S]*?clearKbContentVersionCache[\s\S]*?\}\s*from\s*["']\.\/kbContentVersion["']/,
+    );
   });
 
   it("invalidateKbCache calls clearKbContentVersionCache() BEFORE invalidateCatalogCache", () => {
@@ -258,5 +263,17 @@ describe("BUG-3 fix: invalidateKbCache calls clearKbContentVersionCache", () => 
     expect(clearIdx).toBeGreaterThan(-1);
     expect(invalidateIdx).toBeGreaterThan(-1);
     expect(clearIdx).toBeLessThan(invalidateIdx);
+  });
+
+  it("P2 #10: invalidateKbCache calls incrementKbContentVersion() BEFORE clearKbContentVersionCache", () => {
+    // P2 #10 fix: the Redis counter increment must come FIRST (primary
+    // invalidation mechanism). The in-process cache clear is the fallback.
+    const incrIdx = source.indexOf("incrementKbContentVersion()");
+    const clearIdx = source.indexOf("clearKbContentVersionCache()");
+    expect(incrIdx).toBeGreaterThan(-1);
+    expect(clearIdx).toBeGreaterThan(-1);
+    // The increment must come BEFORE the clear (it also calls clear internally,
+    // but the explicit clear is a safety net).
+    expect(incrIdx).toBeLessThan(clearIdx);
   });
 });

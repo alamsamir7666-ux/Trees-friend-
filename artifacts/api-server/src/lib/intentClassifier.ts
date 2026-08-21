@@ -78,6 +78,10 @@
  */
 
 import { logger } from "./logger";
+// P2 #9 fix: import the shared L1LruCache class instead of maintaining a
+// local copy. Eliminates drift across rerankerCache.ts, promptInjectionCache.ts,
+// topicClassifierCache.ts, and intentClassifier.ts.
+import { L1LruCache } from "./l1LruCache";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -498,44 +502,13 @@ const KNOWLEDGE_KEYWORDS = [
 // Same pattern as topicClassifierCache.ts (but no L2 — see module comment
 // for why). Each entry: { intent, reason, hits, normalizedMessage } ≈ 200
 // bytes. 512 entries × 200 bytes = ~100KB max — negligible.
+//
+// P2 #9 fix: the L1Cache class was extracted to ./l1LruCache.ts as the
+// generic L1LruCache<T> class. This eliminates drift across the 4 cache
+// modules that previously each had their own copy. The instance below
+// uses the shared class with the IntentClassification type parameter.
 
-class L1Cache {
-  private map = new Map<string, IntentClassification>();
-  private readonly maxEntries: number;
-
-  constructor(maxEntries: number) {
-    this.maxEntries = maxEntries;
-  }
-
-  get(key: string): IntentClassification | null {
-    const entry = this.map.get(key);
-    if (!entry) return null;
-    // LRU: move to end (most recently used).
-    this.map.delete(key);
-    this.map.set(key, entry);
-    return entry;
-  }
-
-  set(key: string, entry: IntentClassification): void {
-    if (this.map.size >= this.maxEntries) {
-      const oldestKey = this.map.keys().next().value;
-      if (oldestKey) this.map.delete(oldestKey);
-    }
-    this.map.set(key, entry);
-  }
-
-  clear(): number {
-    const count = this.map.size;
-    this.map.clear();
-    return count;
-  }
-
-  get size(): number {
-    return this.map.size;
-  }
-}
-
-const _l1 = new L1Cache(L1_MAX_ENTRIES);
+const _l1 = new L1LruCache<IntentClassification>(L1_MAX_ENTRIES);
 
 // ─── Cache key construction ─────────────────────────────────────────────────
 

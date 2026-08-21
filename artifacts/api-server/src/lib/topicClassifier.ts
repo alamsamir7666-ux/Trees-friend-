@@ -46,6 +46,11 @@ import {
   getInFlightTopicClassification,
   setInFlightTopicClassification,
 } from "./topicClassifierCache";
+// P2 #13 fix: import the shared GROQ_MODELS_WITH_JSON_SCHEMA set +
+// supportsGroqJsonSchema() helper from the central registry. Eliminates
+// drift across structuredOutput.ts, outputSafety.ts, topicClassifier.ts,
+// and promptInjectionLLM.ts (previously each had its own copy).
+import { supportsGroqJsonSchema } from "./groqModels";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -58,21 +63,9 @@ const MAX_MESSAGE_CHARS = 1000;
 const CLASSIFIER_TEMPERATURE = 0.1;
 const CLASSIFIER_MAX_TOKENS = 50;
 
-// Same set as structuredOutput.ts / outputSafety.ts — keep in sync.
-const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
-  "llama-4-scout-17b-16e-instruct",
-  "llama-4-maverick-17b-128e-instruct",
-  "openai/gpt-oss-120b",
-  "openai/gpt-oss-20b",
-  "llama-3.3-70b-versatile",
-  "llama-3.1-8b-instant",
-  "llama3-70b-8192",
-  "llama3-8b-8192",
-]);
-
-function supportsGroqJsonSchema(model: string): boolean {
-  return GROQ_MODELS_WITH_JSON_SCHEMA.has(model.split("@")[0]);
-}
+// P2 #13 fix: GROQ_MODELS_WITH_JSON_SCHEMA + supportsGroqJsonSchema() are now
+// imported from ./groqModels (shared registry). The local copy was removed
+// to eliminate drift across the 4 consumers.
 
 const TOPIC_CLASSIFIER_ENABLED =
   (process.env.TOPIC_CLASSIFIER_ENABLED ?? "true").toLowerCase() !== "false";

@@ -127,7 +127,13 @@ describe("P0 #1: pure greeting shortcut runs BEFORE the LLM gates", () => {
   });
 
   it("declares hasBotanicalKw from hasBotanicalKeyword(safeMessage)", () => {
-    expect(source).toMatch(/const\s+hasBotanicalKw\s*=\s*hasBotanicalKeyword\(safeMessage\)/);
+    // P2 #11 fix: hasBotanicalKeyword is now CONDITIONAL on !isGreeting.
+    // For pure greetings, we skip the botanical keyword check entirely
+    // (returns true — allow). We accept EITHER the direct call form OR the
+    // conditional form.
+    expect(source).toMatch(
+      /const\s+hasBotanicalKw\s*=\s*(?:hasBotanicalKeyword\(safeMessage\)|isGreeting\s*\?\s*true\s*:\s*hasBotanicalKeyword\(safeMessage\))/,
+    );
   });
 
   it("the greeting shortcut (if isGreeting) runs BEFORE the Promise.allSettled for LLM gates", () => {

@@ -104,7 +104,11 @@ import { classifyTopic } from "../lib/topicClassifier";
 // KNOWLEDGE → get_product_care + KB, MIXED → both. Fast (~10μs after warmup),
 // $0 cost (no LLM call), deterministic. Fail-open to MIXED when no keywords match.
 import { classifyIntent } from "../lib/intentClassifier";
-import { checkOutputSafety, shouldRunConstitutionalAI } from "../lib/outputSafety";
+import {
+  checkOutputSafety,
+  shouldRunConstitutionalAI,
+  shouldRunOutputPiiRedaction,
+} from "../lib/outputSafety";
 import { getCachedResponse, setCachedResponse } from "../lib/semanticCache";
 import { getSemanticCachedResponse, setSemanticCachedResponse } from "../lib/embeddingCache";
 // BUG-3 fix: compute a KB content version fingerprint so the semantic cache
@@ -1093,14 +1097,40 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   //     entirely (existing v6.1 Part 6 optimization — these intents are
   //     high-confidence + the message is clearly on-topic).
   //
+  // P2 #11 fix (control flow clarity): check `isPureGreeting` FIRST. If the
+  // message is a pure greeting, we skip `classifyIntent` + `hasBotanicalKeyword`
+  // entirely (they're not needed for the greeting shortcut). Saves ~20μs per
+  // greeting + makes the control flow cleaner — the greeting check is the
+  // fastest short-circuit, so it should be the first thing we evaluate.
+  //
   // The classifier runs AFTER PII redaction (so the redacted message is
   // what gets classified — protects user privacy in cache + logs) and
   // AFTER the circuit check (so we don't waste cycles when throttled).
   // It runs BEFORE the topic gate so we can correlate intent + topic in
   // the event log.
-  const intentClassification = classifyIntent(safeMessage);
+  //
+  // Order:
+  //   1. isPureGreeting(safeMessage) — fastest, most common short-circuit.
+  //   2. classifyIntent(safeMessage) — only if not a greeting (needed for
+  //      intent-based tool subsetting + KB auto-inject routing).
+  //   3. hasBotanicalKeyword(safeMessage) — only if not a greeting (needed
+  //      to decide if the topic classifier should run).
   const isGreeting = isPureGreeting(safeMessage);
-  const hasBotanicalKw = hasBotanicalKeyword(safeMessage);
+  // P2 #11: only run the intent classifier + botanical keyword check if
+  // the message is NOT a pure greeting. For greetings, these checks are
+  // unnecessary — the greeting shortcut doesn't use intent or topic info.
+  // We use a default intent classification (MIXED — fail-open) + a default
+  // botanical keyword flag (true — allow) so the downstream code compiles.
+  const intentClassification = isGreeting
+    ? {
+        intent: "GREETING" as const,
+        reason: "pure greeting — intent classification skipped (P2 #11)",
+        purchaseHits: [] as string[],
+        knowledgeHits: [] as string[],
+        normalizedMessage: safeMessage,
+      }
+    : classifyIntent(safeMessage);
+  const hasBotanicalKw = isGreeting ? true : hasBotanicalKeyword(safeMessage);
 
   // ─── 4b. Pure greeting shortcut (BEFORE the LLM gates) ──────────────────
   // For "Hi" / "Hello" / "Salam" etc., skip Gemini entirely and return a
@@ -1111,6 +1141,10 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // detector. Both of those are LLM calls (~200ms-4s each), and a pure
   // greeting is clearly on-topic + clearly not an injection attack —
   // running them would be wasted latency + wasted LLM quota.
+  //
+  // P2 #11 fix: the greeting check is now the FIRST lexical check (above).
+  // If it's a greeting, we skip the intent classifier + botanical keyword
+  // check entirely (not needed for the greeting shortcut).
   if (isGreeting) {
     try {
       const session = await findOrCreateSession(resolved.sid, safeMessage, resolved.uid);
@@ -2512,12 +2546,30 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     //
     // The fast PII redaction (regex, ~1ms) ALWAYS runs on the output —
     // catches phone numbers, emails, NID, card numbers regardless of the gate.
+    //
+    // P2 #12 fix: the output PII redaction is NOW ALSO GATED (similar to
+    // Constitutional AI). When the response comes from vetted sources
+    // (catalog/KB) with no PII leak vector, we skip the output PII redaction
+    // entirely — saves ~1ms (regex) or ~50ms (Presidio when configured).
+    // The gate is the same as Constitutional AI (user-scoped tools called OR
+    // input had PII) EXCEPT it doesn't include the `isPrivateQuery` gate
+    // (account keywords alone don't indicate a PII leak vector — they just
+    // indicate the user MIGHT ask about their orders, which is caught by the
+    // user-scoped tool gate).
     const toolCallsForGate = metaHolder.value?.toolCalls ?? [];
     const runConstitutionalAI = shouldRunConstitutionalAI(
       toolCallsForGate,
       USER_SCOPED_TOOLS,
       piiResult.hadPii,
       isPrivateQuery,
+    );
+    // P2 #12: gate the output PII redaction separately. Uses the same
+    // toolCallsForGate + piiResult.hadPii but NOT isPrivateQuery (account
+    // keywords alone don't indicate a PII leak vector).
+    const runOutputPiiRedaction = shouldRunOutputPiiRedaction(
+      toolCallsForGate,
+      USER_SCOPED_TOOLS,
+      piiResult.hadPii,
     );
 
     // Determine if followups fallback is needed (cheap pre-check — extractFollowups is sync).
@@ -2574,11 +2626,16 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
         if (!fullResponse || !fullResponse.trim()) return null;
         // P0 #4: gate the slow Constitutional AI check via shouldRunConstitutionalAI().
         // When skipped, only the fast PII redaction runs (~1ms regex).
+        // P2 #12: also gate the output PII redaction via
+        // shouldRunOutputPiiRedaction(). When skipped, neither check runs —
+        // the response is used as-is (safe because the caller verified no PII
+        // leak vector).
         try {
           const outputSafety = await checkOutputSafety(
             safeMessage,
             fullResponse,
             runConstitutionalAI,
+            runOutputPiiRedaction,
           );
           return {
             sanitizedResponse: outputSafety.sanitizedResponse,
@@ -2687,6 +2744,16 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
           isPrivateQuery,
         },
         "AI: P0 #4 — Constitutional AI check SKIPPED (response from vetted sources, no PII leak vector)",
+      );
+    }
+    // P2 #12: log the output PII redaction gating decision (for observability).
+    if (!runOutputPiiRedaction) {
+      logger.debug(
+        {
+          toolCalls: toolCallsForGate,
+          hadInputPii: piiResult.hadPii,
+        },
+        "AI: P2 #12 — output PII redaction SKIPPED (response from vetted sources, no PII leak vector)",
       );
     }
     // Reference `appendedFollowups` + `appendedFollowupsBlock` to satisfy

@@ -147,7 +147,10 @@ describe("Topic classifier: multi-tier cache (v5.3.1)", () => {
 
   it("uses L1 LRU + L2 Redis (multi-tier, industry standard)", () => {
     const source = readSource("artifacts/api-server/src/lib/topicClassifierCache.ts");
-    expect(source).toContain("class L1Cache");
+    // P2 #9 fix: the L1Cache class was extracted to ./l1LruCache.ts as the
+    // generic L1LruCache<T> class. The local class definition is gone —
+    // we now import L1LruCache + instantiate it with the CacheEntry type.
+    expect(source).toContain("L1LruCache");
     expect(source).toContain("getRedis");
     expect(source).toContain("LRU");
   });

@@ -48,7 +48,7 @@
  * in `aiAdmin.ts`.
  */
 import { invalidateCatalogCache } from "./catalogCache";
-import { clearKbContentVersionCache } from "./kbContentVersion";
+import { clearKbContentVersionCache, incrementKbContentVersion } from "./kbContentVersion";
 import { logger } from "./logger";
 
 /**
@@ -59,15 +59,23 @@ import { logger } from "./logger";
  * would leave caches empty for no reason (the data didn't actually
  * change).
  *
- * Two-layer invalidation:
- *   1. `clearKbContentVersionCache()` — clears the in-process KB version
- *      cache so the next chat request recomputes the version from the
- *      (now-updated) DB state. MUST run BEFORE the catalog cache flush
- *      so a concurrent in-flight request can't read the stale versioned
- *      cache during the invalidation window.
- *   2. `invalidateCatalogCache()` — flushes the Redis exact-match cache
+ * Three-layer invalidation:
+ *   1. `incrementKbContentVersion()` — P2 #10: increments the Redis KB
+ *      version counter so the next chat request reads the new version.
+ *      Also clears the in-process version cache (via
+ *      `clearKbContentVersionCache()`). MUST run BEFORE the catalog cache
+ *      flush so a concurrent in-flight request can't read the stale
+ *      versioned cache during the invalidation window.
+ *   2. `clearKbContentVersionCache()` — clears the in-process KB version
+ *      cache (also called by `incrementKbContentVersion()` — redundant
+ *      but safe + explicit).
+ *   3. `invalidateCatalogCache()` — flushes the Redis exact-match cache
  *      + pgvector semantic cache + reranker cache. See catalogCache.ts
  *      for the full list.
+ *
+ * P2 #10 fix: the Redis counter increment (#1) is the PRIMARY version
+ * invalidation. The in-process cache clear (#2) is the FALLBACK for when
+ * Redis is unavailable (the DB hash recomputation will pick up the change).
  *
  * @param reason - human-readable label for audit logging.
  *                 Examples: "entry.update", "creator.tone.regen",
@@ -75,10 +83,20 @@ import { logger } from "./logger";
  */
 export async function invalidateKbCache(reason: string): Promise<void> {
   try {
-    // Clear the in-process KB version cache FIRST so the next request
-    // recomputes the version from the (now-updated) DB state. If we
-    // cleared it after invalidateCatalogCache, a concurrent request
-    // could read the stale versioned cache during the invalidation window.
+    // P2 #10: increment the Redis KB version counter FIRST. This is the
+    // primary invalidation mechanism — the next chat request reads the
+    // new counter value via `getKbContentVersion()`. The INCR is atomic
+    // + also clears the in-process cache (via `clearKbContentVersionCache()`
+    // inside `incrementKbContentVersion()`).
+    //
+    // If Redis is unavailable, this returns null (non-fatal) — the
+    // `clearKbContentVersionCache()` call below ensures the DB hash
+    // fallback will be used on the next request.
+    await incrementKbContentVersion();
+
+    // Clear the in-process KB version cache (redundant if Redis INCR
+    // succeeded — `incrementKbContentVersion()` already calls this —
+    // but explicit + safe in case Redis was unavailable).
     clearKbContentVersionCache();
 
     await invalidateCatalogCache(`kb:${reason}`);

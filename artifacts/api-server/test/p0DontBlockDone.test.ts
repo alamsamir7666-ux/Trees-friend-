@@ -228,10 +228,13 @@ describe("P0 #4: checkOutputSafety accepts a runConstitutionalAI parameter", () 
     expect(source).toMatch(/200ms.+3s/i);
   });
 
-  it("PII redaction ALWAYS runs (not gated on runConstitutionalAI)", () => {
-    // The PII redaction block runs unconditionally (when PII_REDACTION_ENABLED=true).
-    // Look for the PII_REDACTION_ENABLED check WITHOUT a runConstitutionalAI condition.
-    expect(source).toMatch(/if\s*\(\s*PII_REDACTION_ENABLED\s*\)/);
+  it("PII redaction is gated on runPiiRedaction (P2 #12)", () => {
+    // P0 #4: PII redaction ALWAYS runs (when runConstitutionalAI=false, the PII
+    // redaction still runs — only the LLM-based Constitutional AI check is skipped).
+    // P2 #12: PII redaction is NOW ALSO gated on `runPiiRedaction` (separate
+    // parameter). When both PII_REDACTION_ENABLED=true AND runPiiRedaction=true,
+    // the PII redaction runs. When runPiiRedaction=false, it's skipped.
+    expect(source).toMatch(/if\s*\(\s*PII_REDACTION_ENABLED\s*&&\s*runPiiRedaction\s*\)/);
   });
 
   it("Constitutional AI check is gated on runConstitutionalAI", () => {

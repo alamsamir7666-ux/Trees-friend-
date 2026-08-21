@@ -65,6 +65,14 @@
  * Temperature: 0.1 (low — we want consistent, deterministic classifications)
  */
 import { logger } from "./logger";
+// P2 #13 fix: import the shared GROQ_MODELS_WITH_JSON_SCHEMA set +
+// supportsGroqJsonSchema() helper from the central registry. Eliminates
+// drift across structuredOutput.ts, outputSafety.ts, topicClassifier.ts,
+// and promptInjectionLLM.ts (previously each had its own copy).
+// This also fixes a pre-existing drift: promptInjectionLLM.ts was MISSING
+// `openai/gpt-oss-20b` (the other 3 files had it). Now all 4 consumers
+// use the same shared set.
+import { supportsGroqJsonSchema } from "./groqModels";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -77,20 +85,12 @@ const MAX_MESSAGE_CHARS = 2000; // truncate long messages (saves tokens)
 const CLASSIFIER_TEMPERATURE = 0.1; // low — consistent classifications
 const CLASSIFIER_MAX_TOKENS = 100; // JSON response is small
 
-// Same set as structuredOutput.ts / outputSafety.ts / topicClassifier.ts.
-const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
-  "llama-4-scout-17b-16e-instruct",
-  "llama-4-maverick-17b-128e-instruct",
-  "openai/gpt-oss-120b",
-  "llama-3.3-70b-versatile",
-  "llama-3.1-8b-instant",
-  "llama3-70b-8192",
-  "llama3-8b-8192",
-]);
-
-function supportsGroqJsonSchema(model: string): boolean {
-  return GROQ_MODELS_WITH_JSON_SCHEMA.has(model.split("@")[0]);
-}
+// P2 #13 fix: GROQ_MODELS_WITH_JSON_SCHEMA + supportsGroqJsonSchema() are now
+// imported from ./groqModels (shared registry). The local copy was removed
+// to eliminate drift across the 4 consumers.
+// This also fixes a pre-existing drift: this file was MISSING
+// `openai/gpt-oss-20b` (the other 3 files had it). Now all 4 consumers
+// use the same shared set.
 
 /**
  * Runtime validator for the prompt-injection classifier response.

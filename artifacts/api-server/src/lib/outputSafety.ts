@@ -53,6 +53,11 @@
  */
 import { redactPii, type RedactionResult } from "./piiRedaction";
 import { logger } from "./logger";
+// P2 #13 fix: import the shared GROQ_MODELS_WITH_JSON_SCHEMA set +
+// supportsGroqJsonSchema() helper from the central registry. Eliminates
+// drift across structuredOutput.ts, outputSafety.ts, topicClassifier.ts,
+// and promptInjectionLLM.ts (previously each had its own copy).
+import { supportsGroqJsonSchema } from "./groqModels";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -127,20 +132,9 @@ const AI_MAX_TOKENS = 50;
 // v6.2 Part 10: added llama-4-* models (Llama 4 MoE family, supports json_schema).
 // Kept the deprecated llama-3.3-70b-versatile + llama-3.1-8b-instant entries
 // for backward compat (users with GROQ_MODEL env var still pointing at them).
-const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
-  "llama-4-scout-17b-16e-instruct",
-  "llama-4-maverick-17b-128e-instruct",
-  "openai/gpt-oss-120b",
-  "openai/gpt-oss-20b",
-  "llama-3.3-70b-versatile",
-  "llama-3.1-8b-instant",
-  "llama3-70b-8192",
-  "llama3-8b-8192",
-]);
-
-function supportsGroqJsonSchema(model: string): boolean {
-  return GROQ_MODELS_WITH_JSON_SCHEMA.has(model.split("@")[0]);
-}
+// P2 #13 fix: GROQ_MODELS_WITH_JSON_SCHEMA + supportsGroqJsonSchema() are now
+// imported from ./groqModels (shared registry). The local copy was removed
+// to eliminate drift across the 4 consumers.
 
 /**
  * Runtime validator for the safety-check response. Used by the
@@ -397,6 +391,17 @@ export async function checkOutputSafety(
    * OUTPUT_CONSTITUTIONAL_AI_ENABLED=true).
    */
   runConstitutionalAI: boolean = true,
+  /**
+   * P2 #12 fix: when false, skip the output PII redaction (regex, ~1ms;
+   * Presidio, ~50ms when configured). The caller decides this via
+   * `shouldRunOutputPiiRedaction()` based on whether user-scoped tools were
+   * called + whether the input had PII.
+   *
+   * Default `true` for back-compat — callers that don't pass this parameter
+   * get the existing behavior (PII redaction runs whenever
+   * OUTPUT_PII_REDACTION_ENABLED=true).
+   */
+  runPiiRedaction: boolean = true,
 ): Promise<OutputSafetyResult> {
   const startTime = Date.now();
 
@@ -420,9 +425,17 @@ export async function checkOutputSafety(
   let safetyExplanation: string | null = null;
 
   // ─── 1. PII redaction on output ──────────────────────────────────────────
-  // P0 #4: PII redaction ALWAYS runs (it's fast — regex ~1ms, Presidio ~50ms).
-  // The Constitutional AI check is gated separately (below).
-  if (PII_REDACTION_ENABLED) {
+  // P0 #4: PII redaction is fast (regex ~1ms, Presidio ~50ms) + runs whenever
+  // PII_REDACTION_ENABLED=true.
+  // P2 #12: now gated on `runPiiRedaction` (caller decides via
+  // `shouldRunOutputPiiRedaction()`). When skipped, the output PII redaction
+  // is not run — the response is used as-is. This is safe because the caller
+  // has already verified that:
+  //   - No user-scoped tools were called (no PII leak from tool results).
+  //   - The input had no PII (no "echo back" risk).
+  // The response comes from vetted sources (catalog/KB) with no realistic PII
+  // leak vector.
+  if (PII_REDACTION_ENABLED && runPiiRedaction) {
     try {
       piiResult = await redactPii(sanitizedResponse);
       if (piiResult.hadPii) {
@@ -443,6 +456,12 @@ export async function checkOutputSafety(
         "Output safety: PII redaction failed (non-fatal)",
       );
     }
+  } else if (PII_REDACTION_ENABLED && !runPiiRedaction) {
+    // P2 #12: log that we skipped the check (for observability).
+    logger.debug(
+      { userQuestionPreview: userQuestion.slice(0, 80) },
+      "Output safety: PII redaction SKIPPED (P2 #12 gating — response from vetted sources, no PII leak vector)",
+    );
   }
 
   // ─── 2. Constitutional AI check ──────────────────────────────────────────
@@ -614,5 +633,97 @@ export function shouldRunConstitutionalAI(
 
   // Default: skip — the response is from vetted sources (catalog/KB) with
   // no realistic PII leak vector. Saves ~200ms–3s per request.
+  return false;
+}
+
+// ─── P2 #12 fix: output PII redaction gating ────────────────────────────────
+
+/**
+ * P2 #12 fix (latency optimization): decides whether to run the output PII
+ * redaction (regex, ~1ms; Presidio, ~50ms when configured).
+ *
+ * The output PII redaction catches PII that LEAKS into the AI's response:
+ *   - Model training data leakage (rare — the model would have to hallucinate
+ *     a real phone number/email).
+ *   - KB content that contains PII (possible but rare — KB content is
+ *     admin-vetted).
+ *   - The LLM "echoing" back PII from the user's input (e.g., the user typed
+ *     their phone number, the LLM restates it).
+ *   - User-scoped tool results that contain PII (order numbers, addresses,
+ *     tracking IDs from get_user_orders / get_order_details).
+ *
+ * For the BULK of traffic (catalog + KB queries with no PII in the input),
+ * there's no realistic PII leak vector — the response comes from vetted
+ * sources (the product catalog, the curated KB). Skipping the output PII
+ * redaction on these requests saves ~1ms (regex) or ~50ms (Presidio when
+ * configured) with zero safety loss.
+ *
+ * The check RUNS when:
+ *   1. Any user-scoped tool was called (get_user_orders, get_order_details) —
+ *      the tool results contain user-specific data (order numbers, addresses)
+ *      that the LLM might inadvertently leak or mishandle.
+ *   2. The user's INPUT had PII redacted — the LLM might "echo" it back.
+ *      The input redaction replaced [PHONE] in the message we sent to the LLM,
+ *      but the LLM might still hallucinate the original based on context.
+ *
+ * This is SIMILAR to `shouldRunConstitutionalAI()` but gates the FAST PII
+ * redaction (regex) instead of the SLOW Constitutional AI check (LLM). The
+ * two gates are INDEPENDENT — each can be enabled/disabled separately via
+ * env vars.
+ *
+ * Config (env vars):
+ *   OUTPUT_PII_REDACTION_ENABLED=false — global kill switch (existing).
+ *   OUTPUT_PII_REDACTION_GATE_ENABLED=true (default) — enable the gating
+ *     logic below. Set to "false" to run on every response (back-compat with
+ *     the pre-P2-#12 behavior — useful for paranoid deployments or for
+ *     testing the check's accuracy).
+ *
+ * @param toolCalls       Names of tools the LLM called during this request.
+ * @param userScopedTools The set of user-scoped tool names.
+ * @param hadInputPii     True if the user's INPUT message had PII redacted.
+ *
+ * @returns true if the output PII redaction should run; false to skip.
+ *
+ * @example
+ *   shouldRunOutputPiiRedaction(
+ *     ["search_catalog"],          // catalog-only query
+ *     new Set(["get_user_orders", "get_order_details"]),
+ *     false,                       // no PII in input
+ *   ) // → false (skip — pure catalog query, no PII leak vector)
+ *
+ *   shouldRunOutputPiiRedaction(
+ *     ["get_user_orders"],         // user-scoped tool called
+ *     new Set(["get_user_orders", "get_order_details"]),
+ *     false,
+ *   ) // → true (run — tool results contain user-specific data)
+ */
+export function shouldRunOutputPiiRedaction(
+  toolCalls: readonly string[],
+  userScopedTools: ReadonlySet<string>,
+  hadInputPii: boolean,
+): boolean {
+  // Global kill switch — if the admin disabled PII redaction entirely,
+  // never run it (preserves the existing OUTPUT_PII_REDACTION_ENABLED=false
+  // behavior).
+  if (!PII_REDACTION_ENABLED) return false;
+
+  // P2 #12 gating — opt-out via env var for paranoid deployments.
+  const gatingEnabled =
+    (process.env.OUTPUT_PII_REDACTION_GATE_ENABLED ?? "true").toLowerCase() !== "false";
+  if (!gatingEnabled) return true;
+
+  // Gate 1: any user-scoped tool was called. The tool results contain
+  // user-specific data (order numbers, addresses, tracking IDs) that the
+  // LLM might inadvertently leak or mishandle.
+  const calledUserScopedTool = toolCalls.some((name) => userScopedTools.has(name));
+  if (calledUserScopedTool) return true;
+
+  // Gate 2: the user's input had PII redacted. The LLM might "echo" the
+  // unredacted PII back (e.g., the user typed their phone number, the LLM
+  // restates it in the response).
+  if (hadInputPii) return true;
+
+  // Default: skip — the response is from vetted sources (catalog/KB) with
+  // no realistic PII leak vector. Saves ~1ms (regex) or ~50ms (Presidio).
   return false;
 }

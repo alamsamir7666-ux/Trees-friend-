@@ -33,6 +33,11 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { logger } from "./logger";
 import { getProviderChain } from "./aiRouter";
 import { getModelChain } from "./gemini";
+// P2 #13 fix: import the shared GROQ_MODELS_WITH_JSON_SCHEMA set +
+// supportsGroqJsonSchema() helper from the central registry. Eliminates
+// drift across structuredOutput.ts, outputSafety.ts, topicClassifier.ts,
+// and promptInjectionLLM.ts (previously each had its own copy).
+import { supportsGroqJsonSchema } from "./groqModels";
 
 // ─── Schema definition ──────────────────────────────────────────────────────
 
@@ -84,24 +89,9 @@ export interface StructuredFollowups {
  * `mixtral-8x7b-32768`, `gemma2-9b-it`, and several others do NOT support
  * json_schema — they reject with HTTP 400 if you try.
  */
-const GROQ_MODELS_WITH_JSON_SCHEMA = new Set([
-  "llama-4-scout-17b-16e-instruct",
-  "llama-4-maverick-17b-128e-instruct",
-  "openai/gpt-oss-120b",
-  "openai/gpt-oss-20b",
-  "llama-3.3-70b-versatile",
-  "llama-3.1-8b-instant",
-  "llama3-70b-8192",
-  "llama3-8b-8192",
-]);
-
-function supportsGroqJsonSchema(model: string): boolean {
-  // Match exact names AND the same name with a date-suffix variant
-  // (e.g. "llama-3.3-70b-versatile@2025-01-01"). Groq occasionally ships
-  // dated snapshots; the json_schema capability follows the base model.
-  const base = model.split("@")[0];
-  return GROQ_MODELS_WITH_JSON_SCHEMA.has(base);
-}
+// P2 #13 fix: GROQ_MODELS_WITH_JSON_SCHEMA + supportsGroqJsonSchema() are now
+// imported from ./groqModels (shared registry). The local copy was removed
+// to eliminate drift across the 4 consumers.
 
 /**
  * Validate a parsed followups object against our expected shape.
