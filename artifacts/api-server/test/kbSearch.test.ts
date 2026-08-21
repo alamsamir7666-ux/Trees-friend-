@@ -390,8 +390,13 @@ describe("Phase 3: routes/ai.ts KB integration", () => {
     expect(source).toContain("kbSearch");
   });
 
-  it("calls getTopKbEntriesForPrompt(safeMessage, 3) to build KB context", () => {
-    expect(source).toContain("getTopKbEntriesForPrompt(safeMessage, 3)");
+  it("calls getTopKbEntriesForPrompt(safeMessage) to build KB context", () => {
+    // P0 #3 fix: the call now passes `safeMessage, undefined, true`
+    // (skipRerank=true for the auto-inject path). The old `(safeMessage, 3)`
+    // call is gone — the explicit `3` was part of the divergent BUG-I1
+    // config that was unified to 5.
+    // We accept ANY call shape that starts with `getTopKbEntriesForPrompt(safeMessage`.
+    expect(source).toMatch(/getTopKbEntriesForPrompt\(\s*safeMessage/);
   });
 
   it("passes knowledgeBlock to renderPromptTemplate (DB path)", () => {

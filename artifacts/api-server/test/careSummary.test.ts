@@ -50,10 +50,7 @@ describe("v6.1 Part 4: search_seller_listings tool declaration includes care_sum
 describe("v6.1 Part 4: executeTool passes careSummary from args.care_summary", () => {
   it("the executeTool switch reads args.care_summary + passes it as careSummary", async () => {
     const fs = await import("node:fs");
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/lib/aiTools.ts`,
-      "utf8",
-    );
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/lib/aiTools.ts`, "utf8");
     // The executeTool switch must read args.care_summary (boolean) and
     // pass it as careSummary to searchSellerListings.
     expect(source).toContain("careSummary: args.care_summary === true");
@@ -141,19 +138,24 @@ describe("v6.1 Part 4: formatSellerListingContextForPrompt prepends care summary
 describe("v6.1 Part 4: chat route skips KB auto-inject for MIXED intent", () => {
   it("routes/ai.ts declares skipKbAutoInject for MIXED+PURCHASE intent", async () => {
     const fs = await import("node:fs");
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-      "utf8",
-    );
-    // v6.1 Part 5 (Gap #4): changed from `const` to `let` so the
-    // MIXED+0-listings fallback can reassign kbContext.
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
+    // v6.1 Part 5 (Gap #4): `kbContext` is declared as `let` so the
+    // MIXED+0-listings fallback can reassign it.
     // v6.1 Part 6: also skips for PURCHASE intent (KB is care-focused,
     // won't match pure purchase queries — saves ~200ms-3.5s).
+    //
+    // P0 #1 fix: the `let kbContext = ...` declaration moved. The
+    // `skipKbAutoInject` variable is still declared in routes/ai.ts +
+    // controls whether KB auto-inject runs. The `kbContext` variable is
+    // now destructured from BATCH B (`let kbContext = batchBKbContext`).
+    // We verify BOTH:
+    //   1. `skipKbAutoInject` is still declared.
+    //   2. `kbContext` is `let` (reassignable for the Gap #4 fallback).
     expect(source).toContain("skipKbAutoInject");
     expect(source).toContain('intentClassification.intent === "MIXED"');
     expect(source).toContain('intentClassification.intent === "PURCHASE"');
-    expect(source).toContain("let kbContext = skipKbAutoInject");
     expect(source).toContain("injected: false");
+    expect(source).toMatch(/let\s+kbContext\s*=\s*batchBKbContext/);
     // The fallback logic for MIXED + 0 listings.
     expect(source).toContain("isMixedIntent");
     expect(source).toContain("MIXED + 0 listings");
@@ -162,20 +164,14 @@ describe("v6.1 Part 4: chat route skips KB auto-inject for MIXED intent", () => 
 
   it("the chat route passes careSummary=isMixedIntent to searchSellerListings", async () => {
     const fs = await import("node:fs");
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-      "utf8",
-    );
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
     expect(source).toContain('const isMixedIntent = intentClassification.intent === "MIXED"');
     expect(source).toContain("careSummary: isMixedIntent");
   });
 
   it("the chat route passes careSummary to formatSellerListingContextForPrompt", async () => {
     const fs = await import("node:fs");
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-      "utf8",
-    );
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
     // The formatSellerListingContextForPrompt call must pass the careSummary
     // from the search result.
     expect(source).toContain("formatSellerListingContextForPrompt(");

@@ -74,7 +74,17 @@ describe("BUG-I1 fix: getTopKbEntriesForPrompt uses unified config", () => {
   });
 
   it("passes UNIFIED_SKIP_RERANK to searchKnowledgeBase (was hardcoded true)", () => {
-    expect(source).toMatch(/getTopKbEntriesForPrompt[\s\S]*?skipRerank:\s*UNIFIED_SKIP_RERANK/);
+    // P0 #3 fix: the `skipRerank` parameter is now a FUNCTION ARGUMENT
+    // (defaulting to UNIFIED_SKIP_RERANK), not an inline reference inside
+    // the searchKnowledgeBase call. This lets the route handler opt into
+    // `skipRerank=true` for the auto-inject path (latency optimization)
+    // while leaving the on-demand tool path on the unified default.
+    //
+    // We verify BOTH:
+    //   1. The function signature has a `skipRerank: boolean = UNIFIED_SKIP_RERANK` parameter.
+    //   2. The searchKnowledgeBase call passes the `skipRerank` parameter through.
+    expect(source).toMatch(/skipRerank:\s*boolean\s*=\s*UNIFIED_SKIP_RERANK/);
+    expect(source).toMatch(/skipRerank,\s*\}\s*\);/);
   });
 });
 
@@ -110,8 +120,16 @@ describe("BUG-I1 fix: routes/ai.ts calls getTopKbEntriesForPrompt without explic
     // The old call was `getTopKbEntriesForPrompt(safeMessage, 3)` —
     // the explicit `3` was part of the divergent config. The unified
     // default (5) is now used.
-    // We check the actual call (an await statement), not comments.
-    expect(source).toMatch(/await\s+getTopKbEntriesForPrompt\(safeMessage\)/);
+    //
+    // P0 #3 fix: the auto-inject call now passes `skipRerank=true` as the
+    // third argument (latency optimization). The fallback path (MIXED + 0
+    // listings) also passes `skipRerank=true`. We verify BOTH call shapes:
+    //   1. The auto-inject call (inside BATCH B Promise.all).
+    //   2. The fallback call (Gap #4 fix).
+    //
+    // We accept EITHER call shape — the test is verifying that the
+    // `safeMessage` arg is present + the explicit `3` is NOT.
+    expect(source).toMatch(/getTopKbEntriesForPrompt\(\s*safeMessage\b/);
   });
 
   it("does NOT have an executable call with the explicit `3` arg", () => {
@@ -122,6 +140,26 @@ describe("BUG-I1 fix: routes/ai.ts calls getTopKbEntriesForPrompt without explic
       .filter((line) => !line.trim().startsWith("//"))
       .join("\n");
     expect(codeOnly).not.toMatch(/getTopKbEntriesForPrompt\(safeMessage,\s*3\)/);
+  });
+
+  it("P0 #3: passes skipRerank=true for the auto-inject path (latency optimization)", () => {
+    // The auto-inject call must explicitly pass `true` as the third
+    // argument (skipRerank). This skips the cross-encoder reranker for
+    // the auto-inject path — saves ~200-500ms on every KNOWLEDGE-intent
+    // query. The on-demand tool path keeps the reranker (higher quality bar).
+    //
+    // We look for the call inside BATCH B (Promise.all) + the fallback
+    // call (Gap #4 fix). Both should pass `true`.
+    const codeOnly = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    // The auto-inject call in BATCH B.
+    expect(codeOnly).toMatch(/getTopKbEntriesForPrompt\(\s*safeMessage,\s*undefined,\s*true/);
+    // The fallback call (Gap #4 fix) — also passes true.
+    expect(codeOnly).toMatch(
+      /fallbackKbContext\s*=\s*await\s+getTopKbEntriesForPrompt\(\s*safeMessage,\s*undefined,\s*true/,
+    );
   });
 });
 

@@ -81,7 +81,11 @@ describe("Prompt-injection: source-shape tests", () => {
   it("ai.ts imports + calls detectPromptInjection", () => {
     const source = readSource("artifacts/api-server/src/routes/ai.ts");
     expect(source).toContain("import { detectPromptInjection }");
-    expect(source).toContain("await detectPromptInjection(safeMessage)");
+    // P0 #1 fix: detectPromptInjection now runs in PARALLEL with classifyTopic
+    // via Promise.allSettled. The call is no longer prefixed with `await` at
+    // the top level — it's inside the Promise.allSettled array. We accept
+    // EITHER the awaited form OR the inline form.
+    expect(source).toMatch(/detectPromptInjection\(safeMessage\)/);
     expect(source).toContain("prompt-injection DETECTED");
     expect(source).toContain("prompt_injection_blocked");
   });

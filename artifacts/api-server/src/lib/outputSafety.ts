@@ -368,13 +368,35 @@ const SAFE_FALLBACK_RESPONSE =
  * Both checks are best-effort (fail-open) — if they fail, the original
  * response is used.
  *
- * @param userQuestion - The user's original question (for context)
- * @param aiResponse - The AI's full response to check
+ * P0 #4 fix: added an optional `runConstitutionalAI` parameter. When set to
+ * `false`, the LLM-based Constitutional AI check is SKIPPED (only the fast
+ * PII redaction runs). The caller decides this via `shouldRunConstitutionalAI()`
+ * based on whether user-scoped tools were called + whether the input had PII.
+ * Saves ~200ms–3s on the bulk of traffic (catalog/KB queries — no PII leak
+ * vector from vetted sources). Default `true` for back-compat with callers
+ * that don't pass the parameter.
+ *
+ * @param userQuestion          - The user's original question (for context)
+ * @param aiResponse            - The AI's full response to check
+ * @param runConstitutionalAI   - P0 #4: when false, skip the LLM-based
+ *                                Constitutional AI check (only PII redaction
+ *                                runs). Defaults to true for back-compat.
  * @returns OutputSafetyResult with the sanitized response + metadata
  */
 export async function checkOutputSafety(
   userQuestion: string,
   aiResponse: string,
+  /**
+   * P0 #4 fix: when false, skip the slow LLM-based Constitutional AI check.
+   * The fast PII redaction (regex, ~1ms) still runs — catches phone numbers,
+   * emails, NID, card numbers. The LLM-based check (which catches subtler
+   * issues like harmful advice or jailbreak compliance) is skipped.
+   *
+   * Default `true` for back-compat — callers that don't pass this parameter
+   * get the existing behavior (Constitutional AI runs whenever
+   * OUTPUT_CONSTITUTIONAL_AI_ENABLED=true).
+   */
+  runConstitutionalAI: boolean = true,
 ): Promise<OutputSafetyResult> {
   const startTime = Date.now();
 
@@ -398,6 +420,8 @@ export async function checkOutputSafety(
   let safetyExplanation: string | null = null;
 
   // ─── 1. PII redaction on output ──────────────────────────────────────────
+  // P0 #4: PII redaction ALWAYS runs (it's fast — regex ~1ms, Presidio ~50ms).
+  // The Constitutional AI check is gated separately (below).
   if (PII_REDACTION_ENABLED) {
     try {
       piiResult = await redactPii(sanitizedResponse);
@@ -422,7 +446,10 @@ export async function checkOutputSafety(
   }
 
   // ─── 2. Constitutional AI check ──────────────────────────────────────────
-  if (CONSTITUTIONAL_AI_ENABLED) {
+  // P0 #4: gated on `runConstitutionalAI` (caller decides via
+  // `shouldRunConstitutionalAI()`). When skipped, only the fast PII redaction
+  // (above) runs. The LLM-based check is skipped — saves ~200ms–3s.
+  if (CONSTITUTIONAL_AI_ENABLED && runConstitutionalAI) {
     try {
       const aiResult = await checkConstitutionalAI(userQuestion, sanitizedResponse);
       if (aiResult && aiResult.isUnsafe && aiResult.confidence >= CONSTITUTIONAL_AI_THRESHOLD) {
@@ -446,6 +473,13 @@ export async function checkOutputSafety(
         "Output safety: Constitutional AI check failed (non-fatal — using original response)",
       );
     }
+  } else if (CONSTITUTIONAL_AI_ENABLED && !runConstitutionalAI) {
+    // P0 #4: log that we skipped the check (for observability — admins can
+    // see in the logs how often the gating kicked in).
+    logger.debug(
+      { userQuestionPreview: userQuestion.slice(0, 80) },
+      "Output safety: Constitutional AI check SKIPPED (P0 #4 gating — response from vetted sources, no PII leak vector)",
+    );
   }
 
   return {
@@ -476,4 +510,109 @@ export function getOutputSafetyStatus(): {
     constitutionalAiThreshold: CONSTITUTIONAL_AI_THRESHOLD,
     llmConfigured: Boolean(process.env.GROQ_API_KEY) || Boolean(process.env.GEMINI_API_KEY),
   };
+}
+
+// ─── P0 #4 fix: Constitutional AI gating ─────────────────────────────────────
+
+/**
+ * P0 #4 fix (latency optimization): decides whether to run the slow LLM-based
+ * Constitutional AI check on a given response.
+ *
+ * The Constitutional AI check is an LLM call (~200ms–3s) that evaluates the
+ * response against 4 safety principles. For the BULK of traffic (catalog +
+ * KB queries), the LLM's response comes from vetted sources (the product
+ * catalog, the curated KB) — there's no realistic PII leak vector or
+ * jailbreak compliance risk. Running the LLM check on every such response
+ * adds ~200ms–3s of latency with essentially zero safety benefit.
+ *
+ * The check is VALUABLE when:
+ *   1. The user asked about their own account/orders (user-scoped tools were
+ *      called). The tool results contain user-specific data (order numbers,
+ *      addresses) that the LLM might inadvertently leak or mishandle.
+ *   2. The user's input contained PII (email/phone/NID/etc. that was
+ *      redacted on input). The LLM might "echo" the unredacted PII back.
+ *   3. The query matched account keywords ("my order", "track package",
+ *      etc.) — same risk as #1, just detected lexically rather than via
+ *      tool calls. Useful when the LLM hasn't yet called a user-scoped tool
+ *      but is about to (or hallucinated user data without calling the tool).
+ *
+ * Industry standard: OpenAI's Moderation API is configurable per-request
+ * (you can disable it for low-risk content). Anthropic's Constitutional AI
+ * runs on every response but is much faster than ours (sub-100ms — they
+ * co-locate the check with the model). Since we use a separate LLM call,
+ * gating is the right trade-off.
+ *
+ * Config (env vars):
+ *   OUTPUT_CONSTITUTIONAL_AI_ENABLED=false — global kill switch (existing).
+ *   OUTPUT_CONSTITUTIONAL_AI_GATE_USER_SCOPED_ONLY=true (default) — enable
+ *     the gating logic below. Set to "false" to run on every response
+ *     (back-compat with the pre-P0-#4 behavior — useful for paranoid
+ *     deployments or for testing the check's accuracy).
+ *
+ * @param toolCalls       Names of tools the LLM called during this request.
+ * @param userScopedTools The set of user-scoped tool names (e.g.
+ *                        get_user_orders, get_order_details). Passed in
+ *                        (rather than imported) so this module doesn't
+ *                        depend on aiTools.ts.
+ * @param hadInputPii     True if the user's INPUT message had PII redacted.
+ *                        (i.e., `piiResult.hadPii` from the input check.)
+ * @param isPrivateQuery  True if the user's message matched account
+ *                        keywords (e.g., "my order", "track package").
+ *
+ * @returns true if the Constitutional AI check should run; false to skip
+ *          (the response is low-risk — PII redaction alone is sufficient).
+ *
+ * @example
+ *   shouldRunConstitutionalAI(
+ *     ["search_catalog"],          // catalog-only query
+ *     new Set(["get_user_orders", "get_order_details"]),
+ *     false,                       // no PII in input
+ *     false,                       // not a private query
+ *   ) // → false (skip — pure catalog query, no PII leak vector)
+ *
+ *   shouldRunConstitutionalAI(
+ *     ["get_user_orders"],         // user-scoped tool called
+ *     new Set(["get_user_orders", "get_order_details"]),
+ *     false,
+ *     false,
+ *   ) // → true (run — tool results contain user-specific data)
+ */
+export function shouldRunConstitutionalAI(
+  toolCalls: readonly string[],
+  userScopedTools: ReadonlySet<string>,
+  hadInputPii: boolean,
+  isPrivateQuery: boolean,
+): boolean {
+  // Global kill switch — if the admin disabled Constitutional AI entirely,
+  // never run it (preserves the existing OUTPUT_CONSTITUTIONAL_AI_ENABLED=false
+  // behavior).
+  if (!CONSTITUTIONAL_AI_ENABLED) return false;
+
+  // P0 #4 gating — opt-out via env var for paranoid deployments.
+  const gatingEnabled =
+    (process.env.OUTPUT_CONSTITUTIONAL_AI_GATE_USER_SCOPED_ONLY ?? "true").toLowerCase() !==
+    "false";
+  if (!gatingEnabled) return true;
+
+  // Gate 1: any user-scoped tool was called. The tool results contain
+  // user-specific data (order numbers, addresses, tracking IDs) that the
+  // LLM might inadvertently leak or mishandle.
+  const calledUserScopedTool = toolCalls.some((name) => userScopedTools.has(name));
+  if (calledUserScopedTool) return true;
+
+  // Gate 2: the user's input had PII redacted. The LLM might "echo" the
+  // unredacted PII back (e.g., the user typed their phone number, the LLM
+  // restates it in the response). The input redaction already replaced
+  // [PHONE] in the message we sent to the LLM, but the LLM might still
+  // hallucinate the original based on context.
+  if (hadInputPii) return true;
+
+  // Gate 3: the query matched account keywords. Even if no user-scoped tool
+  // was called yet, the LLM might hallucinate user data (order numbers,
+  // addresses) in its response. The Constitutional AI check catches this.
+  if (isPrivateQuery) return true;
+
+  // Default: skip — the response is from vetted sources (catalog/KB) with
+  // no realistic PII leak vector. Saves ~200ms–3s per request.
+  return false;
 }

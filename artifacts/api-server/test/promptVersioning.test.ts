@@ -20,8 +20,7 @@ const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 // Ensure the AI_SESSION_SECRET is set (required by sessionToken.ts which is
 // transitively imported). setupEnv.ts handles this for the rest of the suite.
-process.env.AI_SESSION_SECRET ??=
-  "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
+process.env.AI_SESSION_SECRET ??= "dGVzdC1haS1zZXNzaW9uLXNlY3JldC1rZXktZG8tbm90LXVzZS1pbi1wcm9k";
 
 import {
   renderPromptTemplate,
@@ -106,7 +105,9 @@ describe("renderPromptTemplate (Bug #3 fix)", () => {
       // Should just have the catalog context appended (the empty-context
       // message, since catalogContext is "").
       expect(result).toContain("Just a prompt.");
-      expect(result).toContain("CATALOG CONTEXT: (no matching products or articles found for this query)");
+      expect(result).toContain(
+        "CATALOG CONTEXT: (no matching products or articles found for this query)",
+      );
       // Should NOT contain a stray "SUMMARY" text (the summary is empty).
       expect(result).not.toContain("SUMMARY");
     });
@@ -152,7 +153,7 @@ describe("SYSTEM_PROMPT_TEMPLATE_V1 (Bug #3 fix)", () => {
 describe("buildSystemPrompt (fallback path)", () => {
   it("produces the same output as rendering the template with the same inputs", () => {
     const summaryBlock = "\nPRIOR CONVERSATION SUMMARY:\nUser has a balcony garden.\n";
-    const catalogContext = 'Mango Sapling — sweet tropical fruit\n';
+    const catalogContext = "Mango Sapling — sweet tropical fruit\n";
     const fromFallback = buildSystemPrompt(catalogContext, summaryBlock);
     const fromTemplate = renderPromptTemplate(
       SYSTEM_PROMPT_TEMPLATE_V1,
@@ -187,38 +188,39 @@ describe("route uses DB prompt text (Bug #3 fix)", () => {
   // actually uses the DB text instead of throwing it away.
 
   it("routes/ai.ts imports renderPromptTemplate", () => {
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-      "utf8",
-    );
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
     expect(source).toContain("renderPromptTemplate");
   });
 
   it("routes/ai.ts uses promptVersionInfo.text (not just .version)", () => {
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-      "utf8",
-    );
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
     expect(source).toContain("promptVersionInfo.text");
     expect(source).toContain("promptVersionInfo.text.trim().length > 0");
   });
 
   it("routes/ai.ts falls back to buildSystemPrompt when DB text is empty", () => {
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-      "utf8",
-    );
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
     // The ternary: promptVersionInfo.text ? renderPromptTemplate(...) : buildSystemPrompt(...)
     expect(source).toMatch(/promptVersionInfo\.text.*renderPromptTemplate.*buildSystemPrompt/s);
   });
 
   it("routes/ai.ts no longer has a duplicate getActivePrompt() call", () => {
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-      "utf8",
-    );
-    // Count occurrences of "await getActivePrompt()" — should be exactly 1.
-    const matches = source.match(/await getActivePrompt\(\)/g);
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
+    // P0 #1 fix: getActivePrompt() now runs inside BATCH B (Promise.all for
+    // context-building). It's no longer prefixed with `await` at the top
+    // level — it's an array entry inside Promise.all.
+    //
+    // We strip comments before counting (the BUG-I5 fix comment mentions
+    // `getActivePrompt()` for documentation purposes — would inflate the
+    // count + cause a false positive).
+    const codeOnly = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    // Count occurrences of "getActivePrompt()" in executable code — should
+    // be exactly 1. We accept either `await getActivePrompt()` or the inline
+    // form (Promise.all array entry).
+    const matches = codeOnly.match(/getActivePrompt\(\)/g);
     expect(matches).not.toBeNull();
     expect(matches!.length).toBe(1);
   });

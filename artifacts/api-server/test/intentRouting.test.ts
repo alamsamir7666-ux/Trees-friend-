@@ -285,24 +285,22 @@ describe("v6.1 Part 3: formatSellerListingContextForPrompt formats listings", ()
 describe("v6.1 Part 3: chat route auto-calls search_seller_listings for PURCHASE/MIXED", () => {
   it("routes/ai.ts imports searchSellerListings + formatSellerListingContextForPrompt", async () => {
     const fs = await import("node:fs");
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-      "utf8",
-    );
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
     expect(source).toContain('import { searchSellerListings } from "../lib/sellerListingSearch"');
     expect(source).toContain("formatSellerListingContextForPrompt");
   });
 
   it("the chat route conditionally auto-calls search_seller_listings for PURCHASE/MIXED intent", async () => {
     const fs = await import("node:fs");
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-      "utf8",
-    );
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
     // The auto-call must be gated on the intent being PURCHASE or MIXED.
     expect(source).toContain('intentClassification.intent === "PURCHASE"');
     expect(source).toContain('intentClassification.intent === "MIXED"');
-    expect(source).toContain("await searchSellerListings(");
+    // P0 #1 fix: the auto-call now runs in PARALLEL with the other
+    // context-building work (BATCH B Promise.all). The call is no longer
+    // prefixed with `await` at the top level — it's wrapped inside the
+    // Promise.all array, so we just check the function name is invoked.
+    expect(source).toMatch(/searchSellerListings\s*\(/);
     // v6.1 Part 4: formatSellerListingContextForPrompt now takes 2 args
     // (listings + careSummary). The old single-arg call is updated.
     expect(source).toContain("formatSellerListingContextForPrompt(");
@@ -312,10 +310,7 @@ describe("v6.1 Part 3: chat route auto-calls search_seller_listings for PURCHASE
 
   it("the chat route passes listingsBlock to renderPromptTemplate + buildSystemPrompt", async () => {
     const fs = await import("node:fs");
-    const source = fs.readFileSync(
-      `${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`,
-      "utf8",
-    );
+    const source = fs.readFileSync(`${REPO_ROOT}/artifacts/api-server/src/routes/ai.ts`, "utf8");
     expect(source).toContain("listingsBlock");
     // Both the renderPromptTemplate call and the buildSystemPrompt call
     // must pass the listingsBlock.

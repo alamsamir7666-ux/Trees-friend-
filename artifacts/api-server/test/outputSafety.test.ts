@@ -63,9 +63,25 @@ describe("Output safety: source-shape tests", () => {
 
   it("ai.ts calls checkOutputSafety after streaming, before persisting", () => {
     const source = readSource("artifacts/api-server/src/routes/ai.ts");
-    expect(source).toContain("import { checkOutputSafety }");
-    expect(source).toContain("await checkOutputSafety(safeMessage, fullResponse)");
-    expect(source).toContain("v5.5: Output safety check");
+    // P0 #4 fix: the import now also includes `shouldRunConstitutionalAI` (the
+    // gating helper). We accept any import shape that includes `checkOutputSafety`.
+    expect(source).toMatch(
+      /import\s*\{[^}]*checkOutputSafety[^}]*\}\s*from\s*["']\.\.\/lib\/outputSafety["']/,
+    );
+    // P0 #4 fix: checkOutputSafety now takes a 3rd arg `runConstitutionalAI`
+    // (boolean) + runs in parallel with the followups fallback via
+    // Promise.allSettled. We accept either the awaited form OR the inline
+    // form (inside the Promise.allSettled array).
+    expect(source).toMatch(/checkOutputSafety\(\s*safeMessage,\s*fullResponse/);
+    // P0 #4 fix: the section header was renamed from "v5.5: Output safety check"
+    // to "P0 #4: run followups fallback + output safety check in parallel".
+    // We accept either the old or new header (both reference the output safety
+    // check + the persist-before-done ordering).
+    expect(
+      source.includes("v5.5: Output safety check") ||
+        source.includes("P0 #4: run followups fallback + output safety check in parallel") ||
+        source.includes("Output safety check"),
+    ).toBe(true);
   });
 
   it("ai.ts sends response_replaced SSE event when output is modified", () => {
@@ -97,10 +113,16 @@ describe("Output safety: source-shape tests", () => {
 describe("Output safety: architecture is industry-standard", () => {
   it("checks BOTH directions (input PII via piiRedaction.ts + output PII via outputSafety.ts)", () => {
     const aiSource = readSource("artifacts/api-server/src/routes/ai.ts");
-    // Input direction: redactPii on user message
-    expect(aiSource).toContain("await redactPii(message)");
-    // Output direction: checkOutputSafety on fullResponse (AI response)
-    expect(aiSource).toContain("checkOutputSafety(safeMessage, fullResponse)");
+    // Input direction: redactPii on user message.
+    // P0 #1 fix: redactPii now runs in PARALLEL with isCircuitOpen via
+    // Promise.all. The call is no longer prefixed with `await` at the top
+    // level — it's inside the Promise.all array. We accept EITHER form.
+    expect(aiSource).toMatch(/redactPii\(message\)/);
+    // Output direction: checkOutputSafety on fullResponse (AI response).
+    // P0 #4 fix: checkOutputSafety now takes a 3rd arg `runConstitutionalAI`
+    // + runs in parallel with the followups fallback via Promise.allSettled.
+    // The call may span multiple lines — we use a regex that tolerates this.
+    expect(aiSource).toMatch(/checkOutputSafety\(\s*safeMessage,\s*fullResponse/);
   });
 
   it("Constitutional AI checks against 4 safety principles", () => {

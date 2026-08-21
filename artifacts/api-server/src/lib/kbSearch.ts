@@ -1251,12 +1251,38 @@ function clamp01(n: number): number {
  * at 3 entries — which caused the LLM to see two different views of the KB
  * for the same query (the "two-source RAG inconsistency" anti-pattern).
  *
+ * P0 #3 fix (latency optimization): added an optional `skipRerank` parameter.
+ * When set to `true`, the auto-inject path skips the cross-encoder reranker
+ * (saves 200-500ms latency). The auto-inject path uses a HIGH minScore
+ * threshold (UNIFIED_MIN_SCORE = 0.3) — first-pass composite scores are
+ * already reliable at this threshold, so the reranker rarely changes the
+ * top results. The on-demand `search_knowledge_base` TOOL path keeps the
+ * reranker (the LLM explicitly asked for KB results — the extra latency is
+ * justified by the higher quality bar).
+ *
+ * Risk mitigation: the auto-inject block is REPLACED by `clearKbBlockFromPrompt`
+ * (BUG-I5 fix) after the first `search_knowledge_base` tool call, so any
+ * divergence between the auto-inject ranking and the tool ranking is
+ * short-lived (the LLM sees only the tool's ranking for subsequent rounds).
+ *
  * Returns `{ entries, injected }`. If `injected` is false, `entries` is
  * empty + the route skips the knowledge block in the prompt.
  */
 export async function getTopKbEntriesForPrompt(
   userMessage: string,
   maxEntries: number = UNIFIED_MAX_RESULTS,
+  /**
+   * P0 #3 fix: when true, skip the cross-encoder reranker for this call.
+   *
+   * Default: `false` (preserve BUG-I1 unified behavior — always rerank
+   * when configured). Callers can opt-in to the faster path by passing
+   * `true` explicitly.
+   *
+   * The route handler passes `true` for the auto-inject path (high-confidence
+   * threshold, results are short-lived) and leaves it `false` for the
+   * on-demand tool path (LLM explicitly asked for KB results).
+   */
+  skipRerank: boolean = UNIFIED_SKIP_RERANK,
 ): Promise<{
   entries: KbSearchResult[];
   injected: boolean;
@@ -1279,11 +1305,16 @@ export async function getTopKbEntriesForPrompt(
       query: userMessage,
       maxResults: maxEntries,
       minScore: UNIFIED_MIN_SCORE,
+      // P0 #3: when the caller passes skipRerank=true, skip the reranker
+      // for the auto-inject path (saves 200-500ms latency). The high
+      // minScore threshold (0.3) means first-pass scores are reliable.
+      //
       // BUG-I1 fix: previously `skipRerank: true` to save 200-500ms latency.
       // But this meant the LLM saw a different ranking for the same query
-      // depending on which path ran. Now both paths use UNIFIED_SKIP_RERANK
-      // (false) so the reranker always runs when configured.
-      skipRerank: UNIFIED_SKIP_RERANK,
+      // depending on which path ran. Now the caller decides — the default
+      // (false) preserves the unified behavior, the route handler passes
+      // true explicitly for the auto-inject path.
+      skipRerank,
     });
     if (entries.length === 0) {
       return { entries: [], injected: false, toneCreator: null };

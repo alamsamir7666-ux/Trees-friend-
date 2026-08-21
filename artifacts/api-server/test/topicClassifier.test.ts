@@ -50,7 +50,11 @@ describe("Topic classifier: source-shape tests", () => {
     const source = readSource("artifacts/api-server/src/routes/ai.ts");
     expect(source).toContain("import { classifyTopic }");
     expect(source).toContain("Topic gate (v5.3: soft LLM-based");
-    expect(source).toContain("await classifyTopic(safeMessage)");
+    // P0 #1 fix: classifyTopic now runs in PARALLEL with detectPromptInjection
+    // via Promise.allSettled. The call is no longer prefixed with `await`
+    // at the top level — it's inside the Promise.allSettled array.
+    // We accept EITHER the awaited form OR the inline form.
+    expect(source).toMatch(/classifyTopic\(safeMessage\)/);
     expect(source).toContain("keyword gate failed but LLM classifier allowed");
   });
 

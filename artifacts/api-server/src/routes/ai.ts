@@ -66,6 +66,17 @@ import {
   ACCOUNT_KEYWORDS,
 } from "../lib/aiContext";
 import { AI_TOOL_DECLARATIONS, executeTool, USER_SCOPED_TOOLS } from "../lib/aiTools";
+// P0 #2 fix (latency optimization): intent-based tool subsetting. Instead of
+// sending all 6 tool declarations to the LLM on every request, we filter the
+// list based on the detected intent (PURCHASE/KNOWLEDGE/MIXED/GREETING).
+//   - KNOWLEDGE → hides search_seller_listings (~150 tokens saved per call).
+//   - PURCHASE → hides search_knowledge_base (~80 tokens saved per call).
+//   - GREETING → hides all tools (no LLM call expected; defensive).
+//   - MIXED → exposes all tools (fail-open — ambiguous intent).
+// Saves ~80-440 tokens per call × every round of a multi-round tool loop.
+// Industry standard: OpenAI, Anthropic, and Google all recommend "only expose
+// the functions the model needs for the current task."
+import { getToolDeclarationsForIntent, getHiddenToolsForIntent } from "../lib/aiToolSubsets";
 // v6.2 Part 12 (Backend Gap Fix #2): import the typed TOOLS_WITH_UI set
 // from aiToolSchemas.ts (single source of truth — same set as the
 // frontend's toolNames.ts). Replaces the local `new Set([...])` that
@@ -93,7 +104,7 @@ import { classifyTopic } from "../lib/topicClassifier";
 // KNOWLEDGE → get_product_care + KB, MIXED → both. Fast (~10μs after warmup),
 // $0 cost (no LLM call), deterministic. Fail-open to MIXED when no keywords match.
 import { classifyIntent } from "../lib/intentClassifier";
-import { checkOutputSafety } from "../lib/outputSafety";
+import { checkOutputSafety, shouldRunConstitutionalAI } from "../lib/outputSafety";
 import { getCachedResponse, setCachedResponse } from "../lib/semanticCache";
 import { getSemanticCachedResponse, setSemanticCachedResponse } from "../lib/embeddingCache";
 // BUG-3 fix: compute a KB content version fingerprint so the semantic cache
@@ -965,33 +976,28 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  // ─── 3. v3.0 PII redaction ───
-  // Scan the user's message for PII (phone, email, NID, card numbers,
-  // Bangladesh-style addresses). Replace with [PHONE], [EMAIL], etc.
-  // The REDACTED version is what we persist + send to Gemini. The original
-  // is never stored in the AI tables.
+  // ─── 3 + 3b. v3.0/v6.0: PII redaction + cost circuit breaker (PARALLEL) ──
+  // P0 #1 fix (latency optimization): run PII redaction + the cost circuit
+  // check IN PARALLEL via Promise.all. They have no data dependency:
+  //   - PII redaction reads `message` + produces `safeMessage`.
+  //   - The circuit check reads Redis (`ai:cost:circuit-open:YYYY-MM-DD`)
+  //     + returns a boolean.
+  // Running them sequentially added ~2ms (Redis GET) of dead latency on
+  // every request — small per-request, but adds up at scale.
   //
-  // PII redaction runs BEFORE the cost circuit breaker because:
+  // The original ordering (PII first, then circuit) was a defensive
+  // belt-and-suspenders choice in case the circuit check somehow needed
+  // `safeMessage` — but it doesn't. The Redis key is date-keyed, not
+  // message-keyed. The refactor is safe.
+  //
+  // PII redaction runs BEFORE the LLM gate (topic classifier + prompt
+  // injection) because:
   //   1. We must NEVER persist the original (un-redacted) message — even if
   //      we're about to throttle the request, we persist the redacted version
   //      of the user's message so the conversation history shows what happened
   //      without leaking PII.
   //   2. PII redaction has no LLM cost when Presidio is not configured (regex
   //      only), and even with Presidio it's a tiny NER call (~50ms, $0).
-  const piiResult = await redactPii(message);
-  const safeMessage = piiResult.redacted;
-  if (piiResult.hadPii) {
-    await logAiEvent(0, "pii_redacted", {
-      types: piiResult.detectedTypes,
-      count: piiResult.count,
-    }).catch(() => {}); // event logging is best-effort
-  }
-
-  // ─── 3b. v6.0: Cost budget circuit breaker ──────────────────────────────
-  // Check AFTER PII redaction (above) but BEFORE the topic classifier + prompt
-  // injection classifier + LLM chat call. We don't burn LLM quota when the
-  // daily budget is already exhausted. The circuit auto-resets at UTC midnight
-  // (the Redis key is date-keyed).
   //
   // When the circuit is OPEN:
   //   - The main LLM chat stream returns a "throttled" response (below).
@@ -1001,17 +1007,20 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   //     the whole point.
   //   - Cached responses (exact-match + semantic) STILL hit — cache lookup
   //     is free, so we serve cached answers even when the circuit is open.
-  //     (This happens later in the flow — the cache check is below the
-  //     topic gate, but we skip the topic gate when the circuit is open.)
   //   - The greeting shortcut + KB auto-inject still work (no LLM cost).
-  //
-  // The throttled response tells the user to come back later. It's better
-  // than silently failing — the user knows it's a temporary cap, not a bug.
   //
   // Fail-safe: if Redis is unavailable, the circuit reports CLOSED (allow
   // the call). This trades potential cost overrun for availability during a
   // Redis outage. See lib/costTracker.ts `isCircuitOpen` for rationale.
-  const circuitOpen = await isCircuitOpen();
+  const [piiResult, circuitOpen] = await Promise.all([redactPii(message), isCircuitOpen()]);
+  const safeMessage = piiResult.redacted;
+  if (piiResult.hadPii) {
+    await logAiEvent(0, "pii_redacted", {
+      types: piiResult.detectedTypes,
+      count: piiResult.count,
+    }).catch(() => {}); // event logging is best-effort
+  }
+
   if (circuitOpen) {
     logger.warn(
       { sid: resolved.sid, budget: getDailyBudgetUsd() },
@@ -1049,19 +1058,18 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  // ─── 3c. v6.1: Classify intent (PURCHASE / KNOWLEDGE / MIXED) ──────────
-  // Lexical classifier — fast (~10μs after L1 cache warmup), $0 cost (no LLM
-  // call), deterministic. Used in Part 3 of this PR series to route chat
-  // requests to the right tool flow:
-  //   - PURCHASE  → search_seller_listings (returns specific seller listings)
-  //   - KNOWLEDGE → get_product_care + KB (existing flow, unchanged)
-  //   - MIXED     → both (single tool call with care summary flag)
-  //
-  // Part 1 (this commit) only LOGS the classification to ai_chat_events
-  // for observability — no behavior change yet. This lets us validate the
-  // classifier's accuracy on real production traffic BEFORE depending on it
-  // for routing (Part 3). Industry standard: "instrument first, then act"
-  // — same pattern as the topic classifier's v5.3 rollout.
+  // ─── 3c + 4b. v6.1: Classify intent + greeting check (lexically parallel) ─
+  // P0 #1 fix (latency optimization): run all three lexical checks together
+  // — `classifyIntent`, `isPureGreeting`, `hasBotanicalKeyword`. These are
+  // all synchronous + instant (~10μs each after L1 cache warmup), so we
+  // just call them sequentially (no Promise.all needed for sync code).
+  // We do this BEFORE the topic classifier + prompt-injection detector so:
+  //   - If the message is a pure greeting, we short-circuit to the canned
+  //     greeting response immediately (saves ~200ms-4s of LLM gate latency
+  //     — the topic classifier + prompt-injection detector are LLM calls).
+  //   - If the intent is PURCHASE or KNOWLEDGE, we SKIP the topic classifier
+  //     entirely (existing v6.1 Part 6 optimization — these intents are
+  //     high-confidence + the message is clearly on-topic).
   //
   // The classifier runs AFTER PII redaction (so the redacted message is
   // what gets classified — protects user privacy in cache + logs) and
@@ -1069,124 +1077,19 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // It runs BEFORE the topic gate so we can correlate intent + topic in
   // the event log.
   const intentClassification = classifyIntent(safeMessage);
+  const isGreeting = isPureGreeting(safeMessage);
+  const hasBotanicalKw = hasBotanicalKeyword(safeMessage);
 
-  // ─── 4. Topic gate (v5.3: soft LLM-based, not hard keyword block) ───
-  // Industry standard: modern chatbots (ChatGPT, Claude, Gemini) do NOT use
-  // hard keyword gates — they rely on the system prompt + LLM judgment.
-  //
-  // The old hard gate (`hasBotanicalKeyword`) blocked legitimate questions
-  // like "কলার কোন জাত ভালো" (which banana variety is good?) because the
-  // Bengali keyword list was incomplete. This caused real user harm.
-  //
-  // New approach (two-tier):
-  //   1. Fast path: hasBotanicalKeyword() — instant. Catches obvious English
-  //      keywords + common Bengali words. Returns true → allow (no LLM call).
-  //   2. Smart path: if keyword gate fails, run classifyTopic() — uses the
-  //      LLM to check if the message is plant-related. Catches Bengali,
-  //      Banglish, paraphrased questions the keyword list misses.
-  //      - LLM says on-topic → allow (proceed to LLM chat)
-  //      - LLM says off-topic → refuse politely
-  //      - LLM unavailable → fail-OPEN (allow). Better to answer an off-topic
-  //        question than to block a legitimate plant question.
-  //
-  // Cost: $0 (uses existing free-tier Groq/Gemini quotas). The LLM topic
-  // check only runs when the keyword gate fails (~20-30% of messages).
-  // Results are cached 24h.
-  // v6.0 note: the cost circuit check at step 3b returns early when the
-  // circuit is OPEN, so we never reach this topic classifier when throttled.
-  // The LLM topic classifier call is therefore implicitly skipped — no
-  // need for an explicit `if (circuitOpen)` guard here.
-  //
-  // v6.1 Part 6 (latency optimization): SKIP the topic classifier when
-  // the intent classifier already returned a confident PURCHASE or
-  // KNOWLEDGE intent. If the user said "buy a mango sapling" (PURCHASE)
-  // or "how to water a mango tree" (KNOWLEDGE), the message is clearly
-  // on-topic — no need for an LLM topic classification call (~200ms-4s).
-  // The intent classifier is lexical (~10μs) and its PURCHASE/KNOWLEDGE
-  // results are high-confidence (a primary keyword matched).
-  //
-  // Only run the topic classifier for MIXED intent (ambiguous messages
-  // where the keyword gate fails AND the intent is unclear). This covers
-  // the edge cases the keyword list misses (Bengali, Banglish, paraphrased
-  // questions) without slowing down every request.
-  //
-  // Latency impact: saves ~200ms-4s for ~70-80% of messages (those where
-  // the intent classifier returns PURCHASE or KNOWLEDGE with high
-  // confidence).
-  const skipTopicClassifier =
-    intentClassification.intent === "PURCHASE" || intentClassification.intent === "KNOWLEDGE";
-  if (!hasBotanicalKeyword(safeMessage) && !skipTopicClassifier) {
-    // Keyword gate failed — run the LLM topic classifier.
-    const topicCheck = await classifyTopic(safeMessage);
-    if (!topicCheck.isOnTopic) {
-      logger.info(
-        {
-          sid: resolved.sid,
-          provider: topicCheck.provider,
-          confidence: topicCheck.confidence,
-          messagePreview: safeMessage.slice(0, 80),
-        },
-        "AI: off-topic message refused (via LLM classifier)",
-      );
-      try {
-        const session = await findOrCreateSession(resolved.sid, safeMessage, resolved.uid);
-        await persistMessage(session.id, "user", safeMessage, {
-          piiRedacted: piiResult.hadPii,
-        });
-        const refusal =
-          "I'm TreeFriend's plant assistant and can only help with trees, plants, and gardening. " +
-          "Feel free to ask me about plant care or browse our catalog at /browse.";
-        const assistantMsgId = await persistMessage(session.id, "assistant", refusal, {
-          offTopic: true,
-          responseMs: Date.now() - requestStartTime,
-        });
-
-        // Log the off-topic refusal for admin observability.
-        await logAiEvent(session.id, "off_topic_refused", {
-          provider: topicCheck.provider,
-          confidence: topicCheck.confidence,
-          messagePreview: safeMessage.slice(0, 100),
-        }).catch(() => {});
-
-        res.json({
-          sessionToken: resolved.token,
-          message: refusal,
-          messageId: assistantMsgId,
-          offTopic: true,
-        });
-      } catch (err) {
-        logger.error({ err }, "AI: topic-gate persist failed");
-        res.status(500).json({ error: "Failed to process request." });
-      }
-      return;
-    }
-    // LLM says on-topic → proceed to the LLM chat call
-    logger.info(
-      { provider: topicCheck.provider, confidence: topicCheck.confidence },
-      "AI: keyword gate failed but LLM classifier allowed message",
-    );
-
-    // v5.3.1: Log the LLM-allowed-via-keyword-gate-failure event for
-    // observability. This tells admins how many messages the keyword list
-    // missed (and the LLM caught) — useful for deciding which keywords to
-    // add to the fast-path list.
-    try {
-      const session = await findOrCreateSession(resolved.sid, safeMessage, resolved.uid);
-      await logAiEvent(session.id, "topic_allowed_via_llm", {
-        provider: topicCheck.provider,
-        confidence: topicCheck.confidence,
-        messagePreview: safeMessage.slice(0, 100),
-      }).catch(() => {});
-    } catch {
-      // best-effort — don't block the chat
-    }
-  }
-
-  // ─── 4b. Pure greeting shortcut ───
+  // ─── 4b. Pure greeting shortcut (BEFORE the LLM gates) ──────────────────
   // For "Hi" / "Hello" / "Salam" etc., skip Gemini entirely and return a
   // friendly canned intro. Saves API quota + gives the user an instant
   // warm welcome instead of a 3-5 second wait for Gemini to say "hi back".
-  if (isPureGreeting(safeMessage)) {
+  //
+  // P0 #1 fix: this now runs BEFORE the topic classifier + prompt-injection
+  // detector. Both of those are LLM calls (~200ms-4s each), and a pure
+  // greeting is clearly on-topic + clearly not an injection attack —
+  // running them would be wasted latency + wasted LLM quota.
+  if (isGreeting) {
     try {
       const session = await findOrCreateSession(resolved.sid, safeMessage, resolved.uid);
       await persistMessage(session.id, "user", safeMessage, {
@@ -1209,7 +1112,84 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  // ─── 4c. Prompt-injection detection (v5.2) ───
+  // ─── 4 + 4c. Topic gate + prompt-injection detection (PARALLEL) ─────────
+  // P0 #1 fix (latency optimization): run `classifyTopic` + `detectPromptInjection`
+  // IN PARALLEL via Promise.all. Both are LLM calls that classify the SAME
+  // message — they have no data dependency on each other:
+  //   - classifyTopic(safeMessage) → { isOnTopic, confidence, provider, ... }
+  //   - detectPromptInjection(safeMessage) → { detected, score, provider, ... }
+  //
+  // Running them sequentially added ~200ms-4s of dead latency on every
+  // non-greeting request (whichever finished last blocked the next step).
+  // Parallelizing cuts the total wait to `max(topicMs, injectionMs)` instead
+  // of `topicMs + injectionMs`.
+  //
+  // v6.1 Part 6: SKIP the topic classifier when the intent is PURCHASE or
+  // KNOWLEDGE (high-confidence on-topic). The injection check ALWAYS runs
+  // (an attacker might use purchase keywords to mask an injection attempt).
+  //
+  // Industry standard: OpenAI's moderation API runs multiple classifiers
+  // (hate, self-harm, sexual, violence) in parallel — same pattern. We
+  // adopt it here.
+  //
+  // v6.0 note: the cost circuit check at step 3b returns early when the
+  // circuit is OPEN, so we never reach these classifiers when throttled.
+  //
+  // Fail-open: both classifiers default to "allow" on LLM error. If the
+  // parallel Promise.all rejects (one of them threw), we catch it and
+  // proceed as if both classifiers passed (better than blocking all chat
+  // traffic during a classifier outage). The catch is per-classifier —
+  // we use Promise.allSettled so a failure in one doesn't cancel the other.
+  const skipTopicClassifier =
+    intentClassification.intent === "PURCHASE" || intentClassification.intent === "KNOWLEDGE";
+  const needsTopicCheck = !hasBotanicalKw && !skipTopicClassifier;
+
+  // P0 #1: only run the topic classifier if needed (keyword gate failed +
+  // intent is MIXED). The injection check ALWAYS runs (security-critical).
+  // If neither is needed (rare — keyword gate passed + ... wait, the
+  // injection check always runs), we still await the injection result.
+  //
+  // We use Promise.allSettled (not Promise.all) so a thrown error in one
+  // classifier doesn't reject the whole batch. We then extract the values
+  // + apply rejections in priority order:
+  //   1. Injection detected → block (highest priority — security).
+  //   2. Topic off-topic → refuse (next priority — content policy).
+  //   3. Both pass → proceed to LLM chat.
+  const [topicSettled, injectionSettled] = await Promise.allSettled([
+    needsTopicCheck ? classifyTopic(safeMessage) : Promise.resolve(null),
+    detectPromptInjection(safeMessage),
+  ]);
+
+  // Extract values (or default to "allow" on rejection — fail-open).
+  const topicCheck = topicSettled.status === "fulfilled" ? topicSettled.value : null;
+  const injectionCheck =
+    injectionSettled.status === "fulfilled"
+      ? injectionSettled.value
+      : {
+          // Fail-open defaults — same shape as a "passed" classifier result.
+          detected: false,
+          score: 0,
+          attackType: null,
+          provider: "failed-open",
+          explanation: "classifier rejected (fail-open)",
+        };
+
+  // Log classifier failures (for observability — fail-open is silent to the
+  // user, but admins need to know when classifiers are down).
+  if (topicSettled.status === "rejected" && needsTopicCheck) {
+    logger.warn(
+      { err: (topicSettled.reason as Error)?.message ?? String(topicSettled.reason) },
+      "AI: classifyTopic rejected (fail-open — proceeding as if on-topic)",
+    );
+  }
+  if (injectionSettled.status === "rejected") {
+    logger.warn(
+      { err: (injectionSettled.reason as Error)?.message ?? String(injectionSettled.reason) },
+      "AI: detectPromptInjection rejected (fail-open — proceeding as if no injection)",
+    );
+  }
+
+  // ─── 4c. Prompt-injection block (highest priority — security) ───────────
   // Defense in depth: after the topic gate (off-topic filtered) + PII
   // redaction (sensitive data removed), check for prompt-injection attacks.
   //
@@ -1230,7 +1210,11 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   //
   // Industry standard: Lakera Guard, NVIDIA NeMo Guardrails, Protect AI.
   // See lib/promptInjection.ts for the full architecture.
-  const injectionCheck = await detectPromptInjection(safeMessage);
+  //
+  // P0 #1 fix: this now runs in parallel with the topic classifier (above).
+  // The injection check ALWAYS runs (even if the topic classifier was
+  // skipped due to PURCHASE/KNOWLEDGE intent) — an attacker might use
+  // purchase keywords to mask an injection attempt.
   if (injectionCheck.detected) {
     logger.warn(
       {
@@ -1279,6 +1263,112 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     return;
   }
 
+  // ─── 4. Topic gate (v5.3: soft LLM-based, not hard keyword block) ───
+  // Industry standard: modern chatbots (ChatGPT, Claude, Gemini) do NOT use
+  // hard keyword gates — they rely on the system prompt + LLM judgment.
+  //
+  // The old hard gate (`hasBotanicalKeyword`) blocked legitimate questions
+  // like "কলার কোন জাত ভালো" (which banana variety is good?) because the
+  // Bengali keyword list was incomplete. This caused real user harm.
+  //
+  // New approach (two-tier):
+  //   1. Fast path: hasBotanicalKeyword() — instant. Catches obvious English
+  //      keywords + common Bengali words. Returns true → allow (no LLM call).
+  //   2. Smart path: if keyword gate fails, run classifyTopic() — uses the
+  //      LLM to check if the message is plant-related. Catches Bengali,
+  //      Banglish, paraphrased questions the keyword list misses.
+  //      - LLM says on-topic → allow (proceed to LLM chat)
+  //      - LLM says off-topic → refuse politely
+  //      - LLM unavailable → fail-OPEN (allow). Better to answer an off-topic
+  //        question than to block a legitimate plant question.
+  //
+  // Cost: $0 (uses existing free-tier Groq/Gemini quotas). The LLM topic
+  // check only runs when the keyword gate fails (~20-30% of messages).
+  // Results are cached 24h.
+  //
+  // v6.1 Part 6 (latency optimization): SKIP the topic classifier when
+  // the intent classifier already returned a confident PURCHASE or
+  // KNOWLEDGE intent. If the user said "buy a mango sapling" (PURCHASE)
+  // or "how to water a mango tree" (KNOWLEDGE), the message is clearly
+  // on-topic — no need for an LLM topic classification call (~200ms-4s).
+  // The intent classifier is lexical (~10μs) and its PURCHASE/KNOWLEDGE
+  // results are high-confidence (a primary keyword matched).
+  //
+  // Only run the topic classifier for MIXED intent (ambiguous messages
+  // where the keyword gate fails AND the intent is unclear). This covers
+  // the edge cases the keyword list misses (Bengali, Banglish, paraphrased
+  // questions) without slowing down every request.
+  //
+  // Latency impact: saves ~200ms-4s for ~70-80% of messages (those where
+  // the intent classifier returns PURCHASE or KNOWLEDGE with high
+  // confidence).
+  //
+  // P0 #1 fix: this check now runs AFTER the parallel batch resolves. The
+  // result is in `topicCheck` (null if the classifier was skipped because
+  // `needsTopicCheck` was false).
+  if (needsTopicCheck && topicCheck && !topicCheck.isOnTopic) {
+    logger.info(
+      {
+        sid: resolved.sid,
+        provider: topicCheck.provider,
+        confidence: topicCheck.confidence,
+        messagePreview: safeMessage.slice(0, 80),
+      },
+      "AI: off-topic message refused (via LLM classifier)",
+    );
+    try {
+      const session = await findOrCreateSession(resolved.sid, safeMessage, resolved.uid);
+      await persistMessage(session.id, "user", safeMessage, {
+        piiRedacted: piiResult.hadPii,
+      });
+      const refusal =
+        "I'm TreeFriend's plant assistant and can only help with trees, plants, and gardening. " +
+        "Feel free to ask me about plant care or browse our catalog at /browse.";
+      const assistantMsgId = await persistMessage(session.id, "assistant", refusal, {
+        offTopic: true,
+        responseMs: Date.now() - requestStartTime,
+      });
+
+      // Log the off-topic refusal for admin observability.
+      await logAiEvent(session.id, "off_topic_refused", {
+        provider: topicCheck.provider,
+        confidence: topicCheck.confidence,
+        messagePreview: safeMessage.slice(0, 100),
+      }).catch(() => {});
+
+      res.json({
+        sessionToken: resolved.token,
+        message: refusal,
+        messageId: assistantMsgId,
+        offTopic: true,
+      });
+    } catch (err) {
+      logger.error({ err }, "AI: topic-gate persist failed");
+      res.status(500).json({ error: "Failed to process request." });
+    }
+    return;
+  }
+
+  // If the topic classifier ran and returned on-topic, log the
+  // "keyword gate failed but LLM allowed" event (existing v5.3.1 behavior).
+  // This tells admins how many messages the keyword list missed.
+  if (needsTopicCheck && topicCheck && topicCheck.isOnTopic) {
+    logger.info(
+      { provider: topicCheck.provider, confidence: topicCheck.confidence },
+      "AI: keyword gate failed but LLM classifier allowed message",
+    );
+    try {
+      const session = await findOrCreateSession(resolved.sid, safeMessage, resolved.uid);
+      await logAiEvent(session.id, "topic_allowed_via_llm", {
+        provider: topicCheck.provider,
+        confidence: topicCheck.confidence,
+        messagePreview: safeMessage.slice(0, 100),
+      }).catch(() => {});
+    } catch {
+      // best-effort — don't block the chat
+    }
+  }
+
   // ─── 5. Find/create session ───
   let session: SessionRow;
   try {
@@ -1313,150 +1403,288 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     buyerDistrict: buyerLocation?.district ?? null,
   }).catch(() => {});
 
-  // ─── 6. v3.0 Conversation memory: load + maybe summarize ───
-  // Load the existing summary (if any) for this session. Then check if
-  // we need to summarize (or re-summarize) the conversation. This runs
-  // BEFORE we persist the user's new message, so the new message is
-  // NOT included in the summary -- it goes into the live history array.
-  const existingMemory = await loadSessionMemory(session.id);
-
-  // ─── 7. Persist the user message BEFORE streaming ───
-  // We do this now (not after) so that even if the streaming fails midway,
-  // the user's message is preserved and the conversation can resume.
-  // v3.0: persist the REDACTED message + the piiRedacted flag.
-  await persistMessage(session.id, "user", safeMessage, {
-    piiRedacted: piiResult.hadPii,
-  });
-
-  // v3.0: Now that the user message is persisted, check if we should
-  // summarize the conversation. This may call Gemini (to generate the
-  // summary) — if it fails, we proceed without a summary (non-fatal).
+  // ─── 6 + 7 + 8 + 9 + Phase 3 + Phase 5: PARALLEL context building ───────
+  // P0 #1 fix (latency optimization): run all the context-building work in
+  // parallel via Promise.all. The previous code ran these SEQUENTIALLY:
+  //   loadSessionMemory (~2ms) →
+  //   persistMessage (~5ms) →
+  //   fetchHistoryForGemini (~5ms) →
+  //   getActivePrompt (~2ms cached) →
+  //   buildCatalogContext (~10ms) →
+  //   getTopKbEntriesForPrompt (~200-3500ms with reranker) →
+  //   (Phase 5) searchSellerListings (~10ms)
   //
-  // ─── v3.8: fire-and-forget (non-blocking) summarization ─────────────
+  // Total sequential cost: ~250-3600ms of pure await latency on the hot
+  // path. Many of these have NO data dependency on each other:
+  //   - loadSessionMemory needs session.id (already have it).
+  //   - persistMessage needs session.id + safeMessage (already have it).
+  //   - fetchHistoryForGemini needs session.id + memory.cutoffId (depends
+  //     on loadSessionMemory — sequential within this block).
+  //   - getActivePrompt needs nothing (DB-cached prompt template).
+  //   - buildCatalogContext needs safeMessage + intent (already have them).
+  //   - getTopKbEntriesForPrompt needs safeMessage (already have it).
+  //   - searchSellerListings needs safeMessage + intent + buyerLocation
+  //     (already have them).
   //
-  // Previously this was `const memory = await maybeSummarize(...)`, which
-  // BLOCKED the request path for 1-3s while Gemini generated the summary
-  // BEFORE the first token could stream. Every threshold-crossing turn
-  // (turn 12, then every 8 turns after) added 1-3s of dead latency.
+  // We split into TWO parallel batches with a single sequential join
+  // point in between:
   //
-  // The summary is NOT needed for the current turn — it's needed for
-  // FUTURE turns (to compress older messages so they fit the token budget).
-  // The current turn already has the last AI_MAX_HISTORY messages in the
-  // history array, which covers recent context. The summary only matters
-  // for messages OLDER than that, which the model wouldn't see either way.
+  //   BATCH A (session-dependent): loadSessionMemory → persistMessage →
+  //           fetchHistoryForGemini. These have a sequential dependency
+  //           chain (memory → persist → history).
+  //   BATCH B (context-building, parallel): getActivePrompt,
+  //           buildCatalogContext, getTopKbEntriesForPrompt (with skipRerank
+  //           for P0 #3), searchSellerListings. These need only safeMessage
+  //           + intent + buyerLocation — already in scope.
   //
-  // Fix: kick off the summarization in the background + use the EXISTING
-  // memory (loaded above) for the current turn. The new summary lands in
-  // the DB + is picked up by the NEXT request's `loadSessionMemory`.
+  // Both batches run concurrently via Promise.all. We join when BOTH
+  // batches complete. The total latency is `max(batchA, batchB)` instead
+  // of `sum(batchA) + sum(batchB)`.
   //
-  // Trade-off: the current turn runs with a stale (or null) summary. This
-  // is the standard industry pattern (OpenAI Assistants, Anthropic prompt
-  // caching, LangChain memory all do this) — the freshness gain of one
-  // turn is never worth 1-3s of blocking latency.
+  // P0 #3 fix: getTopKbEntriesForPrompt now passes `skipRerank=true` for
+  // the auto-inject path. The high minScore threshold (0.3) means first-pass
+  // composite scores are reliable; the cross-encoder reranker rarely
+  // changes the top results. Saves ~200-500ms on every KNOWLEDGE-intent
+  // query. The on-demand search_knowledge_base TOOL path keeps the
+  // reranker (the LLM explicitly asked for KB results — higher quality bar).
   //
-  // The background promise is detached + self-contained:
-  //   - It catches its own errors (already does — maybeSummarize has an
-  //     outer try/catch that returns existingMemory on failure).
-  //   - We attach a `.catch()` here as a second safety net so an
-  //     unexpected throw never becomes an unhandled rejection (which
-  //     would crash the process in Node 15+ / Vercel).
-  //   - We DO NOT await it — the request proceeds immediately.
-  maybeSummarize(session.id, existingMemory).catch((err) => {
-    logger.warn(
-      { err: (err as Error)?.message, sessionId: session.id },
-      "Memory: background maybeSummarize failed (non-fatal — current turn uses existing memory)",
-    );
-  });
-  const memory = existingMemory;
-
-  // ─── 8. Build Gemini history (respects summary cutoff) ───
-  // If a summary exists, only messages with id > cutoffId are included.
-  // The summary itself is injected into the system prompt.
+  // The `maxHistory` env read happens BEFORE the Promise.all so it's
+  // available to the BATCH A chain.
   const maxHistory = Number(process.env.AI_MAX_HISTORY ?? 10);
-  const geminiHistory = await fetchHistoryForGemini(session.id, memory.cutoffId, maxHistory);
 
-  // ─── 9. Build system prompt (DB-driven, with summary + catalog context) ───
-  // Bug #3 fix: actually USE the DB prompt text instead of throwing it away.
-  // The previous code called getActivePrompt() but only used .version for
-  // tracking — the .text was discarded, and buildSystemPrompt() (hardcoded)
-  // was always used. This made A/B testing + rollback impossible.
-  //
-  // The new flow:
-  //   1. Fetch the active prompt from the DB (cached in memory, refreshed by
-  //      forcePromptRefresh() when an admin activates a new version).
-  //   2. If the DB returned non-empty text → use it as the template, rendered
-  //      via renderPromptTemplate() (which handles {{summary}}/{{catalog}}
-  //      placeholders, falling back to appending if missing).
-  //   3. If the DB returned empty text (table empty / DB unavailable / no
-  //      active row) → fall back to buildSystemPrompt() (hardcoded
-  //      SYSTEM_PROMPT_TEMPLATE_V1, also rendered via renderPromptTemplate).
-  //
-  // Both paths produce identical output when the DB seed mirrors the
-  // hardcoded template — so existing deployments see no behavior change.
-  // Admins can then create new versions (v1.1.0, v2.0.0, …) and activate
-  // them via POST /api/ai/admin/prompts/:id/activate.
-  const promptVersionInfo = await getActivePrompt();
-  // v6.1: pass the detected intent to buildCatalogContext. When intent is
-  // PURCHASE, the catalog context block is SKIPPED — the AI will call
-  // search_seller_listings instead (which returns specific purchasable
-  // listings, not variety-level info). This saves ~200-500 tokens per
-  // request + avoids confusing the LLM with two granularities of info.
-  // For KNOWLEDGE + MIXED + GREETING intent, the catalog context is still
-  // injected (existing behavior).
-  const catalogContext = await buildCatalogContext(safeMessage, intentClassification.intent);
-  const summaryBlock = buildSummaryPromptBlock(memory.summary);
+  // BATCH A: session-dependent chain (memory → persist → history).
+  // Encapsulated in an async IIFE so we can run it in parallel with BATCH B.
+  const batchAPromise = (async () => {
+    const existingMemory = await loadSessionMemory(session.id);
 
-  // ─── Phase 3: Build Knowledge Base context ────────────────────────────────
-  // Pre-search the KB for the user's message. If high-confidence matches
-  // are found (score > UNIFIED_MIN_SCORE = 0.3), inject the top entries
-  // (up to UNIFIED_MAX_RESULTS = 5) into the system prompt as
-  // "KNOWLEDGE BASE CONTEXT". The AI uses this as its primary source.
+    // Persist the user message BEFORE streaming. We do this now (not after)
+    // so that even if the streaming fails midway, the user's message is
+    // preserved and the conversation can resume.
+    // v3.0: persist the REDACTED message + the piiRedacted flag.
+    await persistMessage(session.id, "user", safeMessage, {
+      piiRedacted: piiResult.hadPii,
+    });
+
+    // v3.0: Now that the user message is persisted, check if we should
+    // summarize the conversation. This may call Gemini (to generate the
+    // summary) — if it fails, we proceed without a summary (non-fatal).
+    //
+    // ─── v3.8: fire-and-forget (non-blocking) summarization ─────────────
+    //
+    // Previously this was `const memory = await maybeSummarize(...)`, which
+    // BLOCKED the request path for 1-3s while Gemini generated the summary
+    // BEFORE the first token could stream. Every threshold-crossing turn
+    // (turn 12, then every 8 turns after) added 1-3s of dead latency.
+    //
+    // The summary is NOT needed for the current turn — it's needed for
+    // FUTURE turns (to compress older messages so they fit the token budget).
+    // The current turn already has the last AI_MAX_HISTORY messages in the
+    // history array, which covers recent context. The summary only matters
+    // for messages OLDER than that, which the model wouldn't see either way.
+    //
+    // Fix: kick off the summarization in the background + use the EXISTING
+    // memory (loaded above) for the current turn. The new summary lands in
+    // the DB + is picked up by the NEXT request's `loadSessionMemory`.
+    //
+    // Trade-off: the current turn runs with a stale (or null) summary. This
+    // is the standard industry pattern (OpenAI Assistants, Anthropic prompt
+    // caching, LangChain memory all do this) — the freshness gain of one
+    // turn is never worth 1-3s of blocking latency.
+    //
+    // The background promise is detached + self-contained:
+    //   - It catches its own errors (already does — maybeSummarize has an
+    //     outer try/catch that returns existingMemory on failure).
+    //   - We attach a `.catch()` here as a second safety net so an
+    //     unexpected throw never becomes an unhandled rejection (which
+    //     would crash the process in Node 15+ / Vercel).
+    //   - We DO NOT await it — the request proceeds immediately.
+    maybeSummarize(session.id, existingMemory).catch((err) => {
+      logger.warn(
+        { err: (err as Error)?.message, sessionId: session.id },
+        "Memory: background maybeSummarize failed (non-fatal — current turn uses existing memory)",
+      );
+    });
+
+    // Build Gemini history (respects summary cutoff). If a summary exists,
+    // only messages with id > cutoffId are included. The summary itself is
+    // injected into the system prompt.
+    const geminiHistory = await fetchHistoryForGemini(
+      session.id,
+      existingMemory.cutoffId,
+      maxHistory,
+    );
+
+    return { memory: existingMemory, geminiHistory };
+  })();
+
+  // ─── Type alias for the parallel batch result ─────────────────────────────
+  // Without this alias, TypeScript widens the `as const` fallback tuples
+  // to `readonly` arrays, which can't be passed to functions expecting
+  // mutable arrays (e.g. formatSellerListingContextForPrompt). By explicitly
+  // typing the batch result, we ensure both the success path and the
+  // fallback path produce the same mutable types.
+  type BatchBResult = [
+    // 1. promptVersionInfo
+    Awaited<ReturnType<typeof getActivePrompt>>,
+    // 2. catalogContext (string)
+    string,
+    // 3. kbContext
+    Awaited<ReturnType<typeof getTopKbEntriesForPrompt>>,
+    // 4. listingSearchResult
+    Awaited<ReturnType<typeof searchSellerListings>>,
+  ];
+
+  // BATCH B: context-building (parallel with BATCH A). All these depend
+  // only on `safeMessage` + `intentClassification.intent` + `buyerLocation`
+  // — no dependency on `session.id` or memory.
   //
-  // BUG-I1 fix: previously this called getTopKbEntriesForPrompt(safeMessage, 3)
-  // with an explicit `3` (the auto-inject cap, diverging from the tool's 5).
-  // The unified config now uses 5 for both paths — no need for the explicit
-  // arg. The tool declaration's max_results description tells the LLM that
-  // the auto-injected block also returns up to 5 entries.
-  //
-  // v6.1 Part 4: for MIXED intent, we SKIP this KB auto-inject — the
-  // search_seller_listings call below (with careSummary=true) fetches a
-  // 1-line care summary in the SAME tool response. This saves ~1500
-  // tokens of redundant KB context per MIXED query (5 entries × ~300
-  // chars each vs. 1 line × ~200 chars).
-  //
-  // v6.1 Part 5 (Gap #4 fix): if the listings search later returns 0
-  // results for MIXED intent, we FALL BACK to the KB auto-inject. This
-  // ensures the LLM always has SOME context for MIXED queries — either
-  // listings + care summary (the optimal path) OR full KB entries (the
-  // fallback). Without this fallback, MIXED + 0 listings → the LLM gets
-  // NOTHING + would have to call search_knowledge_base on-demand (adding
-  // a tool round + ~500ms latency). The fallback is implemented below
-  // after the listings search result is known.
-  //
-  // For KNOWLEDGE + GREETING intent, KB auto-inject runs as usual
-  // (KNOWLEDGE needs the full 5 entries; GREETING typically returns
-  // nothing — KB content is care-focused, doesn't match pure greeting
-  // queries).
-  //
-  // v6.1 Part 6 (latency optimization): also skip for PURCHASE intent.
-  // The KB content is care-focused (watering, sunlight, pruning) — it
-  // doesn't match pure purchase queries like "buy a mango sapling".
-  // Skipping saves ~200ms-3.5s (the KB search + reranker latency) for
-  // every PURCHASE-intent query. The LLM can still call
-  // search_knowledge_base on-demand if it needs care info for the
-  // specific listing it's recommending.
+  // We use Promise.all here (not allSettled) because every one of these
+  // has its own internal try/catch that returns a safe default on failure
+  // (catalogCache returns "", getTopKbEntriesForPrompt returns
+  // {entries: [], injected: false, toneCreator: null}, etc.). None of
+  // these should reject — but if one does, Promise.all rejects the whole
+  // batch + we catch it below to fall back to safe defaults.
   const skipKbAutoInject =
     intentClassification.intent === "MIXED" || intentClassification.intent === "PURCHASE";
+
+  // v6.1 Part 3+4: searchSellerListings is auto-called for PURCHASE/MIXED
+  // intent. The result is used to build the `listingsBlock`. For KNOWLEDGE
+  // + GREETING intent, the search is skipped (the LLM can call the tool
+  // on-demand).
+  const isMixedIntent = intentClassification.intent === "MIXED";
+
+  const batchBPromise: Promise<BatchBResult> = Promise.all([
+    // 1. Active prompt template (DB-cached).
+    getActivePrompt(),
+    // 2. Catalog context (DB query). For PURCHASE intent, buildCatalogContext
+    //    internally returns "" early (v6.1 Part 6).
+    buildCatalogContext(safeMessage, intentClassification.intent),
+    // 3. KB auto-inject. P0 #3 fix: pass skipRerank=true for the auto-inject
+    //    path (high minScore threshold means first-pass scores are reliable).
+    //    For PURCHASE/MIXED intent, we skip the call entirely (the search is
+    //    gated by the intent — saves the reranker latency entirely).
+    skipKbAutoInject
+      ? Promise.resolve({
+          injected: false,
+          entries: [] as Awaited<ReturnType<typeof getTopKbEntriesForPrompt>>["entries"],
+          toneCreator: null as Awaited<ReturnType<typeof getTopKbEntriesForPrompt>>["toneCreator"],
+        })
+      : getTopKbEntriesForPrompt(safeMessage, undefined, true /* skipRerank: P0 #3 */),
+    // 4. Seller-listing auto-call (PURCHASE/MIXED intent only).
+    intentClassification.intent === "PURCHASE" || isMixedIntent
+      ? searchSellerListings({
+          query: safeMessage,
+          userCity: buyerLocation?.city ?? null,
+          userDistrict: buyerLocation?.district ?? null,
+          // v6.1 Part 4: for MIXED intent, also fetch a 1-line care summary
+          // in the same response. For PURCHASE intent, skip (user doesn't
+          // want care info).
+          careSummary: isMixedIntent,
+        }).catch((err) => {
+          // Non-fatal — the LLM can still call search_seller_listings as
+          // a tool on-demand. Log + return an empty result so the prompt
+          // assembly skips the listings block.
+          logger.warn(
+            { err: (err as Error)?.message ?? String(err), intent: intentClassification.intent },
+            "AI: search_seller_listings auto-call failed (non-fatal — LLM can call as tool)",
+          );
+          // Cast through `unknown` because the empty fallback is missing
+          // required fields (query, buyerCity, buyerDistrict). The
+          // downstream code only checks `.listings` + `.careSummary`, so the
+          // missing fields don't matter at runtime — they're just transparency
+          // metadata echoed back to the LLM/tool-result envelope.
+          return {
+            listings: [],
+            totalCount: 0,
+            careSummary: null,
+          } as unknown as Awaited<ReturnType<typeof searchSellerListings>>;
+        })
+      : Promise.resolve({
+          listings: [],
+          totalCount: 0,
+          careSummary: null,
+        } as unknown as Awaited<ReturnType<typeof searchSellerListings>>),
+  ]).catch((err): BatchBResult => {
+    // Defensive: if Promise.all rejected (shouldn't happen — all entries
+    // have their own try/catch), log + return safe defaults so the rest of
+    // the request proceeds with empty context. The LLM will rely on its
+    // training data + the user's message.
+    logger.error(
+      { err: (err as Error)?.message ?? String(err) },
+      "AI: BATCH B (context-building) rejected — proceeding with empty context (non-fatal)",
+    );
+    return [
+      { text: "", version: "fallback" },
+      "",
+      { injected: false, entries: [], toneCreator: null },
+      {
+        listings: [],
+        totalCount: 0,
+        careSummary: null,
+      } as unknown as Awaited<ReturnType<typeof searchSellerListings>>,
+    ];
+  });
+
+  // Await both batches in parallel. We use Promise.allSettled so that if
+  // BATCH A fails (DB error on session row — unlikely but possible), we
+  // can still proceed with BATCH B's results + a null memory. The BATCH B
+  // promise has its own internal catch (above), so it should always fulfill.
+  const [batchASettled, batchBSettled] = await Promise.allSettled([batchAPromise, batchBPromise]);
+
+  // Extract BATCH A results (memory + geminiHistory).
+  if (batchASettled.status === "rejected") {
+    // BATCH A failed — DB error on session or memory fetch. We can't
+    // proceed without a session row (the persist + history fetch both
+    // need it). Return 500.
+    logger.error(
+      { err: (batchASettled.reason as Error)?.message ?? String(batchASettled.reason) },
+      "AI: BATCH A (session/memory/history) failed",
+    );
+    res.status(500).json({ error: "Failed to load conversation history." });
+    return;
+  }
+  const { memory, geminiHistory } = batchASettled.value;
+
+  // Extract BATCH B results (promptVersionInfo, catalogContext, kbContext,
+  // listingSearchResult). The batch promise has its own catch (above), so
+  // this should always be fulfilled — but we still guard defensively.
+  if (batchBSettled.status === "rejected") {
+    // Should not happen (BATCH B has its own catch). Log + fall back to
+    // empty context.
+    logger.error(
+      { err: (batchBSettled.reason as Error)?.message ?? String(batchBSettled.reason) },
+      "AI: BATCH B (context-building) unexpectedly rejected (defensive fallback engaged)",
+    );
+  }
+  const batchB: BatchBResult =
+    batchBSettled.status === "fulfilled"
+      ? batchBSettled.value
+      : [
+          { text: "", version: "fallback" },
+          "",
+          { injected: false, entries: [], toneCreator: null },
+          {
+            listings: [],
+            totalCount: 0,
+            careSummary: null,
+          } as unknown as Awaited<ReturnType<typeof searchSellerListings>>,
+        ];
+  // We use `let` for `kbContext` because the MIXED+0-listings fallback (Gap #4
+  // fix below) reassigns it after the parallel batch resolves. The other
+  // three values (`promptVersionInfo`, `catalogContext`, `listingSearchResult`)
+  // are immutable post-batch — destructured as `const`.
+  const [promptVersionInfo, catalogContext, batchBKbContext, listingSearchResult] = batchB;
   // Changed from `const` to `let` so the MIXED+0-listings fallback can
   // reassign kbContext below (Gap #4 fix).
-  let kbContext = skipKbAutoInject
-    ? {
-        injected: false,
-        entries: [] as Awaited<ReturnType<typeof getTopKbEntriesForPrompt>>["entries"],
-        toneCreator: null as Awaited<ReturnType<typeof getTopKbEntriesForPrompt>>["toneCreator"],
-      }
-    : await getTopKbEntriesForPrompt(safeMessage);
-  // Changed from `const` to `let` for the same fallback reason.
+  let kbContext = batchBKbContext;
+
+  // Build the summary block from the loaded memory. (Was a separate step
+  // in the old sequential flow — now we just compute it from the memory
+  // we already have.)
+  const summaryBlock = buildSummaryPromptBlock(memory.summary);
+
+  // Changed from `const` to `let` so the MIXED+0-listings fallback can
+  // reassign kbContext below (Gap #4 fix).
   let knowledgeBlock = kbContext.injected ? formatKbContextForPrompt(kbContext.entries) : "";
   if (kbContext.injected) {
     logger.info(
@@ -1482,6 +1710,13 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
   // `kbContext.toneCreator` is set by `getTopKbEntriesForPrompt` based on
   // the primary creator selection logic (top entry's creator, with a
   // multi-creator tie-breaker for scores within 0.05).
+  //
+  // P0 #1 note: the tone profile + match percentage fetches are NOT in the
+  // parallel BATCH B (they depend on kbContext.toneCreator, which is the
+  // OUTPUT of BATCH B's getTopKbEntriesForPrompt call). They run sequentially
+  // AFTER the batches complete — the typical latency is 2ms × 2 DB queries
+  // (~4ms total), which is acceptable. We could move them into a third
+  // parallel batch if profiling shows they're a bottleneck.
   let toneBlock = "";
   if (kbContext.injected && kbContext.toneCreator?.hasToneProfile) {
     const profile = await getToneProfile(kbContext.toneCreator.creatorId);
@@ -1500,143 +1735,121 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     }
   }
 
-  // ─── v6.1 Part 3+4: Auto-call search_seller_listings for PURCHASE/MIXED intent ──
-  // Mirrors the getTopKbEntriesForPrompt auto-inject pattern (above). When
-  // the intent classifier detects PURCHASE or MIXED intent, we pre-call
-  // search_seller_listings so the LLM has the listings upfront — no
-  // first-round tool call needed. This saves ~1 LLM round (~500ms-2s)
-  // of latency for purchase-intent queries.
+  // ─── v6.1 Part 3+4: Process search_seller_listings result (PURCHASE/MIXED) ──
+  // The search was already executed in BATCH B (in parallel with the session
+  // memory fetch + the KB auto-inject). Here we just process the result:
+  //   - If listings were found → build the listingsBlock from them.
+  //   - If 0 listings + MIXED intent → fall back to KB auto-inject (Gap #4).
+  //   - If 0 listings + PURCHASE intent → empty listingsBlock (LLM will say
+  //     "no listings found" + suggest browsing the catalog).
+  //   - If KNOWLEDGE/GREETING intent → listingsBlock stays empty (the search
+  //     was skipped in BATCH B).
   //
-  // PURCHASE intent: KB auto-inject is still attempted (above) but typically
-  // returns nothing because PURCHASE queries don't match care-info keywords.
-  // The KB block is empty, the listings block has the purchasable items.
-  //
-  // MIXED intent: KB auto-inject is SKIPPED (see skipKbAutoInject above) +
-  // the listings call passes careSummary=true, which fetches a 1-line KB
-  // care summary in the SAME response. The listings block (with care summary
-  // prepended) replaces both the KB block AND the listings block.
-  //   - Token savings: ~1500 tokens (5 KB entries × ~300 chars vs 1 line × ~200 chars)
-  //   - Latency savings: ~50ms (no separate KB DB call)
-  //   - LLM still has care info (1 line) + listings (5 items) — enough for
-  //     a "buy this + here's how to care for it" response.
-  //
-  // KNOWLEDGE intent: listings block is skipped (no point injecting listings
-  // if the user just wants care info). The LLM can still call the
-  // search_seller_listings tool on-demand if the user follows up with a
-  // purchase question.
+  // The original sequential flow called searchSellerListings here (sequential
+  // ~10ms). The new flow runs it in parallel with the other context-building
+  // work, saving ~10ms on the hot path. The result processing logic is
+  // unchanged — we just consume the result from the parallel batch.
   let listingsBlock = "";
-  const isMixedIntent = intentClassification.intent === "MIXED";
   if (intentClassification.intent === "PURCHASE" || isMixedIntent) {
-    try {
-      const listingSearchResult = await searchSellerListings({
-        query: safeMessage,
-        userCity: buyerLocation?.city ?? null,
-        userDistrict: buyerLocation?.district ?? null,
-        // v6.1 Part 4: for MIXED intent, also fetch a 1-line care summary
-        // in the same response. For PURCHASE intent, skip (user doesn't
-        // want care info).
-        careSummary: isMixedIntent,
-      });
-      if (listingSearchResult.listings.length > 0) {
-        listingsBlock = formatSellerListingContextForPrompt(
-          listingSearchResult.listings,
-          listingSearchResult.careSummary,
-        );
-        logger.info(
-          {
-            intent: intentClassification.intent,
-            listingCount: listingSearchResult.listings.length,
-            totalCount: listingSearchResult.totalCount,
-            listingIds: listingSearchResult.listings.map((l) => l.listingId),
-            buyerDistrict: buyerLocation?.district ?? null,
-            careSummaryIncluded: listingSearchResult.careSummary !== null,
-            careSummarySource: listingSearchResult.careSummary?.sourceTitle ?? null,
-          },
-          "AI: seller-listing context injected into prompt (v6.1 Part 3+4 auto-call)",
-        );
-      } else {
-        logger.info(
-          {
-            intent: intentClassification.intent,
-            query: safeMessage.slice(0, 80),
-            error: listingSearchResult.error,
-          },
-          "AI: search_seller_listings returned 0 listings — LLM will rely on KB / catalog context",
-        );
+    if (listingSearchResult.listings.length > 0) {
+      listingsBlock = formatSellerListingContextForPrompt(
+        listingSearchResult.listings,
+        listingSearchResult.careSummary,
+      );
+      logger.info(
+        {
+          intent: intentClassification.intent,
+          listingCount: listingSearchResult.listings.length,
+          totalCount: listingSearchResult.totalCount,
+          listingIds: listingSearchResult.listings.map((l) => l.listingId),
+          buyerDistrict: buyerLocation?.district ?? null,
+          careSummaryIncluded: listingSearchResult.careSummary !== null,
+          careSummarySource: listingSearchResult.careSummary?.sourceTitle ?? null,
+        },
+        "AI: seller-listing context injected into prompt (v6.1 Part 3+4 auto-call)",
+      );
+    } else {
+      logger.info(
+        {
+          intent: intentClassification.intent,
+          query: safeMessage.slice(0, 80),
+        },
+        "AI: search_seller_listings returned 0 listings — LLM will rely on KB / catalog context",
+      );
 
-        // ─── v6.1 Part 5 (Gap #4 fix): MIXED + 0 listings fallback ────
-        // When MIXED intent + 0 listings found, the LLM has NO listings
-        // block AND NO KB block (we skipped it earlier via skipKbAutoInject).
-        // The LLM would have to call search_knowledge_base on-demand,
-        // adding a tool round + ~500ms latency.
-        //
-        // Fix: fall back to the regular KB auto-inject (getTopKbEntriesForPrompt)
-        // so the LLM at least has care info to work with. The LLM can still
-        // call search_seller_listings on-demand if it wants to try again
-        // with different args (e.g. a broader query).
-        //
-        // This fallback is ONLY for MIXED intent. PURCHASE intent with 0
-        // listings is fine — the KB content is care-focused, wouldn't
-        // help a pure purchase query. The LLM will say "no listings found
-        // for that query" + suggest browsing the catalog.
-        if (isMixedIntent) {
-          try {
+      // ─── v6.1 Part 5 (Gap #4 fix): MIXED + 0 listings fallback ────
+      // When MIXED intent + 0 listings found, the LLM has NO listings
+      // block AND NO KB block (we skipped it earlier via skipKbAutoInject).
+      // The LLM would have to call search_knowledge_base on-demand,
+      // adding a tool round + ~500ms latency.
+      //
+      // Fix: fall back to the regular KB auto-inject (getTopKbEntriesForPrompt)
+      // so the LLM at least has care info to work with. The LLM can still
+      // call search_seller_listings on-demand if it wants to try again
+      // with different args (e.g. a broader query).
+      //
+      // This fallback is ONLY for MIXED intent. PURCHASE intent with 0
+      // listings is fine — the KB content is care-focused, wouldn't
+      // help a pure purchase query. The LLM will say "no listings found
+      // for that query" + suggest browsing the catalog.
+      //
+      // P0 #3 note: the fallback uses skipRerank=true (same as the primary
+      // auto-inject path) — the high minScore threshold makes first-pass
+      // scores reliable, and we want this fallback to be fast.
+      if (isMixedIntent) {
+        try {
+          logger.info(
+            { intent: intentClassification.intent, query: safeMessage.slice(0, 80) },
+            "AI: MIXED + 0 listings → falling back to KB auto-inject (Gap #4 fix)",
+          );
+          const fallbackKbContext = await getTopKbEntriesForPrompt(
+            safeMessage,
+            undefined,
+            true /* skipRerank: P0 #3 — keep the fallback fast */,
+          );
+          if (fallbackKbContext.injected) {
+            kbContext = fallbackKbContext;
+            knowledgeBlock = formatKbContextForPrompt(fallbackKbContext.entries);
             logger.info(
-              { intent: intentClassification.intent, query: safeMessage.slice(0, 80) },
-              "AI: MIXED + 0 listings → falling back to KB auto-inject (Gap #4 fix)",
+              {
+                entryCount: fallbackKbContext.entries.length,
+                topScore: fallbackKbContext.entries[0]?.score,
+                entryIds: fallbackKbContext.entries.map((e) => e.entry.id),
+              },
+              "AI: MIXED fallback KB context injected into prompt",
             );
-            const fallbackKbContext = await getTopKbEntriesForPrompt(safeMessage);
-            if (fallbackKbContext.injected) {
-              kbContext = fallbackKbContext;
-              knowledgeBlock = formatKbContextForPrompt(fallbackKbContext.entries);
-              logger.info(
-                {
-                  entryCount: fallbackKbContext.entries.length,
-                  topScore: fallbackKbContext.entries[0]?.score,
-                  entryIds: fallbackKbContext.entries.map((e) => e.entry.id),
-                },
-                "AI: MIXED fallback KB context injected into prompt",
-              );
-              // Re-compute tone matching (the initial toneBlock was "" because
-              // kbContext was empty — now we have real entries + maybe a toneCreator).
-              if (fallbackKbContext.toneCreator?.hasToneProfile) {
-                const profile = await getToneProfile(fallbackKbContext.toneCreator.creatorId);
-                if (profile) {
-                  const matchPct = await getEffectiveToneMatchPercentage(
-                    fallbackKbContext.toneCreator.creatorId,
-                  );
-                  toneBlock = formatToneBlockForPrompt(
-                    profile,
-                    fallbackKbContext.toneCreator.creatorName,
+            // Re-compute tone matching (the initial toneBlock was "" because
+            // kbContext was empty — now we have real entries + maybe a toneCreator).
+            if (fallbackKbContext.toneCreator?.hasToneProfile) {
+              const profile = await getToneProfile(fallbackKbContext.toneCreator.creatorId);
+              if (profile) {
+                const matchPct = await getEffectiveToneMatchPercentage(
+                  fallbackKbContext.toneCreator.creatorId,
+                );
+                toneBlock = formatToneBlockForPrompt(
+                  profile,
+                  fallbackKbContext.toneCreator.creatorName,
+                  matchPct,
+                );
+                logger.info(
+                  {
+                    creator: fallbackKbContext.toneCreator.creatorName,
+                    creatorId: fallbackKbContext.toneCreator.creatorId,
                     matchPct,
-                  );
-                  logger.info(
-                    {
-                      creator: fallbackKbContext.toneCreator.creatorName,
-                      creatorId: fallbackKbContext.toneCreator.creatorId,
-                      matchPct,
-                    },
-                    "AI: MIXED fallback tone matching activated",
-                  );
-                }
+                  },
+                  "AI: MIXED fallback tone matching activated",
+                );
               }
             }
-          } catch (fallbackErr) {
-            // Non-fatal — the LLM can still call search_knowledge_base as a tool.
-            logger.warn(
-              { err: (fallbackErr as Error)?.message ?? String(fallbackErr) },
-              "AI: MIXED fallback KB auto-inject failed (non-fatal — LLM can call search_knowledge_base as tool)",
-            );
           }
+        } catch (fallbackErr) {
+          // Non-fatal — the LLM can still call search_knowledge_base as a tool.
+          logger.warn(
+            { err: (fallbackErr as Error)?.message ?? String(fallbackErr) },
+            "AI: MIXED fallback KB auto-inject failed (non-fatal — LLM can call search_knowledge_base as tool)",
+          );
         }
       }
-    } catch (err) {
-      // Non-fatal — the LLM can still call search_seller_listings as a tool
-      // on-demand (the tool is declared, the LLM can invoke it).
-      logger.warn(
-        { err: (err as Error)?.message ?? String(err), intent: intentClassification.intent },
-        "AI: search_seller_listings auto-call failed (non-fatal — LLM can call as tool)",
-      );
     }
   }
 
@@ -1998,6 +2211,43 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       return clearedPrompt;
     };
 
+    // ─── P0 #2 fix (latency optimization): intent-based tool subsetting ────
+    // Filter the tool declarations to just the subset for the detected intent.
+    // The full AI_TOOL_DECLARATIONS array (~440 tokens) is filtered down via
+    // `getToolDeclarationsForIntent(intent)`:
+    //   - PURCHASE → 5 tools (hides search_knowledge_base, ~80 tokens saved)
+    //   - KNOWLEDGE → 5 tools (hides search_seller_listings, ~150 tokens saved)
+    //   - MIXED → 6 tools (full set — fail-open for ambiguous intent)
+    //   - GREETING → 0 tools (no LLM call expected — defensive)
+    //
+    // The `execute` callback is NOT filtered — if the LLM hallucinates a
+    // hidden tool name + tries to call it, `executeTool` returns an
+    // "Unknown function" error to the LLM (handled in aiTools.ts via the
+    // `isToolName(name)` guard). This is safer than re-filtering here +
+    // potentially missing a future tool that should be executable but
+    // wasn't added to the subset.
+    //
+    // Industry standard: OpenAI function-calling best practices recommend
+    // "only expose the functions the model needs for the current task."
+    // Anthropic's tool-use docs warn: "passing too many tools degrades
+    // performance and increases cost." Google's Gemini docs say the same.
+    // This change catches the codebase up to industry standards.
+    const visibleToolDeclarations = getToolDeclarationsForIntent(
+      intentClassification.intent,
+      AI_TOOL_DECLARATIONS,
+    );
+    const hiddenToolNames = getHiddenToolsForIntent(intentClassification.intent);
+    if (hiddenToolNames.length > 0) {
+      logger.debug(
+        {
+          intent: intentClassification.intent,
+          visibleToolCount: visibleToolDeclarations.length,
+          hiddenToolNames,
+        },
+        "AI: P0 #2 — intent-based tool subsetting applied",
+      );
+    }
+
     const stream = streamChat(
       // BUG-I5 fix: pass a getter `() => currentSystemPrompt` instead of
       // the original `systemPrompt` const. The provider reads the getter
@@ -2018,8 +2268,11 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
       // and surfaces it as `tone_locked_creator` in its response envelope
       // so the LLM can detect creator mismatches and use neutral tone
       // for off-creator citations.
+      //
+      // P0 #2 fix: `declarations` is the filtered `visibleToolDeclarations`
+      // (computed above) instead of the full `AI_TOOL_DECLARATIONS` array.
       {
-        declarations: AI_TOOL_DECLARATIONS,
+        declarations: visibleToolDeclarations,
         // v6.2 Part 9 (Gap 17 fix — Phase B): accept the options object
         // (4th param) so we can forward onProgress to executeTool. The
         // context (toneLockedCreatorId, buyerLocation) is still passed
@@ -2199,80 +2452,182 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     // block means no follow-up chips are shown — the response itself is fine.
     // Saves ~500ms-2s per request where the LLM forgets the block (~5% of
     // responses). The frontend handles missing followups gracefully.
+    //
+    // P0 #4 fix (latency optimization): run the followups fallback + the
+    // output safety check IN PARALLEL via Promise.all. They have no data
+    // dependency on each other (both read the streamed `fullResponse`,
+    // neither modifies it in a way the other cares about):
+    //   - Followups fallback: appends a [followups] block to fullResponse.
+    //   - Output safety: sanitizes the original fullResponse (PII redaction
+    //     + optional Constitutional AI).
+    // After both complete, we combine: sanitized response + followups block.
+    //
+    // This saves the SEQUENTIAL cost: previously followups (~500ms-2s when
+    // triggered) ran BEFORE safety check (~200ms-3s when Constitutional AI
+    // runs) — total up to ~5s of blocking work. Now they run concurrently,
+    // total = max(followupsMs, safetyMs) instead of sum.
+    //
+    // The followups block is a fixed format ([followups]...[/followups]) that
+    // doesn't need safety checking — it's just question strings the LLM
+    // generated. The safety check on the original response catches any
+    // harmful/jailbreak content in the body.
     const followupsFallbackEnabled =
       (process.env.AI_FOLLOWUPS_FALLBACK_ENABLED ?? "true").toLowerCase() !== "false";
-    if (fullResponse && !piiResult.hadPii && followupsFallbackEnabled) {
-      const { found } = extractFollowups(fullResponse);
-      if (!found) {
-        logger.info("AI: [followups] block missing, generating via structured output");
-        // v5.1: notify the frontend that followups are being generated
-        try {
-          res.write(`data: ${JSON.stringify({ type: "followups_loading" })}\n\n`);
-        } catch {
-          // Best-effort — client may have disconnected
-        }
+
+    // ─── P0 #4: decide whether to run the slow Constitutional AI check ───────
+    // The LLM-based Constitutional AI check (~200ms-3s) is GATED on whether
+    // the response has a realistic PII leak / jailbreak compliance vector.
+    // For the BULK of traffic (catalog + KB queries), the response comes
+    // from vetted sources with no PII leak vector — skipping the LLM check
+    // saves ~200ms-3s per request with zero safety loss.
+    //
+    // The check RUNS when:
+    //   - Any user-scoped tool was called (get_user_orders, get_order_details)
+    //     → tool results contain user-specific data the LLM might leak.
+    //   - The user's INPUT had PII redacted → LLM might echo it back.
+    //   - The query matched account keywords ("my order", "track package")
+    //     → LLM might hallucinate user data without calling a tool.
+    //
+    // The fast PII redaction (regex, ~1ms) ALWAYS runs on the output —
+    // catches phone numbers, emails, NID, card numbers regardless of the gate.
+    const toolCallsForGate = metaHolder.value?.toolCalls ?? [];
+    const runConstitutionalAI = shouldRunConstitutionalAI(
+      toolCallsForGate,
+      USER_SCOPED_TOOLS,
+      piiResult.hadPii,
+      isPrivateQuery,
+    );
+
+    // Determine if followups fallback is needed (cheap pre-check — extractFollowups is sync).
+    const needsFollowupsFallback =
+      fullResponse &&
+      !piiResult.hadPii &&
+      followupsFallbackEnabled &&
+      !extractFollowups(fullResponse).found;
+
+    // ─── P0 #4: notify the frontend that followups are being generated ─────
+    // Send `followups_loading` BEFORE the parallel batch so the frontend can
+    // show a loading spinner immediately. If followups aren't needed, skip.
+    if (needsFollowupsFallback) {
+      logger.info("AI: [followups] block missing, generating via structured output");
+      try {
+        res.write(`data: ${JSON.stringify({ type: "followups_loading" })}\n\n`);
+      } catch {
+        // Best-effort — client may have disconnected
+      }
+    }
+
+    // ─── P0 #4: run followups fallback + output safety check in parallel ──
+    // Promise.allSettled so a rejection in one doesn't cancel the other.
+    // Each branch has its own try/catch that returns a safe default.
+    const [followupsSettled, safetySettled] = await Promise.allSettled([
+      // Branch 1: followups fallback (only runs if needed).
+      // Returns the followups block string (empty if no followups generated).
+      (async (): Promise<{ followupsBlock: string; followups: string[] }> => {
+        if (!needsFollowupsFallback) return { followupsBlock: "", followups: [] };
         try {
           const structuredFollowups = await generateFollowupsStructured(safeMessage, fullResponse);
           if (structuredFollowups.length > 0) {
-            const followupsBlock = formatFollowupsBlock(structuredFollowups);
-            fullResponse += followupsBlock;
-            // v5.1: send as a dedicated `followups_delta` event so the
-            // frontend can render suggestion chips immediately without
-            // re-parsing the text response.
-            res.write(
-              `data: ${JSON.stringify({ type: "followups_delta", followups: structuredFollowups })}\n\n`,
-            );
-            // Also send as a delta so the persisted response includes the block
-            res.write(`data: ${JSON.stringify({ type: "delta", text: followupsBlock })}\n\n`);
+            return {
+              followupsBlock: formatFollowupsBlock(structuredFollowups),
+              followups: structuredFollowups,
+            };
           }
         } catch (err) {
           logger.warn({ err }, "AI: structured followup generation failed (non-fatal)");
         }
+        return { followupsBlock: "", followups: [] };
+      })(),
+      // Branch 2: output safety check (PII redaction + optional Constitutional AI).
+      // P0 #4: pass `runConstitutionalAI` to skip the LLM check when not needed.
+      (async (): Promise<{
+        sanitizedResponse: string;
+        hadOutputPii: boolean;
+        wasUnsafe: boolean;
+        violationType: string | null;
+        safetyExplanation: string | null;
+        piiDetectedTypes: string[];
+        piiCount: number;
+      } | null> => {
+        if (!fullResponse || !fullResponse.trim()) return null;
+        // P0 #4: gate the slow Constitutional AI check via shouldRunConstitutionalAI().
+        // When skipped, only the fast PII redaction runs (~1ms regex).
+        try {
+          const outputSafety = await checkOutputSafety(
+            safeMessage,
+            fullResponse,
+            runConstitutionalAI,
+          );
+          return {
+            sanitizedResponse: outputSafety.sanitizedResponse,
+            hadOutputPii: outputSafety.hadOutputPii,
+            wasUnsafe: outputSafety.wasUnsafe,
+            violationType: outputSafety.violationType,
+            safetyExplanation: outputSafety.safetyExplanation,
+            piiDetectedTypes: outputSafety.piiResult?.detectedTypes ?? [],
+            piiCount: outputSafety.piiResult?.count ?? 0,
+          };
+        } catch (err) {
+          // Fail-open: if the safety check itself threw, use the original response.
+          logger.warn(
+            { err: (err as Error)?.message ?? String(err) },
+            "AI: checkOutputSafety threw (fail-open — using original response)",
+          );
+          return null;
+        }
+      })(),
+    ]);
+
+    // ─── Process followups result ────────────────────────────────────────────
+    let appendedFollowupsBlock = "";
+    let appendedFollowups: string[] = [];
+    if (followupsSettled.status === "fulfilled") {
+      const { followupsBlock, followups } = followupsSettled.value;
+      appendedFollowupsBlock = followupsBlock;
+      appendedFollowups = followups;
+      if (followupsBlock.length > 0) {
+        // Append the followups block to the full response.
+        fullResponse += followupsBlock;
+        // v5.1: send as a dedicated `followups_delta` event so the
+        // frontend can render suggestion chips immediately without
+        // re-parsing the text response.
+        try {
+          res.write(`data: ${JSON.stringify({ type: "followups_delta", followups })}\n\n`);
+          // Also send as a delta so the persisted response includes the block
+          res.write(`data: ${JSON.stringify({ type: "delta", text: followupsBlock })}\n\n`);
+        } catch {
+          // best-effort — client may have disconnected
+        }
       }
+    } else {
+      // Followups branch rejected — non-fatal. The response just won't have
+      // a followups block; the frontend handles missing followups gracefully.
+      logger.warn(
+        { err: (followupsSettled.reason as Error)?.message ?? String(followupsSettled.reason) },
+        "AI: followups branch rejected (non-fatal — no followups block)",
+      );
     }
 
-    // ─── v5.5: Output safety check (PII redaction + Constitutional AI) ───
-    // Industry standard: Anthropic Constitutional AI, Cloudflare Prompt Shield,
-    // AWS Bedrock Guardrails — all check BOTH input AND output.
-    //
-    // Previously PII redaction only ran on USER INPUT. But PII can also leak
-    // in the OUTPUT direction (model training data, KB content, jailbreak
-    // compliance). This check:
-    //   1. Runs redactPii() on the full AI response → catches leaked PII
-    //   2. Runs Constitutional AI check → catches harmful advice, jailbreak
-    //      compliance, system prompt leakage, off-topic compliance
-    //
-    // If PII is found, the redacted version replaces the streamed response.
-    // If the Constitutional AI check flags the response as unsafe, a safe
-    // fallback replaces it.
-    //
-    // The client is notified via a `response_replaced` SSE event so it can
-    // update the displayed message (the original was already streamed via
-    // deltas, so we need to tell the client to replace it).
-    //
-    // v6.1 Part 6 (latency optimization): the Constitutional AI check (an
-    // LLM call, ~200ms-3s) can be DISABLED via
-    // OUTPUT_CONSTITUTIONAL_AI_ENABLED=false. PII redaction (regex, ~1ms)
-    // still runs. When disabled, the check is skipped entirely — the
-    // response is persisted as-is. This is a security trade-off: the
-    // PII regex still catches phone numbers, emails, NID numbers, etc.
-    // The Constitutional AI catches subtler issues (harmful advice,
-    // jailbreak compliance). Disable at your own risk.
-    const constitutionalAiEnabled =
-      (process.env.OUTPUT_CONSTITUTIONAL_AI_ENABLED ?? "true").toLowerCase() !== "false";
-    if (fullResponse && fullResponse.trim() && constitutionalAiEnabled) {
-      const outputSafety = await checkOutputSafety(safeMessage, fullResponse);
-      if (outputSafety.sanitizedResponse !== fullResponse) {
+    // ─── Process output safety result ───────────────────────────────────────
+    // P0 #4: the safety check ran on the ORIGINAL response (without the
+    // followups block). If safety sanitized the response, we use the
+    // sanitized version + append the followups block on top.
+    if (safetySettled.status === "fulfilled" && safetySettled.value) {
+      const safety = safetySettled.value;
+      if (safety.sanitizedResponse !== fullResponse.slice(0, -appendedFollowupsBlock.length)) {
         // The response was modified (PII redacted or safety fallback).
+        // Replace the body (preserve the followups block at the end).
+        const sanitizedWithFollowups = safety.sanitizedResponse + appendedFollowupsBlock;
+        fullResponse = sanitizedWithFollowups;
         // Notify the client to replace the displayed response.
         try {
           res.write(
             `data: ${JSON.stringify({
               type: "response_replaced",
-              text: outputSafety.sanitizedResponse,
-              reason: outputSafety.wasUnsafe
+              text: safety.sanitizedResponse,
+              reason: safety.wasUnsafe
                 ? "safety"
-                : outputSafety.hadOutputPii
+                : safety.hadOutputPii
                   ? "pii_redacted"
                   : "unknown",
             })}\n\n`,
@@ -2280,23 +2635,43 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
         } catch {
           // best-effort — client may have disconnected
         }
-        fullResponse = outputSafety.sanitizedResponse;
       }
 
       // Log output safety events for observability.
-      if (outputSafety.hadOutputPii) {
+      if (safety.hadOutputPii) {
         await logAiEvent(session.id, "output_pii_redacted", {
-          types: outputSafety.piiResult?.detectedTypes ?? [],
-          count: outputSafety.piiResult?.count ?? 0,
+          types: safety.piiDetectedTypes,
+          count: safety.piiCount,
         }).catch(() => {});
       }
-      if (outputSafety.wasUnsafe) {
+      if (safety.wasUnsafe) {
         await logAiEvent(session.id, "output_unsafe_blocked", {
-          violationType: outputSafety.violationType,
-          explanation: outputSafety.safetyExplanation,
+          violationType: safety.violationType,
+          explanation: safety.safetyExplanation,
         }).catch(() => {});
       }
+    } else if (safetySettled.status === "rejected") {
+      // Safety branch rejected — already logged inside the branch (fail-open).
+      // No action needed; the original response (with followups block) is used.
     }
+
+    // P0 #4: log the Constitutional AI gating decision (for observability —
+    // admins can see in the logs how often the gating kicked in).
+    if (!runConstitutionalAI) {
+      logger.debug(
+        {
+          toolCalls: toolCallsForGate,
+          hadInputPii: piiResult.hadPii,
+          isPrivateQuery,
+        },
+        "AI: P0 #4 — Constitutional AI check SKIPPED (response from vetted sources, no PII leak vector)",
+      );
+    }
+    // Reference `appendedFollowups` + `appendedFollowupsBlock` to satisfy
+    // noUnusedLocals if the compiler is strict (we use them above, but TS
+    // control-flow analysis can't always see the assignment in the if branch).
+    void appendedFollowups;
+    void appendedFollowupsBlock;
 
     // ─── Persist the assistant message BEFORE sending done ───
     // We need its DB id so the frontend can wire up feedback buttons.
@@ -2358,8 +2733,13 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     // Uses the existing ai_chat_events table + logAiEvent (no schema change).
     // The event is visible in the admin "Events" tab + used by the Insights
     // view to count tone-match activations.
+    //
+    // P0 #4 fix (latency optimization): fire-and-forget (don't `await`). The
+    // `logAiEvent` function is already wrapped in `.catch(() => {})` (best-effort)
+    // — making it non-blocking shaves a few ms off the response time. The tone
+    // match event is purely observability metadata; the user doesn't wait on it.
     if (toneBlock && kbContext.toneCreator) {
-      await logAiEvent(session.id, "tone_match", {
+      logAiEvent(session.id, "tone_match", {
         creatorId: kbContext.toneCreator.creatorId,
         creatorName: kbContext.toneCreator.creatorName,
         matchPct: kbContext.toneCreator.toneMatchPercentage,
