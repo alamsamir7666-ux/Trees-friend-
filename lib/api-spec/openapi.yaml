@@ -329,6 +329,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/MessageResponse"
 
+  /products/{id}/related:
+    get:
+      operationId: listRelatedProducts
+      tags: [products]
+      summary: List related products (same subcategory, excludes the given product)
+      description: |
+        Returns up to 4 products in the same subcategory as the given product,
+        excluding the given product itself. Used by the product detail page's
+        "You may also like" section.
+
+        Replaces the previous client-side filter pattern where the frontend
+        fetched 40 products via `useListProducts({ limit: 40 })` and then
+        filtered by `categoryId` in JS — that wasted bandwidth and would miss
+        related products when the category had > 40 items.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: Max number of related products to return (default 4, max 12).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 12
+            default: 4
+      responses:
+        "200":
+          description: Related products (same subcategory, excludes the requested product)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+        "404":
+          description: Product not found
+
   /cart:
     get:
       operationId: getCart

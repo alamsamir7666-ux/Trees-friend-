@@ -1,8 +1,10 @@
 import { useParams, Link } from "wouter";
 import { ArrowLeft, Clock, Tag, Share2, Check, BookOpen, FileText } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { apiClient } from "@/lib/apiClient";
-import { updateSEO } from "@/lib/seo";
+import { useSEO } from "@/lib/seo";
+import { formatReadTime } from "@/lib/blog";
+import { sanitizeHtml } from "@/lib/sanitizeHtml";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { BlogProductCarousel } from "@/components/blog/BlogProductCarousel";
 
@@ -39,6 +41,39 @@ export function BlogArticlePage() {
       })
       .finally(() => setLoading(false));
   }, [slug]);
+
+  // SEO — must run for every state (loading / not-found / loaded) so <head>
+  // reflects the current page. Previously this page had NO SEO call at all,
+  // so articles shared on social media fell back to the generic homepage
+  // metadata. Now: loading → defaults; not-found → noindex; loaded → full
+  // article OG tags (article:published_time, article:section, og:type=article).
+  useSEO(
+    loading
+      ? {}
+      : !article
+        ? { title: "Article Not Found", noIndex: true }
+        : {
+            title: article.title,
+            description: article.excerpt,
+            image: article.image || undefined,
+            type: "article",
+            publishedTime: article.date ?? undefined,
+            section: article.category || undefined,
+          },
+  );
+
+  // Pre-sanitize the raw-HTML fallback (only used when content is a string,
+  // not an array of blocks). Done in useMemo so it only re-runs when the
+  // article actually changes — DOMPurify on a 50KB article body is not free.
+  // Returns "" for array content / missing article so the fallback <div>
+  // renders nothing if the array branch is taken instead.
+  const sanitizedFallbackHtml = useMemo(
+    () =>
+      article && typeof article.content === "string"
+        ? sanitizeHtml(article.content)
+        : "",
+    [article],
+  );
 
   if (loading) {
     return (
@@ -96,9 +131,11 @@ export function BlogArticlePage() {
         <span className="bg-accent/10 text-accent text-xs px-3 py-1 rounded-full flex items-center gap-1">
           <Tag className="h-3 w-3" />{article.category}
         </span>
-        <span className="text-muted-foreground text-xs flex items-center gap-1">
-          <Clock className="h-3 w-3" />{article.readTime}
-        </span>
+        {formatReadTime(article.readTime) && (
+          <span className="text-muted-foreground text-xs flex items-center gap-1">
+            <Clock className="h-3 w-3" />{formatReadTime(article.readTime)}
+          </span>
+        )}
         <span className="text-muted-foreground text-xs">{article.date}</span>
       </div>
 
@@ -134,7 +171,12 @@ export function BlogArticlePage() {
             return null;
           })
         ) : (
-          <div dangerouslySetInnerHTML={{ __html: article.content || "" }} />
+          // Fallback for legacy / admin-authored raw HTML strings.
+          // Sanitized via DOMPurify (see lib/sanitizeHtml.ts) — strips
+          // <script>, on* handlers, javascript: URIs, and any tag/attr
+          // outside the RichTextEditor's allow-list. Without this, a
+          // compromised admin account could inject XSS into every visitor.
+          <div dangerouslySetInnerHTML={{ __html: sanitizedFallbackHtml }} />
         )}
       </div>
 

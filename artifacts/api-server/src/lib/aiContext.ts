@@ -1301,6 +1301,10 @@ interface BlogRow {
   title: string;
   slug: string;
   excerpt: string | null;
+  // Postgres returns jsonb as a string when queried via raw `pool.query()`
+  // without explicit casting. Callers that need the parsed array should
+  // JSON.parse this — but for AI context purposes we treat it as opaque
+  // text (the tsvector regex strips HTML tags either way).
   content: string | null;
 }
 

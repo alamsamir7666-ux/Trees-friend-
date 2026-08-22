@@ -1,4 +1,32 @@
-// artifacts/tree-friend/src/components/ui/PhotoReviewForm.tsx
+/**
+ * PhotoReviewForm — review submission with up to 4 photo uploads.
+ *
+ * ─── Why this bypasses the generated API client ────────────────────────────
+ *
+ * This component uses the lower-level `useApiFetch` hook (instead of the
+ * orval-generated `useCreateReview` mutation hook from
+ * `@workspace/api-client-react`) because the generated client only supports
+ * JSON request bodies, but this endpoint requires `multipart/form-data`
+ * (file uploads + JSON fields in the same request).
+ *
+ * orval's mutator (`lib/api-client-react/src/custom-fetch.ts`) always sets
+ * `Content-Type: application/json` and `JSON.stringify`s the body — there's
+ * no way to override that to let the browser generate the multipart boundary
+ * automatically.
+ *
+ * Pattern for any future multipart upload:
+ *   1. Use `useApiFetch` (not the generated client).
+ *   2. Construct a `FormData` object, append file(s) + scalar field(s).
+ *   3. Do NOT set `Content-Type` — the browser sets it to
+ *      `multipart/form-data; boundary=...` automatically when the body is a
+ *      FormData instance. Setting it manually breaks the boundary.
+ *   4. The backend route uses `multer` (memoryStorage) to parse the fields
+ *      and uploads — see `routes/reviews.ts` POST /reviews/:productId.
+ *
+ * If the generated client ever needs multipart support, the fix is at the
+ * orval config level (override the mutator to detect FormData and skip
+ * JSON.stringify), not at the call-site level.
+ */
 // Drop this into ProductDetailPage.tsx replacing the existing review form section.
 // Supports up to 4 photo uploads via Cloudinary (through your backend).
 import { useState, useRef } from "react";

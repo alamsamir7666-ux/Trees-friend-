@@ -527,6 +527,75 @@ router.post("/products/upload-image", requireAuth, requireAdmin, uploadMiddlewar
  * route's doc comment for the full purchasability-filter rationale and the
  * price-sort/qualifying-variant semantics, which are identical here.
  */
+router.get("/products/:id/related", validateParams(GetProductParams, "GetProductParams"), async (req, res) => {
+  try {
+    const id = req.params.id as unknown as number;  // VAL-MIGRATE-5: validated + coerced
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid product ID" });
+      return;
+    }
+
+    // Look up the source product to find its categoryId. Returns 404 if the
+    // product doesn't exist (or was soft-deleted — buyers never see
+    // soft-deleted products, so the related endpoint should behave the
+    // same as the product-detail endpoint for consistency).
+    const [source] = await db
+      .select({ categoryId: productsTable.categoryId })
+      .from(productsTable)
+      .where(and(eq(productsTable.id, id), isNull(productsTable.deletedAt)));
+    if (!source) {
+      res.status(404).json({ error: "Product not found" });
+      return;
+    }
+
+    // Parse the `limit` query param — default 4, clamp to [1, 12]. The
+    // OpenAPI spec declares the same bounds; this is defense-in-depth.
+    const rawLimit = parseInt(String(req.query.limit ?? "4"), 10);
+    const limit = Math.min(12, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 4));
+
+    // Fetch up to `limit * 3` candidate products in the same subcategory
+    // (excluding the source product), then filter to `limit` after computing
+    // stats. We over-fetch because some candidates may have been
+    // soft-deleted between the candidate fetch and the stats join — though
+    // the WHERE already excludes soft-deleted, so over-fetch is just
+    // defensive padding for the stats lookup.
+    const candidates = await db
+      .select()
+      .from(productsTable)
+      .where(
+        and(
+          eq(productsTable.categoryId, source.categoryId),
+          sql`${productsTable.id} <> ${id}`,
+          isNull(productsTable.deletedAt),
+        ),
+      )
+      .orderBy(desc(productsTable.createdAt))
+      .limit(limit);
+
+    if (candidates.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    const candidateIds = candidates.map((p) => p.id);
+    const [statsMap, variantsMap, marketplaceMap] = await Promise.all([
+      fetchReviewStats(candidateIds),
+      fetchVariantsFor(candidateIds),
+      fetchMarketplaceStatsFor(candidateIds),
+    ]);
+
+    const related = candidates.map((p) => {
+      const stats = statsMap.get(p.id) ?? { avg: 0, count: 0 };
+      return toProduct(p, variantsMap.get(p.id) ?? [], stats.avg, stats.count, marketplaceMap.get(p.id));
+    });
+
+    res.json(related);
+  } catch (err) {
+    logger.error({ err }, "GET /products/:id/related: failed");
+    res.status(500).json({ error: "Failed to fetch related products" });
+  }
+});
+
 router.get("/products/:id", validateParams(GetProductParams, "GetProductParams"), async (req, res) => {
   try {
     const id = req.params.id as unknown as number;  // VAL-MIGRATE-5: validated + coerced

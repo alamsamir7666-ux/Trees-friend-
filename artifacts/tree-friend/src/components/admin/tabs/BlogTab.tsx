@@ -6,6 +6,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Plus, Search, Save, Pencil, Trash2, X } from "lucide-react";
 import { RichTextEditor } from "@/components/admin/RichTextEditor";
 import { ProductPicker } from "@/components/admin/ProductPicker";
+import { formatReadTime, parseReadTimeInput } from "@/lib/blog";
+import { normalizeSlug as normalizeSlugUtil } from "@/lib/slugs";
 
 export function BlogTab() {
   const apiFetch = useApiFetch();
@@ -18,7 +20,11 @@ export function BlogTab() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const emptyForm = { slug: "", title: "", excerpt: "", content: "", category: "Plant Care Tips", readTime: "5 min read", image: "", featured: false, slugEdited: false, linkedProductIds: [] as number[] };
+  // readTime is an integer (minutes) in the DB and API. The admin form
+  // captures it as a numeric input — not free text — so ranges like
+  // "10-15 minutes" can no longer be silently corrupted into 1015 by the
+  // backend's old `replace(/\D/g, "")` strip.
+  const emptyForm = { slug: "", title: "", excerpt: "", content: "", category: "Plant Care Tips", readTime: 5, image: "", featured: false, slugEdited: false, linkedProductIds: [] as number[] };
   const [form, setForm] = useState(emptyForm);
 
   const fetchedRef = useRef(false);
@@ -55,7 +61,7 @@ export function BlogTab() {
           }).join("")
         : (post.content || ""),
       category: post.category,
-      readTime: post.readTime,
+      readTime: typeof post.readTime === "number" ? post.readTime : parseReadTimeInput(post.readTime),
       image: post.image,
       featured: post.featured,
       slugEdited: true,
@@ -68,7 +74,11 @@ export function BlogTab() {
   async function handleSave() {
     setSaving(true); setError("");
     try {
-      const body = { ...form, content: form.content };
+      // Normalize readTime to a clamped integer before sending — the backend
+      // also does this (defense in depth), but doing it here means the form
+      // state is always a clean number, not a string the backend has to guess
+      // about.
+      const body = { ...form, readTime: parseReadTimeInput(form.readTime), content: form.content };
       const url = editingPost ? `/api/admin/blog-posts/${editingPost.id}` : "/api/admin/blog-posts";
       const method = editingPost ? "PATCH" : "POST";
       const r = await apiFetch(url, {
@@ -92,9 +102,13 @@ export function BlogTab() {
     if (r.ok) { setPosts(prev => prev.filter(p => p.id !== id)); setDeleteConfirm(null); }
   }
 
-  function autoSlug(title: string) {
-    return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  }
+  // Replaced the local `autoSlug` function with the shared `normalizeSlug`
+  // util from `@/lib/slugs` (mirrors the backend's `@workspace/db/logic`
+  // implementation). The previous inline regex
+  //   title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+  // was correct but duplicated the backend's logic — keeping them in sync
+  // manually was fragile. Now both layers import the same algorithm.
+  const autoSlug = (title: string) => normalizeSlugUtil(title);
 
   const filtered = useMemo(() =>
     posts.filter(p =>
@@ -166,10 +180,24 @@ export function BlogTab() {
                   className="rounded-xl" />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Read Time</Label>
-                <Input placeholder="e.g. 5 min read" value={form.readTime}
-                  onChange={e => setForm(f => ({ ...f, readTime: e.target.value }))}
-                  className="rounded-xl" />
+                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Read Time (minutes)</Label>
+                <div className="flex items-center gap-3">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={600}
+                    step={1}
+                    placeholder="5"
+                    value={form.readTime}
+                    onChange={e => setForm(f => ({ ...f, readTime: parseReadTimeInput(e.target.value) }))}
+                    className="rounded-xl w-28"
+                  />
+                  {/* Live preview so the admin sees exactly how the read time
+                      will render on the public blog page (e.g. "5 min read"). */}
+                  <span className="text-xs text-muted-foreground">
+                    Displays as: <span className="font-medium text-foreground">{formatReadTime(parseReadTimeInput(form.readTime))}</span>
+                  </span>
+                </div>
               </div>
             </div>
             <div className="space-y-1.5">
@@ -274,7 +302,7 @@ export function BlogTab() {
                 <div className="flex items-center gap-2 flex-wrap mb-1">
                   <span className="text-xs bg-accent/10 text-accent px-2 py-0.5 rounded-full">{post.category}</span>
                   {post.featured && <span className="text-xs bg-warning text-warning-foreground px-2 py-0.5 rounded-full">Featured</span>}
-                  <span className="text-xs text-muted-foreground">{post.readTime}</span>
+                  <span className="text-xs text-muted-foreground">{formatReadTime(post.readTime)}</span>
                 </div>
                 <h3 className="font-medium text-sm line-clamp-1">{post.title}</h3>
                 <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{post.excerpt}</p>

@@ -41,6 +41,7 @@
     "@tailwindcss/typography": "^0.5.15",
     "@tailwindcss/vite": "catalog:",
     "@tanstack/react-query": "catalog:",
+    "@types/dompurify": "^3.2.0",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
@@ -81,6 +82,7 @@
     "@tiptap/extension-underline": "catalog:",
     "@tiptap/pm": "catalog:",
     "@tiptap/react": "catalog:",
-    "@tiptap/starter-kit": "catalog:"
+    "@tiptap/starter-kit": "catalog:",
+    "dompurify": "^3.4.14"
   }
 }

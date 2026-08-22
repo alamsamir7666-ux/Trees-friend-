@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { useParams, useLocation, useSearch, Link } from "wouter";
 import {
   useGetProduct, useListReviews, useUpdateReview, useDeleteReview,
-  useAddToWishlist, useRemoveFromWishlist, useGetWishlist, useListProducts, useListCategories,
+  useAddToWishlist, useRemoveFromWishlist, useGetWishlist, useListCategories,
+  useListRelatedProducts,
   useGetReviewEligibility,
   getGetWishlistQueryKey, getListReviewsQueryKey,
   getGetReviewEligibilityQueryKey,
@@ -23,7 +24,8 @@ import { ProductQA } from "@/components/ui/ProductQA";
 import { SellerListingsSection } from "@/components/ui/SellerListingsSection";
 import { PhotoReviewForm } from "@/components/ui/PhotoReviewForm";
 import { ConfirmDialog } from "@/components/admin/modals/ConfirmDialog";
-import { updateSEO } from "@/lib/seo";
+import { useSEO } from "@/lib/seo";
+import { mainProductImage, productGalleryThumbnail } from "@/lib/cloudinary";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 
 export function ProductDetailPage() {
@@ -66,13 +68,20 @@ export function ProductDetailPage() {
     },
   });
 
-  // The /products list endpoint filters `category` by slug, not id, and
-  // Product doesn't carry the category's slug -- so related products are
-  // fetched broadly and filtered client-side by categoryId instead.
-  const { data: relatedData } = useListProducts(
-    { limit: 40 },
-    { query: { enabled: !!product?.categoryId, queryKey: ["relatedProducts", product?.categoryId] } }
-  );
+  // Related products — fetched via the dedicated /products/:id/related
+  // endpoint (added in Bug 7 fix). Previously this called
+  // `useListProducts({ limit: 40 })` and filtered client-side by
+  // categoryId, which (a) wasted bandwidth (40 products when we render
+  // 4), (b) would silently miss related products when the category had
+  // >40 items, and (c) couldn't reuse the server's review/marketplace
+  // stats join. The new endpoint returns fully-shaped Product objects
+  // ready to render.
+  const { data: relatedProducts = [] } = useListRelatedProducts(id, undefined, {
+    query: {
+      enabled: !!id,
+      queryKey: ["relatedProducts", id],
+    },
+  });
 
   const addToWishlist = useAddToWishlist();
   const removeFromWishlist = useRemoveFromWishlist();
@@ -88,15 +97,36 @@ export function ProductDetailPage() {
 
   const isWishlisted = wishlist?.products.some((w) => w.productId === id) ?? false;
 
-  const relatedProducts = (relatedData?.products ?? [])
-    .filter((p) => p.id !== id && p.categoryId === product?.categoryId)
-    .slice(0, 4);
   const recentlyViewed = useRecentlyViewed(id);
 
   useEffect(() => {
     if (!product) return;
     saveRecentlyViewed(product);
   }, [product?.id]);
+
+  // SEO — must be called unconditionally (rules of hooks) BEFORE any early
+  // return. Previously this was an imperative `updateSEO()` call AFTER the
+  // isLoading/!product early returns, which (a) ran during render (a side
+  // effect in the render phase — breaks React concurrent mode invariants)
+  // and (b) never fired for the loading / not-found states, so stale SEO
+  // from the previous page lingered in <head>. The hook form below runs in
+  // useEffect (commit phase) and covers all three states: loading →
+  // defaults, not-found → noindex + "Product Not Found", loaded → full
+  // product OG tags.
+  useSEO(
+    isLoading
+      ? {}
+      : !product
+        ? { title: "Product Not Found", noIndex: true }
+        : {
+            title: product.name,
+            description: product.description,
+            image: product.images[0],
+            type: "product",
+            priceAmount: product.listingMinPrice ?? 0,
+            priceCurrency: "BDT",
+          },
+  );
 
   if (isLoading) {
     return (
@@ -147,21 +177,12 @@ export function ProductDetailPage() {
   }
   if (!product) return <div className="py-20 text-center text-muted-foreground">Product not found</div>;
 
-  updateSEO({
-    title: product.name,
-    description: product.description,
-    image: product.images[0],
-    type: "product",
-    priceAmount: product.listingMinPrice ?? 0,
-    priceCurrency: "BDT",
-  });
-
+  // Cloudinary URL rewriting centralized in lib/cloudinary.ts. Main image
+  // uses JPEG q_85 (best quality, no WebP — some og:scrapers don't parse
+  // WebP og:image). Gallery thumbnails use WebP q_80 (smaller payload,
+  // supported by all modern browsers).
   const imgs = product.images.map((img: string, i: number) =>
-    img.includes("res.cloudinary.com")
-      ? (i === 0
-          ? img.replace("/upload/", "/upload/w_800,h_800,c_fill,q_85/")
-          : img.replace("/upload/", "/upload/w_800,h_800,c_fill,f_webp,q_80/"))
-      : img
+    i === 0 ? mainProductImage(img) : productGalleryThumbnail(img),
   );
 
   function handleWishlist() {

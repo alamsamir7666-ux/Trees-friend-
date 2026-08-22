@@ -9,12 +9,37 @@ import {
   sellerListingVariantsTable,
   sellersTable,
 } from "@workspace/db";
+import { normalizeSlug } from "@workspace/db/logic";
 import { eq, desc, and, inArray } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/auth";
 import { isPgError, PG_ERROR_CODE, asyncHandler, HttpError } from "../lib/errors";
 import { validateBody, validateParams } from "../lib/validateRequest";
 import { CreateBlogPostBody, UpdateBlogPostBody, IdParam } from "../lib/schemas";
 import type { ApiRequest } from "../types/apiRequest";
+
+/**
+ * Parse arbitrary admin input into a valid integer read time (minutes).
+ *
+ * Mirrors the frontend `parseReadTimeInput` in
+ * `tree-friend/src/lib/blog.ts` so both layers agree on parsing rules.
+ *
+ * Extracts the FIRST contiguous run of digits — so "10-15 minutes" → 10
+ * (not 1015, which the old `replace(/\D/g, "")` produced). Clamps to
+ * [1, 600]. Returns 5 (default) if no digits are found.
+ */
+function parseReadTimeInput(input: unknown): number {
+  if (input == null) return 5;
+  if (typeof input === "number" && Number.isFinite(input)) {
+    return Math.min(600, Math.max(1, Math.floor(input)));
+  }
+  const str = String(input).trim();
+  if (str === "") return 5;
+  const match = str.match(/\d+/);
+  if (!match) return 5;
+  const n = parseInt(match[0], 10);
+  if (!Number.isFinite(n)) return 5;
+  return Math.min(600, Math.max(1, n));
+}
 
 const router = Router();
 
@@ -24,7 +49,11 @@ function fmtPost(p: typeof blogPostsTable.$inferSelect, linkedProducts: any[] = 
     slug: p.slug,
     title: p.title,
     excerpt: p.excerpt,
-    content: (() => { try { return JSON.parse(p.content); } catch { return []; } })(),
+    // Migration 0011: `content` is now native `jsonb`, so no JSON.parse
+    // needed — Drizzle returns the parsed array directly. Coalesce to []
+    // defensively in case a row somehow has NULL (shouldn't happen — column
+    // is NOT NULL with DEFAULT '[]').
+    content: Array.isArray(p.content) ? p.content : [],
     category: p.category,
     readTime: p.readTime,
     image: p.image,
@@ -141,12 +170,12 @@ router.post(
     const { slug, title, excerpt, content, category, readTime, image, featured, publishedAt, linkedProductIds } = req.body;
     try {
       const [post] = await db.insert(blogPostsTable).values({
-        slug: slug.trim().toLowerCase().replace(/\s+/g, "-"),
+        slug: normalizeSlug(slug),
         title: title.trim(),
         excerpt: excerpt?.trim() ?? "",
-        content: JSON.stringify(content ?? []),
+        content: Array.isArray(content) ? content : [],
         category: category?.trim() ?? "",
-        readTime: readTime ? parseInt(String(readTime).replace(/\D/g, "") || "5", 10) : 5,
+        readTime: parseReadTimeInput(readTime),
         image: image?.trim() || "",
         featured: featured ?? false,
         publishedAt: publishedAt ? new Date(publishedAt) : null,
@@ -173,13 +202,13 @@ router.patch(
     const { id } = req.params;
     const body = req.body;
     const updates: Partial<typeof blogPostsTable.$inferInsert> = { updatedAt: new Date() };
-    if (body.slug !== undefined) updates.slug = body.slug.trim().toLowerCase().replace(/\s+/g, "-");
+    if (body.slug !== undefined) updates.slug = normalizeSlug(body.slug);
     if (body.title !== undefined) updates.title = body.title.trim();
     if (body.excerpt !== undefined) updates.excerpt = body.excerpt?.trim() ?? "";
-    if (body.content !== undefined) updates.content = JSON.stringify(body.content);
+    if (body.content !== undefined) updates.content = Array.isArray(body.content) ? body.content : [];
     if (body.category !== undefined) updates.category = body.category?.trim() ?? "";
     if (body.readTime !== undefined) {
-      updates.readTime = parseInt(String(body.readTime).replace(/\D/g, "") || "5", 10);
+      updates.readTime = parseReadTimeInput(body.readTime);
     }
     if (body.image !== undefined) updates.image = body.image?.trim() || "";
     if (body.featured !== undefined) updates.featured = body.featured;

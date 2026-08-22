@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { apiClient } from "@/lib/apiClient";
 import { useSEO } from "@/lib/seo";
+import { formatReadTime } from "@/lib/blog";
 import { Link } from "wouter";
 import { ArrowRight, Clock, Tag, BookOpen, Loader2 } from "lucide-react";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
@@ -10,7 +11,7 @@ interface BlogPost {
   title: string;
   excerpt: string;
   category: string;
-  readTime: string;
+  readTime: number;
   publishedAt: string;
   featured: boolean;
   image: string;
@@ -79,7 +80,7 @@ export function BlogPage() {
             <div className="absolute bottom-0 left-0 p-6 md:p-8 text-background">
               <div className="flex items-center gap-3 mb-3">
                 <span className="bg-accent text-accent-foreground text-xs px-3 py-1 rounded-full">{featured.category}</span>
-                <span className="text-background/70 text-xs flex items-center gap-1"><Clock className="h-3 w-3" />{featured.readTime}</span>
+                <span className="text-background/70 text-xs flex items-center gap-1"><Clock className="h-3 w-3" />{formatReadTime(featured.readTime)}</span>
               </div>
               <h2 className="font-serif text-xl md:text-2xl font-medium mb-2">{featured.title}</h2>
               <p className="text-background/80 text-sm line-clamp-2 max-w-xl">{featured.excerpt}</p>
@@ -117,7 +118,7 @@ export function BlogPage() {
                       <Tag className="h-3 w-3" />{post.category}
                     </span>
                     <span className="text-xs text-muted-foreground flex items-center gap-1">
-                      <Clock className="h-3 w-3" />{post.readTime}
+                      <Clock className="h-3 w-3" />{formatReadTime(post.readTime)}
                     </span>
                   </div>
                   <h3 className="font-semibold text-sm leading-snug mb-2 flex-1">{post.title}</h3>

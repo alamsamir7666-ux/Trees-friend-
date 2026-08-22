@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { type Product } from "@workspace/api-client-react";
 import { useWishlist } from "@/contexts/WishlistContext";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
+import { homepageProductCardImage } from "@/lib/cloudinary";
 
 // Same custom icon set used in the original design mockup (Cloudinary-hosted
 // SVGs), kept as-is rather than swapped for a generic icon library so the
@@ -78,13 +79,11 @@ function HomepageProductCardInner({
   }
 
   const rawImg = product.images[0] || null;
-  // Smaller Cloudinary transform than the previous wide-card layout
-  // (w_200 instead of w_600) — the new compact card displays the image at
-  // 72–88px, so 200px is plenty for 2–3x retina sharpness and saves
-  // meaningful bandwidth on the homepage's many cards.
-  const img = rawImg && rawImg.includes("res.cloudinary.com")
-    ? rawImg.replace("/upload/", "/upload/w_200,h_200,c_fill,f_webp,q_75/")
-    : rawImg;
+  // Smaller Cloudinary transform than the wide-card layout (w_200 instead
+  // of w_600) — the compact card displays the image at 72–88px, so 200px is
+  // plenty for 2–3x retina sharpness and saves meaningful bandwidth on the
+  // homepage's many cards. Centralized in lib/cloudinary.ts.
+  const img = homepageProductCardImage(rawImg);
   const href = backContext
     ? "/products/" + product.id + "?from=" + encodeURIComponent(backContext)
     : "/products/" + product.id;

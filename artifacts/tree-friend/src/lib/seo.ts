@@ -16,10 +16,16 @@ interface SEOOptions {
   title?: string;
   description?: string;
   image?: string;
-  type?: "website" | "product";
+  type?: "website" | "product" | "article";
   noIndex?: boolean;
   priceAmount?: number;
   priceCurrency?: string;
+  /** ISO 8601 publish time for articles (e.g. "2025-08-01T00:00:00Z"). */
+  publishedTime?: string;
+  /** Section / category for articles (e.g. "Plant Care Tips"). */
+  section?: string;
+  /** Author name for articles (e.g. "Tree Friend Editorial"). */
+  author?: string;
 }
 
 function setMeta(name: string, content: string, property = false) {
@@ -53,11 +59,19 @@ export function updateSEO(opts: SEOOptions = {}) {
     setMeta("robots", "index, follow");
   }
 
+  // Canonical URL (also used for og:url below).
+  const canonicalUrl = window.location.href.split("?")[0]; // Strip query params from canonical
+
   // Open Graph
   setMeta("og:title", title, true);
   setMeta("og:description", description, true);
   setMeta("og:image", image.startsWith("http") ? image : `https://treefriend.com${image}`, true);
-  setMeta("og:type", opts.type === "product" ? "product" : "website", true);
+  setMeta("og:url", canonicalUrl, true);
+  setMeta(
+    "og:type",
+    opts.type === "product" ? "product" : opts.type === "article" ? "article" : "website",
+    true,
+  );
   setMeta("og:site_name", SITE_NAME, true);
 
   // Product price (Open Graph product namespace) — only when supplied
@@ -66,19 +80,50 @@ export function updateSEO(opts: SEOOptions = {}) {
     setMeta("product:price:currency", opts.priceCurrency ?? "BDT", true);
   }
 
-  // Twitter
+  // Article-specific OG tags (Open Graph article namespace).
+  // https://ogp.me/#type_article — only emitted when the page declares
+  // itself as an article, and only for fields that have a value.
+  if (opts.type === "article") {
+    if (opts.publishedTime) {
+      setMeta("article:published_time", opts.publishedTime, true);
+    }
+    if (opts.section) {
+      setMeta("article:section", opts.section, true);
+    }
+    if (opts.author) {
+      setMeta("article:author", opts.author, true);
+    }
+  }
+
+  // Twitter Card — always set `twitter:card` so crawlers render the right
+  // card type. `summary_large_image` when there's a real image (which is
+  // always, since we fall back to DEFAULT_IMAGE); `summary` only if the
+  // caller explicitly passes a falsy image — but since `image` always
+  // resolves to at least DEFAULT_IMAGE, we use summary_large_image.
+  setMeta("twitter:card", "summary_large_image");
   setMeta("twitter:title", title);
   setMeta("twitter:description", description);
   setMeta("twitter:image", image.startsWith("http") ? image : `https://treefriend.com${image}`);
 
-  // Canonical
+  // Canonical link tag
   let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
   if (!canonical) {
     canonical = document.createElement("link");
     canonical.rel = "canonical";
     document.head.appendChild(canonical);
   }
-  canonical.href = window.location.href.split("?")[0]; // Strip query params from canonical
+  canonical.href = canonicalUrl;
+
+  // Cleanup: remove stale article-specific tags when navigating away from
+  // an article to a non-article page (e.g. article → product detail).
+  // Without this, `article:published_time` from the previous page would
+  // persist in <head> and misrepresent the current page to crawlers.
+  if (opts.type !== "article") {
+    for (const tag of ["article:published_time", "article:section", "article:author"]) {
+      const el = document.querySelector<HTMLMetaElement>(`meta[property="${tag}"]`);
+      if (el) el.remove();
+    }
+  }
 }
 
 /**

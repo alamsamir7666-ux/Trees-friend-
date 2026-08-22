@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { Star, Users, ArrowRight } from "lucide-react";
 import { type Product } from "@workspace/api-client-react";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
+import { productCardImage } from "@/lib/cloudinary";
 
 /**
  * ProductCard — redesigned to match the user's HTML reference (2026-08-06).
@@ -32,9 +33,7 @@ function ProductCardInner({
   priority?: boolean;
 }) {
   const rawImg = product.images[0] || null;
-  const img = rawImg && rawImg.includes("res.cloudinary.com")
-    ? rawImg.replace("/upload/", "/upload/w_400,h_400,c_fill,f_webp,q_75/")
-    : rawImg;
+  const img = productCardImage(rawImg);
   const href = backContext
     ? "/products/" + product.id + "?from=" + encodeURIComponent(backContext)
     : "/products/" + product.id;

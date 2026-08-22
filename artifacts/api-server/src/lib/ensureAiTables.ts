@@ -212,7 +212,7 @@ UPDATE blog_posts
 SET search_tsvector =
   setweight(to_tsvector('english', COALESCE(title, '')), 'A') ||
   setweight(to_tsvector('english', COALESCE(excerpt, '')), 'B') ||
-  setweight(to_tsvector('english', COALESCE(regexp_replace(content, '<[^>]+>', ' ', 'g'), '')), 'C')
+  setweight(to_tsvector('english', COALESCE(regexp_replace(content::text, '<[^>]+>', ' ', 'g'), '')), 'C')
 WHERE search_tsvector IS NULL;
 
 CREATE INDEX IF NOT EXISTS blog_posts_search_tsvector_idx
@@ -225,7 +225,7 @@ BEGIN
   NEW.search_tsvector :=
     setweight(to_tsvector('english', COALESCE(NEW.title, '')), 'A') ||
     setweight(to_tsvector('english', COALESCE(NEW.excerpt, '')), 'B') ||
-    setweight(to_tsvector('english', COALESCE(regexp_replace(NEW.content, '<[^>]+>', ' ', 'g'), '')), 'C');
+    setweight(to_tsvector('english', COALESCE(regexp_replace(NEW.content::text, '<[^>]+>', ' ', 'g'), '')), 'C');
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;

@@ -36,6 +36,13 @@
       "when": 1786872000000,
       "tag": "0010_embedding_model_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786958400000,
+      "tag": "0011_blog_content_jsonb",
+      "breakpoints": true
     }
   ]
 }
