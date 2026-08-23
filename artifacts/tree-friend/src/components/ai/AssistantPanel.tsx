@@ -546,12 +546,28 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
                   // — skip rendering the empty bubble here so the user
                   // doesn't see an empty bubble + typing dots stacked
                   // (industry-standard: only the typing indicator).
+                  //
+                  // Bug fix: removed the `(!m.toolResults || m.toolResults.length === 0)`
+                  // condition. Previously, when the LLM called a tool (e.g.,
+                  // search_knowledge_base) and the tool result arrived but
+                  // no text delta had arrived yet, the assistant message had
+                  // `toolResults.length > 0` + empty `content`. The skip
+                  // condition failed (because of the toolResults check), so
+                  // BOTH the empty bubble (with AI logo #1) AND the
+                  // TypingIndicator (with AI logo #2) rendered — two AI
+                  // logos in what appeared to be a single message area.
+                  //
+                  // Now we skip the empty bubble whenever `isTyping` is true
+                  // (regardless of toolResults). The TypingIndicator handles
+                  // the "waiting" state, and tool results render once content
+                  // arrives (or once the stream completes + isTyping=false).
+                  // This is consistent with industry UX (ChatGPT hides
+                  // citations until text arrives).
                   if (
                     isTyping &&
                     i === messages.length - 1 &&
                     m.role === "assistant" &&
-                    !m.content &&
-                    (!m.toolResults || m.toolResults.length === 0)
+                    !m.content
                   ) {
                     return null;
                   }
@@ -948,7 +964,16 @@ function MessageRow({
           {displayContent ? (
             <MarkdownText content={displayContent} />
           ) : (
-            !isStreaming && <span className="text-muted-foreground italic">(empty response)</span>
+            // Bug fix: don't show "(empty response)" placeholder when the
+            // message has tool results (the tool results ARE the content —
+            // KB citations, order details, listing grids, etc.). The
+            // "(empty response)" placeholder should only appear when the
+            // message has NO content AND no tool results (a true empty
+            // response from the LLM).
+            !isStreaming &&
+            (!message.toolResults || message.toolResults.length === 0) && (
+              <span className="text-muted-foreground italic">(empty response)</span>
+            )
           )}
           {isStreaming && (
             <span

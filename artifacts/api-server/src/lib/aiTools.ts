@@ -1293,7 +1293,18 @@ async function searchKb(
         ? {
             type: r.source.type,
             title: r.source.title,
-            url: r.source.url,
+            // Privacy fix: strip the URL from the tool result sent to the LLM.
+            // The system prompt (aiContext.ts) explicitly instructs the LLM:
+            //   "Do not attribute it to any specific person or source."
+            // Including the URL (especially YouTube links) would:
+            //   1. Tempt the LLM to parrot it back in its text response.
+            //   2. Leak it to the frontend via the `tool_result` SSE event,
+            //      where KbCitations renders it as a clickable external link.
+            // The frontend's KbCitations component also stops rendering
+            // clickable external links when `url` is null/absent — showing
+            // only the source title (e.g., "Mango tree care guide") as a
+            // static label.
+            url: null,
           }
         : null,
       relevance_score: Math.round(r.score * 100) / 100,

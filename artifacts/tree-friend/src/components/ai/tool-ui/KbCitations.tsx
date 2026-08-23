@@ -91,7 +91,14 @@ export function extractKbCitations(toolResults: ToolResultEntry[]): Citation[] {
       const source = entry.source;
       if (!source) continue;
       const title = source.title?.trim() || entry.title?.trim() || "Untitled source";
-      const url = source.url?.trim() || null;
+      // Privacy fix (defense-in-depth): the backend now strips `url` from the
+      // tool result (aiTools.ts searchKb). We also strip it here on the
+      // frontend as a second layer — if the backend ever drifts and starts
+      // including URLs again, the frontend won't render clickable external
+      // links (especially YouTube video links) in the chat response.
+      // The system prompt explicitly says "Do not attribute it to any specific
+      // person or source" — rendering a clickable YouTube URL violates this.
+      const url = null;
       const type = source.type?.trim() || "article";
 
       // Dedupe key: URL if present, otherwise title (so two URL-less

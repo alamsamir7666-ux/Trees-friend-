@@ -2433,13 +2433,25 @@ router.post("/ai/chat", aiChatLimiter, async (req: Request, res: Response) => {
     // This happens when the AI only called tools but didn't generate a final
     // text response, or when the model returned an empty completion.
     // Show a friendly fallback instead of "(empty response)".
-    if (!fullResponse.trim()) {
+    //
+    // Bug fix: also strip [followups]...[/followups] blocks before checking
+    // emptiness. The LLM sometimes generates ONLY a [followups] block (no
+    // main answer text) — the raw `fullResponse` is non-empty, but the
+    // effective content (after stripping the followups block) IS empty.
+    // Without this fix, the response would be persisted as just a
+    // [followups] block, and the frontend would render an "(empty response)"
+    // placeholder because `extractFollowups()` strips the block for display.
+    const FOLLOWUPS_BLOCK_RE = /\[followups\][\s\S]*?\[\/followups\]/gi;
+    const cleanedForEmptyCheck = fullResponse.replace(FOLLOWUPS_BLOCK_RE, "").trim();
+    if (!cleanedForEmptyCheck) {
       const fallback =
         "I'm sorry, I couldn't generate a response for that. Could you try rephrasing your question?";
       fullResponse = fallback;
       // v3.6: Stream the fallback as chunked SSE deltas too (consistent UX).
       await streamCachedResponse(res, fallback);
-      logger.warn("AI: stream completed but produced no text, using fallback");
+      logger.warn(
+        "AI: stream completed but produced no text (or only [followups] block), using fallback",
+      );
     }
 
     // v3.0: extract token count from usage metadata (if the provider sent it).

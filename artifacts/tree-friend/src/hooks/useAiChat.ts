@@ -755,7 +755,17 @@ export function useAiChat(): UseAiChatResult {
           } else if (payload.type === "done") {
             // Stream complete. If we got no deltas, surface a fallback so
             // the bubble isn't permanently empty.
-            if (!received) {
+            //
+            // Bug fix: also strip [followups]...[/followups] blocks before
+            // checking emptiness. The LLM sometimes generates ONLY a
+            // [followups] block (no main answer text) — the raw `received`
+            // is non-empty, but the effective content (after stripping the
+            // followups block) IS empty. Without this fix, the frontend would
+            // render an "(empty response)" placeholder because
+            // `extractFollowups()` strips the block for display.
+            const FOLLOWUPS_BLOCK_RE = /\[followups\][\s\S]*?\[\/followups\]/gi;
+            const cleanedReceived = received.replace(FOLLOWUPS_BLOCK_RE, "").trim();
+            if (!cleanedReceived) {
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsg.id
