@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Star, MapPin, ShoppingBag, Heart,
-  LogIn, ChevronLeft, ChevronDown, PackageX, Ship,
+  ChevronLeft, ChevronDown, PackageX, Ship,
   Tag, Eye, Minus, Plus,
   AlertTriangle, RefreshCw,
 } from "lucide-react";
@@ -18,6 +18,8 @@ import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { useToast } from "@/hooks/use-toast";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { useWishlist } from "@/contexts/WishlistContext";
+import { useGuestCart } from "@/hooks/useGuestCart";
+import { useGuestSession } from "@/hooks/useGuestSession";
 import { SellerListingReviews } from "@/components/ui/SellerListingReviews";
 import { SellerListingQA } from "@/components/ui/SellerListingQA";
 
@@ -73,6 +75,8 @@ export function SellerListingDetailPage() {
   const productId = parseInt(params.productId ?? "0");
   const listingId = parseInt(params.listingId ?? "0");
   const { user } = useUser();
+  const { isVerified } = useGuestSession();
+  const guestCart = useGuestCart();
   const qc = useQueryClient();
   const { toast } = useToast();
   const addToCart = useAddToCart();
@@ -94,6 +98,12 @@ export function SellerListingDetailPage() {
   const { data: product } = useGetProduct(productId, { query: { enabled: !!productId, queryKey: ["product", productId] } });
   const images = card ? card.listing.images : [];
 
+  // Authenticated users AND phone-verified guests use the server cart
+  // (useAddToCart → POST /cart/items with their JWT). Unverified guests
+  // use the localStorage cart (useGuestCart) — they'll merge to the
+  // server cart when they verify their phone at checkout.
+  const useServerCart = !!user || isVerified;
+
   // First variant is selected by default ("First Available Option" in the
   // design); once the person picks a pill, that choice sticks even if it's
   // technically out of stock -- the Add to Bag button itself reflects
@@ -104,24 +114,37 @@ export function SellerListingDetailPage() {
 
   function handleAddToBag() {
     if (!card || !selectedVariant) return;
-    if (!user) {
-      toast({ title: "Sign in required", description: "Please sign in to buy from marketplace sellers.", variant: "destructive" });
-      return;
+    if (useServerCart) {
+      setIsAdding(true);
+      addToCart.mutate(
+        { data: { productId, sellerListingVariantId: selectedVariant.id, quantity } },
+        {
+          onSuccess: () => {
+            qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
+            toast({ title: "Added to bag" });
+          },
+          onError: (err: any) => {
+            toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+          },
+          onSettled: () => setIsAdding(false),
+        }
+      );
+    } else {
+      guestCart.addItem({
+        productId,
+        sellerListingVariantId: selectedVariant.id,
+        variantId: null,
+        quantity,
+        name: product?.name ?? "Listing",
+        price: Number(selectedVariant.price),
+        discountPrice: selectedVariant.discountPrice != null ? Number(selectedVariant.discountPrice) : null,
+        image: images[0] ?? "",
+        deliveryCharge: Number(selectedVariant.deliveryCharge ?? 0),
+        stock: selectedVariant.availableQuantity,
+        addedAt: Date.now(),
+      });
+      toast({ title: "Added to bag" });
     }
-    setIsAdding(true);
-    addToCart.mutate(
-      { data: { productId, sellerListingVariantId: selectedVariant.id, quantity } },
-      {
-        onSuccess: () => {
-          qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
-          toast({ title: "Added to bag" });
-        },
-        onError: (err: any) => {
-          toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
-        },
-        onSettled: () => setIsAdding(false),
-      }
-    );
   }
 
   function handleWishlistToggle() {
@@ -360,18 +383,14 @@ export function SellerListingDetailPage() {
                   disabled={isAdding}
                   className="flex-1 flex items-center justify-center gap-1.5 h-10 bg-primary text-primary-foreground border-none rounded-lg text-sm font-semibold"
                 >
-                  {!user ? (
-                    <><LogIn className="w-4 h-4" /> Sign in to buy</>
-                  ) : (
-                    <>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
-                        <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
-                        <line x1="3" y1="6" x2="21" y2="6"></line>
-                        <path d="M16 10a4 4 0 0 1-8 0"></path>
-                      </svg>
-                      {isAdding ? "Adding…" : "Add to Bag"}
-                    </>
-                  )}
+                  <>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+                      <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+                      <line x1="3" y1="6" x2="21" y2="6"></line>
+                      <path d="M16 10a4 4 0 0 1-8 0"></path>
+                    </svg>
+                    {isAdding ? "Adding…" : "Add to Bag"}
+                  </>
                 </button>
               )}
 

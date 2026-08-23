@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
 import {
   useGetWishlist, useRemoveFromWishlist, useAddToCart, getGetWishlistQueryKey, getGetCartQueryKey,
   useRemoveSellerListingVariantFromWishlist,
@@ -14,6 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Heart, ShoppingBag, Trash2, Loader2, ChevronRight, Store } from "lucide-react";
 import { useGuestWishlist } from "@/hooks/useGuestWishlist";
+import { useGuestCart } from "@/hooks/useGuestCart";
+import { useGuestSession } from "@/hooks/useGuestSession";
 import { useToast } from "@/hooks/use-toast";
 import { SellerListingPickerDialog } from "@/components/ui/SellerListingPickerDialog";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
@@ -65,8 +67,14 @@ type SellerListingWishlistLine = {
 export function WishlistPage() {
   const qc = useQueryClient();
   const { user, isLoaded } = useUser();
-  const [, setLocation] = useLocation();
+  const { isVerified } = useGuestSession();
+  const guestCart = useGuestCart();
   const { toast } = useToast();
+  // Authenticated users AND phone-verified guests use the server cart
+  // (useAddToCart → POST /cart/items with their JWT). Unverified guests
+  // use the localStorage cart (useGuestCart) — they'll merge to the
+  // server cart when they verify their phone at checkout.
+  const useServerCart = !!user || isVerified;
   const isGuest = isLoaded && !user;
   const guestWishlist = useGuestWishlist();
 
@@ -188,16 +196,32 @@ export function WishlistPage() {
     });
   }
 
-  function addVariantToCart(productId: number, variant: SellerListingVariant) {
-    addToCart.mutate(
-      { data: { productId, sellerListingVariantId: variant.id, quantity: 1 } },
-      {
-        onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
-        onError: (err: any) => {
-          toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+  function addVariantToCart(productId: number, variant: SellerListingVariant, productName: string, productImage: string) {
+    if (useServerCart) {
+      addToCart.mutate(
+        { data: { productId, sellerListingVariantId: variant.id, quantity: 1 } },
+        {
+          onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
+          onError: (err: any) => {
+            toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+          },
         },
-      },
-    );
+      );
+    } else {
+      guestCart.addItem({
+        productId,
+        sellerListingVariantId: variant.id,
+        variantId: null,
+        quantity: 1,
+        name: productName,
+        price: Number(variant.price),
+        discountPrice: variant.discountPrice != null ? Number(variant.discountPrice) : null,
+        image: productImage,
+        deliveryCharge: Number(variant.deliveryCharge ?? 0),
+        stock: variant.availableQuantity,
+        addedAt: Date.now(),
+      });
+    }
   }
 
   // Industry-standard marketplace pattern (Amazon/Daraz "choose a seller"):
@@ -213,11 +237,6 @@ export function WishlistPage() {
   // cards already have a specific variant resolved and add straight to
   // cart via handleAddSellerListingToCart instead.
   async function handleAddToCart(item: WishlistLine) {
-    if (!user) {
-      toast({ title: "Sign in required", description: "Please sign in to buy from marketplace sellers.", variant: "destructive" });
-      setLocation("/sign-in");
-      return;
-    }
     setLoadingItemId(item.productId);
     try {
       const cards: SellerListingCard[] = await listProductSellerListings(item.productId, {
@@ -231,7 +250,7 @@ export function WishlistPage() {
       if (qualifyingCards.length === 1) {
         const onlyQualifying = qualifyingCards[0].listing.variants.filter((v) => v.availableQuantity > 0);
         if (onlyQualifying.length === 1) {
-          addVariantToCart(item.productId, onlyQualifying[0]);
+          addVariantToCart(item.productId, onlyQualifying[0], item.name, item.image);
           return;
         }
       }
@@ -244,22 +263,34 @@ export function WishlistPage() {
   }
 
   function handleAddSellerListingToCart(line: SellerListingWishlistLine) {
-    if (!user) {
-      toast({ title: "Sign in required", description: "Please sign in to buy from marketplace sellers.", variant: "destructive" });
-      setLocation("/sign-in");
-      return;
-    }
     setLoadingListingLineId(line.sellerListingVariantId);
-    addToCart.mutate(
-      { data: { productId: line.productId, sellerListingVariantId: line.sellerListingVariantId, quantity: 1 } },
-      {
-        onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
-        onError: (err: any) => {
-          toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+    if (useServerCart) {
+      addToCart.mutate(
+        { data: { productId: line.productId, sellerListingVariantId: line.sellerListingVariantId, quantity: 1 } },
+        {
+          onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
+          onError: (err: any) => {
+            toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+          },
+          onSettled: () => setLoadingListingLineId(null),
         },
-        onSettled: () => setLoadingListingLineId(null),
-      },
-    );
+      );
+    } else {
+      guestCart.addItem({
+        productId: line.productId,
+        sellerListingVariantId: line.sellerListingVariantId,
+        variantId: null,
+        quantity: 1,
+        name: line.productName,
+        price: Number(line.price),
+        discountPrice: line.discountPrice,
+        image: line.image,
+        deliveryCharge: 0,
+        stock: line.availableQuantity ?? undefined,
+        addedAt: Date.now(),
+      });
+      setLoadingListingLineId(null);
+    }
   }
 
   if (isLoading) {
@@ -434,7 +465,7 @@ export function WishlistPage() {
           onOpenChange={(o) => { if (!o) setPickerState(null); }}
           productName={pickerState.item.name}
           cards={pickerState.cards}
-          onConfirm={(_card, variant) => addVariantToCart(pickerState.item.productId, variant)}
+          onConfirm={(_card, variant) => addVariantToCart(pickerState.item.productId, variant, pickerState.item.name, pickerState.item.image)}
         />
       )}
     </div>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "wouter";
 import {
-  Star, Truck, MapPin, ArrowUpDown, ShoppingBag, LogIn, Eye,
+  Star, Truck, MapPin, ArrowUpDown, ShoppingBag, Eye,
   BadgeCheck, ImageOff, Package, ArrowLeft, Loader2,
 } from "lucide-react";
 import {
@@ -13,6 +13,8 @@ import {
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useUser } from "@clerk/react";
+import { useGuestCart } from "@/hooks/useGuestCart";
+import { useGuestSession } from "@/hooks/useGuestSession";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
@@ -47,11 +49,19 @@ export function ProductSellerListingsPage() {
   const { data: cards, isLoading: cardsLoading } = useListProductSellerListings(productId, { sort });
 
   const { user } = useUser();
+  const { isVerified } = useGuestSession();
+  const guestCart = useGuestCart();
   const qc = useQueryClient();
   const { toast } = useToast();
   const addToCart = useAddToCart();
   const [addingId, setAddingId] = useState<number | null>(null);
   const [pickerListingId, setPickerListingId] = useState<number | null>(null);
+
+  // Authenticated users AND phone-verified guests use the server cart
+  // (useAddToCart → POST /cart/items with their JWT). Unverified guests
+  // use the localStorage cart (useGuestCart) — they'll merge to the
+  // server cart when they verify their phone at checkout.
+  const useServerCart = !!user || isVerified;
 
   // ── SEO ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -63,30 +73,43 @@ export function ProductSellerListingsPage() {
     });
   }, [product]);
 
-  function addVariantToBag(variant: SellerListingVariant, listingId: number, nurseryName: string) {
-    setAddingId(listingId);
-    addToCart.mutate(
-      { data: { productId, sellerListingVariantId: variant.id, quantity: 1 } },
-      {
-        onSuccess: () => {
-          qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
-          toast({ title: "Added to bag", description: `From ${nurseryName}` });
+  function addVariantToBag(variant: SellerListingVariant, listingId: number, nurseryName: string, productName: string, productImage: string) {
+    if (useServerCart) {
+      setAddingId(listingId);
+      addToCart.mutate(
+        { data: { productId, sellerListingVariantId: variant.id, quantity: 1 } },
+        {
+          onSuccess: () => {
+            qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
+            toast({ title: "Added to bag", description: `From ${nurseryName}` });
+          },
+          onError: (err: any) => {
+            toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+          },
+          onSettled: () => setAddingId(null),
         },
-        onError: (err: any) => {
-          toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
-        },
-        onSettled: () => setAddingId(null),
-      },
-    );
+      );
+    } else {
+      guestCart.addItem({
+        productId,
+        sellerListingVariantId: variant.id,
+        variantId: null,
+        quantity: 1,
+        name: productName,
+        price: Number(variant.price),
+        discountPrice: variant.discountPrice != null ? Number(variant.discountPrice) : null,
+        image: productImage,
+        deliveryCharge: Number(variant.deliveryCharge ?? 0),
+        stock: variant.availableQuantity,
+        addedAt: Date.now(),
+      });
+      toast({ title: "Added to bag", description: `From ${nurseryName}` });
+    }
   }
 
-  function handleAddToBag(listingId: number, nurseryName: string, qualifyingVariants: SellerListingVariant[]) {
-    if (!user) {
-      toast({ title: "Sign in required", description: "Please sign in to buy from marketplace sellers.", variant: "destructive" });
-      return;
-    }
+  function handleAddToBag(listingId: number, nurseryName: string, qualifyingVariants: SellerListingVariant[], productName: string, productImage: string) {
     if (qualifyingVariants.length === 1) {
-      addVariantToBag(qualifyingVariants[0], listingId, nurseryName);
+      addVariantToBag(qualifyingVariants[0], listingId, nurseryName, productName, productImage);
       return;
     }
     setPickerListingId(listingId);
@@ -275,11 +298,9 @@ export function ProductSellerListingsPage() {
                       size="sm"
                       className="flex-1 rounded-lg border-primary text-primary hover:bg-primary/5 hover:text-primary gap-1.5"
                       disabled={outOfStock || isAdding}
-                      onClick={() => handleAddToBag(card.listing.id, card.seller.nurseryName, qualifying)}
+                      onClick={() => handleAddToBag(card.listing.id, card.seller.nurseryName, qualifying, product?.name ?? "", img ?? "")}
                     >
-                      {!user ? (
-                        <><LogIn className="h-3.5 w-3.5" /> Sign in</>
-                      ) : outOfStock ? (
+                      {outOfStock ? (
                         "Out of stock"
                       ) : isAdding ? (
                         <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Adding…</>
@@ -301,7 +322,7 @@ export function ProductSellerListingsPage() {
             onOpenChange={(o) => { if (!o) setPickerListingId(null); }}
             sellerName={pickerCard.seller.nurseryName}
             variants={pickerQualifying}
-            onConfirm={(variant) => addVariantToBag(variant, pickerCard.listing.id, pickerCard.seller.nurseryName)}
+            onConfirm={(variant) => addVariantToBag(variant, pickerCard.listing.id, pickerCard.seller.nurseryName, product?.name ?? "", pickerCard.listing.images?.[0] ?? "")}
           />
         )}
       </div>
