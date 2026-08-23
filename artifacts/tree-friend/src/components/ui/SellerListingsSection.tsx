@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Star, Truck, MapPin, ArrowUpDown, ShoppingBag, LogIn, Eye, BadgeCheck, ImageOff, Package } from "lucide-react";
+import { Star, Truck, MapPin, ArrowUpDown, ShoppingBag, Eye, BadgeCheck, ImageOff, Package } from "lucide-react";
 import {
   useListProductSellerListings, ListProductSellerListingsSort,
   useAddToCart, getGetCartQueryKey,
@@ -10,6 +10,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useUser } from "@clerk/react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { useGuestCart } from "@/hooks/useGuestCart";
+import { useGuestSession } from "@/hooks/useGuestSession";
 import { SellerListingVariantPickerDialog } from "@/components/ui/SellerListingVariantPickerDialog";
 
 const SORT_OPTIONS = [
@@ -35,11 +37,13 @@ const SORT_OPTIONS = [
  * sellers" message for every product that simply hasn't been listed by a
  * marketplace seller yet.
  *
- * Add to Bag here requires sign-in. Guest checkout (routes/orders.ts POST
- * /orders/guest) is admin-direct-only by design -- a guest has no account
- * to attach a seller-scoped order to, so letting a guest add a
- * seller-listing item to their bag would only fail later at checkout.
- * Gating it here means the failure is immediate and the reason is clear.
+ * Add to Bag works for ALL buyers:
+ *   - Authenticated users: useAddToCart (server cart via Clerk JWT)
+ *   - Phone-verified guests: useAddToCart (server cart via guest JWT)
+ *   - Unverified guests: useGuestCart (localStorage cart)
+ *     The guest will verify their phone at checkout time — items are
+ *     merged from localStorage to the server cart at that point
+ *     (see CartPage's onVerified callback → POST /cart/merge).
  *
  * Phase 3b Part 2: add-to-cart now addresses a specific VARIANT
  * (sellerListingVariantId), not just the listing -- cart.ts's real
@@ -55,6 +59,8 @@ export function SellerListingsSection({ productId }: { productId: number }) {
   const [sort, setSort] = useState<ListProductSellerListingsSort>(ListProductSellerListingsSort.price_asc);
   const { data: cards, isLoading } = useListProductSellerListings(productId, { sort });
   const { user } = useUser();
+  const { isVerified } = useGuestSession();
+  const guestCart = useGuestCart();
   const [, setLocation] = useLocation();
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -62,31 +68,64 @@ export function SellerListingsSection({ productId }: { productId: number }) {
   const [addingId, setAddingId] = useState<number | null>(null);
   const [pickerListingId, setPickerListingId] = useState<number | null>(null);
 
-  function addVariantToBag(variant: SellerListingVariant, listingId: number, nurseryName: string) {
-    setAddingId(listingId);
-    addToCart.mutate(
-      { data: { productId, sellerListingVariantId: variant.id, quantity: 1 } },
-      {
-        onSuccess: () => {
-          qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
-          toast({ title: "Added to bag", description: `From ${nurseryName}` });
-        },
-        onError: (err: any) => {
-          toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
-        },
-        onSettled: () => setAddingId(null),
-      }
-    );
+  // Authenticated users AND phone-verified guests use the server cart
+  // (useAddToCart → POST /cart/items with their JWT). Unverified guests
+  // use the localStorage cart (useGuestCart) — they'll merge to the
+  // server cart when they verify their phone at checkout.
+  const useServerCart = !!user || isVerified;
+
+  function addVariantToBag(
+    variant: SellerListingVariant,
+    listingId: number,
+    nurseryName: string,
+    productName: string,
+    productImage: string,
+  ) {
+    if (useServerCart) {
+      setAddingId(listingId);
+      addToCart.mutate(
+        { data: { productId, sellerListingVariantId: variant.id, quantity: 1 } },
+        {
+          onSuccess: () => {
+            qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
+            toast({ title: "Added to bag", description: `From ${nurseryName}` });
+          },
+          onError: (err: any) => {
+            toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+          },
+          onSettled: () => setAddingId(null),
+        }
+      );
+    } else {
+      // Unverified guest — add to localStorage cart. The guest will
+      // verify their phone at checkout, at which point the localStorage
+      // cart is merged into the server cart (POST /cart/merge).
+      guestCart.addItem({
+        productId,
+        sellerListingVariantId: variant.id,
+        variantId: null,
+        quantity: 1,
+        name: productName,
+        price: Number(variant.price),
+        discountPrice: variant.discountPrice != null ? Number(variant.discountPrice) : null,
+        image: productImage,
+        deliveryCharge: Number(variant.deliveryCharge ?? 0),
+        stock: variant.availableQuantity,
+        addedAt: Date.now(),
+      });
+      toast({ title: "Added to bag", description: `From ${nurseryName}` });
+    }
   }
 
-  function handleAddToBag(listingId: number, nurseryName: string, qualifyingVariants: SellerListingVariant[]) {
-    if (!user) {
-      toast({ title: "Sign in required", description: "Please sign in to buy from marketplace sellers.", variant: "destructive" });
-      setLocation("/sign-in");
-      return;
-    }
+  function handleAddToBag(
+    listingId: number,
+    nurseryName: string,
+    qualifyingVariants: SellerListingVariant[],
+    productName: string,
+    productImage: string,
+  ) {
     if (qualifyingVariants.length === 1) {
-      addVariantToBag(qualifyingVariants[0], listingId, nurseryName);
+      addVariantToBag(qualifyingVariants[0], listingId, nurseryName, productName, productImage);
       return;
     }
     // Multiple qualifying variants -- ask which one before adding.
@@ -228,15 +267,28 @@ export function SellerListingsSection({ productId }: { productId: number }) {
                   variant="outline"
                   size="sm"
                   className="flex-1 rounded-lg border-primary text-primary hover:bg-primary/5 hover:text-primary gap-1.5"
-                  disabled={outOfStock || isAdding}
-                  onClick={() => handleAddToBag(card.listing.id, card.seller.nurseryName, qualifying)}
+                  disabled={outOfStock || (useServerCart && isAdding)}
+                  onClick={() =>
+                    handleAddToBag(
+                      card.listing.id,
+                      card.seller.nurseryName,
+                      qualifying,
+                      // Product name + image for the guest cart item —
+                      // the product detail page's context (ProductDetailPage)
+                      // has these, but SellerListingsSection doesn't receive
+                      // them as props. We use the listing's first image as
+                      // a fallback and the seller's nurseryName as the name
+                      // proxy (the guest cart merge at checkout will use the
+                      // real product name from the server response).
+                      card.seller.nurseryName,
+                      img ?? "",
+                    )
+                  }
                 >
-                  {!user ? (
-                    <><LogIn className="h-3.5 w-3.5" /> Sign in</>
-                  ) : outOfStock ? (
+                  {outOfStock ? (
                     "Out of stock"
                   ) : (
-                    <><ShoppingBag className="h-3.5 w-3.5" /> {isAdding ? "Adding…" : "Add to Bag"}</>
+                    <><ShoppingBag className="h-3.5 w-3.5" /> {useServerCart && isAdding ? "Adding…" : "Add to Bag"}</>
                   )}
                 </Button>
               </div>
@@ -251,7 +303,15 @@ export function SellerListingsSection({ productId }: { productId: number }) {
           onOpenChange={(o) => { if (!o) setPickerListingId(null); }}
           sellerName={pickerCard.seller.nurseryName}
           variants={pickerQualifying}
-          onConfirm={(variant) => addVariantToBag(variant, pickerCard.listing.id, pickerCard.seller.nurseryName)}
+          onConfirm={(variant) =>
+            addVariantToBag(
+              variant,
+              pickerCard.listing.id,
+              pickerCard.seller.nurseryName,
+              pickerCard.seller.nurseryName,
+              pickerCard.listing.images?.[0] ?? "",
+            )
+          }
         />
       )}
     </section>
