@@ -576,10 +576,17 @@ export function AssistantPanel({ onClose, onOpenFullPage }: AssistantPanelProps)
                       key={m.id ?? `m${i}`}
                       message={m}
                       isStreaming={
-                        loading &&
-                        m.role === "assistant" &&
-                        i === messages.length - 1 &&
-                        !!m.content
+                        // Bug fix: isStreaming should be true even when content
+                        // is empty, as long as loading is true + this is the last
+                        // assistant message. Previously, `!!m.content` made
+                        // isStreaming=false when content was empty — causing the
+                        // "(empty response)" placeholder to flash for a few
+                        // milliseconds before the first text delta arrived.
+                        // Now isStreaming is true whenever loading + last assistant
+                        // message (regardless of content). The streaming dot
+                        // (rendered when isStreaming=true) shows instead of the
+                        // "(empty response)" placeholder.
+                        loading && m.role === "assistant" && i === messages.length - 1
                       }
                       isLast={i === messages.length - 1}
                       // v6.2 Part 15: find the most recent USER message
