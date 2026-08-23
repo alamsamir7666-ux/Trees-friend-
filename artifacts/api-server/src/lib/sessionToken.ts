@@ -285,14 +285,20 @@ export function verifySessionToken(token: string): SessionTokenPayload | null {
 
 /**
  * Mints a fresh anonymous session token. Convenience wrapper for
- * `signSessionToken({ sid: crypto.randomUUID(), uid: null })`.
+ * `signSessionToken({ sid, uid: null })`.
+ *
+ * Bug fix: now accepts an optional `sid` parameter. If provided, the token
+ * carries THAT sid (so the caller can ensure the DB row + cookie share the
+ * same sid). If omitted, a fresh `crypto.randomUUID()` is generated (the
+ * original behavior — but callers should always pass `sid` to avoid the
+ * session-token/cookie mismatch bug that caused chat history to vanish).
  *
  * Use this when a request arrives with no token at all (first-time visitor)
  * or with a token that failed verification (treat as a brand-new session
  * and discard any persisted state tied to the old sid).
  */
-export function mintAnonymousSessionToken(): string {
-  return signSessionToken({ sid: crypto.randomUUID(), uid: null });
+export function mintAnonymousSessionToken(sid?: string): string {
+  return signSessionToken({ sid: sid ?? crypto.randomUUID(), uid: null });
 }
 
 /**
@@ -303,9 +309,15 @@ export function mintAnonymousSessionToken(): string {
  *     invalidated because the new token has a different sid).
  *   - Ensures future `get_user_orders` tool calls are scoped to the
  *     correct user even if the cookie is somehow shared.
+ *
+ * Bug fix: now accepts an optional `sid` parameter. If provided, the token
+ * carries THAT sid (so the caller can ensure the DB row + cookie share the
+ * same sid). If omitted, a fresh `crypto.randomUUID()` is generated (the
+ * original behavior — but callers should always pass `sid` to avoid the
+ * session-token/cookie mismatch bug that caused chat history to vanish).
  */
-export function mintAuthenticatedSessionToken(clerkUserId: string): string {
-  return signSessionToken({ sid: crypto.randomUUID(), uid: clerkUserId });
+export function mintAuthenticatedSessionToken(clerkUserId: string, sid?: string): string {
+  return signSessionToken({ sid: sid ?? crypto.randomUUID(), uid: clerkUserId });
 }
 
 /**

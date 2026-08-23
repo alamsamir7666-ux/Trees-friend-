@@ -263,7 +263,9 @@ describe("Bug #7 fix: resolveSessionToken blocks all 6 attack scenarios", () => 
     // migrate and mints a fresh authenticated session for the attacker.
     expect(fnBody).toContain("authenticated requester tried to");
     expect(fnBody).toContain("claim an anonymous session");
-    expect(fnBody).toContain("mintAuthenticatedSessionToken(clerkUserId)");
+    // Bug fix: the mint helper now takes a sid parameter so the DB row + cookie match.
+    // We accept either the old form (no sid) or the new form (with sid).
+    expect(fnBody).toMatch(/mintAuthenticatedSessionToken\(clerkUserId(,\s*\w+)?\)/);
   });
 
   // Scenario 5: Attacker has victim's LEGACY bare UUID (authenticated session, uid=victim) + is authenticated as themselves.

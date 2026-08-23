@@ -353,9 +353,14 @@ async function resolveSessionToken(
         );
         // Mint a fresh anonymous session for the requester (don't crash,
         // don't leak info — just refuse to honor the stolen token).
+        // Bug fix: generate sid ONCE + pass it to both the DB row + the
+        // signed token so they match (previously mintAnonymousSessionToken()
+        // generated its own sid internally, causing a mismatch that made
+        // chat history vanish after closing + reopening the chat).
+        const hijackSid = crypto.randomUUID();
         return {
-          sid: crypto.randomUUID(),
-          token: mintAnonymousSessionToken(),
+          sid: hijackSid,
+          token: mintAnonymousSessionToken(hijackSid),
           uid: null,
           rotationReason: "new_session",
         };
@@ -500,9 +505,12 @@ async function resolveSessionToken(
             "AI: legacy migration denied — authenticated requester tried to " +
               "claim an anonymous session (possible hijack)",
           );
+          // Bug fix: generate sid ONCE + pass it to both the DB row + the
+          // signed token so they match (prevents chat history vanishing).
+          const legacyHijackSid = crypto.randomUUID();
           return {
-            sid: crypto.randomUUID(),
-            token: mintAuthenticatedSessionToken(clerkUserId),
+            sid: legacyHijackSid,
+            token: mintAuthenticatedSessionToken(clerkUserId, legacyHijackSid),
             uid: clerkUserId,
             rotationReason: "new_session",
           };
@@ -522,12 +530,15 @@ async function resolveSessionToken(
           { sid: rawToken, existingUid, requesterUid: clerkUserId },
           "AI: legacy migration denied — identity mismatch (possible hijack)",
         );
+        // Bug fix: generate sid ONCE + pass it to both the DB row + the
+        // signed token so they match (prevents chat history vanishing).
+        const legacyMismatchSid = crypto.randomUUID();
         return {
-          sid: crypto.randomUUID(),
+          sid: legacyMismatchSid,
           token:
             clerkUserId !== null
-              ? mintAuthenticatedSessionToken(clerkUserId)
-              : mintAnonymousSessionToken(),
+              ? mintAuthenticatedSessionToken(clerkUserId, legacyMismatchSid)
+              : mintAnonymousSessionToken(legacyMismatchSid),
           uid: clerkUserId,
           rotationReason: "new_session",
         };
@@ -568,18 +579,24 @@ async function resolveSessionToken(
   //     signed tokens even when Clerk can't re-resolve), history always
   //     loads on reopen.
   if (clerkUserId !== null) {
+    // Bug fix: generate sid ONCE + pass it to both the DB row + the
+    // signed token so they match (prevents chat history vanishing).
+    const newAuthSid = crypto.randomUUID();
     return {
-      sid: crypto.randomUUID(),
-      token: mintAuthenticatedSessionToken(clerkUserId),
+      sid: newAuthSid,
+      token: mintAuthenticatedSessionToken(clerkUserId, newAuthSid),
       uid: clerkUserId,
       rotationReason: "new_session",
     };
   }
 
   // Anonymous visitor (no Clerk identity) → mint fresh anonymous session.
+  // Bug fix: generate sid ONCE + pass it to both the DB row + the
+  // signed token so they match (prevents chat history vanishing).
+  const newAnonSid = crypto.randomUUID();
   return {
-    sid: crypto.randomUUID(),
-    token: mintAnonymousSessionToken(),
+    sid: newAnonSid,
+    token: mintAnonymousSessionToken(newAnonSid),
     uid: null,
     rotationReason: "new_session",
   };
