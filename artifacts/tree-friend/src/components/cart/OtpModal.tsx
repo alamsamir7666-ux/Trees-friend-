@@ -47,14 +47,21 @@ interface OtpModalProps {
   onOpenChange: (open: boolean) => void;
   /** Called after successful verification — parent uses this to trigger cart merge. */
   onVerified?: () => void;
+  /**
+   * Optional pre-filled phone number (e.g. from the shipping address form
+   * on the checkout page). When provided, the phone input is pre-filled
+   * so the buyer doesn't have to re-type their number. Industry standard
+   * — Daraz pre-fills from the buyer's profile.
+   */
+  initialPhone?: string;
 }
 
 const RESEND_COOLDOWN_SECONDS = 30;
 
-export function OtpModal({ open, onOpenChange, onVerified }: OtpModalProps) {
+export function OtpModal({ open, onOpenChange, onVerified, initialPhone }: OtpModalProps) {
   const { sendOtp, verifyOtp } = useGuestSession();
   const [step, setStep] = useState<1 | 2>(1);
-  const [phone, setPhone] = useState("");
+  const [phone, setPhone] = useState(initialPhone ?? "");
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -81,13 +88,13 @@ export function OtpModal({ open, onOpenChange, onVerified }: OtpModalProps) {
       // Small delay so the close animation doesn't show the reset
       setTimeout(() => {
         setStep(1);
-        setPhone("");
+        setPhone(initialPhone ?? "");
         setCode("");
         setError("");
         setCooldown(0);
       }, 200);
     }
-  }, [open]);
+  }, [open, initialPhone]);
 
   async function handleSendCode() {
     setError("");
@@ -102,6 +109,11 @@ export function OtpModal({ open, onOpenChange, onVerified }: OtpModalProps) {
     if (result.success) {
       setStep(2);
       setCooldown(RESEND_COOLDOWN_SECONDS);
+    } else if (result.retryAfter) {
+      // Cooldown active — show the backend's retryAfter value
+      setCooldown(result.retryAfter);
+      setStep(2); // Move to step 2 so the buyer sees the resend timer
+      setError(result.error ?? `Please wait ${result.retryAfter}s before requesting a new code.`);
     } else {
       setError(result.error ?? "Failed to send code. Please try again.");
     }

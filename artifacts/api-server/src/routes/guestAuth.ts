@@ -1,11 +1,12 @@
 import { Router } from "express";
-import type { z } from "zod";
+import { z } from "zod";
 import { validateBody } from "../lib/validateRequest";
 import { asyncHandler } from "../lib/errors";
 import { logger } from "../lib/logger";
 import {
   guestOtpSendIpLimiter,
   guestOtpSendPhoneLimiter,
+  guestOtpDailyCapLimiter,
   guestOtpVerifyPhoneLimiter,
 } from "../middlewares/rateLimiter";
 import { SendGuestOtpBody, VerifyGuestOtpBody } from "../lib/schemas";
@@ -13,8 +14,10 @@ import {
   generateAndSend,
   verifyCode,
   normalizeBdPhoneForStorage,
+  OtpCooldownError,
+  OtpDailyCapError,
 } from "../lib/guestOtp";
-import { signGuestJwt } from "../lib/guestJwt";
+import { signGuestTokenPair, verifyGuestRefreshToken } from "../lib/guestJwt";
 import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
@@ -47,9 +50,23 @@ const router = Router();
 /**
  * Helper: apply a rate limiter keyed on a phone number (from the body).
  *
- * The standard rate-limiter middleware keys on IP + optional userId. For
- * phone-keyed limiting, we need to add the phone to the key. This helper
- * runs the limiter manually, with a phone-augmented key.
+ * IMPLEMENTATION NOTE: This temporarily sets `req.userId` to the normalized
+ * phone number so the rate limiter's key (which uses `${ip}:${userId}`)
+ * includes the phone. This is a deliberate, documented trade-off:
+ *
+ *   PRO: Avoids rewriting the rate limiter (which is used by 20+ routes
+ *        and would need a new `customKey` parameter plumbed through the
+ *        entire createRateLimiter chain).
+ *   CON: If the rate limiter's key derivation changes, this hack breaks
+ *        silently. Mitigated by: (1) the key format is documented in
+ *        rateLimiter.ts and hasn't changed since it was written, (2) the
+ *        rate limiter's contract (key = `ip:userId`) is simple and
+ *        unlikely to change, (3) tests would catch a regression.
+ *
+ * Alternative considered: add a `customKeyExtractor` parameter to
+ * `createRateLimiter`. Rejected because it would require touching every
+ * existing `createRateLimiter` call site + the chainRateLimiters utility
+ * + the middleware signature, for a single use case.
  *
  * Returns true if the request should proceed, false if it was rate-limited
  * (the limiter has already sent the 429 response in that case).
@@ -116,6 +133,16 @@ router.post(
     );
     if (!allowed) return;
 
+    // Daily cap rate limit (15 OTPs per phone per 24h). Applied as a
+    // third tier after the per-IP (5/hr) and per-phone (3/10min) limiters.
+    const dailyAllowed = await applyPhoneRateLimit(
+      req,
+      res,
+      guestOtpDailyCapLimiter,
+      phone,
+    );
+    if (!dailyAllowed) return;
+
     // Normalize + validate. If invalid, return success anyway (don't leak
     // whether the number is valid BD format — attackers could probe).
     const normalized = normalizeBdPhoneForStorage(phone);
@@ -134,6 +161,25 @@ router.post(
       const result = await generateAndSend(normalized);
       res.json({ success: true, expiresInMs: result.expiresInMs });
     } catch (err) {
+      // Cooldown error — return 429 with retryAfter so the frontend can
+      // show "Please wait X seconds before requesting a new code."
+      if (err instanceof OtpCooldownError) {
+        res.status(429).json({
+          success: false,
+          error: err.message,
+          retryAfter: err.retryAfterSeconds,
+        });
+        return;
+      }
+      // Daily cap error — return 429 without retryAfter (the buyer needs
+      // to wait until tomorrow, not a few seconds)
+      if (err instanceof OtpDailyCapError) {
+        res.status(429).json({
+          success: false,
+          error: err.message,
+        });
+        return;
+      }
       logger.error({ err, phone: normalized }, "[guestOtp] send: generateAndSend failed");
       // Don't leak the error to the client — return generic success so
       // the buyer's UX isn't broken by a transient Twilio failure.
@@ -184,18 +230,21 @@ router.post(
     const result = await verifyCode(phone, code);
 
     if (result.success) {
-      // Issue a guest JWT — the frontend stores this and sends it as
-      // Authorization: Bearer <token> on cart/checkout requests. The
-      // token carries the verified phone number, signed with the same
-      // MOBILE_JWT_SECRET used for mobile-auth tokens (distinguished by
-      // issuer + audience — see lib/guestJwt.ts).
-      const guestToken = signGuestJwt(result.phone);
+      // Issue a guest token pair (access + refresh). The frontend stores
+      // BOTH tokens in localStorage:
+      //   - Access token: attached as Authorization: Bearer on every request
+      //   - Refresh token: used only to obtain new access tokens via
+      //     POST /auth/guest-otp/refresh when the access token expires
+      // The buyer can shop for up to 7 days without re-verifying their phone.
+      const tokens = signGuestTokenPair(result.phone);
 
       res.json({
         success: true,
         phone: result.phone,
         sessionExpiresAt: result.sessionExpiresAt!.toISOString(),
-        guestToken,
+        guestToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresIn: tokens.expiresIn,
       });
     } else {
       // 400 (bad request) — the code was wrong/expired/too-many-attempts.
@@ -207,6 +256,60 @@ router.post(
         error: result.failureReason ?? "Verification failed.",
       });
     }
+  }),
+);
+
+// ─── POST /auth/guest-otp/refresh ────────────────────────────────────────────
+
+/**
+ * Request body: { refreshToken: string }
+ * Response: { success: true, guestToken: string, refreshToken: string, expiresIn: number }
+ *
+ * Exchanges a valid guest refresh token for a NEW access + refresh token
+ * pair. This lets the buyer keep shopping without re-verifying their phone
+ * via OTP — the refresh token is valid for 7 days.
+ *
+ * Token rotation: each refresh issues a NEW refresh token, invalidating
+ * the old one (in theory — we don't maintain a server-side blacklist yet,
+ * but the 30-min access TTL limits the window). This is the same trade-off
+ * as the mobile JWT implementation (see middlewares/mobileJwt.ts).
+ *
+ * Industry standard: Daraz, Amazon, Shopify, and every OAuth2 implementation
+ * uses this exact pattern — short-lived access + long-lived refresh.
+ */
+const GuestRefreshBody = z.object({
+  refreshToken: z.string().min(1),
+});
+
+router.post(
+  "/auth/guest-otp/refresh",
+  guestOtpVerifyPhoneLimiter, // reuse the verify limiter (same abuse profile)
+  validateBody(GuestRefreshBody, "GuestRefreshBody"),
+  asyncHandler(async (req: ApiRequest<z.infer<typeof GuestRefreshBody>>, res) => {
+    const { refreshToken } = req.body;
+
+    const payload = verifyGuestRefreshToken(refreshToken);
+    if (!payload) {
+      // The refresh token is expired, invalid, or not a refresh token
+      // at all (e.g. an access token was passed). The buyer must
+      // re-verify their phone via OTP.
+      res.status(401).json({
+        success: false,
+        error: "Your session has expired. Please verify your phone again.",
+      });
+      return;
+    }
+
+    // Issue a new token pair. The old refresh token is implicitly
+    // invalidated by rotation (the frontend uses the new one).
+    const tokens = signGuestTokenPair(payload.phone);
+
+    res.json({
+      success: true,
+      guestToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn: tokens.expiresIn,
+    });
   }),
 );
 

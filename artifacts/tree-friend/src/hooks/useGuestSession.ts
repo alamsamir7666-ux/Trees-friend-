@@ -1,5 +1,6 @@
 /**
- * useGuestSession — manages the phone-verified guest session.
+ * useGuestSession — manages the phone-verified guest session with
+ * access + refresh token rotation.
  *
  * Part 2 of the Daraz-style guest checkout.
  *
@@ -8,31 +9,42 @@
  *   2. Not signed in, verified → server cart (useGetCart with guest JWT)
  *   3. Signed in → server cart (useGetCart with Clerk JWT)
  *
- * The guest JWT is stored in localStorage under GUEST_TOKEN_KEY. On app
- * boot, App.tsx's token getter checks for this key when Clerk isn't
- * signed in, and attaches it as `Authorization: Bearer <guest-jwt>` if
- * present. This means all API calls (useGetCart, useCreateOrder, etc.)
- * work unchanged for verified guests — the backend's requireGuestOrAuth
- * middleware validates the token and sets req.userId = "guest_<phone>".
+ * Token lifecycle:
+ *   - Access token (30 min): attached as `Authorization: Bearer` on every request
+ *   - Refresh token (7 days): stored in localStorage, used ONLY to obtain
+ *     new access tokens via POST /auth/guest-otp/refresh
+ *   - When the access token expires, the next API call returns 401 → the
+ *     frontend silently calls the refresh endpoint → gets a new access
+ *     token → retries the original request. The buyer sees no interruption.
+ *   - If the refresh token is also expired (7 days), the buyer must
+ *     re-verify their phone via OTP.
  *
- * Session lifecycle:
- *   - Verified via POST /auth/guest-otp/verify → guestToken stored
- *   - Expires after 30 min (JWT exp claim) — the next API call 401s,
- *     which the frontend should handle by clearing the session and
- *     prompting re-verification
- *   - Cleared on sign-in (App.tsx detects isSignedIn → clears guest token)
- *   - Cleared on explicit logout / "sign out of guest session"
+ * Storage:
+ *   - GUEST_TOKEN_KEY: the access token (read on every request by App.tsx's
+ *     TokenSync, which attaches it as Authorization: Bearer)
+ *   - GUEST_REFRESH_TOKEN_KEY: the refresh token (used only by this hook's
+ *     refreshAccessToken function)
+ *   - GUEST_PHONE_KEY: the verified phone number (for display + account claim)
  */
 
 import { useState, useCallback, useEffect } from "react";
 import { apiClient } from "@/lib/apiClient";
 
 const GUEST_TOKEN_KEY = "treefriend_guest_token";
+const GUEST_REFRESH_TOKEN_KEY = "treefriend_guest_refresh_token";
 const GUEST_PHONE_KEY = "treefriend_guest_phone";
 
 function readToken(): string | null {
   try {
     return localStorage.getItem(GUEST_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function readRefreshToken(): string | null {
+  try {
+    return localStorage.getItem(GUEST_REFRESH_TOKEN_KEY);
   } catch {
     return null;
   }
@@ -46,28 +58,77 @@ function readPhone(): string | null {
   }
 }
 
-function writeSession(token: string, phone: string): void {
+function writeSession(accessToken: string, refreshToken: string, phone: string): void {
   try {
-    localStorage.setItem(GUEST_TOKEN_KEY, token);
+    localStorage.setItem(GUEST_TOKEN_KEY, accessToken);
+    localStorage.setItem(GUEST_REFRESH_TOKEN_KEY, refreshToken);
     localStorage.setItem(GUEST_PHONE_KEY, phone);
   } catch {
-    // localStorage unavailable (private mode) — non-critical, the session
-    // just won't persist across page reloads. The in-memory state still
-    // works for the current tab.
+    // localStorage unavailable (private mode) — non-critical
   }
 }
 
 function clearSession(): void {
   try {
     localStorage.removeItem(GUEST_TOKEN_KEY);
+    localStorage.removeItem(GUEST_REFRESH_TOKEN_KEY);
     localStorage.removeItem(GUEST_PHONE_KEY);
   } catch {
-    // Same as above — nothing to do.
+    // Same as above
+  }
+}
+
+// ─── Refresh token singleton ──────────────────────────────────────────────────
+//
+// The refresh logic needs to be callable from OUTSIDE React (specifically,
+// from the apiClient's 401 interceptor, which isn't a React component).
+// We use a module-level singleton that's set up by the useGuestSession
+// hook on mount, and can be called by the interceptor without React context.
+
+let _refreshFn: (() => Promise<string | null>) | null = null;
+
+/**
+ * Try to refresh the guest access token using the stored refresh token.
+ * Called by the 401 interceptor when a guest request fails with 401.
+ *
+ * Returns the new access token on success, or null on failure (refresh
+ * token expired, not a guest session, etc.). The caller should retry
+ * the original request with the new token, or redirect to re-verification.
+ *
+ * This function is safe to call from outside React (it reads localStorage
+ * directly, not from React state).
+ */
+export async function tryRefreshGuestToken(): Promise<string | null> {
+  const refreshToken = readRefreshToken();
+  if (!refreshToken) return null;
+
+  try {
+    const { data } = await apiClient.post<{
+      success: boolean;
+      guestToken?: string;
+      refreshToken?: string;
+      expiresIn?: number;
+      error?: string;
+    }>("/auth/guest-otp/refresh", { refreshToken });
+
+    if (data.success && data.guestToken && data.refreshToken) {
+      // Store the new token pair
+      const phone = readPhone();
+      if (phone) {
+        writeSession(data.guestToken, data.refreshToken, phone);
+      }
+      return data.guestToken;
+    }
+    return null;
+  } catch {
+    // Refresh failed (expired refresh token, network error, etc.)
+    // The caller should redirect to re-verification.
+    return null;
   }
 }
 
 export interface GuestSession {
-  /** The guest JWT, or null if not verified. */
+  /** The guest access token, or null if not verified. */
   guestToken: string | null;
   /** The verified phone number (normalized bare-local form). */
   guestPhone: string | null;
@@ -77,14 +138,17 @@ export interface GuestSession {
   /**
    * Send an OTP to the given phone number.
    * Returns { success: true } on success, { success: false, error } on failure.
-   * Always returns success: true even if the transport fails (the backend
-   * doesn't leak transport errors to avoid breaking the buyer's UX).
+   * Returns { success: false, retryAfter } when the cooldown is active.
    */
-  sendOtp: (phone: string) => Promise<{ success: boolean; error?: string }>;
+  sendOtp: (phone: string) => Promise<{
+    success: boolean;
+    error?: string;
+    retryAfter?: number;
+  }>;
 
   /**
    * Verify the OTP code for the given phone number.
-   * On success: stores the guest JWT, sets isVerified = true.
+   * On success: stores the guest token pair (access + refresh), sets isVerified = true.
    * On failure: returns { success: false, error }.
    */
   verifyOtp: (
@@ -92,7 +156,7 @@ export interface GuestSession {
     code: string,
   ) => Promise<{ success: boolean; error?: string }>;
 
-  /** Clear the guest session (on sign-in, logout, or 401). */
+  /** Clear the guest session (on sign-in, logout, or refresh failure). */
   clear: () => void;
 }
 
@@ -100,8 +164,7 @@ export function useGuestSession(): GuestSession {
   const [guestToken, setGuestToken] = useState<string | null>(readToken);
   const [guestPhone, setGuestPhone] = useState<string | null>(readPhone);
 
-  // Listen for storage events (cross-tab sync — if the buyer verifies in
-  // one tab, other tabs should see the updated session).
+  // Listen for storage events (cross-tab sync)
   useEffect(() => {
     function onStorage(e: StorageEvent) {
       if (e.key === GUEST_TOKEN_KEY) {
@@ -115,17 +178,67 @@ export function useGuestSession(): GuestSession {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
+  // Register the refresh function so the 401 interceptor can call it.
+  // This is set on every render — safe because it's idempotent.
+  useEffect(() => {
+    _refreshFn = async () => {
+      const newToken = await tryRefreshGuestToken();
+      if (newToken) {
+        setGuestToken(newToken);
+      } else {
+        // Refresh failed — clear the session entirely so the buyer
+        // sees the OTP modal again.
+        clearSession();
+        setGuestToken(null);
+        setGuestPhone(null);
+      }
+      return newToken;
+    };
+    return () => {
+      _refreshFn = null;
+    };
+  }, []);
+
   const sendOtp = useCallback(async (phone: string) => {
     try {
       const { data } = await apiClient.post<{
         success: boolean;
         expiresInMs?: number;
+        retryAfter?: number;
       }>("/auth/guest-otp/send", { phone });
+
+      if (!data.success && data.retryAfter) {
+        return {
+          success: false,
+          error: `Please wait ${data.retryAfter}s before requesting a new code.`,
+          retryAfter: data.retryAfter,
+        };
+      }
       return { success: data.success === true };
     } catch (err) {
+      // Check for 429 with retryAfter in the error message
+      const msg = err instanceof Error ? err.message : "Failed to send code.";
+      const match = msg.match(/\{[\s\S]*\}/);
+      if (match) {
+        try {
+          const body = JSON.parse(match[0]);
+          if (body.retryAfter) {
+            return {
+              success: false,
+              error: `Please wait ${body.retryAfter}s before requesting a new code.`,
+              retryAfter: body.retryAfter,
+            };
+          }
+          if (body.error) {
+            return { success: false, error: body.error };
+          }
+        } catch {
+          // Fall through
+        }
+      }
       return {
         success: false,
-        error: err instanceof Error ? err.message : "Failed to send code.",
+        error: msg,
       };
     }
   }, []);
@@ -138,11 +251,13 @@ export function useGuestSession(): GuestSession {
           phone?: string;
           sessionExpiresAt?: string;
           guestToken?: string;
+          refreshToken?: string;
+          expiresIn?: number;
           error?: string;
         }>("/auth/guest-otp/verify", { phone, code });
 
-        if (data.success && data.guestToken && data.phone) {
-          writeSession(data.guestToken, data.phone);
+        if (data.success && data.guestToken && data.refreshToken && data.phone) {
+          writeSession(data.guestToken, data.refreshToken, data.phone);
           setGuestToken(data.guestToken);
           setGuestPhone(data.phone);
           return { success: true };
@@ -152,10 +267,7 @@ export function useGuestSession(): GuestSession {
           error: data.error ?? "Verification failed.",
         };
       } catch (err) {
-        // The API returns 400 for wrong codes, which apiClient throws on.
-        // Parse the error message from the response.
         const msg = err instanceof Error ? err.message : "Verification failed.";
-        // Try to extract the JSON error body from the HTTP error string
         const match = msg.match(/\{[\s\S]*\}/);
         if (match) {
           try {
@@ -164,7 +276,7 @@ export function useGuestSession(): GuestSession {
               return { success: false, error: body.error };
             }
           } catch {
-            // Fall through to returning the raw message
+            // Fall through
           }
         }
         return { success: false, error: msg };
@@ -190,8 +302,8 @@ export function useGuestSession(): GuestSession {
 }
 
 /**
- * Get the guest token from localStorage (for use outside of React components,
- * e.g. in App.tsx's token getter).
+ * Get the guest access token from localStorage (for use outside of React
+ * components, e.g. in App.tsx's token getter).
  */
 export function getGuestToken(): string | null {
   return readToken();

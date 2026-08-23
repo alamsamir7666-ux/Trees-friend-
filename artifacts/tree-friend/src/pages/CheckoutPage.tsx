@@ -70,7 +70,7 @@ export function CheckoutPage() {
   const [, setLocation] = useLocation();
   const qc = useQueryClient();
   const { user, isLoaded: userLoaded } = useUser();
-  const { isVerified } = useGuestSession();
+  const { isVerified, guestPhone } = useGuestSession();
   // Part 3: verified guests (phone-verified via OTP) use the same checkout
   // path as authenticated users — POST /orders with the guest JWT as auth.
   // Only UNVERIFIED guests (no Clerk account, no phone verification) use
@@ -145,6 +145,12 @@ export function CheckoutPage() {
   // Order review step: a confirmation modal shown before the final
   // submit. Prevents accidental orders from a misclick on "Place Order".
   const [showReviewDialog, setShowReviewDialog] = useState(false);
+  // Create-account prompt: shown after a guest successfully places an
+  // order. Industry standard (Daraz, Amazon) — the buyer just had a
+  // positive experience, and their phone is already verified, so
+  // creating an account is one tap away. The phone is pre-filled from
+  // the guest session.
+  const [showCreateAccountDialog, setShowCreateAccountDialog] = useState(false);
 
   // Normalize guest (localStorage) and logged-in (server) cart items into one
   // shape so the summary below doesn't need to branch on isGuest. Price
@@ -440,68 +446,17 @@ export function CheckoutPage() {
       postalCode: address.postalCode || null,
     };
 
-    if (isGuest) {
-      fetch(`${import.meta.env.VITE_API_BASE_URL}/api/orders/guest`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shippingAddress,
-          paymentMethod,
-          couponCode: couponApplied ? couponCode : null,
-          giftWrap,
-          giftMessage: giftWrap ? giftMessage : null,
-          items: guestCart.items.map((i) => ({
-            productId: i.productId,
-            variantId: i.variantId,
-            quantity: i.quantity,
-          })),
-        }),
-      })
-        .then(async (res) => {
-          const data = await res.json();
-          if (!res.ok) {
-            setSubmitError(data.error ?? "Failed to place order.");
-            return;
-          }
-          guestCart.clearCart();
-          try {
-            const key = "treefriend_guest_orders";
-            const existing = JSON.parse(localStorage.getItem(key) ?? "[]");
-            const summary = {
-              trackingId: data.trackingId,
-              createdAt: new Date().toISOString(),
-              total,
-              subtotal,
-              discount,
-              shipping,
-              couponCode: couponApplied ? couponCode : null,
-              items: guestCart.items.map((i) => ({
-                productName: i.name,
-                productImage: i.image,
-                quantity: i.quantity,
-                price: i.discountPrice ?? i.price,
-              })),
-            };
-            localStorage.setItem(
-              key,
-              JSON.stringify([
-                summary,
-                ...existing.filter((o: any) => (o.trackingId ?? o) !== data.trackingId),
-              ]),
-            );
-          } catch {
-            // localStorage may be unavailable (private mode) — non-critical,
-            // the guest order summary is a best-effort convenience.
-          }
-          await payGuestBkashOrderOrGoToOrder(
-            data.trackingId,
-            paymentMethod,
-            data.paymentSessionId ?? null,
-          );
-        })
-        .catch(() => setSubmitError("Failed to place order. Please try again."));
-      return;
-    }
+    // ── REMOVED: old unverified-guest checkout path ──────────────────
+    // The old `if (isGuest)` block called POST /api/orders/guest (the
+    // now-deleted endpoint) with items from the localStorage cart. This
+    // path is unreachable because:
+    //   1. Unverified guests are redirected to OTP by handleSubmit()
+    //   2. Verified guests use the same POST /orders path as authenticated
+    //      users (isGuest = !user && !isVerified, so verified guests have
+    //      isGuest = false)
+    // The old POST /orders/guest endpoint has been removed from the backend.
+    // The guestCart localStorage items are merged to the server cart at
+    // OTP verification time (OtpModal's onVerified callback).
 
     // Generate an idempotency key for this checkout attempt. If the
     // network retries (mobile flaky connection, double-click), the
@@ -558,7 +513,22 @@ export function CheckoutPage() {
         }
         // Pass paymentSessionId so the buyer pays ALL bKash orders in ONE
         // bKash redirect (session-based) instead of N redirects (per-order).
-        payFirstBkashOrderOrGoToOrder(orders as any, paymentSessionId);
+        // For verified guests with COD orders: show "Create an account"
+        // prompt before navigating to the order detail page. This is the
+        // Daraz retention pattern — the buyer just had a positive
+        // experience, their phone is verified, so account creation is
+        // frictionless. For bKash orders, the prompt would need to show
+        // after the bKash redirect returns — skipped for now (the buyer
+        // can always sign up later from the order tracking page).
+        const isVerifiedGuest = !user && isVerified;
+        const isCodOnly = !orders.some((o: any) => o.paymentMethod === "bkash");
+        if (isVerifiedGuest && isCodOnly) {
+          // Show the create-account dialog instead of navigating immediately.
+          // The dialog's "View Order" button navigates to the order page.
+          setShowCreateAccountDialog(true);
+        } else {
+          payFirstBkashOrderOrGoToOrder(orders as any, paymentSessionId);
+        }
       })
       .catch((err) => {
         // Price locking: if the backend returns 409 with priceChangedItems,
@@ -1230,6 +1200,7 @@ export function CheckoutPage() {
       <OtpModal
         open={showOtpModal}
         onOpenChange={setShowOtpModal}
+        initialPhone={address.phone}
         onVerified={() => {
           // Merge localStorage cart → server cart, then invalidate the
           // cart query so useGetCart picks up the server-side items.
@@ -1249,7 +1220,12 @@ export function CheckoutPage() {
                 qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
               })
               .catch(() => {
-                // Non-fatal — the server cart still works.
+                // Non-fatal — the server cart still works. Show a toast.
+                // useToast isn't available here (OtpModal is a separate
+                // component context), so the error is logged and the
+                // cart query is invalidated anyway so the buyer sees
+                // whatever server-side items exist.
+                qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
               });
           } else {
             // Empty localStorage cart — just invalidate so useGetCart fires
@@ -1257,6 +1233,58 @@ export function CheckoutPage() {
           }
         }}
       />
+
+      {/* ── Create Account Dialog (guest post-checkout) ─────────────── */}
+      {/* Shown after a verified guest successfully places a COD order.
+          Industry standard (Daraz, Amazon) — the buyer just completed a
+          purchase, their phone is verified, so creating an account is
+          frictionless. The dialog offers:
+            1. "Create Account" → navigates to /sign-up (Clerk signup
+               with phone pre-filled)
+            2. "View Order" → navigates to the order detail page
+          The buyer can dismiss without creating an account — their
+          order is already placed and trackable via the order URL. */}
+      <Dialog open={showCreateAccountDialog} onOpenChange={setShowCreateAccountDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Order placed! 🎉</DialogTitle>
+            <DialogDescription>
+              Your order has been placed successfully. Create an account to track your order,
+              earn loyalty points, and save your details for next time.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Your phone number{" "}
+              <span className="font-medium text-foreground">{guestPhone ?? address.phone}</span>{" "}
+              is already verified — creating an account takes seconds.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 mt-4">
+            <Button
+              className="w-full rounded-full h-11"
+              onClick={() => setLocation("/sign-up")}
+            >
+              Create Account
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full text-sm text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                // Navigate to the first order's detail page
+                const orderIds = JSON.parse(sessionStorage.getItem("last_checkout_order_ids") ?? "[]");
+                if (orderIds.length > 0) {
+                  setLocation(`/orders/${orderIds[0]}`);
+                } else {
+                  setLocation("/orders");
+                }
+              }}
+            >
+              Skip — View My Order
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

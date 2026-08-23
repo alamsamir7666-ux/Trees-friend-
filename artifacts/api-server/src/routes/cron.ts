@@ -13,6 +13,7 @@ import { runKbToneProfileJob } from "../jobs/kbToneProfileJob";
 import { runCostDailyReset } from "../jobs/costDailyReset";
 import { archiveLastMonth } from "./monthlyRecords";
 import { runAbandonedCartJob } from "./abandonedCart";
+import { purgeExpiredOtps } from "../lib/guestOtp";
 import type { ApiRequest } from "../types/apiRequest";
 
 const router = Router();
@@ -337,6 +338,36 @@ router.post("/cron/ai-cost-daily-reset", async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err }, "Cron: AI cost daily reset failed");
+    res.status(500).json({ error: "Cron job failed" });
+  }
+});
+
+/**
+ * POST /api/cron/guest-otp-cleanup
+ * Every 5 minutes. Purges expired guest OTP rows from the guest_otps
+ * table — both unverified-expired (code TTL of 5 min has passed without
+ * verification) and verified-session-expired (the 30-min verified session
+ * has ended).
+ *
+ * Without this cron, the guest_otps table grows unbounded — every OTP
+ * send creates a row that's only deleted when the buyer sends a new OTP
+ * for the same phone (upsert behavior). Abandoned OTPs (buyer closed the
+ * tab, mistyped their number, etc.) would accumulate forever.
+ *
+ * Industry standard: Daraz runs this every 5 min. Twilio Verify auto-expires
+ * server-side. Our cron is the equivalent.
+ *
+ * Idempotent: safe to run multiple times — only touches rows where
+ * expires_at < now() OR session_expires_at < now().
+ */
+router.post("/cron/guest-otp-cleanup", async (req, res) => {
+  if (!requireCronAuth(req, res)) return;
+  try {
+    logger.info("Cron: running guest OTP cleanup");
+    const purged = await purgeExpiredOtps();
+    res.json({ ok: true, purged });
+  } catch (err) {
+    logger.error({ err }, "Cron: guest OTP cleanup failed");
     res.status(500).json({ error: "Cron job failed" });
   }
 });

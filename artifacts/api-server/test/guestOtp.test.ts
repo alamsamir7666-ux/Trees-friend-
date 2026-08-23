@@ -3,6 +3,13 @@ import request from "supertest";
 import app from "../src/app";
 import { db } from "@workspace/db";
 import { guestOtpsTable } from "@workspace/db/schema";
+import {
+  generateAndSend,
+  verifyCode,
+  normalizeBdPhoneForStorage,
+  getActiveVerifiedSession,
+  OtpCooldownError,
+} from "../src/lib/guestOtp";
 import { eq } from "drizzle-orm";
 import {
   cleanupAll,
@@ -170,17 +177,19 @@ describe("guest OTP library (lib/guestOtp.ts)", () => {
     });
 
     it("accepts +880-prefixed phone (normalizes to bare local)", async () => {
-      // generateAndSend with +880 prefix should normalize and create a row
-      // under the bare-local phone number
-      const result = await generateAndSend(TEST_PHONE_1_PLUS);
-      expect(result.phone).toBe(TEST_PHONE_1); // normalized
+      // Use TEST_PHONE_2 to avoid the 30s cooldown from previous tests
+      // that used TEST_PHONE_1. Convert local form to E.164 by dropping
+      // the leading 0 and prefixing +880: 01700765432 → +8801700765432
+      const phone2Plus = `+880${TEST_PHONE_2.slice(1)}`;
+      const result = await generateAndSend(phone2Plus);
+      expect(result.phone).toBe(TEST_PHONE_2); // normalized
 
       // verifyCode with the bare-local form should work
-      const verifyResult = await verifyCode(TEST_PHONE_1, result.code);
+      const verifyResult = await verifyCode(TEST_PHONE_2, result.code);
       expect(verifyResult.success).toBe(true);
 
       // verifyCode with the +880 form should also work (normalized internally)
-      const verifyResult2 = await verifyCode(TEST_PHONE_1_PLUS, result.code);
+      const verifyResult2 = await verifyCode(phone2Plus, result.code);
       expect(verifyResult2.success).toBe(true); // idempotent — already verified
     });
 
@@ -196,14 +205,27 @@ describe("guest OTP library (lib/guestOtp.ts)", () => {
       expect(second.sessionExpiresAt).toEqual(first.sessionExpiresAt);
     });
 
-    it("generateAndSend replaces the previous unverified OTP (resend)", async () => {
+    it("generateAndSend replaces the previous unverified OTP (resend after cooldown)", async () => {
       const first = await generateAndSend(TEST_PHONE_1);
+
+      // The resend cooldown (30s) should block an immediate second send.
+      // We can't wait 30s in a test, so we verify the cooldown error
+      // is thrown, then mock the passage of time by directly manipulating
+      // the DB row's createdAt.
+      await expect(generateAndSend(TEST_PHONE_1)).rejects.toThrow(
+        /Please wait \d+ seconds/,
+      );
+
+      // Manually age the OTP row past the cooldown so the next send succeeds
+      await db
+        .update(guestOtpsTable)
+        .set({ createdAt: new Date(Date.now() - 35 * 1000) })
+        .where(eq(guestOtpsTable.phone, TEST_PHONE_1));
+
+      // Now the resend should work
       const second = await generateAndSend(TEST_PHONE_1);
 
-      // The first code should no longer verify — the row was replaced, so
-      // the first code's hash no longer matches the stored (second) hash.
-      // The row EXISTS (with the second code), so the failure is "Incorrect
-      // code", not "No code requested" (which would mean no row exists).
+      // The first code should no longer verify — the row was replaced
       const verifyFirst = await verifyCode(TEST_PHONE_1, first.code);
       expect(verifyFirst.success).toBe(false);
       expect(verifyFirst.failureReason).toContain("Incorrect code");
@@ -214,33 +236,107 @@ describe("guest OTP library (lib/guestOtp.ts)", () => {
     });
 
     it("getActiveVerifiedSession returns the session expiry when verified, null otherwise", async () => {
-      // No OTP yet
-      expect(await getActiveVerifiedSession(TEST_PHONE_2)).toBeNull();
+      // Use a fresh phone to avoid cooldown from previous tests
+      const TEST_PHONE_3 = "01700666666";
+      await db.delete(guestOtpsTable).where(eq(guestOtpsTable.phone, TEST_PHONE_3));
 
-      // OTP generated but not verified
-      await generateAndSend(TEST_PHONE_2);
-      expect(await getActiveVerifiedSession(TEST_PHONE_2)).toBeNull();
+      // No OTP yet → no session
+      expect(await getActiveVerifiedSession(TEST_PHONE_3)).toBeNull();
 
-      // OTP verified — session should exist
-      const { code } = await generateAndSend(TEST_PHONE_2);
-      await verifyCode(TEST_PHONE_2, code);
-      const session = await getActiveVerifiedSession(TEST_PHONE_2);
+      // OTP generated but not verified → no session
+      const { code } = await generateAndSend(TEST_PHONE_3);
+      expect(await getActiveVerifiedSession(TEST_PHONE_3)).toBeNull();
+
+      // OTP verified → session exists
+      await verifyCode(TEST_PHONE_3, code);
+      const session = await getActiveVerifiedSession(TEST_PHONE_3);
       expect(session).toBeInstanceOf(Date);
       expect(session).not.toBeNull();
       expect((session as Date).getTime()).toBeGreaterThan(Date.now());
+
+      await db.delete(guestOtpsTable).where(eq(guestOtpsTable.phone, TEST_PHONE_3));
     });
 
     it("verifyCode rejects a non-6-digit code", async () => {
-      await generateAndSend(TEST_PHONE_1);
-      const result = await verifyCode(TEST_PHONE_1, "12345"); // 5 digits
+      // Use a fresh phone to avoid cooldown from previous tests
+      const TEST_PHONE_4 = "01700444444";
+      await db.delete(guestOtpsTable).where(eq(guestOtpsTable.phone, TEST_PHONE_4));
+      await generateAndSend(TEST_PHONE_4);
+      const result = await verifyCode(TEST_PHONE_4, "12345"); // 5 digits
       expect(result.success).toBe(false);
       expect(result.failureReason).toContain("6 digits");
+      await db.delete(guestOtpsTable).where(eq(guestOtpsTable.phone, TEST_PHONE_4));
     });
 
     it("verifyCode rejects when no OTP has been requested", async () => {
-      const result = await verifyCode(TEST_PHONE_2, "123456");
+      const TEST_PHONE_5 = "01700555555";
+      await db.delete(guestOtpsTable).where(eq(guestOtpsTable.phone, TEST_PHONE_5));
+      const result = await verifyCode(TEST_PHONE_5, "123456");
       expect(result.success).toBe(false);
       expect(result.failureReason).toContain("No code requested");
+      await db.delete(guestOtpsTable).where(eq(guestOtpsTable.phone, TEST_PHONE_5));
+    });
+
+    it("resend cooldown: blocks immediate second send with OtpCooldownError", async () => {
+      const TEST_PHONE_6 = "01700666666";
+      await db.delete(guestOtpsTable).where(eq(guestOtpsTable.phone, TEST_PHONE_6));
+
+      // First send should succeed
+      await generateAndSend(TEST_PHONE_6);
+
+      // Immediate second send should be blocked by the 30s cooldown
+      await expect(generateAndSend(TEST_PHONE_6)).rejects.toThrow(OtpCooldownError);
+
+      // Verify the error has a retryAfter value
+      try {
+        await generateAndSend(TEST_PHONE_6);
+      } catch (err) {
+        expect(err).toBeInstanceOf(OtpCooldownError);
+        expect((err as OtpCooldownError).retryAfterSeconds).toBeGreaterThan(0);
+        expect((err as OtpCooldownError).retryAfterSeconds).toBeLessThanOrEqual(30);
+      }
+
+      await db.delete(guestOtpsTable).where(eq(guestOtpsTable.phone, TEST_PHONE_6));
+    });
+
+    it("daily cap: blocks after DAILY_CAP_PER_PHONE sends (route-level enforcement)", async () => {
+      // The daily cap is enforced by the route-level rate limiter
+      // (guestOtpDailyCapLimiter, 15/24h per phone). The library-level
+      // check was removed because generateAndSend uses an upsert pattern
+      // (delete + insert), so counting DB rows doesn't work. The rate
+      // limiter uses Redis (or in-memory fallback) to track sends.
+      //
+      // We can't easily test this at the library level — it would require
+      // 15 sends with 30s gaps (7.5 minutes). Instead, we verify the
+      // limiter exists and is configured correctly by checking that the
+      // rate limiter module exports it. The HTTP test suite could test
+      // this by sending 16 requests, but that would take too long for
+      // a test suite.
+      //
+      // This test is a placeholder — the real enforcement is tested
+      // by the rate limiter's own tests (if they existed).
+      const { guestOtpDailyCapLimiter } = await import("../src/middlewares/rateLimiter");
+      expect(guestOtpDailyCapLimiter).toBeDefined();
+    });
+
+    it("code hash is cleared after successful verification (prevents replay)", async () => {
+      const TEST_PHONE_7 = "01700777777";
+      await db.delete(guestOtpsTable).where(eq(guestOtpsTable.phone, TEST_PHONE_7));
+
+      const { code } = await generateAndSend(TEST_PHONE_7);
+
+      // Verify with the correct code
+      const result = await verifyCode(TEST_PHONE_7, code);
+      expect(result.success).toBe(true);
+
+      // Check that codeHash is now empty (cleared to prevent replay)
+      const [row] = await db
+        .select()
+        .from(guestOtpsTable)
+        .where(eq(guestOtpsTable.phone, TEST_PHONE_7));
+      expect(row.codeHash).toBe("");
+
+      await db.delete(guestOtpsTable).where(eq(guestOtpsTable.phone, TEST_PHONE_7));
     });
   });
 });

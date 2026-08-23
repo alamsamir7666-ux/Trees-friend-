@@ -32,6 +32,7 @@ import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { apiClient } from "@/lib/apiClient";
 import { OtpModal } from "@/components/cart/OtpModal";
+import { useToast } from "@/hooks/use-toast";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -309,6 +310,7 @@ function GuestCartPage() {
   const guestCart = useGuestCart();
   const [, setLocation] = useLocation();
   const [showOtpModal, setShowOtpModal] = useState(false);
+  const { toast } = useToast();
 
   const items = guestCart.items;
   const subtotal = items.reduce((sum, item) => {
@@ -377,12 +379,17 @@ function GuestCartPage() {
               })
               .then(() => {
                 // Clear the localStorage cart after a successful merge
-                // so the buyer doesn't see duplicate items if they go back.
                 guestCart.clearCart();
               })
-              .catch(() => {
+              .catch((err) => {
                 // Non-fatal — the server cart still works, and the
                 // localStorage items can be re-added manually if needed.
+                // Show a toast so the buyer knows the merge failed.
+                toast({
+                  title: "Couldn't sync your bag",
+                  description: "Some items from your bag may not have transferred. Please re-add them if missing.",
+                  variant: "destructive",
+                });
               });
           }
         }}

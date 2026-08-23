@@ -421,10 +421,13 @@ export const guestBkashLimiter = createRateLimiter({
 // against an attacker rotating between codes for the same phone.
 
 // Per-IP send limiter — applied first in the chain. Keyed on IP only
-// (no userId available pre-auth).
+// (no userId available pre-auth). 5/hour is tight enough to stop OTP
+// bombing across multiple numbers from one IP, while still allowing
+// a real buyer (who sends 1-2 OTPs per session) plenty of headroom.
+// Daraz uses a similar limit for their OTP send endpoint.
 export const guestOtpSendIpLimiter = createRateLimiter({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10,
+  max: 5,
   message: "Too many OTP requests from this IP. Please try again later.",
   keyPrefix: "guest-otp-send-ip",
 });
@@ -439,6 +442,18 @@ export const guestOtpSendPhoneLimiter = createRateLimiter({
   max: 3,
   message: "Too many OTP requests for this phone number. Please wait before requesting a new code.",
   keyPrefix: "guest-otp-send-phone",
+});
+
+// Daily cap per phone — applied third. 15 per 24 hours is generous for a
+// real buyer (who rarely needs >2-3 in a session) but stops sustained
+// abuse that paces itself just under the 10-min rate limit (3 per 10 min
+// = 43 per day — this cap of 15 is much tighter).
+// Daraz uses ~20/day, Twilio Verify defaults to 10/day.
+export const guestOtpDailyCapLimiter = createRateLimiter({
+  windowMs: 24 * 60 * 60 * 1000, // 24 hours
+  max: 15,
+  message: "Too many OTP requests for this phone number today. Please try again tomorrow.",
+  keyPrefix: "guest-otp-daily-cap",
 });
 
 // Verify limiter — 5 attempts per 10 minutes per phone. The OTP-level

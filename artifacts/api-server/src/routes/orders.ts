@@ -17,10 +17,11 @@ import {
 import { eq, desc, and, sql, inArray, ilike, gte, lte } from "drizzle-orm";
 import { requireAuth, requireGuestOrAuth } from "../middlewares/auth";
 import { sendOrderConfirmation } from "../lib/email";
+import { sendWhatsAppOrderConfirmation } from "../lib/whatsapp";
 import { logger } from "../lib/logger";
 import { formatOrder } from "../lib/formatters";
 import { asyncHandler, HttpError, generateId } from "../lib/errors";
-import { checkoutLimiter, guestCheckoutLimiter } from "../middlewares/rateLimiter";
+import { checkoutLimiter, guestCheckoutLimiter, chainRateLimiters } from "../middlewares/rateLimiter";
 import { CreateOrderBody } from "@workspace/api-zod";
 import { validateBody } from "../lib/validateRequest";
 import { CancelOrderBody } from "../lib/schemas";
@@ -150,309 +151,6 @@ router.get(
  * re-exported here so this file's existing export surface is unaffected.
  */
 
-router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) => {
-  try {
-    const {
-      paymentMethod,
-      transactionId,
-      senderNumber,
-      shippingAddress,
-      items,
-      couponCode,
-      giftWrap,
-      giftMessage,
-    } = req.body as Record<string, unknown> & {
-      paymentMethod?: string;
-      transactionId?: string;
-      senderNumber?: string;
-      shippingAddress?: any;
-      items?: any[];
-      couponCode?: string;
-      giftWrap?: string;
-      giftMessage?: string;
-    };
-
-    // ── Idempotency key ──────────────────────────────────────────────
-    // If the buyer's client sends an Idempotency-Key header, check if an
-    // order with that key already exists. If so, return the existing order
-    // instead of creating a duplicate — prevents duplicate orders on
-    // network retry / double-click. Industry standard (Stripe, Shopify).
-    const idempotencyKey = req.get("Idempotency-Key");
-    if (idempotencyKey) {
-      const [existing] = await db
-        .select()
-        .from(ordersTable)
-        .where(eq(ordersTable.idempotencyKey, idempotencyKey))
-        .limit(1);
-      if (existing) {
-        res
-          .status(200)
-          .json({ id: existing.id, trackingId: existing.trackingId, idempotentReplay: true });
-        return;
-      }
-    }
-
-    if (!paymentMethod) {
-      res.status(400).json({ error: "Payment method is required" });
-      return;
-    }
-    // Validate paymentMethod enum — previously accepted any string,
-    // so a value like "xyz" would create an order with paymentMethod="xyz"
-    // and paymentStatus="pending" (a dead order that could never be paid).
-    if (!["cod", "bkash"].includes(paymentMethod)) {
-      res.status(400).json({ error: "Payment method must be 'cod' or 'bkash'" });
-      return;
-    }
-    if (
-      !shippingAddress?.fullName ||
-      !shippingAddress?.phone ||
-      !shippingAddress?.street ||
-      !shippingAddress?.city
-    ) {
-      res.status(400).json({ error: "Incomplete shipping address" });
-      return;
-    }
-    // BD phone format validation: prevents garbage like "abc" from
-    // creating an order with an undeliverable phone number. The regex
-    // matches all Bangladeshi mobile operators (01[3-9]XXXXXXXXX).
-    if (
-      shippingAddress.phone &&
-      !BD_PHONE_REGEX.test(String(shippingAddress.phone).replace(/[\s-]/g, ""))
-    ) {
-      res
-        .status(400)
-        .json({ error: "Please enter a valid Bangladeshi phone number (e.g. 01XXXXXXXXX)" });
-      return;
-    }
-    if (!Array.isArray(items) || items.length === 0) {
-      res.status(400).json({ error: "Cart is empty" });
-      return;
-    }
-    for (const i of items) {
-      if (i.variantId == null || isNaN(Number(i.variantId))) {
-        res.status(400).json({
-          error: "Each item must specify a variant (e.g. Seed, Sapling, Grafted, Potted)",
-        });
-        return;
-      }
-    }
-
-    const productIds = items.map((i: any) => i.productId);
-    const variantIds = items.map((i: any) => Number(i.variantId));
-    const [products, variants] = await Promise.all([
-      db.select().from(productsTable).where(inArray(productsTable.id, productIds)),
-      db.select().from(productVariantsTable).where(inArray(productVariantsTable.id, variantIds)),
-    ]);
-    const productMap = new Map(products.map((p) => [p.id, p]));
-    const variantMap = new Map(variants.map((v) => [v.id, v]));
-
-    for (const i of items) {
-      const product = productMap.get(i.productId);
-      const variant = variantMap.get(Number(i.variantId));
-      if (!product) {
-        res.status(400).json({ error: "Product not found" });
-        return;
-      }
-      if (!variant || variant.productId !== product.id) {
-        res.status(400).json({ error: `Variant not found for "${product.name}"` });
-        return;
-      }
-      if (variant.stock < i.quantity) {
-        res.status(400).json({
-          error: `Insufficient stock for "${product.name}" (${variant.name}). Only ${variant.stock} left.`,
-        });
-        return;
-      }
-    }
-
-    let subtotal = 0;
-    let deliveryFee = 0;
-    const orderItems: OrderItem[] = items.map((i: any) => {
-      const product = productMap.get(i.productId)!;
-      const variant = variantMap.get(Number(i.variantId))!;
-      const price =
-        variant.discountPrice != null ? Number(variant.discountPrice) : Number(variant.price);
-      const deliveryCharge = Number(variant.deliveryCharge);
-      subtotal += price * i.quantity;
-      deliveryFee += deliveryCharge * i.quantity;
-      return {
-        productId: product.id,
-        productName: product.name,
-        productImage: (product.images as string[])[0] ?? "",
-        variantId: variant.id,
-        variantName: variant.name,
-        quantity: i.quantity,
-        price,
-        deliveryCharge,
-      };
-    });
-
-    // Coupon validation + usage tracking. Previously a coupon could be
-    // used infinitely — no usageLimit, no timesUsed counter. Now:
-    //   1. If coupon has usageLimit and timesUsed >= usageLimit, reject.
-    //   2. Increment timesUsed inside the checkout transaction (below).
-    let discountAmount = 0;
-    let couponRow: typeof couponsTable.$inferSelect | null = null;
-    if (couponCode) {
-      const [coupon] = await db
-        .select()
-        .from(couponsTable)
-        .where(eq(couponsTable.code, couponCode.toUpperCase()))
-        .limit(1);
-      if (coupon && coupon.isActive) {
-        if (coupon.sellerId !== null) {
-          res.status(400).json({ error: "This coupon isn't valid for the items in your cart." });
-          return;
-        }
-        // Usage limit check: if the coupon has reached its global usage
-        // limit, reject it rather than silently applying a discount that
-        // exceeds the campaign budget.
-        if (coupon.usageLimit != null && coupon.timesUsed >= coupon.usageLimit) {
-          res.status(400).json({ error: "This coupon has reached its usage limit." });
-          return;
-        }
-        discountAmount =
-          coupon.discountType === "percentage"
-            ? Math.floor((subtotal * Number(coupon.discountValue)) / 100)
-            : Math.min(Number(coupon.discountValue), subtotal);
-        couponRow = coupon;
-      }
-    }
-
-    if (paymentMethod === "bkash") {
-      const [config] = await db
-        .select({ isVerified: platformPaymentConfigTable.isVerified })
-        .from(platformPaymentConfigTable)
-        .limit(1);
-      if (config?.isVerified !== true) {
-        res.status(400).json({
-          error: "bKash payment isn't available right now. Please choose Cash on Delivery.",
-        });
-        return;
-      }
-    }
-
-    // Fetch gift wrap cost from platform config (was hardcoded at 50).
-    const [giftWrapConfig] = await db
-      .select({ giftWrapCost: platformPaymentConfigTable.giftWrapCost })
-      .from(platformPaymentConfigTable)
-      .limit(1);
-    const giftWrapCost =
-      giftWrapConfig?.giftWrapCost != null ? Number(giftWrapConfig.giftWrapCost) : 50;
-
-    const totalAmount = Math.max(
-      0,
-      subtotal - discountAmount + deliveryFee + (giftWrap ? giftWrapCost : 0),
-    );
-    const trackingId = generateId("EE", 6);
-    const paymentStatus = paymentMethod === "cod" ? "pending" : "payment_pending";
-    const guestUserId = "guest_" + crypto.randomBytes(8).toString("hex");
-
-    // ── ATOMIC GUEST CHECKOUT TRANSACTION ────────────────────────────
-    // Previously the order insert and stock decrements were separate
-    // SQL statements with NO transaction wrapper — if the order insert
-    // succeeded but a stock decrement failed (DB blip, connection drop),
-    // the order existed with un-decremented stock (oversell risk). Now
-    // wrapped in db.transaction with SERIALIZABLE isolation, matching
-    // the authenticated checkout path's pattern. If any write fails,
-    // the entire checkout rolls back — no partial state.
-    const [order] = await db.transaction(
-      async (tx) => {
-        // Insert the order row
-        const [inserted] = await tx
-          .insert(ordersTable)
-          .values({
-            trackingId,
-            // Sequential order number from a Postgres SEQUENCE.
-            orderNumber: sql`nextval('order_number_seq')`,
-            userId: guestUserId,
-            sellerId: null,
-            items: orderItems,
-            totalAmount: String(totalAmount),
-            paymentMethod,
-            paymentStatus,
-            orderStatus: "pending",
-            transactionId: paymentMethod === "bkash" ? null : (transactionId?.trim() ?? null),
-            senderNumber: paymentMethod === "bkash" ? null : (senderNumber ?? null),
-            shippingAddress,
-            couponCode: couponCode ?? null,
-            discountAmount: String(discountAmount),
-            giftWrap: !!giftWrap,
-            giftMessage: giftMessage ?? null,
-            idempotencyKey: idempotencyKey ?? null,
-            // bKash orders get a 60-minute payment window; COD orders have
-            // no payment-pending state to expire.
-            paymentExpiresAt: paymentMethod === "bkash" ? paymentExpiryDate() : null,
-          })
-          .returning();
-
-        // Decrement stock inside the transaction — if any decrement fails,
-        // the order insert rolls back too (no order without stock).
-        await Promise.all(
-          items.map((i: any) => {
-            const variant = variantMap.get(Number(i.variantId))!;
-            return tx
-              .update(productVariantsTable)
-              .set({ stock: Math.max(0, variant.stock - i.quantity) })
-              .where(eq(productVariantsTable.id, variant.id));
-          }),
-        );
-
-        // Increment coupon usage counter inside the transaction — if the
-        // transaction rolls back, the counter isn't incremented (no
-        // phantom usage). Atomic with the order creation.
-        if (couponRow) {
-          await tx
-            .update(couponsTable)
-            .set({ timesUsed: sql`${couponsTable.timesUsed} + 1` })
-            .where(eq(couponsTable.id, couponRow.id));
-        }
-
-        return [inserted] as const;
-      },
-      { isolationLevel: "serializable" },
-    );
-
-    // ── Payment Session creation (guest bKash) ──────────────────────
-    // Guest checkout produces exactly one order (admin-direct only), so
-    // there's no multi-seller problem. But for consistency with the
-    // authenticated flow, we still create a payment session for bKash
-    // orders — the frontend uses the same session-based endpoint for
-    // both paths, simplifying the client code.
-    let paymentSessionId: number | null = null;
-    if (order.paymentMethod === "bkash") {
-      try {
-        const [session] = await db
-          .insert(paymentSessionsTable)
-          .values({
-            // Guest sessions have no userId (guest orders use "guest_"
-            // prefixed userId on the order row itself).
-            userId: null,
-            totalAmount: String(totalAmount),
-            paymentStatus: "payment_pending",
-            paymentExpiresAt: paymentExpiryDate(),
-          })
-          .returning();
-        paymentSessionId = session.id;
-        await db
-          .update(ordersTable)
-          .set({ paymentSessionId: session.id })
-          .where(eq(ordersTable.id, order.id));
-      } catch (err) {
-        // Non-fatal: fallback to the old per-order flow.
-        logger.error(
-          { err, orderId: order.id },
-          "Guest payment session creation failed — falling back to per-order payment",
-        );
-      }
-    }
-
-    res.status(201).json({ id: order.id, trackingId: order.trackingId, paymentSessionId });
-  } catch (err) {
-    logger.error({ err }, "guest order error");
-    res.status(500).json({ error: "Failed to place order" });
-  }
-});
 
 /**
  * Place an order for the authenticated user's full cart. A cart spanning
@@ -513,7 +211,11 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
 router.post(
   "/orders",
   requireGuestOrAuth,
-  checkoutLimiter,
+  // Chain both limiters: checkoutLimiter (10/15min for auth users) +
+  // guestCheckoutLimiter (5/15min, tighter for guests). Whichever trips
+  // first returns its 429. Guests have less trust capital, so the tighter
+  // limit applies to them.
+  chainRateLimiters(checkoutLimiter, guestCheckoutLimiter),
   validateBody(CreateOrderBody, "CreateOrderBody"),
   async (req: ApiRequest<z.infer<typeof CreateOrderBody>>, res) => {
     try {
@@ -1103,8 +805,9 @@ router.post(
         }
       }
 
-      // Email order confirmation — guests skip this (no users row, so
-      // userRow is undefined). Authenticated users get an email per order.
+      // Email order confirmation — guests skip email (no users row).
+      // Instead, guests get a WhatsApp order confirmation (they have a
+      // verified phone number — we know they have WhatsApp).
       if (!isGuest) {
         const [userRow] = await db
           .select({
@@ -1130,6 +833,34 @@ router.post(
               paymentMethod: order.paymentMethod,
             }).catch(() => {});
           }
+        }
+      } else {
+        // Guest — send WhatsApp order confirmation to the verified phone.
+        // The phone is extracted from the guest userId ("guest_<phone>")
+        // and the shipping address phone. We use the guest userId phone
+        // (verified via OTP) as the destination — it's guaranteed to be
+        // a real WhatsApp-capable number.
+        const guestPhone = req.userId!.replace("guest_", "");
+        const itemCount = createdOrders.reduce(
+          (sum, o) => sum + (o.items as any[]).length,
+          0,
+        );
+        const grandTotal = createdOrders.reduce(
+          (sum, o) => sum + Number(o.totalAmount),
+          0,
+        );
+        // Send one WhatsApp message per order (Daraz sends per-order too,
+        // so the buyer can track each one independently).
+        for (const order of createdOrders) {
+          sendWhatsAppOrderConfirmation({
+            phone: guestPhone,
+            orderSummary: {
+              trackingId: order.trackingId,
+              totalAmount: Number(order.totalAmount),
+              itemCount: (order.items as any[]).length,
+              paymentMethod: order.paymentMethod,
+            },
+          }).catch(() => {});
         }
       }
 

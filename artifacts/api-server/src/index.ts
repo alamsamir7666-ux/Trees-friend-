@@ -11,6 +11,7 @@ import { runKbEmbeddingJob } from "./jobs/kbEmbeddingJob";
 import { runKbToneProfileJob } from "./jobs/kbToneProfileJob";
 import { startBm25StatsJob } from "./jobs/bm25StatsJob";
 import { runCostDailyReset } from "./jobs/costDailyReset";
+import { purgeExpiredOtps } from "./lib/guestOtp";
 
 // Note: ensureConversationsTables() is invoked from app.ts at module load,
 // so it runs on every cold start (including Vercel serverless). We do NOT
@@ -80,6 +81,11 @@ app.listen(port, (err) => {
   // are date-keyed); this scheduler is only for the summary alert.
   // On Vercel (serverless), this runs via POST /api/cron/ai-cost-daily-reset.
   scheduleCostDailyReset();
+
+  // Guest OTP cleanup — runs every 5 min, purges expired OTP rows so
+  // the guest_otps table doesn't grow unbounded.
+  // On Vercel (serverless), this runs via POST /api/cron/guest-otp-cleanup.
+  scheduleGuestOtpCleanup();
 });
 
 // ─── Keep-alive: ping self every 14 min so Render free tier never sleeps ─────
@@ -278,4 +284,32 @@ function scheduleCostDailyReset() {
   }, STARTUP_DELAY_MS);
 
   logger.info("Cost daily reset scheduler started (runs every 24h, first run in 5 min)");
+}
+
+/**
+ * Guest OTP cleanup scheduler (Render long-lived process).
+ * Runs every 5 minutes — purges expired guest OTP rows so the
+ * guest_otps table doesn't grow unbounded.
+ *
+ * On Vercel (serverless), this runs via POST /api/cron/guest-otp-cleanup
+ * (see routes/cron.ts).
+ *
+ * Idempotent: safe to run multiple times — only touches rows past expiry.
+ */
+function scheduleGuestOtpCleanup() {
+  const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+  // First run 30s after startup (don't compete with cold-start migrations)
+  setTimeout(() => {
+    purgeExpiredOtps().catch((err) => {
+      logger.warn({ err }, "Guest OTP cleanup failed at startup");
+    });
+    setInterval(() => {
+      purgeExpiredOtps().catch((err) => {
+        logger.warn({ err }, "Guest OTP cleanup failed");
+      });
+    }, CLEANUP_INTERVAL_MS);
+  }, 30 * 1000);
+
+  logger.info("Guest OTP cleanup scheduler started (runs every 5 min)");
 }

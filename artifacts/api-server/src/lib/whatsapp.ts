@@ -45,3 +45,75 @@ export async function sendWhatsAppStockAlert({
     logger.error({ err: describeError(err) }, "[whatsapp] Failed to send");
   }
 }
+
+/**
+ * Send a WhatsApp order confirmation to a guest buyer.
+ *
+ * Guests don't have an email address (they checked out via phone
+ * verification), so the standard email order confirmation
+ * (sendOrderConfirmation in lib/email.ts) doesn't apply. Instead, we
+ * send a WhatsApp message with the order details + tracking ID.
+ *
+ * This is the Daraz pattern — Daraz sends both SMS + WhatsApp order
+ * confirmations for COD orders. We send WhatsApp only (the buyer's
+ * phone is already verified via OTP, so we know they have WhatsApp).
+ *
+ * @param phone - Bare-local BD phone (01XXXXXXXXX)
+ * @param orderSummary - Order details for the message body
+ */
+export async function sendWhatsAppOrderConfirmation({
+  phone,
+  orderSummary,
+}: {
+  phone: string;
+  orderSummary: {
+    trackingId: string;
+    totalAmount: number;
+    itemCount: number;
+    paymentMethod: string;
+  };
+}) {
+  const client = getClient();
+  if (!client) {
+    if (process.env.NODE_ENV !== "production") {
+      logger.info(
+        `[whatsapp][DEV] Order confirmation for ${phone}: trackingId=${orderSummary.trackingId}, total=Tk${orderSummary.totalAmount}`,
+      );
+    }
+    return;
+  }
+
+  const cleaned = phone.replace(/[^+\d]/g, "");
+  const to = cleaned.startsWith("+") ? cleaned : `+88${cleaned}`;
+
+  const paymentLabel =
+    orderSummary.paymentMethod === "cod"
+      ? "Cash on Delivery"
+      : orderSummary.paymentMethod === "bkash"
+        ? "bKash"
+        : orderSummary.paymentMethod;
+
+  const message =
+    `🌳 *Tree Friend*\n\n` +
+    `Thank you for your order!\n\n` +
+    `📦 Order: ${orderSummary.trackingId}\n` +
+    `🛍️ Items: ${orderSummary.itemCount}\n` +
+    `💰 Total: Tk${orderSummary.totalAmount.toLocaleString()}\n` +
+    `💳 Payment: ${paymentLabel}\n\n` +
+    `Track your order 👉 ${siteUrl}/orders/${orderSummary.trackingId}\n\n` +
+    `_Reply STOP to unsubscribe_`;
+
+  try {
+    await client.messages.create({
+      from,
+      to: `whatsapp:${to}`,
+      body: message,
+    });
+    logger.info(`[whatsapp] Sent order confirmation to ${to}`);
+  } catch (err) {
+    logger.error(
+      { err: describeError(err) },
+      `[whatsapp] Failed to send order confirmation to ${to}`,
+    );
+  }
+}
