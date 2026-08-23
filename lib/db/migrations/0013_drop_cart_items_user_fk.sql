@@ -1,0 +1,22 @@
+-- ─── Migration 0013: Drop FK on cart_items.user_id ─────────────────────────────
+--
+-- Part 2 of the Daraz-style guest checkout. Phone-verified guests have a
+-- guest JWT that sets req.userId = "guest_<phone>", but they don't have a
+-- users row (that's the whole point of guest checkout — no account).
+-- The FK constraint on cart_items.user_id → users.clerk_id prevents
+-- inserting cart items for guest users, causing a 500 error.
+--
+-- This migration drops the FK constraint, making cart_items.user_id a
+-- free-text column — same pattern already used by orders.user_id (see
+-- testDb.ts: "orders.userId is a free-text clerkId column, not an FK").
+--
+-- ─── Safety ──────────────────────────────────────────────────────────────────
+--   * Idempotent (IF EXISTS on the DROP).
+--   * No data migration — existing cart_items rows are untouched.
+--   * The column itself stays NOT NULL — guests always have a userId
+--     ("guest_<phone>"), and logged-in users still have their clerkId.
+--   * Cascade behavior is preserved at the application layer: the cart
+--     routes already scope by userId, and cleanupAll deletes by prefix.
+-- ────────────────────────────────────────────────────────────────────────────
+
+ALTER TABLE cart_items DROP CONSTRAINT IF EXISTS cart_items_user_id_fkey;

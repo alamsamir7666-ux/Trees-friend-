@@ -43,6 +43,27 @@
       "when": 1786958400000,
       "tag": "0011_blog_content_jsonb",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787044800000,
+      "tag": "0012_guest_otps",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787131200000,
+      "tag": "0013_drop_cart_items_user_fk",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787217600000,
+      "tag": "0014_drop_orders_user_fk",
+      "breakpoints": true
     }
   ]
 }

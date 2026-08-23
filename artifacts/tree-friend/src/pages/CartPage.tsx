@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useGetCart,
   useUpdateCartItem,
@@ -23,12 +23,15 @@ import {
   Truck,
   Wallet,
   Info,
+  ShieldCheck,
 } from "lucide-react";
 import { useUser } from "@clerk/react";
 import { useGuestCart } from "@/hooks/useGuestCart";
+import { useGuestSession } from "@/hooks/useGuestSession";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { apiClient } from "@/lib/apiClient";
+import { OtpModal } from "@/components/cart/OtpModal";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -305,6 +308,7 @@ function CartItemCard({
 function GuestCartPage() {
   const guestCart = useGuestCart();
   const [, setLocation] = useLocation();
+  const [showOtpModal, setShowOtpModal] = useState(false);
 
   const items = guestCart.items;
   const subtotal = items.reduce((sum, item) => {
@@ -324,6 +328,65 @@ function GuestCartPage() {
   return (
     <div className="min-h-screen bg-background">
       <PageHeader itemCount={items.length} />
+
+      {/* Phone verification banner — unverified guests must verify before
+          they can check out. This is the Daraz-style "light identity" gate:
+          the buyer provides a phone number, receives an OTP via WhatsApp,
+          and verifies it. Once verified, the cart moves from localStorage
+          to the server (POST /cart/merge), and the buyer can proceed to
+          checkout. */}
+      <div className="bg-info/30 border-b border-info-border">
+        <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-3 text-sm text-info-foreground">
+          <span className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 shrink-0" />
+            Verify your phone number to check out securely.
+          </span>
+          <Button
+            size="sm"
+            onClick={() => setShowOtpModal(true)}
+            className="shrink-0 rounded-full"
+          >
+            Verify Phone
+          </Button>
+        </div>
+      </div>
+
+      <OtpModal
+        open={showOtpModal}
+        onOpenChange={setShowOtpModal}
+        onVerified={() => {
+          // After verification, the CartPage component re-renders and
+          // routes to AuthenticatedCartPage (because isVerified is now
+          // true). The cart merge happens in AuthenticatedCartPage's
+          // useEffect — see below.
+          //
+          // But we also need to trigger the merge of localStorage → server
+          // cart here, because AuthenticatedCartPage doesn't know about the
+          // localStorage items. The merge endpoint reads items from the
+          // request body, so we pass the localStorage items directly.
+          const guestItems = guestCart.items;
+          if (guestItems.length > 0) {
+            apiClient
+              .post("/cart/merge", {
+                items: guestItems.map((i) => ({
+                  productId: i.productId,
+                  variantId: i.variantId ?? null,
+                  sellerListingVariantId: i.sellerListingVariantId ?? null,
+                  quantity: i.quantity,
+                })),
+              })
+              .then(() => {
+                // Clear the localStorage cart after a successful merge
+                // so the buyer doesn't see duplicate items if they go back.
+                guestCart.clearCart();
+              })
+              .catch(() => {
+                // Non-fatal — the server cart still works, and the
+                // localStorage items can be re-added manually if needed.
+              });
+          }
+        }}
+      />
 
       <div className="container mx-auto px-4 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
@@ -395,7 +458,11 @@ function GuestCartPage() {
               giftWrapCost={0}
               discount={0}
               loyaltyDiscount={0}
-              onCheckout={() => setLocation("/checkout")}
+              // Unverified guest — checkout button triggers OTP verification
+              // instead of going to /checkout. Once verified, the CartPage
+              // re-renders to AuthenticatedCartPage, and the buyer can
+              // proceed to checkout normally.
+              onCheckout={() => setShowOtpModal(true)}
               isGuest
               onSignIn={() => setLocation("/sign-in")}
             />
@@ -477,19 +544,65 @@ interface OrderSummaryProps {
 }
 
 /**
- * Restructured order summary per the approved design.
+ * Honest order summary that correctly distinguishes the two delivery
+ * charge concepts in the data model:
  *
- * Splits the buyer's financial obligation into:
- *   - "Due now" = subtotal - discount - loyaltyDiscount + shipping + giftWrap
- *     (paid at checkout via bKash or COD platform fee)
- *   - "Due on delivery (COD)" = sum of marketplace sellers' courier fees
- *     (paid directly to each seller's courier on delivery — NOT collected
- *      by the platform at checkout, see routes/cart.ts:buildCart doc comment)
- *   - "Total order value" = due now + due on delivery (the grand total)
+ *   1. Admin-direct deliveryCharge (productVariantsTable.deliveryCharge)
+ *      — set by the admin, COLLECTED BY THE PLATFORM at checkout,
+ *        summed into cart.deliveryTotal by routes/cart.ts:buildCart.
  *
- * The "Due on delivery" section lists each marketplace seller with a Sprout
- * icon and their per-seller courier amount, so the buyer sees exactly what
- * they'll owe each seller's courier — no surprise COD charges.
+ *   2. Marketplace seller deliveryCharge (sellerListingVariantsTable.
+ *      deliveryCharge) — set by the SELLER per variant, NOT collected
+ *      by the platform at checkout (see cart.ts line 290-295 doc
+ *      comment: "courier fee is paid by the buyer directly to the
+ *      seller's own courier account"). Buyer pays this amount to the
+ *      courier on delivery (COD).
+ *
+ * Layout (matches the user's reference):
+ *
+ *   Order Summary
+ *   Subtotal                          Tk1,300
+ *   Delivery                          Tk280
+ *                                      (Due on delivery)
+ *
+ *   Due now (You'll be charged now)   Tk1,300
+ *
+ *   Due on delivery (COD)
+ *     Haven Garden                    Tk80
+ *     Green Garden                    Tk200
+ *   Total                             Tk280
+ *
+ *   Total order value                 Tk1,580
+ *
+ * "Delivery" line logic (honest, never misleading):
+ *   - totalDelivery = admin-direct delivery (cart.deliveryTotal) +
+ *                     marketplace COD total
+ *   - If totalDelivery === 0 → "Free" (genuinely free — either no
+ *     delivery charge exists, or sellers set deliveryCharge=0)
+ *   - If admin-direct delivery > 0 AND marketplace COD === 0 → show
+ *     the amount (collected at checkout, included in "Due now")
+ *   - If marketplace COD > 0 (regardless of admin-direct) → show the
+ *     TOTAL amount + a "Due on delivery" badge, because at least part
+ *     of it is COD. The breakdown below shows which portion goes to
+ *     which seller.
+ *
+ *   A seller setting deliveryCharge=0 means the seller is offering
+ *   free shipping (they absorb the courier cost) — "Free" is honest
+ *   in that case. The misleading old behavior was showing "Free"
+ *   when the platform wasn't collecting but the buyer still owed the
+ *   courier — that can't happen with this model because the
+ *   deliveryCharge field IS the truth (0 = free, >0 = buyer pays).
+ *
+ * "Due now" = subtotal − discount − loyaltyDiscount + admin-direct
+ *   delivery (cart.deliveryTotal) + giftWrap. This is what bKash/COD
+ *   collects at checkout — does NOT include marketplace COD.
+ *
+ * "Due on delivery (COD)" = sum of marketplace sellers' courier fees
+ *   (paid directly to each seller's courier on delivery). Listed
+ *   per-seller so the buyer sees exactly what they'll owe each
+ *   courier.
+ *
+ * "Total order value" = due now + due on delivery (the grand total).
  */
 function OrderSummary({
   subtotal,
@@ -503,11 +616,30 @@ function OrderSummary({
   isGuest,
   onSignIn,
 }: OrderSummaryProps) {
+  // shipping here = cart.deliveryTotal = admin-direct delivery charges
+  // ONLY (marketplace COD is in codDeliveryTotal, never in shipping).
+  const adminDirectDelivery = shipping;
+  const totalDelivery = adminDirectDelivery + codDeliveryTotal;
   const dueNow = Math.max(
     0,
-    subtotal - discount - loyaltyDiscount + shipping + giftWrapCost,
+    subtotal - discount - loyaltyDiscount + adminDirectDelivery + giftWrapCost,
   );
   const totalOrderValue = dueNow + codDeliveryTotal;
+
+  // "Delivery" line: honest about whether the buyer pays anything and when.
+  // - totalDelivery === 0 → "Free" (no delivery charge anywhere — either no
+  //   items have a delivery charge, or every seller set deliveryCharge=0
+  //   meaning they're offering free shipping)
+  // - marketplace COD > 0 → show total + "Due on delivery" badge (the
+  //   breakdown below shows which seller gets what)
+  // - admin-direct delivery > 0 only (no COD) → show the amount (collected
+  //   at checkout, included in "Due now")
+  const deliveryDisplay =
+    totalDelivery === 0
+      ? { label: "Free", tone: "free" as const }
+      : codDeliveryTotal > 0
+        ? { label: formatTk(totalDelivery), tone: "due" as const }
+        : { label: formatTk(totalDelivery), tone: "amount" as const };
 
   return (
     <div className="bg-card border border-border rounded-2xl p-5 shadow-md sticky top-24 space-y-4">
@@ -519,13 +651,20 @@ function OrderSummary({
           <span className="text-muted-foreground">Subtotal</span>
           <span className="font-semibold text-foreground">{formatTk(subtotal)}</span>
         </div>
-        <div className="flex justify-between">
+        <div className="flex justify-between items-center">
           <span className="text-muted-foreground">Delivery</span>
-          <span className="font-semibold text-foreground">
-            {shipping === 0 ? (
-              <span className="text-success-foreground">Free</span>
+          <span className="flex items-center gap-2">
+            {deliveryDisplay.tone === "free" ? (
+              <span className="font-semibold text-success-foreground">Free</span>
+            ) : deliveryDisplay.tone === "due" ? (
+              <>
+                <span className="font-semibold text-foreground">{deliveryDisplay.label}</span>
+                <span className="text-[10px] font-medium uppercase tracking-wide text-warning-foreground bg-warning/40 px-1.5 py-0.5 rounded">
+                  Due on delivery
+                </span>
+              </>
             ) : (
-              formatTk(shipping)
+              <span className="font-semibold text-foreground">{deliveryDisplay.label}</span>
             )}
           </span>
         </div>
@@ -549,45 +688,57 @@ function OrderSummary({
         )}
       </div>
 
-      {/* Due now section */}
-      <div className="border-t border-border pt-3 space-y-2">
-        <div className="flex justify-between items-center">
-          <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-            Due now
-            <Info className="h-3.5 w-3.5 text-muted-foreground/70" />
+      {/* Due now section — what the buyer pays at checkout (bKash or COD).
+          Includes admin-direct delivery but NOT marketplace COD (that's
+          paid to couriers on delivery, see breakdown below). */}
+      <div className="border-t border-border pt-3">
+        <div className="flex justify-between items-baseline">
+          <span className="text-sm font-semibold text-foreground">
+            Due now{" "}
+            <span className="text-xs font-normal text-muted-foreground">
+              (You'll be charged now)
+            </span>
           </span>
           <span className="text-lg font-bold text-foreground">{formatTk(dueNow)}</span>
         </div>
-
-        {/* Due on delivery (COD) section — marketplace courier fees */}
-        {codDeliveryTotal > 0 && (
-          <div className="space-y-1.5">
-            <div className="flex justify-between items-center">
-              <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-                Due on delivery
-                <Info className="h-3.5 w-3.5 text-muted-foreground/70" />
-              </span>
-              <span className="text-sm font-semibold text-foreground">
-                {formatTk(codDeliveryTotal)}
-              </span>
-            </div>
-            {/* Per-seller COD breakdown */}
-            <div className="pl-6 space-y-1">
-              {codBreakdown.map((entry, i) => (
-                <div key={i} className="flex justify-between items-center text-xs">
-                  <span className="flex items-center gap-1.5 text-muted-foreground">
-                    <Sprout className="h-3 w-3 text-success-foreground" />
-                    {entry.sellerName}
-                  </span>
-                  <span className="font-medium text-foreground">{formatTk(entry.amount)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Total order value (grand total) */}
+      {/* Due on delivery (COD) section — marketplace courier fees,
+          broken down per seller so the buyer sees exactly what they'll
+          owe each courier. Hidden entirely when there are no COD charges
+          (cart is 100% admin-direct, or all sellers set deliveryCharge=0). */}
+      {codDeliveryTotal > 0 && (
+        <div className="border-t border-border pt-3 space-y-2">
+          {/* Section header — no amount on this line */}
+          <div className="flex justify-between items-baseline">
+            <span className="text-sm font-semibold text-foreground">
+              Due on delivery{" "}
+              <span className="text-xs font-normal text-muted-foreground">(COD)</span>
+            </span>
+          </div>
+
+          {/* Per-seller COD breakdown */}
+          <div className="pl-3 space-y-1.5">
+            {codBreakdown.map((entry, i) => (
+              <div key={i} className="flex justify-between items-center text-sm">
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <Sprout className="h-3 w-3 text-success-foreground shrink-0" />
+                  {entry.sellerName}
+                </span>
+                <span className="font-medium text-foreground">{formatTk(entry.amount)}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Total of the COD section */}
+          <div className="flex justify-between items-center text-sm pt-1">
+            <span className="font-semibold text-foreground">Total</span>
+            <span className="font-bold text-foreground">{formatTk(codDeliveryTotal)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Total order value (grand total = due now + due on delivery) */}
       <div className="border-t border-border pt-3">
         <div className="flex justify-between items-baseline">
           <span className="text-sm font-bold text-foreground">Total order value</span>
@@ -974,6 +1125,7 @@ function AuthenticatedCartPage() {
 
 export function CartPage() {
   const { user, isLoaded } = useUser();
+  const { isVerified } = useGuestSession();
 
   if (!isLoaded) {
     return (
@@ -987,5 +1139,10 @@ export function CartPage() {
     );
   }
 
-  return user ? <AuthenticatedCartPage /> : <GuestCartPage />;
+  // Logged-in users AND phone-verified guests both use the server-side
+  // cart (AuthenticatedCartPage reads via useGetCart, which attaches the
+  // guest JWT as Authorization: Bearer — see App.tsx's TokenSync). Only
+  // unverified guests use the localStorage cart (GuestCartPage).
+  if (user || isVerified) return <AuthenticatedCartPage />;
+  return <GuestCartPage />;
 }

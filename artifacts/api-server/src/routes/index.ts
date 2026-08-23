@@ -35,6 +35,7 @@ import cronRouter from "./cron";
 // for the full reasoning if needed.
 import blogPostsRouter from "./blogPosts";
 import mobileAuthRouter from "./mobileAuth";
+import guestAuthRouter from "./guestAuth";
 import assetsRouter from "./assets";
 import homepageSectionsRouter from "./homepageSections";
 import sellerSubscriptionsRouter from "./sellerSubscriptions";
@@ -61,6 +62,7 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(mobileAuthRouter);
+router.use(guestAuthRouter);
 router.use(categoriesRouter);
 router.use(productsRouter);
 router.use(cartRouter);

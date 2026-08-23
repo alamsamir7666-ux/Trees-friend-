@@ -11,8 +11,9 @@ import {
   cartItemsTable,
   ordersTable,
   orderShipmentsTable,
+  guestOtpsTable,
 } from "@workspace/db/schema";
-import { eq, like } from "drizzle-orm";
+import { eq, like, or } from "drizzle-orm";
 import { encryptCredential } from "../src/lib/credentialEncryption";
 
 /**
@@ -76,13 +77,23 @@ export function markerId(suffix: string): string {
 
 /** Deletes every row this suite could have created, in FK-safe order. Safe to call before AND after a run. */
 export async function cleanupAll(): Promise<void> {
-  // orders.userId is a free-text clerkId column, not an FK -- must clean
-  // explicitly by prefix rather than relying on a users-row cascade.
-  const staleOrders = await db.select({ id: ordersTable.id }).from(ordersTable).where(like(ordersTable.userId, `${TEST_MARKER}%`));
+  // orders.userId is a free-text column (FK dropped in migration 0014).
+  // Clean explicitly by prefix rather than relying on a users-row cascade.
+  // Includes both the test-marker prefix (httptest_%) AND guest orders
+  // (guest_01700... — created by guest checkout tests).
+  const staleOrders = await db.select({ id: ordersTable.id }).from(ordersTable).where(
+    or(
+      like(ordersTable.userId, `${TEST_MARKER}%`),
+      like(ordersTable.userId, "guest_01700%"),
+    ),
+  );
   for (const o of staleOrders) {
     await db.delete(orderShipmentsTable).where(eq(orderShipmentsTable.orderId, o.id));
     await db.delete(ordersTable).where(eq(ordersTable.id, o.id));
   }
+
+  // Also clean guest cart items (cart_items.userId = "guest_01700...")
+  await db.delete(cartItemsTable).where(like(cartItemsTable.userId, "guest_01700%"));
 
   const staleUsers = await db.select({ id: usersTable.id, clerkId: usersTable.clerkId }).from(usersTable).where(like(usersTable.clerkId, `${TEST_MARKER}%`));
   for (const u of staleUsers) {
@@ -94,6 +105,11 @@ export async function cleanupAll(): Promise<void> {
 
   await db.delete(productsTable).where(like(productsTable.slug, `${TEST_MARKER}%`));
   await db.delete(categoriesTable).where(like(categoriesTable.slug, `${TEST_MARKER}%`));
+
+  // Guest OTPs created by guest-auth tests use test phone numbers starting
+  // with 01700 (017 = Grameenphone prefix, 00 = unlikely-real subscriber
+  // range — safe for tests). Delete all rows for these test numbers.
+  await db.delete(guestOtpsTable).where(like(guestOtpsTable.phone, "01700%"));
 }
 
 let categoryCounter = 0;

@@ -43,3 +43,6 @@ export * from "./conversations";
 
 // AI assistant chat (anonymous v1 — TreeBot / Gemini-powered)
 export * from "./aiChat";
+
+// Guest OTP (phone-verified guest checkout — Daraz-style light identity)
+export * from "./guestOtps";

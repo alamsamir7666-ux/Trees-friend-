@@ -4,6 +4,9 @@ import { db } from "@workspace/db";
 import { usersTable, sellersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { verifyMobileJwt } from "./mobileJwt";
+import { extractGuestJwtFromHeader } from "../lib/guestJwt";
+import { claimGuestOrders } from "../lib/accountClaim";
+import { normalizeBdPhoneForStorage } from "../lib/guestOtp";
 import { logger } from "../lib/logger";
 
 /**
@@ -66,6 +69,7 @@ function resolveIdentity(req: Request): {
   claimedEmail: string | null;
   claimedFirst: string | null;
   claimedLast: string | null;
+  claimedPhone: string | null;
 } | null {
   // 1. Try our mobile JWT first.
   const authHeader = req.headers.authorization;
@@ -78,6 +82,7 @@ function resolveIdentity(req: Request): {
         claimedEmail: mobilePayload.email,
         claimedFirst: null,
         claimedLast: null,
+        claimedPhone: null,
       };
     }
     // Not a valid mobile JWT — fall through and let Clerk's own verifier
@@ -87,9 +92,19 @@ function resolveIdentity(req: Request): {
   }
 
   // 2. Fall back to Clerk's own session verification (website / any real
-  // Clerk-issued session JWT).
-  const auth = getAuth(req);
-  const clerkId = auth?.userId;
+  // Clerk-issued session JWT). Wrapped in try-catch because getAuth(req)
+  // can throw when Clerk's middleware hasn't fully initialized (e.g. in
+  // the test environment with fake Clerk credentials, or when a non-Clerk
+  // Bearer token is sent that Clerk's parser rejects). A throw here means
+  // "no Clerk identity found" — treat it the same as null, not a 500.
+  let auth: ReturnType<typeof getAuth> | null = null;
+  let clerkId: string | null = null;
+  try {
+    auth = getAuth(req);
+    clerkId = auth?.userId ?? null;
+  } catch {
+    clerkId = null;
+  }
   if (!clerkId) return null;
 
   const claims = (auth as any)?.sessionClaims ?? {};
@@ -98,6 +113,12 @@ function resolveIdentity(req: Request): {
     claimedEmail: claims.email ?? claims.email_address ?? claims.primary_email_address ?? null,
     claimedFirst: claims.first_name ?? claims.firstName ?? null,
     claimedLast: claims.last_name ?? claims.lastName ?? null,
+    // Part 4: extract phone from Clerk session claims for account-claim.
+    // Clerk stores the verified phone number in `phone_number` when the
+    // user has phone verification enabled. The value is in E.164 format
+    // (+8801XXXXXXXXX) — normalizeBdPhoneForStorage converts it to the
+    // bare-local form (01XXXXXXXXX) used by guest_otps.phone.
+    claimedPhone: claims.phone_number ?? claims.phoneNumber ?? null,
   };
 }
 
@@ -119,7 +140,7 @@ async function authenticate(req: Request, res: Response): Promise<boolean> {
     res.status(401).json({ error: "Unauthorized" });
     return false;
   }
-  const { clerkId, claimedEmail, claimedFirst, claimedLast } = identity;
+  const { clerkId, claimedEmail, claimedFirst, claimedLast, claimedPhone } = identity;
   req.userId = clerkId;
 
   let user = await db
@@ -152,18 +173,46 @@ async function authenticate(req: Request, res: Response): Promise<boolean> {
         email,
         firstName: claimedFirst,
         lastName: claimedLast,
+        // Part 4: save the phone number on the user row so future lookups
+        // (e.g. seller dashboard, order history) can find it without
+        // re-parsing Clerk claims.
+        phone: claimedPhone ?? null,
         role: effectiveRole ?? (isAdminEmail ? "admin" : "user"),
       })
       .returning();
     user = inserted;
+
+    // Part 4: account claim — migrate guest orders + cart to this new
+    // account if the buyer previously checked out as a phone-verified
+    // guest with the same phone number. Idempotent: if no guest orders
+    // exist under "guest_<phone>", the UPDATE matches 0 rows and is a
+    // no-op. Fire-and-forget (non-blocking) — account creation succeeds
+    // even if the migration fails (the guest's data stays intact and
+    // can be retried on the next sign-in).
+    if (claimedPhone) {
+      const normalizedPhone = normalizeBdPhoneForStorage(claimedPhone);
+      if (normalizedPhone) {
+        claimGuestOrders(clerkId, normalizedPhone).catch((err) => {
+          logger.error(
+            { err, clerkId, phone: normalizedPhone },
+            "[auth] Account claim failed (non-fatal — guest data stays intact)",
+          );
+        });
+      }
+    }
   } else {
     const isAdminEmail = claimedEmail ? ADMIN_EMAILS.includes(claimedEmail.toLowerCase()) : ADMIN_EMAILS.includes(user.email.toLowerCase());
     const resolvedRole = effectiveRole ?? (isAdminEmail ? "admin" : null);
+    // Part 4: also update phone if it changed (e.g. the user just added
+    // a phone number to their Clerk profile — we want it on the user row
+    // AND we want to trigger account claim for the new phone).
+    const phoneChanged = claimedPhone && user.phone !== claimedPhone;
     const needsUpdate =
       (claimedFirst && user.firstName !== claimedFirst) ||
       (claimedLast && user.lastName !== claimedLast) ||
       (claimedEmail && user.email !== claimedEmail) ||
-      (resolvedRole && user.role !== resolvedRole);
+      (resolvedRole && user.role !== resolvedRole) ||
+      phoneChanged;
 
     if (needsUpdate) {
       const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -171,6 +220,7 @@ async function authenticate(req: Request, res: Response): Promise<boolean> {
       if (claimedLast) updates.lastName = claimedLast;
       if (claimedEmail) updates.email = claimedEmail;
       if (resolvedRole) updates.role = resolvedRole;
+      if (phoneChanged) updates.phone = claimedPhone;
 
       const [updated] = await db
         .update(usersTable)
@@ -178,6 +228,22 @@ async function authenticate(req: Request, res: Response): Promise<boolean> {
         .where(eq(usersTable.clerkId, clerkId))
         .returning();
       user = updated;
+    }
+
+    // Part 4: account claim for EXISTING users too — the user may have
+    // just added a phone number to their Clerk profile (or signed in for
+    // the first time after a guest checkout). Idempotent: if the guest
+    // orders have already been migrated, the UPDATE matches 0 rows.
+    if (phoneChanged && claimedPhone) {
+      const normalizedPhone = normalizeBdPhoneForStorage(claimedPhone);
+      if (normalizedPhone) {
+        claimGuestOrders(clerkId, normalizedPhone).catch((err) => {
+          logger.error(
+            { err, clerkId, phone: normalizedPhone },
+            "[auth] Account claim failed (non-fatal — guest data stays intact)",
+          );
+        });
+      }
     }
   }
 
@@ -288,5 +354,58 @@ export const requireSeller = async (
   }
 
   req.dbSeller = seller;
+  next();
+};
+
+/**
+ * Combined auth middleware — accepts EITHER a guest JWT (phone-verified
+ * guest) OR a normal Clerk/mobile-JWT session (logged-in user).
+ *
+ * Part 2 of the Daraz-style guest checkout. Cart routes use this instead
+ * of `requireAuth` so that phone-verified guests can use the same cart
+ * API as logged-in users. The guest's cart items are stored under
+ * `userId = "guest_<phone>"` in cart_items — same table, same queries,
+ * no route duplication.
+ *
+ * Flow:
+ *   1. Try guest JWT first (fast — local HMAC verify, no DB lookup).
+ *      If valid → set req.userId = "guest_<phone>", skip usersTable
+ *      lookup (guests don't have a user account — that's the point of
+ *      guest checkout). Call next().
+ *   2. If no guest JWT (or invalid) → fall through to the existing
+ *      `authenticate()` which handles Clerk session JWTs and mobile-auth
+ *      JWTs. This is the normal logged-in path, unchanged.
+ *
+ * What guests CAN do with this middleware:
+ *   - GET /cart, POST /cart/items, PUT /cart/items/:id, DELETE /cart/items/:id
+ *   - POST /cart/merge (merge localStorage → server cart)
+ *   - POST /orders/guest (Part 3 — will be extended to support marketplace items)
+ *
+ * What guests CANNOT do:
+ *   - Anything that requires req.dbUser (which stays undefined for guests):
+ *     requireAdmin, requireSeller, requireSellerAccount, wishlist, loyalty, etc.
+ *   - Routes that still use `requireAuth` (not yet migrated to
+ *     requireGuestOrAuth) — these will 401 for guests, which is correct
+ *     (guests shouldn't access account-only features).
+ */
+export const requireGuestOrAuth = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  // 1. Try guest JWT — fast, local, no DB lookup.
+  const guestPayload = extractGuestJwtFromHeader(req.headers.authorization);
+  if (guestPayload) {
+    // Valid guest token. Set req.userId to "guest_<phone>" so cart
+    // routes scope cart_items by this key. req.dbUser stays undefined
+    // — guests don't have a usersTable row (Part 4 handles account
+    // claim when they later sign up).
+    req.userId = `guest_${guestPayload.phone}`;
+    next();
+    return;
+  }
+
+  // 2. No guest token — fall through to normal auth (Clerk or mobile JWT).
+  if (!(await authenticate(req, res))) return;
   next();
 };

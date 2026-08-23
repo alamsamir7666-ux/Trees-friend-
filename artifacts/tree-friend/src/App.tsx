@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ClerkProvider, Show, useClerk, useAuth } from "@clerk/react";
 import { setAuthTokenGetter } from "@workspace/api-client-react";
 import { setTokenGetter as setLocalApiTokenGetter } from "@/lib/getToken";
+import { getGuestToken, clearGuestSession } from "@/hooks/useGuestSession";
 import { shadcn } from "@clerk/themes";
 import { Switch, Route, useLocation, Router as WouterRouter, Redirect, Link } from "wouter";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
@@ -137,14 +138,41 @@ import { useHeartbeat } from "@/hooks/usePresence";
 
 function TokenSync() {
   const { getToken, isSignedIn } = useAuth();
-  // Set synchronously so queries have token on first render
-  setAuthTokenGetter(isSignedIn ? () => getToken() : null);
-  // Also wire up the local apiClient's token getter (used by ProductModal,
-  // CategoryModal, and admin tabs that call apiClient.* directly instead of
-  // the generated @workspace/api-client-react hooks). Previously this was
-  // never connected, so every apiClient request went out with no
-  // Authorization header and silently got a 401 from the API.
-  setLocalApiTokenGetter(isSignedIn ? () => getToken() : () => Promise.resolve(null));
+
+  // When the user signs in (Clerk), clear any guest session so the
+  // guest JWT doesn't linger in localStorage after the buyer has
+  // authenticated. Part 4 will handle merging guest orders into the
+  // new account; for now, just clear the token so it can't be
+  // accidentally reused.
+  useEffect(() => {
+    if (isSignedIn) {
+      clearGuestSession();
+    }
+  }, [isSignedIn]);
+
+  // Set synchronously so queries have token on first render.
+  //
+  // Priority: Clerk session token (if signed in) > guest JWT (if
+  // phone-verified) > null (unauthenticated).
+  //
+  // The guest JWT is read from localStorage directly (not from React
+  // state) because this function runs on every render and needs the
+  // freshest value. useGuestSession's state syncs via storage events,
+  // but TokenSync doesn't re-render when localStorage changes —
+  // reading directly avoids a stale closure.
+  if (isSignedIn) {
+    setAuthTokenGetter(() => getToken());
+    setLocalApiTokenGetter(() => getToken());
+  } else {
+    const guestToken = getGuestToken();
+    if (guestToken) {
+      setAuthTokenGetter(() => Promise.resolve(guestToken));
+      setLocalApiTokenGetter(() => Promise.resolve(guestToken));
+    } else {
+      setAuthTokenGetter(null);
+      setLocalApiTokenGetter(() => Promise.resolve(null));
+    }
+  }
   return null;
 }
 

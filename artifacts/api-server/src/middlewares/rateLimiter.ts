@@ -402,3 +402,54 @@ export const guestBkashLimiter = createRateLimiter({
   message: "Too many bKash payment attempts from this IP. Please try again later.",
   keyPrefix: "guest-bkash",
 });
+
+// ─── Guest OTP limiters (Part 1 of Daraz-style guest checkout) ──────────────
+//
+// Two-tier protection against OTP abuse:
+//   1. Per-IP: stops a single attacker from spamming OTPs to many numbers
+//      from one IP (e.g. a botnet node). 10/hour is generous for a real
+//      buyer (one checkout = 1-2 OTP sends) but blocks scripted spam.
+//   2. Per-phone: stops an attacker from repeatedly sending OTPs to ONE
+//      number (SMS-bombing / WhatsApp-bombing harassment). 3/10min per
+//      phone — Daraz uses a similar limit. A real buyer who fat-fingers
+//      "resend" 4 times in 10 minutes gets a "please wait" message.
+//
+// Both apply on SEND (POST /auth/guest-otp/send). VERIFY has its own
+// limiter (5/10min per phone) to stop brute-force guessing of the 6-digit
+// code — though the OTP-level 5-attempts guard (see lib/guestOtp.ts) is
+// the primary brute-force defense, the route limiter adds defense-in-depth
+// against an attacker rotating between codes for the same phone.
+
+// Per-IP send limiter — applied first in the chain. Keyed on IP only
+// (no userId available pre-auth).
+export const guestOtpSendIpLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  message: "Too many OTP requests from this IP. Please try again later.",
+  keyPrefix: "guest-otp-send-ip",
+});
+
+// Per-phone send limiter — applied second. Keyed on IP + phone (the
+// phone is part of the body, not the URL, so the limiter reads it
+// inside the route handler). 3 per 10 minutes matches Daraz's resend
+// throttle — a real buyer rarely needs more than 2 sends (original +
+// one resend if the first didn't arrive).
+export const guestOtpSendPhoneLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 3,
+  message: "Too many OTP requests for this phone number. Please wait before requesting a new code.",
+  keyPrefix: "guest-otp-send-phone",
+});
+
+// Verify limiter — 5 attempts per 10 minutes per phone. The OTP-level
+// 5-attempts guard (lib/guestOtp.ts:MAX_ATTEMPTS) already invalidates
+// the code after 5 wrong guesses, but this route-level limiter stops
+// an attacker from requesting a new code and immediately burning 5 more
+// guesses in a tight loop (the phone-send limiter would eventually
+// trip, but this limiter catches the rapid-fire case faster).
+export const guestOtpVerifyPhoneLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 5,
+  message: "Too many verification attempts for this phone number. Please wait before trying again.",
+  keyPrefix: "guest-otp-verify-phone",
+});

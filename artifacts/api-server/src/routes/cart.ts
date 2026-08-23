@@ -13,7 +13,7 @@ import {
 } from "@workspace/db";
 import { eq, and, inArray, sql, gte, lt } from "drizzle-orm";
 import { z } from "zod";
-import { requireAuth } from "../middlewares/auth";
+import { requireGuestOrAuth } from "../middlewares/auth";
 import { AddToCartBody, UpdateCartItemBody, UpdateCartItemParams } from "@workspace/api-zod";
 import { validateBody, validateParams } from "../lib/validateRequest";
 import { logger } from "../lib/logger";
@@ -371,7 +371,7 @@ async function buildCart(userId: string) {
 
 router.get(
   "/cart",
-  requireAuth,
+  requireGuestOrAuth,
   asyncHandler(async (req: ApiRequest, res) => {
     // Lazy housekeeping: delete this user's expired cart lines so stale
     // rows don't accumulate between cron runs. Fire-and-forget — the
@@ -432,7 +432,7 @@ async function purgeExpiredCartLines(userId: string): Promise<void> {
  */
 router.post(
   "/cart/items",
-  requireAuth,
+  requireGuestOrAuth,
   validateBody(AddToCartBody, "AddToCartBody"),
   async (req: ApiRequest<z.infer<typeof AddToCartBody>>, res) => {
     try {
@@ -625,7 +625,7 @@ router.post(
  */
 router.put(
   "/cart/items/:id",
-  requireAuth,
+  requireGuestOrAuth,
   validateParams(UpdateCartItemParams, "UpdateCartItemParams"),
   validateBody(UpdateCartItemBody, "UpdateCartItemBody"),
   async (req: ApiRequest<z.infer<typeof UpdateCartItemBody>>, res) => {
@@ -689,7 +689,7 @@ router.put(
 
 router.delete(
   "/cart/items/:id",
-  requireAuth,
+  requireGuestOrAuth,
   validateParams(UpdateCartItemParams, "DeleteCartItemParams"),
   async (req: ApiRequest, res) => {
     try {
@@ -743,7 +743,7 @@ const MergeCartBody = z.object({
 
 router.post(
   "/cart/merge",
-  requireAuth,
+  requireGuestOrAuth,
   validateBody(MergeCartBody, "MergeCartBody"),
   async (req: ApiRequest<z.infer<typeof MergeCartBody>>, res) => {
     try {
@@ -996,7 +996,7 @@ router.post(
 
 router.delete(
   "/cart",
-  requireAuth,
+  requireGuestOrAuth,
   asyncHandler(async (req: ApiRequest, res) => {
     await db.delete(cartItemsTable).where(eq(cartItemsTable.userId, req.userId!));
     res.json({ message: "Cart cleared" });

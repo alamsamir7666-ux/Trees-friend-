@@ -15,7 +15,7 @@ import {
   paymentSessionsTable,
 } from "@workspace/db";
 import { eq, desc, and, sql, inArray, ilike, gte, lte } from "drizzle-orm";
-import { requireAuth } from "../middlewares/auth";
+import { requireAuth, requireGuestOrAuth } from "../middlewares/auth";
 import { sendOrderConfirmation } from "../lib/email";
 import { logger } from "../lib/logger";
 import { formatOrder } from "../lib/formatters";
@@ -58,7 +58,7 @@ function paymentExpiryDate(): Date {
 
 router.get(
   "/orders",
-  requireAuth,
+  requireGuestOrAuth,
   asyncHandler(async (req: ApiRequest, res) => {
     // PERF-5: Add DB-level LIMIT — was fetching ALL orders for the user
     // in one unbounded query. A buyer with 500 lifetime orders got all 500
@@ -512,7 +512,7 @@ router.post("/orders/guest", guestCheckoutLimiter, async (req: ApiRequest, res) 
 
 router.post(
   "/orders",
-  requireAuth,
+  requireGuestOrAuth,
   checkoutLimiter,
   validateBody(CreateOrderBody, "CreateOrderBody"),
   async (req: ApiRequest<z.infer<typeof CreateOrderBody>>, res) => {
@@ -817,8 +817,17 @@ router.post(
         }
       }
 
+      // Part 3: phone-verified guests use this same checkout endpoint.
+      // Guests can't use loyalty points (no loyalty_points row exists for
+      // guest_<phone> — FK to users.clerkId would fail), can't save
+      // addresses (same FK issue), and don't have an email for order
+      // confirmation. The isGuest flag gates all three features.
+      const isGuest = req.userId!.startsWith("guest_");
+
       let loyaltyDiscount = 0;
-      const pointsToRedeem = Math.max(0, Math.floor(Number(loyaltyPointsToRedeem) || 0));
+      const pointsToRedeem = isGuest
+        ? 0
+        : Math.max(0, Math.floor(Number(loyaltyPointsToRedeem) || 0));
       if (pointsToRedeem > 0) {
         const maxLoyaltyDiscount = Math.floor(grandSubtotal * 0.2);
         loyaltyDiscount = Math.min(pointsToRedeem * TAKA_PER_POINT, maxLoyaltyDiscount);
@@ -1038,78 +1047,89 @@ router.post(
         { isolationLevel: "serializable" },
       );
 
-      // Loyalty points redeem/award once at the grand-total level (a single
-      // ledger event), not once per resulting order -- points are a
-      // platform-wide concept, not a per-seller one.
-      if (pointsToRedeem > 0) {
-        const actualPointsToRedeem = Math.ceil(loyaltyDiscount / TAKA_PER_POINT);
-        redeemPoints(req.userId!, actualPointsToRedeem, createdOrders[0].id).catch(() => {});
+      // Loyalty points redeem/award — guests skip this entirely (no
+      // loyalty_points row, FK to users.clerkId would fail). Fire-and-forget
+      // for authenticated users.
+      if (!isGuest) {
+        if (pointsToRedeem > 0) {
+          const actualPointsToRedeem = Math.ceil(loyaltyDiscount / TAKA_PER_POINT);
+          redeemPoints(req.userId!, actualPointsToRedeem, createdOrders[0].id).catch(() => {});
+        }
+        const grandTotal = createdOrders.reduce((s, o) => s + Number(o.totalAmount), 0);
+        awardPoints(req.userId!, createdOrders[0].id, grandTotal).catch(() => {});
       }
-      const grandTotal = createdOrders.reduce((s, o) => s + Number(o.totalAmount), 0);
-      awardPoints(req.userId!, createdOrders[0].id, grandTotal).catch(() => {});
 
-      const addr = shippingAddress as {
-        fullName?: string;
-        phone?: string;
-        street?: string;
-        city?: string;
-        district?: string;
-        postalCode?: string;
-      } | null;
-      if (addr?.fullName && addr?.street && addr?.city) {
-        try {
-          const existing = await db
-            .select()
-            .from(addressesTable)
-            .where(eq(addressesTable.userId, req.userId!));
-          const alreadySaved = existing.some(
-            (a) => a.street === addr.street && a.city === addr.city,
-          );
-          if (!alreadySaved) {
-            await db.insert(addressesTable).values({
-              userId: req.userId!,
-              fullName: addr.fullName ?? "",
-              phone: addr.phone ?? "",
-              street: addr.street ?? "",
-              city: addr.city ?? "",
-              district: addr.district ?? "",
-              postalCode: addr.postalCode ?? null,
-              isDefault: existing.length === 0,
-            });
+      // Address auto-save — guests skip this (addressesTable.userId has
+      // an FK to users.clerkId, which would fail for guest_<phone>).
+      // Authenticated users get their shipping address saved for next time.
+      if (!isGuest) {
+        const addr = shippingAddress as {
+          fullName?: string;
+          phone?: string;
+          street?: string;
+          city?: string;
+          district?: string;
+          postalCode?: string;
+        } | null;
+        if (addr?.fullName && addr?.street && addr?.city) {
+          try {
+            const existing = await db
+              .select()
+              .from(addressesTable)
+              .where(eq(addressesTable.userId, req.userId!));
+            const alreadySaved = existing.some(
+              (a) => a.street === addr.street && a.city === addr.city,
+            );
+            if (!alreadySaved) {
+              await db.insert(addressesTable).values({
+                userId: req.userId!,
+                fullName: addr.fullName ?? "",
+                phone: addr.phone ?? "",
+                street: addr.street ?? "",
+                city: addr.city ?? "",
+                district: addr.district ?? "",
+                postalCode: addr.postalCode ?? null,
+                isDefault: existing.length === 0,
+              });
+            }
+          } catch (err) {
+            // VAL-4: was catch (_) {} — completely swallowed with no logging.
+            // Address auto-save is non-blocking (the order is already committed),
+            // but a silent failure means the buyer's address won't be saved for
+            // next time and we'll never know why. Log it so it's visible in
+            // production logs without failing the checkout response.
+            logger.warn({ err, userId: req.userId! }, "Address auto-save failed (non-blocking)");
           }
-        } catch (err) {
-          // VAL-4: was catch (_) {} — completely swallowed with no logging.
-          // Address auto-save is non-blocking (the order is already committed),
-          // but a silent failure means the buyer's address won't be saved for
-          // next time and we'll never know why. Log it so it's visible in
-          // production logs without failing the checkout response.
-          logger.warn({ err, userId: req.userId! }, "Address auto-save failed (non-blocking)");
         }
       }
 
-      const [userRow] = await db
-        .select({
-          email: usersTable.email,
-          firstName: usersTable.firstName,
-          lastName: usersTable.lastName,
-        })
-        .from(usersTable)
-        .where(eq(usersTable.clerkId, req.userId!))
-        .limit(1);
+      // Email order confirmation — guests skip this (no users row, so
+      // userRow is undefined). Authenticated users get an email per order.
+      if (!isGuest) {
+        const [userRow] = await db
+          .select({
+            email: usersTable.email,
+            firstName: usersTable.firstName,
+            lastName: usersTable.lastName,
+          })
+          .from(usersTable)
+          .where(eq(usersTable.clerkId, req.userId!))
+          .limit(1);
 
-      if (userRow?.email && !userRow.email.endsWith("@clerk.user")) {
-        const name = [userRow.firstName, userRow.lastName].filter(Boolean).join(" ") || "Customer";
-        for (const order of createdOrders) {
-          sendOrderConfirmation({
-            to: userRow.email,
-            name,
-            orderId: order.id,
-            trackingId: order.trackingId,
-            items: order.items as any[],
-            total: Number(order.totalAmount),
-            shippingAddress,
-            paymentMethod: order.paymentMethod,
-          }).catch(() => {});
+        if (userRow?.email && !userRow.email.endsWith("@clerk.user")) {
+          const name = [userRow.firstName, userRow.lastName].filter(Boolean).join(" ") || "Customer";
+          for (const order of createdOrders) {
+            sendOrderConfirmation({
+              to: userRow.email,
+              name,
+              orderId: order.id,
+              trackingId: order.trackingId,
+              items: order.items as any[],
+              total: Number(order.totalAmount),
+              shippingAddress,
+              paymentMethod: order.paymentMethod,
+            }).catch(() => {});
+          }
         }
       }
 
@@ -1238,7 +1258,7 @@ router.get(
 
 router.get(
   "/orders/:id",
-  requireAuth,
+  requireGuestOrAuth,
   asyncHandler(async (req: ApiRequest, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id) || id <= 0) {
@@ -1260,7 +1280,7 @@ router.get(
 
 router.post(
   "/orders/:id/cancel",
-  requireAuth,
+  requireGuestOrAuth,
   validateBody(CancelOrderBody, "CancelOrderBody"),
   asyncHandler(async (req: ApiRequest<z.infer<typeof CancelOrderBody>>, res) => {
     const id = parseInt(req.params.id, 10);

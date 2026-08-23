@@ -2,6 +2,8 @@ import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useLoyalty } from "@/hooks/useLoyalty";
+import { useGuestSession } from "@/hooks/useGuestSession";
+import { OtpModal } from "@/components/cart/OtpModal";
 import {
   useGetCart,
   useCreateOrder,
@@ -68,7 +70,13 @@ export function CheckoutPage() {
   const [, setLocation] = useLocation();
   const qc = useQueryClient();
   const { user, isLoaded: userLoaded } = useUser();
-  const isGuest = userLoaded && !user;
+  const { isVerified } = useGuestSession();
+  // Part 3: verified guests (phone-verified via OTP) use the same checkout
+  // path as authenticated users — POST /orders with the guest JWT as auth.
+  // Only UNVERIFIED guests (no Clerk account, no phone verification) use
+  // the old localStorage-based guest checkout (POST /orders/guest).
+  const isGuest = userLoaded && !user && !isVerified;
+  const [showOtpModal, setShowOtpModal] = useState(false);
   const guestCart = useGuestCart();
   const { data: cart, isLoading: cartLoading } = useGetCart({
     query: { enabled: !isGuest, queryKey: getGetCartQueryKey() },
@@ -396,6 +404,16 @@ export function CheckoutPage() {
     const normalizedPhone = address.phone.replace(/[\s-]/g, "");
     if (!/^01[3-9]\d{8}$/.test(normalizedPhone)) {
       setSubmitError("Please enter a valid Bangladeshi phone number (e.g. 01XXXXXXXXX).");
+      return;
+    }
+    // Part 3: unverified guests must verify their phone before checkout.
+    // This is the Daraz-style "light identity" gate — the buyer enters
+    // their phone number (already filled in the address form), receives
+    // an OTP via WhatsApp, and verifies it. After verification, the page
+    // re-renders with isVerified=true, isGuest=false, and the buyer
+    // proceeds through the normal authenticated checkout path.
+    if (isGuest) {
+      setShowOtpModal(true);
       return;
     }
     // Show the order review dialog before actually submitting. This is
@@ -1204,6 +1222,41 @@ export function CheckoutPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── OTP Modal (unverified guests) ─────────────────────────── */}
+      {/* Shown when an unverified guest taps "Place Order". After
+          verification, the page re-renders (isVerified=true → isGuest=false)
+          and the buyer can proceed through the normal checkout path. */}
+      <OtpModal
+        open={showOtpModal}
+        onOpenChange={setShowOtpModal}
+        onVerified={() => {
+          // Merge localStorage cart → server cart, then invalidate the
+          // cart query so useGetCart picks up the server-side items.
+          const guestItems = guestCart.items;
+          if (guestItems.length > 0) {
+            apiClient
+              .post("/cart/merge", {
+                items: guestItems.map((i) => ({
+                  productId: i.productId,
+                  variantId: i.variantId ?? null,
+                  sellerListingVariantId: i.sellerListingVariantId ?? null,
+                  quantity: i.quantity,
+                })),
+              })
+              .then(() => {
+                guestCart.clearCart();
+                qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
+              })
+              .catch(() => {
+                // Non-fatal — the server cart still works.
+              });
+          } else {
+            // Empty localStorage cart — just invalidate so useGetCart fires
+            qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
+          }
+        }}
+      />
     </div>
   );
 }

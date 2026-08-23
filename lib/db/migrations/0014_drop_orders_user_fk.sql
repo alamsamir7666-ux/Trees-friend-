@@ -1,0 +1,22 @@
+-- ─── Migration 0014: Drop FK on orders.user_id ─────────────────────────────────
+--
+-- Part 3 of the Daraz-style guest checkout. Phone-verified guests create
+-- orders via POST /orders with userId = "guest_<phone>", but they don't
+-- have a users row. The FK constraint on orders.user_id → users.clerk_id
+-- prevents inserting orders for guest users, causing a 500 error.
+--
+-- This mirrors migration 0013 (which dropped the same FK on cart_items).
+-- orders.user_id is now a free-text column — same pattern already used by
+-- orders.userId in the testDb.ts cleanup (which claimed "orders.userId is
+-- a free-text clerkId column, not an FK" — this migration makes that true).
+--
+-- ─── Safety ──────────────────────────────────────────────────────────────────
+--   * Idempotent (IF EXISTS on the DROP).
+--   * No data migration — existing orders rows are untouched.
+--   * The column itself stays NOT NULL — guests always have a userId
+--     ("guest_<phone>"), and logged-in users still have their clerkId.
+--   * The onDelete: "restrict" behavior is preserved at the application
+--     layer: routes/users.ts doesn't hard-delete users with orders.
+-- ────────────────────────────────────────────────────────────────────────────
+
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_user_id_fkey;

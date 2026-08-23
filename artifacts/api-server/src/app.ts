@@ -145,7 +145,36 @@ app.use(responseHelpersMiddleware);
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
 // ─── Clerk middleware ─────────────────────────────────────────────────────────
-app.use(clerkMiddleware({ publishableKey: process.env.CLERK_PUBLISHABLE_KEY }));
+// Clerk's middleware throws a SyntaxError when it tries to decode a non-Clerk
+// Bearer token (e.g. a guest JWT or a mobile-auth JWT). Without this wrapper,
+// Express's error handler turns the throw into a 500. The wrapper catches
+// the error and continues — requireGuestOrAuth/resolveIdentity handle the
+// token via their own verification paths (guest JWT via verifyGuestJwt, mobile
+// JWT via verifyMobileJwt, Clerk via getAuth's try-catch in resolveIdentity).
+const clerkMiddlewareWrapper = (
+  req: import("express").Request,
+  res: import("express").Response,
+  next: import("express").NextFunction,
+) => {
+  clerkMiddleware({ publishableKey: process.env.CLERK_PUBLISHABLE_KEY })(
+    req,
+    res,
+    (err?: unknown) => {
+      // Swallow Clerk parse errors — the request will be authenticated via
+      // requireGuestOrAuth (guest JWT) or requireAuth (mobile JWT) instead.
+      // This is safe because Clerk's middleware's only side effect is setting
+      // req.auth — if it throws, req.auth is undefined, which resolveIdentity
+      // already handles via its try-catch on getAuth(req).
+      if (err) {
+        // Log at debug level so ops can see if this happens in production
+        // (it shouldn't — Clerk should only see Clerk tokens).
+        logger.debug({ err: String(err).slice(0, 200) }, "Clerk middleware error (swallowed — non-Clerk Bearer token)");
+      }
+      next();
+    },
+  );
+};
+app.use(clerkMiddlewareWrapper);
 
 // ─── Rate Limiting ───────────────────────────────────────────────────────────
 // The global apiLimiter is IP-based (no userId needed) and runs before

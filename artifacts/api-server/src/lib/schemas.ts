@@ -159,6 +159,22 @@ export const IdParam = z.object({
   id: z.coerce.number().int().positive(),
 });
 
+// ─── Guest OTP (Part 1 of Daraz-style guest checkout) ────────────────────────
+//
+// Phone validation: accepts any of the three common BD formats
+// (01XXXXXXXXX, +8801XXXXXXXXX, 8801XXXXXXXXX) — normalization to the
+// bare-local form happens in lib/guestOtp.ts:normalizeBdPhoneForStorage().
+// This keeps the API forgiving for buyers typing on mobile keyboards
+// while the storage layer stays consistent.
+export const SendGuestOtpBody = z.object({
+  phone: z.string().min(1).max(20),
+});
+
+export const VerifyGuestOtpBody = z.object({
+  phone: z.string().min(1).max(20),
+  code: z.string().regex(/^\d{6}$/, "Code must be exactly 6 digits"),
+});
+
 // ─── Gift cards ──────────────────────────────────────────────────────────────
 export const PurchaseGiftCardBody = z.object({
   amount: z.union([z.number(), z.string()]).transform((v) => Number(v)),
