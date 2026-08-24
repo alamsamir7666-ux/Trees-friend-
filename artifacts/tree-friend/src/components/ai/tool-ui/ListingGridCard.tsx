@@ -395,6 +395,11 @@ function ListingCard({ listing, onClose }: { listing: ListingData; onClose?: () 
       discountPrice: variant.discountPrice,
       image: thumbnail,
       deliveryCharge: variant.deliveryCharge,
+      // Store the seller's nurseryName so the bag page can show
+      // "Sold by <nurseryName>" instead of the platform fallback.
+      // The platform never sells anything — every cart line is a
+      // seller's listing. See GuestCartItem.sellerName doc.
+      sellerName: listing.sellerName,
     });
     setAddStatus("added");
     toast.success(`${listing.productName} added to cart`, {

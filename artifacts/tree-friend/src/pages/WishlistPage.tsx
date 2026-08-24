@@ -2,11 +2,16 @@ import { useState } from "react";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { Link } from "wouter";
 import {
-  useGetWishlist, useRemoveFromWishlist, useAddToCart, getGetWishlistQueryKey, getGetCartQueryKey,
+  useGetWishlist,
+  useRemoveFromWishlist,
+  useAddToCart,
+  getGetWishlistQueryKey,
+  getGetCartQueryKey,
   useRemoveSellerListingVariantFromWishlist,
-  listProductSellerListings, ListProductSellerListingsSort,
-  useListCategories, getListCategoriesQueryKey,
-  type SellerListingCard, type SellerListingVariant,
+  useListCategories,
+  getListCategoriesQueryKey,
+  type SellerListingCard,
+  type SellerListingVariant,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useUser } from "@clerk/react";
@@ -82,12 +87,12 @@ export function WishlistPage() {
   // seller listing (a real choice -- price/delivery/location all differ),
   // rather than silently auto-picking the cheapest seller. Only reduces
   // straight to the (single-seller) variant picker, or straight to the
-  // cart, when there's truly nothing left to choose. See handleAddToCart.
+  // cart, when there's truly nothing left to choose. Opened by the
+  // SellerListingPickerDialog's onConfirm callback below.
   const [pickerState, setPickerState] = useState<{
     item: WishlistLine;
     cards: SellerListingCard[];
   } | null>(null);
-  const [loadingItemId, setLoadingItemId] = useState<number | null>(null);
   const [loadingListingLineId, setLoadingListingLineId] = useState<number | null>(null);
 
   const { data: wishlistData, isLoading: wishlistLoading } = useGetWishlist({
@@ -104,7 +109,7 @@ export function WishlistPage() {
     query: { staleTime: 60_000, queryKey: getListCategoriesQueryKey() },
   });
   const categoryNameById = new Map<number, string>(
-    wishlistCategories.map((c: { id: number; name: string }) => [c.id, c.name])
+    wishlistCategories.map((c: { id: number; name: string }) => [c.id, c.name]),
   );
 
   const isLoading = !isLoaded || (!isGuest && wishlistLoading);
@@ -121,24 +126,37 @@ export function WishlistPage() {
         scientificName: g.scientificName ?? null,
         categoryId: g.categoryId ?? null,
       }))
-    : (wishlistData?.products ?? []).map((w: { id: number; productId: number; product: { name: string; slug: string; images?: string[] | null; startingPrice?: number | null; scientificName?: string | null; categoryId?: number | null } }) => ({
-        id: w.id,
-        productId: w.productId,
-        name: w.product.name,
-        slug: w.product.slug,
-        image: w.product.images?.[0] ?? "",
-        // startingPrice here is wishlist.ts's own custom field (falls back
-        // to the cheapest qualifying marketplace price when no legacy admin
-        // price exists) -- NOT the generated Product type's startingPrice,
-        // which is permanently null post-Phase-2. Confirmed by reading
-        // wishlist.ts directly; see PHASE2_HANDOFF.md §5 and this phase's
-        // handoff doc for the full trace. No fix needed here, this was
-        // already reading the correctly-computed value.
-        price: w.product.startingPrice ?? 0,
-        discountPrice: null,
-        scientificName: w.product.scientificName ?? null,
-        categoryId: w.product.categoryId ?? null,
-      }));
+    : (wishlistData?.products ?? []).map(
+        (w: {
+          id: number;
+          productId: number;
+          product: {
+            name: string;
+            slug: string;
+            images?: string[] | null;
+            startingPrice?: number | null;
+            scientificName?: string | null;
+            categoryId?: number | null;
+          };
+        }) => ({
+          id: w.id,
+          productId: w.productId,
+          name: w.product.name,
+          slug: w.product.slug,
+          image: w.product.images?.[0] ?? "",
+          // startingPrice here is wishlist.ts's own custom field (falls back
+          // to the cheapest qualifying marketplace price when no legacy admin
+          // price exists) -- NOT the generated Product type's startingPrice,
+          // which is permanently null post-Phase-2. Confirmed by reading
+          // wishlist.ts directly; see PHASE2_HANDOFF.md §5 and this phase's
+          // handoff doc for the full trace. No fix needed here, this was
+          // already reading the correctly-computed value.
+          price: w.product.startingPrice ?? 0,
+          discountPrice: null,
+          scientificName: w.product.scientificName ?? null,
+          categoryId: w.product.categoryId ?? null,
+        }),
+      );
 
   // availableQuantity is only known server-side (from the joined variant
   // row); guests only ever stored what SellerListingDetailPage's toggle
@@ -181,9 +199,12 @@ export function WishlistPage() {
       guestWishlist.removeItem(productId);
       return;
     }
-    removeFromWishlist.mutate({ productId }, {
-      onSuccess: () => qc.invalidateQueries({ queryKey: getGetWishlistQueryKey() }),
-    });
+    removeFromWishlist.mutate(
+      { productId },
+      {
+        onSuccess: () => qc.invalidateQueries({ queryKey: getGetWishlistQueryKey() }),
+      },
+    );
   }
 
   function handleRemoveSellerListing(sellerListingVariantId: number) {
@@ -191,19 +212,31 @@ export function WishlistPage() {
       guestWishlist.removeSellerListingItem(sellerListingVariantId);
       return;
     }
-    removeSellerListingVariant.mutate({ variantId: sellerListingVariantId }, {
-      onSuccess: () => qc.invalidateQueries({ queryKey: getGetWishlistQueryKey() }),
-    });
+    removeSellerListingVariant.mutate(
+      { variantId: sellerListingVariantId },
+      {
+        onSuccess: () => qc.invalidateQueries({ queryKey: getGetWishlistQueryKey() }),
+      },
+    );
   }
 
-  function addVariantToCart(productId: number, variant: SellerListingVariant, productName: string, productImage: string) {
+  function addVariantToCart(
+    productId: number,
+    variant: SellerListingVariant,
+    productName: string,
+    productImage: string,
+  ) {
     if (useServerCart) {
       addToCart.mutate(
         { data: { productId, sellerListingVariantId: variant.id, quantity: 1 } },
         {
           onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
           onError: (err: any) => {
-            toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+            toast({
+              title: "Couldn't add to bag",
+              description: err?.message ?? "Please try again.",
+              variant: "destructive",
+            });
           },
         },
       );
@@ -224,53 +257,25 @@ export function WishlistPage() {
     }
   }
 
-  // Industry-standard marketplace pattern (Amazon/Daraz "choose a seller"):
-  // when a product has more than one seller with in-stock listings, that's
-  // a real choice for the buyer (price, delivery time, location all
-  // differ), not an implementation detail to auto-resolve. So this only
-  // skips straight to the cart when there is truly nothing left to pick --
-  // one qualifying seller AND that seller has exactly one qualifying
-  // variant. Otherwise it opens SellerListingPickerDialog, which itself
-  // skips its own seller-choice step if only one seller qualifies.
-  //
-  // Only used by the Product Varieties section below -- Seller Listings
-  // cards already have a specific variant resolved and add straight to
-  // cart via handleAddSellerListingToCart instead.
-  async function handleAddToCart(item: WishlistLine) {
-    setLoadingItemId(item.productId);
-    try {
-      const cards: SellerListingCard[] = await listProductSellerListings(item.productId, {
-        sort: ListProductSellerListingsSort.price_asc,
-      });
-      const qualifyingCards = cards.filter((c) => c.listing.variants.some((v) => v.availableQuantity > 0));
-      if (qualifyingCards.length === 0) {
-        toast({ title: "No longer available", description: `${item.name} currently has no in-stock seller listings.`, variant: "destructive" });
-        return;
-      }
-      if (qualifyingCards.length === 1) {
-        const onlyQualifying = qualifyingCards[0].listing.variants.filter((v) => v.availableQuantity > 0);
-        if (onlyQualifying.length === 1) {
-          addVariantToCart(item.productId, onlyQualifying[0], item.name, item.image);
-          return;
-        }
-      }
-      setPickerState({ item, cards: qualifyingCards });
-    } catch {
-      toast({ title: "Couldn't add to bag", description: "Please try again.", variant: "destructive" });
-    } finally {
-      setLoadingItemId(null);
-    }
-  }
-
   function handleAddSellerListingToCart(line: SellerListingWishlistLine) {
     setLoadingListingLineId(line.sellerListingVariantId);
     if (useServerCart) {
       addToCart.mutate(
-        { data: { productId: line.productId, sellerListingVariantId: line.sellerListingVariantId, quantity: 1 } },
+        {
+          data: {
+            productId: line.productId,
+            sellerListingVariantId: line.sellerListingVariantId,
+            quantity: 1,
+          },
+        },
         {
           onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
           onError: (err: any) => {
-            toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+            toast({
+              title: "Couldn't add to bag",
+              description: err?.message ?? "Please try again.",
+              variant: "destructive",
+            });
           },
           onSettled: () => setLoadingListingLineId(null),
         },
@@ -287,6 +292,11 @@ export function WishlistPage() {
         image: line.image,
         deliveryCharge: 0,
         stock: line.availableQuantity ?? undefined,
+        // Store the seller's nurseryName so the bag page can show
+        // "Sold by <nurseryName>" instead of the platform fallback.
+        // The platform never sells anything — every cart line is a
+        // seller's listing. See GuestCartItem.sellerName doc.
+        sellerName: line.sellerName,
         addedAt: Date.now(),
       });
       setLoadingListingLineId(null);
@@ -297,7 +307,9 @@ export function WishlistPage() {
     return (
       <div className="container mx-auto px-4 py-10">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
-          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="aspect-square rounded-xl" />)}
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="aspect-square rounded-xl" />
+          ))}
         </div>
       </div>
     );
@@ -310,8 +322,12 @@ export function WishlistPage() {
           <Heart className="h-9 w-9 text-muted-foreground" />
         </div>
         <h2 className="font-serif text-2xl font-medium mb-2">Your wishlist is empty</h2>
-        <p className="text-muted-foreground text-sm mb-6">Save products you love and come back to them anytime.</p>
-        <Link href="/products"><Button className="rounded-full px-8">Explore Products</Button></Link>
+        <p className="text-muted-foreground text-sm mb-6">
+          Save products you love and come back to them anytime.
+        </p>
+        <Link href="/products">
+          <Button className="rounded-full px-8">Explore Products</Button>
+        </Link>
       </div>
     );
   }
@@ -320,9 +336,14 @@ export function WishlistPage() {
     <div className="min-h-screen bg-background">
       <div className="bg-muted/30 border-b py-10">
         <div className="container mx-auto px-4">
-          <PageBreadcrumb crumbs={[{ label: "Wishlist", icon: <Heart className="h-3 w-3" /> }]} className="mb-3" />
+          <PageBreadcrumb
+            crumbs={[{ label: "Wishlist", icon: <Heart className="h-3 w-3" /> }]}
+            className="mb-3"
+          />
           <h1 className="font-serif text-4xl font-medium">Wishlist</h1>
-          <p className="text-muted-foreground mt-1 text-sm">{totalCount} saved item{totalCount !== 1 ? "s" : ""}</p>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {totalCount} saved item{totalCount !== 1 ? "s" : ""}
+          </p>
         </div>
       </div>
 
@@ -337,19 +358,26 @@ export function WishlistPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
               {items.map((item) => {
                 const img = item.image || null;
-                const categoryName = item.categoryId != null ? categoryNameById.get(item.categoryId) : undefined;
-                const isAdding = loadingItemId === item.productId;
+                const categoryName =
+                  item.categoryId != null ? categoryNameById.get(item.categoryId) : undefined;
                 return (
                   <div key={item.id} className="group bg-card border rounded-xl overflow-hidden">
                     <Link href={`/products/${item.productId}`}>
                       <div className="relative aspect-square overflow-hidden bg-muted/20 cursor-pointer">
                         {img ? (
-                          <img src={img} alt={item.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                          <img
+                            src={img}
+                            alt={item.name}
+                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                          />
                         ) : (
                           <NoImagePlaceholder />
                         )}
                         <button
-                          onClick={(e) => { e.preventDefault(); handleRemove(item.productId); }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            handleRemove(item.productId);
+                          }}
                           className="absolute top-3 right-3 p-2 rounded-full bg-background/80 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive text-muted-foreground"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -358,14 +386,23 @@ export function WishlistPage() {
                     </Link>
                     <div className="p-3">
                       <Link href={`/products/${item.productId}`}>
-                        <p className="font-medium text-sm leading-snug cursor-pointer hover:text-accent">{item.name}</p>
+                        <p className="font-medium text-sm leading-snug cursor-pointer hover:text-accent">
+                          {item.name}
+                        </p>
                       </Link>
                       {item.scientificName && (
-                        <p className="text-xs italic text-muted-foreground mt-0.5">{item.scientificName}</p>
+                        <p className="text-xs italic text-muted-foreground mt-0.5">
+                          {item.scientificName}
+                        </p>
                       )}
                       {categoryName && (
                         <span className="inline-flex items-center gap-1 bg-primary/10 text-primary px-2.5 py-1 rounded-full text-xs font-medium mt-2">
-                          <img src={CATEGORY_ICON} alt="" aria-hidden="true" className="h-3.5 w-3.5" />
+                          <img
+                            src={CATEGORY_ICON}
+                            alt=""
+                            aria-hidden="true"
+                            className="h-3.5 w-3.5"
+                          />
                           {categoryName}
                         </span>
                       )}
@@ -376,7 +413,11 @@ export function WishlistPage() {
                           belongs to the Seller Listings section below,
                           or to picking a seller from the product page. */}
                       <Link href={`/products/${item.productId}`}>
-                        <Button size="sm" variant="outline" className="w-full text-xs border-primary text-primary hover:bg-primary/5 hover:text-primary">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full text-xs border-primary text-primary hover:bg-primary/5 hover:text-primary"
+                        >
                           View Details
                           <ChevronRight className="h-3.5 w-3.5 ml-1" />
                         </Button>
@@ -394,7 +435,9 @@ export function WishlistPage() {
             <h2 className="font-serif text-xl font-medium mb-4 flex items-center gap-2">
               <Store className="h-4 w-4 text-muted-foreground" />
               Seller Listings
-              <span className="text-sm font-normal text-muted-foreground">({sellerListingItems.length})</span>
+              <span className="text-sm font-normal text-muted-foreground">
+                ({sellerListingItems.length})
+              </span>
             </h2>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
               {sellerListingItems.map((line) => {
@@ -407,12 +450,19 @@ export function WishlistPage() {
                     <Link href={detailHref}>
                       <div className="relative aspect-square overflow-hidden bg-muted/20 cursor-pointer">
                         {img ? (
-                          <img src={img} alt={line.productName} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                          <img
+                            src={img}
+                            alt={line.productName}
+                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                          />
                         ) : (
                           <NoImagePlaceholder />
                         )}
                         <button
-                          onClick={(e) => { e.preventDefault(); handleRemoveSellerListing(line.sellerListingVariantId); }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            handleRemoveSellerListing(line.sellerListingVariantId);
+                          }}
                           className="absolute top-3 right-3 p-2 rounded-full bg-background/80 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive text-muted-foreground"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -421,7 +471,9 @@ export function WishlistPage() {
                     </Link>
                     <div className="p-3">
                       <Link href={detailHref}>
-                        <p className="font-medium text-sm leading-snug cursor-pointer hover:text-accent">{line.productName}</p>
+                        <p className="font-medium text-sm leading-snug cursor-pointer hover:text-accent">
+                          {line.productName}
+                        </p>
                       </Link>
                       <p className="text-xs text-muted-foreground mt-0.5">{line.variantLabel}</p>
                       <span className="inline-flex items-center gap-1 bg-primary/10 text-primary px-2.5 py-1 rounded-full text-xs font-medium mt-2">
@@ -431,7 +483,11 @@ export function WishlistPage() {
                       <hr className="border-border mt-3 mb-3" />
                       <div className="flex flex-col gap-2">
                         <Link href={detailHref}>
-                          <Button size="sm" variant="outline" className="w-full text-xs border-primary text-primary hover:bg-primary/5 hover:text-primary">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full text-xs border-primary text-primary hover:bg-primary/5 hover:text-primary"
+                          >
                             View Details
                             <ChevronRight className="h-3.5 w-3.5 ml-1" />
                           </Button>
@@ -462,10 +518,19 @@ export function WishlistPage() {
       {pickerState && (
         <SellerListingPickerDialog
           open={!!pickerState}
-          onOpenChange={(o) => { if (!o) setPickerState(null); }}
+          onOpenChange={(o) => {
+            if (!o) setPickerState(null);
+          }}
           productName={pickerState.item.name}
           cards={pickerState.cards}
-          onConfirm={(_card, variant) => addVariantToCart(pickerState.item.productId, variant, pickerState.item.name, pickerState.item.image)}
+          onConfirm={(_card, variant) =>
+            addVariantToCart(
+              pickerState.item.productId,
+              variant,
+              pickerState.item.name,
+              pickerState.item.image,
+            )
+          }
         />
       )}
     </div>

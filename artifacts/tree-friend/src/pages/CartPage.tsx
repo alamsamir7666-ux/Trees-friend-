@@ -189,9 +189,7 @@ function CartItemCard({
             <Link href={href} className="min-w-0 flex-1">
               <h3
                 className={`font-semibold text-base leading-snug truncate transition-colors ${
-                  outOfStock
-                    ? "text-muted-foreground"
-                    : "text-foreground hover:text-accent-text"
+                  outOfStock ? "text-muted-foreground" : "text-foreground hover:text-accent-text"
                 }`}
               >
                 {name}
@@ -222,9 +220,7 @@ function CartItemCard({
                 out-of-stock is shown on the image overlay instead, so the
                 buyer's eye goes to the image first). */}
             {!outOfStock && lowStock && (
-              <span className="text-xs text-warning-foreground font-medium">
-                Only {stock} left
-              </span>
+              <span className="text-xs text-warning-foreground font-medium">Only {stock} left</span>
             )}
           </div>
 
@@ -233,9 +229,7 @@ function CartItemCard({
             {/* Quantity stepper — fully disabled when out of stock */}
             <div
               className={`flex items-center border rounded-lg overflow-hidden h-9 w-24 shrink-0 ${
-                outOfStock
-                  ? "border-muted opacity-50 pointer-events-none"
-                  : "border-input"
+                outOfStock ? "border-muted opacity-50 pointer-events-none" : "border-input"
               }`}
             >
               <button
@@ -281,9 +275,7 @@ function CartItemCard({
           {codTotal > 0 && !outOfStock && (
             <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-info/60 text-info-foreground">
               <Wallet className="h-3.5 w-3.5 shrink-0" />
-              <span className="text-xs font-medium">
-                {formatTk(codTotal)} due on delivery
-              </span>
+              <span className="text-xs font-medium">{formatTk(codTotal)} due on delivery</span>
             </div>
           )}
 
@@ -343,11 +335,7 @@ function GuestCartPage() {
             <ShieldCheck className="h-4 w-4 shrink-0" />
             Verify your phone number to check out securely.
           </span>
-          <Button
-            size="sm"
-            onClick={() => setShowOtpModal(true)}
-            className="shrink-0 rounded-full"
-          >
+          <Button size="sm" onClick={() => setShowOtpModal(true)} className="shrink-0 rounded-full">
             Verify Phone
           </Button>
         </div>
@@ -381,13 +369,14 @@ function GuestCartPage() {
                 // Clear the localStorage cart after a successful merge
                 guestCart.clearCart();
               })
-              .catch((err) => {
+              .catch(() => {
                 // Non-fatal — the server cart still works, and the
                 // localStorage items can be re-added manually if needed.
                 // Show a toast so the buyer knows the merge failed.
                 toast({
                   title: "Couldn't sync your bag",
-                  description: "Some items from your bag may not have transferred. Please re-add them if missing.",
+                  description:
+                    "Some items from your bag may not have transferred. Please re-add them if missing.",
                   variant: "destructive",
                 });
               });
@@ -397,58 +386,73 @@ function GuestCartPage() {
 
       <div className="container mx-auto px-4 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
-          {/* Items */}
-          <div className="lg:col-span-2 space-y-4">
-            <SellerGroupHeader sellerName={null} />
-            {items.map((item) => {
-              const price = item.discountPrice ?? item.price;
-              const stock = item.stock;
-              const atMaxStock = stock != null && item.quantity >= stock;
-              return (
-                <CartItemCard
-                  key={`${item.productId}:${item.variantId ?? "null"}`}
-                  name={item.name}
-                  image={item.image || null}
-                  variantLabel={null}
-                  quantity={item.quantity}
-                  price={price}
-                  originalPrice={item.price}
-                  stock={stock ?? null}
-                  codDeliveryCharge={0}
-                  deliveryEstimate={null}
-                  href={`/products/${item.productId}`}
-                  onIncrement={() =>
-                    !atMaxStock &&
-                    guestCart.updateQuantity(
-                      item.productId,
-                      item.quantity + 1,
-                      item.variantId,
-                      item.sellerListingVariantId,
-                    )
-                  }
-                  onDecrement={() =>
-                    item.quantity > 1 &&
-                    guestCart.updateQuantity(
-                      item.productId,
-                      item.quantity - 1,
-                      item.variantId,
-                      item.sellerListingVariantId,
-                    )
-                  }
-                  onRemove={() =>
-                    guestCart.removeItem(
-                      item.productId,
-                      item.variantId,
-                      item.sellerListingVariantId,
-                    )
-                  }
-                />
-              );
-            })}
+          {/* Items, grouped by seller — mirrors the authenticated cart's
+              groupBySeller + SellerGroupHeader pattern. Without this
+              grouping, a guest's bag showed "Tree Friend" for EVERY
+              item, which was wrong: the platform never sells anything,
+              every cart line is a seller's listing. */}
+          <div className="lg:col-span-2 space-y-6">
+            {(() => {
+              const groups = groupGuestCartBySeller(items);
+              return groups.map((group, gi) => (
+                <div key={group.sellerName ?? "tree-friend"} className="space-y-3">
+                  <SellerGroupHeader sellerName={group.sellerName ?? null} />
+                  {groups.length > 1 && gi > 0 && <div className="border-t border-border" />}
+                  {group.items.map((item) => {
+                    const price = item.discountPrice ?? item.price;
+                    const stock = item.stock;
+                    const atMaxStock = stock != null && item.quantity >= stock;
+                    return (
+                      <CartItemCard
+                        key={`${item.productId}:${item.variantId ?? "null"}:${item.sellerListingVariantId ?? "null"}`}
+                        name={item.name}
+                        image={item.image || null}
+                        variantLabel={null}
+                        quantity={item.quantity}
+                        price={price}
+                        originalPrice={item.price}
+                        stock={stock ?? null}
+                        codDeliveryCharge={0}
+                        deliveryEstimate={null}
+                        href={`/products/${item.productId}`}
+                        onIncrement={() =>
+                          !atMaxStock &&
+                          guestCart.updateQuantity(
+                            item.productId,
+                            item.quantity + 1,
+                            item.variantId,
+                            item.sellerListingVariantId,
+                          )
+                        }
+                        onDecrement={() =>
+                          item.quantity > 1 &&
+                          guestCart.updateQuantity(
+                            item.productId,
+                            item.quantity - 1,
+                            item.variantId,
+                            item.sellerListingVariantId,
+                          )
+                        }
+                        onRemove={() =>
+                          guestCart.removeItem(
+                            item.productId,
+                            item.variantId,
+                            item.sellerListingVariantId,
+                          )
+                        }
+                      />
+                    );
+                  })}
+                </div>
+              ));
+            })()}
 
             <div className="pt-2">
               <Link href="/products">
-                <Button variant="ghost" className="text-sm text-muted-foreground hover:text-foreground">
+                <Button
+                  variant="ghost"
+                  className="text-sm text-muted-foreground hover:text-foreground"
+                >
                   ← Continue Shopping
                 </Button>
               </Link>
@@ -519,9 +523,7 @@ function PageHeader({ itemCount, onBack }: PageHeaderProps) {
           crumbs={[{ label: "Your Bag", icon: <ShoppingBag className="h-3 w-3" /> }]}
           className="mb-3"
         />
-        <h1 className="font-serif text-4xl md:text-5xl font-medium tracking-tight">
-          Your Bag
-        </h1>
+        <h1 className="font-serif text-4xl md:text-5xl font-medium tracking-tight">Your Bag</h1>
         <p className="text-muted-foreground mt-1.5 text-sm">
           {itemCount} item{itemCount !== 1 ? "s" : ""}
         </p>
@@ -749,9 +751,7 @@ function OrderSummary({
       <div className="border-t border-border pt-3">
         <div className="flex justify-between items-baseline">
           <span className="text-sm font-bold text-foreground">Total order value</span>
-          <span className="text-xl font-bold text-foreground">
-            {formatTk(totalOrderValue)}
-          </span>
+          <span className="text-xl font-bold text-foreground">{formatTk(totalOrderValue)}</span>
         </div>
       </div>
 
@@ -782,7 +782,10 @@ function OrderSummary({
       )}
 
       <Link href="/products">
-        <Button variant="ghost" className="w-full text-sm text-muted-foreground hover:text-foreground">
+        <Button
+          variant="ghost"
+          className="w-full text-sm text-muted-foreground hover:text-foreground"
+        >
           Continue Shopping
         </Button>
       </Link>
@@ -815,6 +818,38 @@ function groupBySeller<
         seller: item.kind === "seller_listing" ? (item.seller ?? null) : null,
         items: [],
       };
+      groups.set(key, group);
+    }
+    group.items.push(item);
+  }
+  return Array.from(groups.values());
+}
+
+/**
+ * Groups guest cart items by seller for display — mirrors the authenticated
+ * cart's groupBySeller, but for the simpler GuestCartItem shape (no sellerId,
+ * just a denormalized sellerName string from localStorage).
+ *
+ * Items with no sellerName (admin-direct variant lines) are grouped under
+ * a null key — rendered with the "Tree Friend" platform header. In practice
+ * these are rare on this marketplace (admin never sells — every product is
+ * a seller's listing), but the code handles them correctly for the legacy
+ * case where a guest added an admin-direct variant before the marketplace
+ * migration.
+ *
+ * Preserves insertion order (first-seen seller first), so the seller the
+ * buyer added first appears at the top of the bag — matching the
+ * authenticated cart's behavior.
+ */
+function groupGuestCartBySeller<T extends { sellerName?: string }>(
+  items: T[],
+): { sellerName: string | null; items: T[] }[] {
+  const groups = new Map<string | null, { sellerName: string | null; items: T[] }>();
+  for (const item of items) {
+    const key = item.sellerName ?? null;
+    let group = groups.get(key);
+    if (!group) {
+      group = { sellerName: key, items: [] };
       groups.set(key, group);
     }
     group.items.push(item);
@@ -886,8 +921,7 @@ function AuthenticatedCartPage() {
   const codBreakdown = sellerGroups
     .map((g) => ({ seller: g.seller, items: g.items }))
     .filter(
-      (g): g is { seller: NonNullable<typeof g.seller>; items: typeof g.items } =>
-        g.seller != null,
+      (g): g is { seller: NonNullable<typeof g.seller>; items: typeof g.items } => g.seller != null,
     )
     .map((g) => ({
       sellerName: g.seller.nurseryName,
@@ -977,9 +1011,7 @@ function AuthenticatedCartPage() {
   const outOfStockItems = items
     .map((item) => {
       const stock =
-        item.kind === "seller_listing"
-          ? (item.listing?.stock ?? 0)
-          : (item.variant?.stock ?? 0);
+        item.kind === "seller_listing" ? (item.listing?.stock ?? 0) : (item.variant?.stock ?? 0);
       return { id: item.id, name: item.product.name, outOfStock: stock <= 0 };
     })
     .filter((x) => x.outOfStock);
@@ -1039,9 +1071,7 @@ function AuthenticatedCartPage() {
           <div className="lg:col-span-2 space-y-6">
             {sellerGroups.map((group, gi) => (
               <div key={group.seller?.id ?? "admin-direct"} className="space-y-3">
-                <SellerGroupHeader
-                  sellerName={group.seller?.nurseryName ?? null}
-                />
+                <SellerGroupHeader sellerName={group.seller?.nurseryName ?? null} />
                 {sellerGroups.length > 1 && gi > 0 && <div className="border-t border-border" />}
                 {group.items.map((item) => {
                   const isListing = item.kind === "seller_listing";
@@ -1056,9 +1086,7 @@ function AuthenticatedCartPage() {
                         .filter(Boolean)
                         .join(" · ")
                     : item.variant!.name;
-                  const codDeliveryCharge = isListing
-                    ? (item.listing!.deliveryCharge ?? 0)
-                    : 0;
+                  const codDeliveryCharge = isListing ? (item.listing!.deliveryCharge ?? 0) : 0;
                   // Delivery estimate is ONLY shown for marketplace
                   // (seller_listing) lines because delivery time is set
                   // BY THE SELLER per-listing (sellerListingsTable.
@@ -1103,7 +1131,8 @@ function AuthenticatedCartPage() {
               <div className="bg-muted/40 border border-border rounded-xl px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground">
                 <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/70" />
                 <span>
-                  Items from different sellers ship separately and become separate orders at checkout.
+                  Items from different sellers ship separately and become separate orders at
+                  checkout.
                 </span>
               </div>
             )}

@@ -1,9 +1,21 @@
 import { useState } from "react";
-import { Link, useLocation } from "wouter";
-import { Star, Truck, MapPin, ArrowUpDown, ShoppingBag, Eye, BadgeCheck, ImageOff, Package } from "lucide-react";
+import { Link } from "wouter";
 import {
-  useListProductSellerListings, ListProductSellerListingsSort,
-  useAddToCart, getGetCartQueryKey,
+  Star,
+  Truck,
+  MapPin,
+  ArrowUpDown,
+  ShoppingBag,
+  Eye,
+  BadgeCheck,
+  ImageOff,
+  Package,
+} from "lucide-react";
+import {
+  useListProductSellerListings,
+  ListProductSellerListingsSort,
+  useAddToCart,
+  getGetCartQueryKey,
   type SellerListingVariant,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -56,12 +68,13 @@ const SORT_OPTIONS = [
  * so the buyer picks which one before it's added.
  */
 export function SellerListingsSection({ productId }: { productId: number }) {
-  const [sort, setSort] = useState<ListProductSellerListingsSort>(ListProductSellerListingsSort.price_asc);
+  const [sort, setSort] = useState<ListProductSellerListingsSort>(
+    ListProductSellerListingsSort.price_asc,
+  );
   const { data: cards, isLoading } = useListProductSellerListings(productId, { sort });
   const { user } = useUser();
   const { isVerified } = useGuestSession();
   const guestCart = useGuestCart();
-  const [, setLocation] = useLocation();
   const qc = useQueryClient();
   const { toast } = useToast();
   const addToCart = useAddToCart();
@@ -91,10 +104,14 @@ export function SellerListingsSection({ productId }: { productId: number }) {
             toast({ title: "Added to bag", description: `From ${nurseryName}` });
           },
           onError: (err: any) => {
-            toast({ title: "Couldn't add to bag", description: err?.message ?? "Please try again.", variant: "destructive" });
+            toast({
+              title: "Couldn't add to bag",
+              description: err?.message ?? "Please try again.",
+              variant: "destructive",
+            });
           },
           onSettled: () => setAddingId(null),
-        }
+        },
       );
     } else {
       // Unverified guest — add to localStorage cart. The guest will
@@ -111,6 +128,12 @@ export function SellerListingsSection({ productId }: { productId: number }) {
         image: productImage,
         deliveryCharge: Number(variant.deliveryCharge ?? 0),
         stock: variant.availableQuantity,
+        // Store the seller's nurseryName so the bag page can show
+        // "Sold by <nurseryName>" instead of the platform fallback.
+        // The platform (admin) never sells anything — every cart line
+        // is a seller's listing, so this field MUST be populated for
+        // every marketplace add. See GuestCartItem.sellerName doc.
+        sellerName: nurseryName,
         addedAt: Date.now(),
       });
       toast({ title: "Added to bag", description: `From ${nurseryName}` });
@@ -137,7 +160,9 @@ export function SellerListingsSection({ productId }: { productId: number }) {
       <section className="border-t pt-12 mb-12">
         <div className="h-7 w-64 bg-muted rounded-lg animate-pulse mb-6" />
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1, 2, 3].map((i) => <div key={i} className="h-48 rounded-2xl bg-muted animate-pulse" />)}
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-48 rounded-2xl bg-muted animate-pulse" />
+          ))}
         </div>
       </section>
     );
@@ -146,14 +171,20 @@ export function SellerListingsSection({ productId }: { productId: number }) {
   if (!cards || cards.length === 0) return null;
 
   const pickerCard = cards.find((c) => c.listing.id === pickerListingId);
-  const pickerQualifying = pickerCard ? pickerCard.listing.variants.filter((v) => v.availableQuantity > 0) : [];
+  const pickerQualifying = pickerCard
+    ? pickerCard.listing.variants.filter((v) => v.availableQuantity > 0)
+    : [];
 
   return (
     <section className="border-t pt-12 mb-12">
       <div className="flex items-end justify-between mb-6 flex-wrap gap-3">
         <div>
-          <p className="text-xs uppercase tracking-[0.15em] text-accent-text mb-2 font-medium">Compare Nurseries</p>
-          <h2 className="font-serif text-3xl font-medium">Available From {cards.length} Seller{cards.length !== 1 ? "s" : ""}</h2>
+          <p className="text-xs uppercase tracking-[0.15em] text-accent-text mb-2 font-medium">
+            Compare Nurseries
+          </p>
+          <h2 className="font-serif text-3xl font-medium">
+            Available From {cards.length} Seller{cards.length !== 1 ? "s" : ""}
+          </h2>
         </div>
         <div className="relative">
           <ArrowUpDown className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
@@ -162,7 +193,11 @@ export function SellerListingsSection({ productId }: { productId: number }) {
             onChange={(e) => setSort(e.target.value as ListProductSellerListingsSort)}
             className="pl-9 pr-8 h-9 rounded-full border border-input bg-background text-sm appearance-none cursor-pointer"
           >
-            {SORT_OPTIONS.map((o) => (<option key={o.value} value={o.value}>{o.label}</option>))}
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -178,22 +213,31 @@ export function SellerListingsSection({ productId }: { productId: number }) {
           // overall if every variant happens to be sold out (so the card
           // still shows a price rather than crashing on an empty array).
           const qualifying = card.listing.variants.filter((v) => v.availableQuantity > 0);
-          const pricedVariant = [...(qualifying.length > 0 ? qualifying : card.listing.variants)].sort(
-            (a, b) => (a.discountPrice ?? a.price) - (b.discountPrice ?? b.price),
-          )[0];
+          const pricedVariant = [
+            ...(qualifying.length > 0 ? qualifying : card.listing.variants),
+          ].sort((a, b) => (a.discountPrice ?? a.price) - (b.discountPrice ?? b.price))[0];
           const outOfStock = qualifying.length === 0;
           const totalStock = card.listing.variants.reduce((sum, v) => sum + v.stock, 0);
           const isAdding = addingId === card.listing.id && addToCart.isPending;
           const img = card.listing.images?.[0] || null;
-          const discountPct = pricedVariant?.discountPrice != null
-            ? Math.round((1 - pricedVariant.discountPrice / pricedVariant.price) * 100)
-            : null;
+          const discountPct =
+            pricedVariant?.discountPrice != null
+              ? Math.round((1 - pricedVariant.discountPrice / pricedVariant.price) * 100)
+              : null;
           return (
-            <div key={card.listing.id} className="border rounded-2xl p-4 bg-card flex flex-col gap-4">
+            <div
+              key={card.listing.id}
+              className="border rounded-2xl p-4 bg-card flex flex-col gap-4"
+            >
               <div className="flex gap-3">
                 <div className="h-24 w-20 sm:h-28 sm:w-24 rounded-xl overflow-hidden bg-muted/30 shrink-0 flex items-center justify-center">
                   {img ? (
-                    <img src={img} alt={card.seller.nurseryName} className="w-full h-full object-cover" loading="lazy" />
+                    <img
+                      src={img}
+                      alt={card.seller.nurseryName}
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                    />
                   ) : (
                     <div className="flex flex-col items-center gap-1 text-muted-foreground/60">
                       <ImageOff className="h-5 w-5" />
@@ -206,7 +250,10 @@ export function SellerListingsSection({ productId }: { productId: number }) {
                   <p className="font-medium text-sm truncate flex items-center gap-1.5">
                     {card.seller.nurseryName}
                     {card.seller.isVerified && (
-                      <BadgeCheck className="h-4 w-4 text-success-foreground shrink-0" aria-label="Verified seller" />
+                      <BadgeCheck
+                        className="h-4 w-4 text-success-foreground shrink-0"
+                        aria-label="Verified seller"
+                      />
                     )}
                   </p>
 
@@ -220,9 +267,14 @@ export function SellerListingsSection({ productId }: { productId: number }) {
 
                   <div className="flex flex-col gap-0.5 text-xs text-muted-foreground mt-1.5">
                     {card.listing.deliveryTimeDays != null && (
-                      <span className="flex items-center gap-1"><Truck className="h-3 w-3 shrink-0" /> {card.listing.deliveryTimeDays}-day delivery</span>
+                      <span className="flex items-center gap-1">
+                        <Truck className="h-3 w-3 shrink-0" /> {card.listing.deliveryTimeDays}-day
+                        delivery
+                      </span>
                     )}
-                    <span className="flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0" /> {card.seller.location}</span>
+                    <span className="flex items-center gap-1">
+                      <MapPin className="h-3 w-3 shrink-0" /> {card.seller.location}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -231,15 +283,23 @@ export function SellerListingsSection({ productId }: { productId: number }) {
                 <div className="flex items-baseline gap-2 flex-wrap">
                   {pricedVariant && (
                     <>
-                      <span className="font-serif text-xl font-bold text-primary">Tk{pricedVariant.discountPrice ?? pricedVariant.price}</span>
-                      {pricedVariant.discountPrice != null && pricedVariant.discountPrice > 0 && pricedVariant.discountPrice < pricedVariant.price && (
-                        <>
-                          <span className="text-sm text-muted-foreground line-through">Tk{pricedVariant.price}</span>
-                          {discountPct != null && discountPct > 0 && (
-                            <span className="text-xs font-semibold text-destructive bg-destructive/10 rounded-md px-1.5 py-0.5">{discountPct}% OFF</span>
-                          )}
-                        </>
-                      )}
+                      <span className="font-serif text-xl font-bold text-primary">
+                        Tk{pricedVariant.discountPrice ?? pricedVariant.price}
+                      </span>
+                      {pricedVariant.discountPrice != null &&
+                        pricedVariant.discountPrice > 0 &&
+                        pricedVariant.discountPrice < pricedVariant.price && (
+                          <>
+                            <span className="text-sm text-muted-foreground line-through">
+                              Tk{pricedVariant.price}
+                            </span>
+                            {discountPct != null && discountPct > 0 && (
+                              <span className="text-xs font-semibold text-destructive bg-destructive/10 rounded-md px-1.5 py-0.5">
+                                {discountPct}% OFF
+                              </span>
+                            )}
+                          </>
+                        )}
                     </>
                   )}
                 </div>
@@ -254,7 +314,10 @@ export function SellerListingsSection({ productId }: { productId: number }) {
               )}
 
               <div className="flex gap-2 mt-auto">
-                <Link href={`/products/${productId}/listings/${card.listing.id}`} className="flex-1">
+                <Link
+                  href={`/products/${productId}/listings/${card.listing.id}`}
+                  className="flex-1"
+                >
                   <Button
                     variant="outline"
                     size="sm"
@@ -288,7 +351,10 @@ export function SellerListingsSection({ productId }: { productId: number }) {
                   {outOfStock ? (
                     "Out of stock"
                   ) : (
-                    <><ShoppingBag className="h-3.5 w-3.5" /> {useServerCart && isAdding ? "Adding…" : "Add to Bag"}</>
+                    <>
+                      <ShoppingBag className="h-3.5 w-3.5" />{" "}
+                      {useServerCart && isAdding ? "Adding…" : "Add to Bag"}
+                    </>
                   )}
                 </Button>
               </div>
@@ -300,7 +366,9 @@ export function SellerListingsSection({ productId }: { productId: number }) {
       {pickerCard && (
         <SellerListingVariantPickerDialog
           open={pickerListingId != null}
-          onOpenChange={(o) => { if (!o) setPickerListingId(null); }}
+          onOpenChange={(o) => {
+            if (!o) setPickerListingId(null);
+          }}
           sellerName={pickerCard.seller.nurseryName}
           variants={pickerQualifying}
           onConfirm={(variant) =>

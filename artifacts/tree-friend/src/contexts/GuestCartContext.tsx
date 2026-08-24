@@ -38,6 +38,26 @@ export type GuestCartItem = {
   discountPrice: number | null;
   image: string;
   /**
+   * Seller's nurseryName for marketplace lines (sellerListingVariantId is
+   * set). For admin-direct variant lines (variantId set, no seller) this
+   * is undefined — and the CartPage groups those under a "Tree Friend"
+   * header (the platform itself, since admin-direct lines have no seller).
+   *
+   * The CartPage shows "Sold by <sellerName>" above each group of items
+   * from the same seller — matching the authenticated cart's behavior
+   * (CartPage.tsx groupBySeller + SellerGroupHeader). Without this field,
+   * a guest's bag showed "Tree Friend" for EVERY item, which was wrong:
+   * the platform never sells anything, every cart line is a seller's
+   * listing, so every line MUST show the seller's nursery name.
+   *
+   * Stored at add-time (snapshot). If the seller later renames their
+   * nursery, the guest's localStorage cart keeps the old name until
+   * they re-add the item. The server-side cart (post-OTP-verify) always
+   * returns the live nurseryName via GET /cart, so this drift is
+   * temporary and self-heals on merge.
+   */
+  sellerName?: string;
+  /**
    * Per-item delivery charge in taka. Optional for backward compat with
    * older localStorage entries that were created before this field existed
    * — those default to 0 (free), which is the safest fallback since the
