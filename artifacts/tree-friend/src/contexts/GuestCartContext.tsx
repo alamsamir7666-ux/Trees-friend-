@@ -1,4 +1,13 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type ReactNode,
+} from "react";
+import { apiClient } from "@/lib/apiClient";
 
 export const GUEST_CART_STORAGE_KEY = "treefriend_guest_cart";
 
@@ -179,10 +188,61 @@ const GuestCartContext = createContext<GuestCartContextType | null>(null);
 
 export function GuestCartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<GuestCartItem[]>(() => readStorage());
+  // Ref to ensure the backfill effect only runs once per mount, even if
+  // `items` changes (which it will, when the backfill itself updates items).
+  const backfillRan = useRef(false);
 
   useEffect(() => {
     writeStorage(items);
   }, [items]);
+
+  // ─── One-time backfill: fetch sellerName for OLD cart items ──────────
+  // Items added BEFORE the sellerName field was introduced (commit
+  // 1775a6d) have no sellerName in localStorage. Without this backfill,
+  // the bag page shows "Tree Friend" (platform fallback) for those
+  // items instead of the seller's nursery name.
+  //
+  // Runs once on mount. Finds all items that have a sellerListingVariantId
+  // but no sellerName, batches their variant IDs into a single POST
+  // /seller-listing-variants/batch-sellers call, and updates each item
+  // with the returned nurseryName. Items that can't be found (deleted
+  // listing, unapproved, etc.) are left as-is — the bag page will show
+  // "Tree Friend" for those, which is the safe fallback.
+  useEffect(() => {
+    if (backfillRan.current) return;
+    backfillRan.current = true;
+
+    const needsBackfill = items.filter((i) => i.sellerListingVariantId != null && !i.sellerName);
+    if (needsBackfill.length === 0) return;
+
+    const variantIds = needsBackfill
+      .map((i) => i.sellerListingVariantId!)
+      .filter((id) => typeof id === "number");
+
+    if (variantIds.length === 0) return;
+
+    apiClient
+      .post<Record<number, { sellerId: number; nurseryName: string; businessName: string }>>(
+        "/seller-listing-variants/batch-sellers",
+        { variantIds },
+      )
+      .then(({ data }) => {
+        if (!data || Object.keys(data).length === 0) return;
+        setItems((prev) =>
+          prev.map((item) => {
+            if (item.sellerListingVariantId == null || item.sellerName) return item;
+            const seller = data[item.sellerListingVariantId];
+            if (!seller) return item;
+            return { ...item, sellerName: seller.nurseryName };
+          }),
+        );
+      })
+      .catch(() => {
+        // Non-fatal — the bag page still works, items just show the
+        // "Tree Friend" fallback until the user re-adds them. The
+        // backfill will retry on the next page load.
+      });
+  }, []);
 
   const addItem = useCallback((item: GuestCartItem) => {
     setItems((prev) => {
