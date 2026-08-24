@@ -38,67 +38,17 @@ const router = Router();
  *     Account claim (Part 4) handles that, when the buyer later signs up.
  *
  * Rate limiting:
- *   - Send: per-IP (10/hour) + per-phone (3/10min) — chained, IP trips first
- *     for botnet-style attacks, phone trips for harassment of one number.
+ *   - Send: per-IP (5/hr) + per-phone (3/10min) + per-phone daily cap (15/24h)
+ *     — chained, IP trips first for botnet-style attacks, phone trips for
+ *     harassment of one number, daily cap stops paced abuse.
  *   - Verify: per-phone (5/10min) — stops brute-force guessing.
  *
- * The per-phone limiters read the phone from req.body (not URL params),
- * so they're applied INSIDE the route handler, not as middleware that
- * runs before body parsing. See `applyPhoneRateLimit` below.
+ * Per-phone limiters use a `keyFn` that reads `req.body.phone` (populated
+ * by express.json() which runs globally before any route middleware).
+ * This replaced the old `applyPhoneRateLimit` helper that temporarily
+ * mutated req.userId — see rateLimiter.ts's phoneFromBodyKeyFn comment
+ * for the full rationale.
  */
-
-/**
- * Helper: apply a rate limiter keyed on a phone number (from the body).
- *
- * IMPLEMENTATION NOTE: This temporarily sets `req.userId` to the normalized
- * phone number so the rate limiter's key (which uses `${ip}:${userId}`)
- * includes the phone. This is a deliberate, documented trade-off:
- *
- *   PRO: Avoids rewriting the rate limiter (which is used by 20+ routes
- *        and would need a new `customKey` parameter plumbed through the
- *        entire createRateLimiter chain).
- *   CON: If the rate limiter's key derivation changes, this hack breaks
- *        silently. Mitigated by: (1) the key format is documented in
- *        rateLimiter.ts and hasn't changed since it was written, (2) the
- *        rate limiter's contract (key = `ip:userId`) is simple and
- *        unlikely to change, (3) tests would catch a regression.
- *
- * Alternative considered: add a `customKeyExtractor` parameter to
- * `createRateLimiter`. Rejected because it would require touching every
- * existing `createRateLimiter` call site + the chainRateLimiters utility
- * + the middleware signature, for a single use case.
- *
- * Returns true if the request should proceed, false if it was rate-limited
- * (the limiter has already sent the 429 response in that case).
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function applyPhoneRateLimit(
-  req: ApiRequest,
-  res: any,
-  limiter: (req: any, res: any, next: (err?: unknown) => void) => Promise<void>,
-  phone: string,
-): Promise<boolean> {
-  // Temporarily attach the phone to req.userId so the limiter's key
-  // includes it (the limiter uses `${ip}:${userId}` as the key — see
-  // rateLimiter.ts:136). This is a hack but avoids rewriting the limiter.
-  // The phone is normalized so the same number always maps to the same key.
-  const normalized = normalizeBdPhoneForStorage(phone) ?? phone;
-  const originalUserId = req.userId;
-  req.userId = normalized;
-  let blocked = false;
-  await new Promise<void>((resolve) => {
-    limiter(req, res, (err?: unknown) => {
-      if (err) {
-        // Unexpected error — log and fail open
-        logger.error({ err }, "[guestOtp] rate limiter error, failing open");
-      }
-      if (res.headersSent) blocked = true;
-      resolve();
-    });
-  });
-  req.userId = originalUserId;
-  return !blocked;
-}
 
 // ─── POST /auth/guest-otp/send ───────────────────────────────────────────────
 
@@ -114,34 +64,27 @@ async function applyPhoneRateLimit(
  * Security: never returns whether the phone was normalized successfully
  * vs rejected — that would leak "is this a valid BD number?" to attackers.
  * Invalid phones return the same success response (but no OTP is sent).
+ *
+ * Rate limiting order (chained):
+ *   1. guestOtpSendIpLimiter   (per-IP, 5/hr)      — mounted as middleware
+ *   2. validateBody             (Zod parse of { phone }) — provides req.body
+ *   3. guestOtpSendPhoneLimiter (per-phone, 3/10min) — middleware, reads req.body.phone via keyFn
+ *   4. guestOtpDailyCapLimiter  (per-phone, 15/24h) — middleware, same keyFn
+ *   5. route handler            — generateAndSend + send via WhatsApp/SMS
+ *
+ * Steps 3 and 4 must run AFTER validateBody (step 2) so req.body.phone
+ * is populated when their keyFn fires. Express runs middlewares in the
+ * order they're listed in the router.post(...) call, so this ordering
+ * is structural, not runtime-configurable.
  */
 router.post(
   "/auth/guest-otp/send",
   guestOtpSendIpLimiter,
   validateBody(SendGuestOtpBody, "SendGuestOtpBody"),
+  guestOtpSendPhoneLimiter,
+  guestOtpDailyCapLimiter,
   asyncHandler(async (req: ApiRequest<z.infer<typeof SendGuestOtpBody>>, res) => {
     const { phone } = req.body;
-
-    // Per-phone rate limit (chained after the per-IP limiter above).
-    // If the IP limiter tripped, we never reach here. If the phone limiter
-    // trips, it sends a 429 and we return early.
-    const allowed = await applyPhoneRateLimit(
-      req,
-      res,
-      guestOtpSendPhoneLimiter,
-      phone,
-    );
-    if (!allowed) return;
-
-    // Daily cap rate limit (15 OTPs per phone per 24h). Applied as a
-    // third tier after the per-IP (5/hr) and per-phone (3/10min) limiters.
-    const dailyAllowed = await applyPhoneRateLimit(
-      req,
-      res,
-      guestOtpDailyCapLimiter,
-      phone,
-    );
-    if (!dailyAllowed) return;
 
     // Normalize + validate. If invalid, return success anyway (don't leak
     // whether the number is valid BD format — attackers could probe).
@@ -211,21 +154,18 @@ router.post(
  * attempts exceeded") so the frontend can show the right message. Unlike
  * the send endpoint, verify DOES return failure — the buyer needs to know
  * their code was wrong so they can retype it.
+ *
+ * Rate limiting order (chained):
+ *   1. validateBody               (Zod parse of { phone, code })
+ *   2. guestOtpVerifyPhoneLimiter  (per-phone, 5/10min) — reads req.body.phone via keyFn
+ *   3. route handler               — verifyCode + signGuestTokenPair
  */
 router.post(
   "/auth/guest-otp/verify",
   validateBody(VerifyGuestOtpBody, "VerifyGuestOtpBody"),
+  guestOtpVerifyPhoneLimiter,
   asyncHandler(async (req: ApiRequest<z.infer<typeof VerifyGuestOtpBody>>, res) => {
     const { phone, code } = req.body;
-
-    // Per-phone rate limit (stops brute-force guessing).
-    const allowed = await applyPhoneRateLimit(
-      req,
-      res,
-      guestOtpVerifyPhoneLimiter,
-      phone,
-    );
-    if (!allowed) return;
 
     const result = await verifyCode(phone, code);
 
@@ -276,6 +216,12 @@ router.post(
  *
  * Industry standard: Daraz, Amazon, Shopify, and every OAuth2 implementation
  * uses this exact pattern — short-lived access + long-lived refresh.
+ *
+ * Rate limiting: reuses guestOtpVerifyPhoneLimiter (5/10min per IP — the
+ * refresh body has no phone field, so the phone-keyed keyFn returns "" and
+ * the limiter degrades to IP-only keying, which is correct for refresh
+ * since the abuse vector here is scripted token-rotation floods from one
+ * IP, not harassment of one phone number).
  */
 const GuestRefreshBody = z.object({
   refreshToken: z.string().min(1),

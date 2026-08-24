@@ -94,17 +94,38 @@ if (typeof setInterval !== "undefined") {
 
 // ─── Rate limiter factory ───────────────────────────────────────────────────
 
+/**
+ * Optional custom key extractor. When provided, the limiter uses this
+ * function's return value (combined with IP) as the rate-limit key,
+ * instead of the default `userId`. Used by routes where the keying
+ * dimension lives in `req.body` rather than `req.userId` — e.g.
+ * guest-OTP routes key on the phone number in the body, which isn't
+ * available as `req.userId` (the OTP flow runs PRE-auth).
+ *
+ * The function MUST be synchronous and MUST NOT throw — returning an
+ * empty string falls back to IP-only keying (the safe default for
+ * pre-auth routes where the body field is absent or malformed).
+ */
+export type RateLimitKeyFn = (req: Request) => string;
+
 export function createRateLimiter(options: {
   windowMs: number;
   max: number;
   message?: string;
   keyPrefix?: string;
+  /**
+   * Custom key extractor. When provided, the limiter key becomes
+   * `${ip}:${keyFn(req)}` instead of the default `${ip}:${userId}`.
+   * Returning an empty string degrades to IP-only keying.
+   */
+  keyFn?: RateLimitKeyFn;
 }) {
   const {
     windowMs,
     max,
     message = "Too many requests. Please try again later.",
     keyPrefix = "rl",
+    keyFn,
   } = options;
 
   // Upstash ratelimit instance (created once per limiter, reused across
@@ -127,13 +148,17 @@ export function createRateLimiter(options: {
   }
 
   return async function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-    // Key: prefix + IP + optional userId (populated when this limiter
-    // runs after requireAuth). userId is undefined for pre-auth routes
-    // like /mobile-auth/sign-in, which is fine — IP-only is still
-    // correct there.
+    // Key derivation:
+    //   - Default: `ip:userId` — populated when this limiter runs after
+    //     requireAuth. userId is undefined for pre-auth routes like
+    //     /mobile-auth/sign-in, which is fine — IP-only is still correct.
+    //   - Custom: `ip:keyFn(req)` — used by routes where the keying
+    //     dimension lives in req.body (e.g. guest-OTP phone limiters).
+    //     keyFn must be synchronous and not throw; an empty return value
+    //     degrades to IP-only keying.
     const ip = req.ip ?? req.socket?.remoteAddress ?? "unknown";
-    const userId = req.userId ?? "";
-    const key = `${ip}:${userId}`;
+    const keyPart = keyFn ? safeKeyFn(keyFn, req) : (req.userId ?? "");
+    const key = `${ip}:${keyPart}`;
 
     const redis = getRedis();
 
@@ -210,6 +235,27 @@ export function createRateLimiter(options: {
     }
     next();
   };
+}
+
+/**
+ * Wraps a keyFn so it can never throw into the limiter's hot path. If
+ * the function throws (e.g. req.body is missing the expected field),
+ * we log once and fall back to an empty string — which the limiter
+ * treats as "IP-only keying" (same as the pre-auth default). This is
+ * the safe degradation: the request still gets the IP-bucket protection,
+ * just without the per-phone (or per-whatever) scoping.
+ */
+function safeKeyFn(fn: RateLimitKeyFn, req: Request): string {
+  try {
+    const v = fn(req);
+    return typeof v === "string" ? v : "";
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Rate limiter: keyFn threw — degrading to IP-only keying for this request",
+    );
+    return "";
+  }
 }
 
 /**
@@ -432,16 +478,54 @@ export const guestOtpSendIpLimiter = createRateLimiter({
   keyPrefix: "guest-otp-send-ip",
 });
 
+// ─── Phone-extracting keyFn (used by the per-phone OTP limiters below) ───────
+//
+// The previous implementation of per-phone OTP rate limiting used an
+// `applyPhoneRateLimit` helper that temporarily MUTATED `req.userId` to
+// the normalized phone number before invoking the limiter, then restored
+// it. That was a documented hack — it relied on the limiter's key
+// derivation being exactly `${ip}:${userId}` and would silently break
+// (per-phone limiters collapsing to IP-only keying) if the key format
+// ever changed.
+//
+// The proper fix exposes a `keyFn` option on `createRateLimiter` so
+// the limiter's key derivation is configurable at construction time.
+// Each phone-keyed limiter below passes a keyFn that reads the phone
+// from `req.body.phone` (populated by `express.json()` which runs
+// globally before any route middleware). The keyFn returns the
+// normalized phone string, or "" if the body is malformed — "" degrades
+// to IP-only keying, the same safe default the IP limiter already uses.
+//
+// Body field: `phone`. This is the raw, unnormalized phone string as
+// sent by the client. Normalization happens here (rather than relying
+// on the route handler's normalizeBdPhoneForStorage call) so the
+// limiter is self-contained and doesn't depend on the handler running
+// first — the limiter runs BEFORE the handler in the middleware chain.
+import { normalizeBdPhoneForStorage } from "../lib/guestOtp";
+
+const phoneFromBodyKeyFn: RateLimitKeyFn = (req) => {
+  const raw = (req.body as { phone?: unknown } | undefined)?.phone;
+  if (typeof raw !== "string" || raw.length === 0) return "";
+  // Normalize so the same number always maps to the same limiter key
+  // regardless of how the client formatted it (+880 vs 880 vs 0 prefix).
+  // If normalization fails (invalid format), the limiter still works —
+  // it just keys on the raw string, which is fine because an invalid
+  // phone will be rejected by the route handler anyway.
+  return normalizeBdPhoneForStorage(raw) ?? raw;
+};
+
 // Per-phone send limiter — applied second. Keyed on IP + phone (the
-// phone is part of the body, not the URL, so the limiter reads it
-// inside the route handler). 3 per 10 minutes matches Daraz's resend
-// throttle — a real buyer rarely needs more than 2 sends (original +
-// one resend if the first didn't arrive).
+// phone comes from req.body via the keyFn defined below — see the
+// phoneFromBodyKeyFn comment for why this replaced the old
+// applyPhoneRateLimit req.userId hack). 3 per 10 minutes matches
+// Daraz's resend throttle — a real buyer rarely needs more than 2
+// sends (original + one resend if the first didn't arrive).
 export const guestOtpSendPhoneLimiter = createRateLimiter({
   windowMs: 10 * 60 * 1000, // 10 minutes
   max: 3,
   message: "Too many OTP requests for this phone number. Please wait before requesting a new code.",
   keyPrefix: "guest-otp-send-phone",
+  keyFn: phoneFromBodyKeyFn,
 });
 
 // Daily cap per phone — applied third. 15 per 24 hours is generous for a
@@ -454,6 +538,7 @@ export const guestOtpDailyCapLimiter = createRateLimiter({
   max: 15,
   message: "Too many OTP requests for this phone number today. Please try again tomorrow.",
   keyPrefix: "guest-otp-daily-cap",
+  keyFn: phoneFromBodyKeyFn,
 });
 
 // Verify limiter — 5 attempts per 10 minutes per phone. The OTP-level
@@ -467,4 +552,69 @@ export const guestOtpVerifyPhoneLimiter = createRateLimiter({
   max: 5,
   message: "Too many verification attempts for this phone number. Please wait before trying again.",
   keyPrefix: "guest-otp-verify-phone",
+  keyFn: phoneFromBodyKeyFn,
+});
+
+// ─── Wishlist limiter (applies to authenticated AND guest users) ──────────────
+//
+// All wishlist mutation routes (POST/DELETE /wishlist/:productId, POST/DELETE
+// /wishlist/seller-listing-variant/:variantId, POST /wishlist/merge) use
+// requireGuestOrAuth, so a guest JWT is enough to write rows. Without a
+// per-route limiter, a scripted attacker with one guest JWT could:
+//   - Add thousands of wishlist rows (one per product) → DB pollution +
+//     bloated GET /wishlist responses for whichever Clerk account later
+//     claims that guest phone.
+//   - Hammer POST /wishlist/merge in a tight loop to exhaust DB connections.
+//
+// 60 mutations / 15 min / user is generous for any real buyer (a heavy
+// shopping session rarely hearts more than 20-30 items) while stopping
+// scripted abuse. Keyed on `ip:userId` (the limiter's default), so each
+// guest (with a distinct guest_<phone> userId) gets their own budget.
+export const wishlistLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 60,
+  message: "Too many wishlist changes. Please slow down and try again later.",
+  keyPrefix: "wishlist",
+});
+
+// ─── Review limiter (authenticated only — guests can't review) ───────────────
+//
+// POST /reviews/:productId and POST /seller-listings/:id/reviews both stayed
+// requireAuth (industry standard — Amazon, Daraz, Etsy, Shopee all require
+// an account to review). But they had NO per-route limiter, only the global
+// apiLimiter (200/15min). Combined with the purchase-eligibility check, an
+// attacker is bounded by how many products they've actually purchased — but
+// a legitimate power-buyer with 50 past purchases could still flood 200
+// reviews in 15 minutes if they scripted it, polluting the review feed.
+//
+// 10 reviews / hour / user is generous (no real buyer writes more than a
+// few reviews per session) while stopping both rapid-fire double-submits
+// and paced review-spam attacks.
+export const reviewLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  message: "You've submitted too many reviews recently. Please try again later.",
+  keyPrefix: "review",
+});
+
+// ─── Public order tracking limiter ──────────────────────────────────────────
+//
+// GET /orders/track/:trackingId is fully public (no auth, no OTP) — the 48-bit
+// random tracking ID is the bearer secret. Without a per-route limiter, an
+// attacker could brute-force tracking IDs at 200/15min/IP (the global limiter)
+// hoping to land a real order. At ~2^48 tracking-ID entropy this is infeasible
+// in absolute terms, but:
+//   1. A scripted sweep could still hit real orders by chance over time, and
+//      every hit returned the full shipping address (PII leak, now fixed
+//      separately by redacting PII in the response).
+//   2. The endpoint is otherwise inconsistent with the rest of the system
+//      (every other mutation/PII route has a per-route limiter).
+//
+// 30 lookups / 15 min / IP is generous for a real buyer (who tracks maybe 1-2
+// orders at a time) while making brute-force sweeps impractical.
+export const trackOrderLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: "Too many tracking lookups. Please try again later.",
+  keyPrefix: "track-order",
 });

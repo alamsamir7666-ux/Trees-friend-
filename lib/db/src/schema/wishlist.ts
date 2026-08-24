@@ -1,24 +1,23 @@
-import {
-  pgTable,
-  serial,
-  text,
-  integer,
-  timestamp,
-  uniqueIndex,
-  index,
-} from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { productsTable } from "./products";
 import { sellerListingVariantsTable } from "./sellerListingVariants";
-import { usersTable } from "./users";
 
 export const wishlistTable = pgTable(
   "wishlist",
   {
     id: serial("id").primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => usersTable.clerkId, { onDelete: "cascade" }),
+    // Free-text userId: a Clerk ID for authenticated users, or
+    // "guest_<phone>" for phone-verified guests (Part 2 of Daraz-style
+    // guest checkout). The FK to users.clerk_id was dropped in migration
+    // 0015 (mirror of 0013 for cart_items and 0014 for orders) so guest
+    // wishlist rows can be inserted without a users row. Account claim
+    // (lib/accountClaim.ts) rewrites userId in place from "guest_<phone>"
+    // to clerkId when the guest later signs up with the same phone.
+    //
+    // NOT NULL is preserved — both guests and authenticated users always
+    // have a non-empty userId.
+    userId: text("user_id").notNull(),
     productId: integer("product_id")
       .notNull()
       .references(() => productsTable.id, { onDelete: "cascade" }),
@@ -34,8 +33,10 @@ export const wishlistTable = pgTable(
     // Cascades on delete like reviews/cart_items' equivalent column, since
     // a wishlist row for a listing that no longer exists is meaningless.
     // Nullable so old rows and product-only wishlist rows are unaffected.
-    sellerListingVariantId: integer("seller_listing_variant_id")
-      .references(() => sellerListingVariantsTable.id, { onDelete: "cascade" }),
+    sellerListingVariantId: integer("seller_listing_variant_id").references(
+      () => sellerListingVariantsTable.id,
+      { onDelete: "cascade" },
+    ),
     addedAt: timestamp("added_at").defaultNow().notNull(),
   },
   (table) => [

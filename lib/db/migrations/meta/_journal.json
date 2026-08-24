@@ -64,6 +64,13 @@
       "when": 1787217600000,
       "tag": "0014_drop_orders_user_fk",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787304000000,
+      "tag": "0015_drop_wishlist_user_fk",
+      "breakpoints": true
     }
   ]
 }

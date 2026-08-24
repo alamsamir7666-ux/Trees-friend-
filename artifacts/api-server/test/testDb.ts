@@ -12,6 +12,7 @@ import {
   ordersTable,
   orderShipmentsTable,
   guestOtpsTable,
+  wishlistTable,
 } from "@workspace/db/schema";
 import { eq, like, or } from "drizzle-orm";
 import { encryptCredential } from "../src/lib/credentialEncryption";
@@ -81,12 +82,12 @@ export async function cleanupAll(): Promise<void> {
   // Clean explicitly by prefix rather than relying on a users-row cascade.
   // Includes both the test-marker prefix (httptest_%) AND guest orders
   // (guest_01700... — created by guest checkout tests).
-  const staleOrders = await db.select({ id: ordersTable.id }).from(ordersTable).where(
-    or(
-      like(ordersTable.userId, `${TEST_MARKER}%`),
-      like(ordersTable.userId, "guest_01700%"),
-    ),
-  );
+  const staleOrders = await db
+    .select({ id: ordersTable.id })
+    .from(ordersTable)
+    .where(
+      or(like(ordersTable.userId, `${TEST_MARKER}%`), like(ordersTable.userId, "guest_01700%")),
+    );
   for (const o of staleOrders) {
     await db.delete(orderShipmentsTable).where(eq(orderShipmentsTable.orderId, o.id));
     await db.delete(ordersTable).where(eq(ordersTable.id, o.id));
@@ -95,11 +96,23 @@ export async function cleanupAll(): Promise<void> {
   // Also clean guest cart items (cart_items.userId = "guest_01700...")
   await db.delete(cartItemsTable).where(like(cartItemsTable.userId, "guest_01700%"));
 
-  const staleUsers = await db.select({ id: usersTable.id, clerkId: usersTable.clerkId }).from(usersTable).where(like(usersTable.clerkId, `${TEST_MARKER}%`));
+  // Clean guest wishlist rows (wishlist.userId = "guest_01700..."). Same
+  // free-text userId pattern as cart_items + orders after migration 0015
+  // dropped the FK on wishlist.user_id → users.clerk_id. Without this,
+  // guest wishlist rows would survive test runs and pollute the next
+  // run's GET /wishlist assertions.
+  await db.delete(wishlistTable).where(like(wishlistTable.userId, "guest_01700%"));
+
+  const staleUsers = await db
+    .select({ id: usersTable.id, clerkId: usersTable.clerkId })
+    .from(usersTable)
+    .where(like(usersTable.clerkId, `${TEST_MARKER}%`));
   for (const u of staleUsers) {
     // Cascades: sellers -> seller_listings, seller_payment_configs, seller_courier_configs.
     // cart_items.userId is also free-text (clerkId), clean explicitly too.
+    // wishlist.userId is also free-text (clerkId), clean explicitly too.
     await db.delete(cartItemsTable).where(eq(cartItemsTable.userId, u.clerkId));
+    await db.delete(wishlistTable).where(eq(wishlistTable.userId, u.clerkId));
     await db.delete(usersTable).where(eq(usersTable.id, u.id));
   }
 
@@ -215,14 +228,19 @@ export async function seedVerifiedPaymentConfig(sellerId: number) {
  * encrypted credential" error the moment book-courier tried to decrypt it,
  * unrelated to anything this suite is actually testing.
  */
-export async function seedVerifiedCourierConfig(sellerId: number, provider: "pathao" | "steadfast" = "steadfast") {
+export async function seedVerifiedCourierConfig(
+  sellerId: number,
+  provider: "pathao" | "steadfast" = "steadfast",
+) {
   const [config] = await db
     .insert(sellerCourierConfigsTable)
     .values({
       sellerId,
       provider,
       apiKey: encryptCredential("test-api-key"),
-      apiSecret: encryptCredential(provider === "pathao" ? "test-secret|test-user|test-pass" : "test-api-secret"),
+      apiSecret: encryptCredential(
+        provider === "pathao" ? "test-secret|test-user|test-pass" : "test-api-secret",
+      ),
       storeId: provider === "pathao" ? "12345" : null,
       isVerified: true,
     })

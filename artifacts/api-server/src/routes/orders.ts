@@ -15,19 +15,23 @@ import {
   paymentSessionsTable,
 } from "@workspace/db";
 import { eq, desc, and, sql, inArray, ilike, gte, lte } from "drizzle-orm";
-import { requireAuth, requireGuestOrAuth } from "../middlewares/auth";
+import { requireGuestOrAuth } from "../middlewares/auth";
 import { sendOrderConfirmation } from "../lib/email";
 import { sendWhatsAppOrderConfirmation } from "../lib/whatsapp";
 import { logger } from "../lib/logger";
 import { formatOrder } from "../lib/formatters";
 import { asyncHandler, HttpError, generateId } from "../lib/errors";
-import { checkoutLimiter, guestCheckoutLimiter, chainRateLimiters } from "../middlewares/rateLimiter";
+import {
+  checkoutLimiter,
+  guestCheckoutLimiter,
+  chainRateLimiters,
+  trackOrderLimiter,
+} from "../middlewares/rateLimiter";
 import { CreateOrderBody } from "@workspace/api-zod";
 import { validateBody } from "../lib/validateRequest";
 import { CancelOrderBody } from "../lib/schemas";
 import type { ApiRequest } from "../types/apiRequest";
 import type { z } from "zod";
-import crypto from "crypto";
 import { awardPoints, redeemPoints, TAKA_PER_POINT } from "./loyalty";
 import type { OrderItem } from "@workspace/db";
 import { groupBySellerAndAllocateDiscount } from "@workspace/db/logic";
@@ -150,7 +154,6 @@ router.get(
  * just stay here with an `export` keyword added). Imported above and
  * re-exported here so this file's existing export surface is unaffected.
  */
-
 
 /**
  * Place an order for the authenticated user's full cart. A cart spanning
@@ -820,7 +823,8 @@ router.post(
           .limit(1);
 
         if (userRow?.email && !userRow.email.endsWith("@clerk.user")) {
-          const name = [userRow.firstName, userRow.lastName].filter(Boolean).join(" ") || "Customer";
+          const name =
+            [userRow.firstName, userRow.lastName].filter(Boolean).join(" ") || "Customer";
           for (const order of createdOrders) {
             sendOrderConfirmation({
               to: userRow.email,
@@ -841,14 +845,6 @@ router.post(
         // (verified via OTP) as the destination — it's guaranteed to be
         // a real WhatsApp-capable number.
         const guestPhone = req.userId!.replace("guest_", "");
-        const itemCount = createdOrders.reduce(
-          (sum, o) => sum + (o.items as any[]).length,
-          0,
-        );
-        const grandTotal = createdOrders.reduce(
-          (sum, o) => sum + Number(o.totalAmount),
-          0,
-        );
         // Send one WhatsApp message per order (Daraz sends per-order too,
         // so the buyer can track each one independently).
         for (const order of createdOrders) {
@@ -944,6 +940,7 @@ router.post(
 
 router.get(
   "/orders/track/:trackingId",
+  trackOrderLimiter,
   asyncHandler(async (req, res) => {
     const rawId = req.params.trackingId;
     if (!/^[A-Z0-9]{2,20}$/i.test(rawId)) {
@@ -979,10 +976,56 @@ router.get(
       completed: i <= currentIdx,
     }));
 
+    // ─── PII REDACTION ───────────────────────────────────────────────────
+    // The tracking endpoint is PUBLIC (no auth, no OTP) — anyone who knows
+    // or guesses the tracking ID can fetch this response. The previous
+    // implementation returned the full `formatOrder(...)` payload, which
+    // includes shippingAddress (fullName, phone, street, city, district,
+    // postalCode), userId (which leaks the buyer's phone for guests as
+    // "guest_<phone>"), senderNumber, giftMessage, transactionId, and
+    // paymentSessionId — all of which constitute PII or internal payment
+    // identifiers.
+    //
+    // The TrackOrderPage UI only needs: trackingId, orderNumber, status,
+    // timeline, payment method/status, total + subtotal + discount (for the
+    // delivery-cost breakdown), items (for product names + quantities, NOT
+    // customer-PII), and timestamps. So we return exactly that subset.
+    //
+    // Item-level PII: `order.items` is a jsonb array of OrderItem shapes
+    // (see lib/db/src/logic/orders.ts) — each item has productName,
+    // productImage, quantity, price, deliveryCharge. None of these are
+    // customer-PII (they describe the product, not the buyer), so the
+    // items array is returned as-is. If a future OrderItem field ever
+    // adds buyer info (e.g. gift-wrap recipient phone), it must be
+    // stripped here.
+    //
+    // The authenticated GET /orders/:id route still returns the full
+    // formatOrder(...) payload (including shippingAddress) because the
+    // caller there is scoping by req.userId — only the order's owner
+    // can read it.
+    const subtotal = (order.items as any[]).reduce((s, i) => s + Number(i.price) * i.quantity, 0);
+
     res.json({
-      ...formatOrder(order),
-      subtotal: (order.items as any[]).reduce((s, i) => s + Number(i.price) * i.quantity, 0),
+      trackingId: order.trackingId,
+      orderNumber: order.orderNumber ?? null,
+      orderStatus: order.orderStatus,
+      paymentMethod: order.paymentMethod,
+      paymentStatus: order.paymentStatus,
+      totalAmount: Number(order.totalAmount),
+      subtotal,
+      discountAmount: Number(order.discountAmount),
+      giftWrap: order.giftWrap,
+      items: order.items,
       timeline,
+      createdAt: order.createdAt.toISOString(),
+      updatedAt: order.updatedAt.toISOString(),
+      confirmedAt: order.confirmedAt ? order.confirmedAt.toISOString() : null,
+      shippedAt: order.shippedAt ? order.shippedAt.toISOString() : null,
+      deliveredAt: order.deliveredAt ? order.deliveredAt.toISOString() : null,
+      cancelledAt: order.cancelledAt ? order.cancelledAt.toISOString() : null,
+      // Explicitly NOT included: shippingAddress, userId, senderNumber,
+      // giftMessage, transactionId, paymentSessionId, couponCode.
+      // These are returned only by the authenticated GET /orders/:id route.
     });
   }),
 );

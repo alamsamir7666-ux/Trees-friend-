@@ -1,21 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { db } from "@workspace/db";
-import {
-  ordersTable,
-  cartItemsTable,
-  usersTable,
-  guestOtpsTable,
-} from "@workspace/db/schema";
+import { ordersTable, cartItemsTable, usersTable, wishlistTable } from "@workspace/db/schema";
 import { eq } from "drizzle-orm";
-import {
-  cleanupAll,
-  seedCategory,
-  seedProduct,
-  seedSeller,
-  seedListing,
-  markerId,
-} from "./testDb";
-import { generateAndSend } from "../src/lib/guestOtp";
+import { cleanupAll, seedCategory, seedProduct, seedSeller, seedListing, markerId } from "./testDb";
 import { claimGuestOrders } from "../src/lib/accountClaim";
 
 /**
@@ -23,8 +10,9 @@ import { claimGuestOrders } from "../src/lib/accountClaim";
  *
  * Verifies that when a guest who previously placed orders (stored under
  * userId = "guest_<phone>") signs up with a Clerk account that has the
- * same phone number, their guest orders + cart items are migrated to the
- * new clerkId.
+ * same phone number, their guest rows are migrated to the new clerkId.
+ *
+ * Now covers wishlist migration too (added alongside cart + orders).
  *
  * These tests call the `claimGuestOrders` library function directly
  * (bypassing the auth middleware, since simulating a real Clerk sign-in
@@ -35,10 +23,12 @@ import { claimGuestOrders } from "../src/lib/accountClaim";
  * Flow:
  *   1. Create a guest order (userId = "guest_<phone>")
  *   2. Create a guest cart item (userId = "guest_<phone>")
- *   3. Call claimGuestOrders(clerkId, phone)
- *   4. Verify the order's userId is now clerkId (not "guest_...")
- *   5. Verify the cart item's userId is now clerkId
- *   6. Verify idempotency: calling again is a no-op
+ *   3. Create a guest wishlist row (userId = "guest_<phone>")
+ *   4. Call claimGuestOrders(clerkId, phone)
+ *   5. Verify the order's userId is now clerkId (not "guest_...")
+ *   6. Verify the cart item's userId is now clerkId
+ *   7. Verify the wishlist row's userId is now clerkId
+ *   8. Verify idempotency: calling again is a no-op
  */
 
 const TEST_PHONE = "01700345678";
@@ -119,6 +109,21 @@ describe("account claim (lib/accountClaim.ts)", () => {
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       priceSeenAtAdd: "750.00",
     });
+
+    // Create a guest wishlist row directly in the DB. Two rows: one
+    // product-only (no seller-listing-variant) and one seller-listing-
+    // variant — both must migrate to the new clerkId. Migration 0015
+    // dropped the FK on wishlist.user_id, so this guest-scoped insert
+    // lands cleanly (mirror of the cart_items pattern).
+    await db.insert(wishlistTable).values({
+      userId: `guest_${TEST_PHONE}`,
+      productId,
+    });
+    await db.insert(wishlistTable).values({
+      userId: `guest_${TEST_PHONE}`,
+      productId,
+      sellerListingVariantId: listingVariantId,
+    });
   });
 
   afterAll(async () => {
@@ -140,6 +145,7 @@ describe("account claim (lib/accountClaim.ts)", () => {
     const result = await claimGuestOrders(clerkId, TEST_PHONE);
     expect(result.ordersMigrated).toBe(1);
     expect(result.cartItemsMigrated).toBe(1);
+    expect(result.wishlistMigrated).toBe(2);
 
     // Verify the order's userId is now the clerkId
     const [order] = await db
@@ -157,6 +163,24 @@ describe("account claim (lib/accountClaim.ts)", () => {
     expect(cartItem).toBeDefined();
     expect(cartItem.productId).toBe(productId);
     expect(cartItem.quantity).toBe(2);
+
+    // Verify both wishlist rows migrated to the clerkId (one product-only,
+    // one seller-listing-variant). The userId was rewritten in place —
+    // same row, same primary key, just a different userId value.
+    const wishlistRows = await db
+      .select()
+      .from(wishlistTable)
+      .where(eq(wishlistTable.userId, clerkId));
+    expect(wishlistRows).toHaveLength(2);
+    expect(wishlistRows.some((r) => r.sellerListingVariantId == null)).toBe(true);
+    expect(wishlistRows.some((r) => r.sellerListingVariantId === listingVariantId)).toBe(true);
+
+    // And no guest-scoped wishlist rows remain for this phone
+    const leftoverGuestWishlist = await db
+      .select()
+      .from(wishlistTable)
+      .where(eq(wishlistTable.userId, `guest_${TEST_PHONE}`));
+    expect(leftoverGuestWishlist).toHaveLength(0);
   });
 
   it("is idempotent — calling again migrates 0 orders", async () => {
@@ -166,6 +190,7 @@ describe("account claim (lib/accountClaim.ts)", () => {
     const result = await claimGuestOrders(clerkId, TEST_PHONE);
     expect(result.ordersMigrated).toBe(0);
     expect(result.cartItemsMigrated).toBe(0);
+    expect(result.wishlistMigrated).toBe(0);
   });
 
   it("returns 0 migrations when no guest orders exist for the phone", async () => {
@@ -180,6 +205,7 @@ describe("account claim (lib/accountClaim.ts)", () => {
     const result = await claimGuestOrders(clerkId, "01700999888");
     expect(result.ordersMigrated).toBe(0);
     expect(result.cartItemsMigrated).toBe(0);
+    expect(result.wishlistMigrated).toBe(0);
   });
 
   it("returns 0 migrations when phone is null", async () => {
@@ -187,6 +213,7 @@ describe("account claim (lib/accountClaim.ts)", () => {
     const result = await claimGuestOrders(clerkId, null);
     expect(result.ordersMigrated).toBe(0);
     expect(result.cartItemsMigrated).toBe(0);
+    expect(result.wishlistMigrated).toBe(0);
   });
 
   it("returns 0 migrations when phone is undefined", async () => {
@@ -194,6 +221,7 @@ describe("account claim (lib/accountClaim.ts)", () => {
     const result = await claimGuestOrders(clerkId, undefined);
     expect(result.ordersMigrated).toBe(0);
     expect(result.cartItemsMigrated).toBe(0);
+    expect(result.wishlistMigrated).toBe(0);
   });
 
   it("migrates multiple guest orders at once", async () => {
@@ -253,10 +281,19 @@ describe("account claim (lib/accountClaim.ts)", () => {
       priceSeenAtAdd: "750.00",
     });
 
+    // Re-insert a guest wishlist row (the first test already migrated the
+    // originals). Reuses productId-only shape — the variant-row migration
+    // was already asserted in the first test.
+    await db.insert(wishlistTable).values({
+      userId: `guest_${TEST_PHONE}`,
+      productId,
+    });
+
     const result = await claimGuestOrders(clerkId, TEST_PHONE);
-    // Should migrate 1 order + 1 cart item (the second batch)
+    // Should migrate 1 order + 1 cart item + 1 wishlist row (the second batch)
     expect(result.ordersMigrated).toBe(1);
     expect(result.cartItemsMigrated).toBe(1);
+    expect(result.wishlistMigrated).toBe(1);
 
     // Verify the second order migrated
     const [order] = await db

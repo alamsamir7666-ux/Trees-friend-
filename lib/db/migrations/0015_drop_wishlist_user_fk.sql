@@ -1,0 +1,27 @@
+-- ─── Migration 0015: Drop FK on wishlist.user_id ─────────────────────────────
+--
+-- Extends the Daraz-style guest checkout (Parts 2/3 already dropped the same
+-- FK on cart_items via 0013 and orders via 0014) to cover wishlist rows.
+--
+-- Phone-verified guests have a guest JWT that sets req.userId = "guest_<phone>",
+-- but they don't have a users row (that's the whole point of guest checkout —
+-- no account). The FK constraint on wishlist.user_id → users.clerk_id prevents
+-- inserting wishlist rows for guest users, causing a 500 error.
+--
+-- This mirrors migrations 0013 (cart_items) and 0014 (orders). wishlist.user_id
+-- is now a free-text column — same pattern. Migrations 0013/0014 already proved
+-- this approach is safe in production for cart + orders.
+--
+-- ─── Safety ──────────────────────────────────────────────────────────────────
+--   * Idempotent (IF EXISTS on the DROP).
+--   * No data migration — existing wishlist rows are untouched.
+--   * The column itself stays NOT NULL — guests always have a userId
+--     ("guest_<phone>"), and logged-in users still have their clerkId.
+--   * Cascade behavior is preserved at the application layer: routes/wishlist.ts
+--     scopes every read/write by userId, and cleanupAll deletes by prefix.
+--   * wishlist partial unique indexes (wishlist_user_product_unique,
+--     wishlist_user_seller_listing_variant_unique) still hold — guest_<phone>
+--     is just another distinct userId value, so two guests never collide.
+-- ────────────────────────────────────────────────────────────────────────────
+
+ALTER TABLE wishlist DROP CONSTRAINT IF EXISTS wishlist_user_id_fkey;

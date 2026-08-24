@@ -10,9 +10,9 @@ import {
   useValidateCoupon,
   useListAddresses,
   getGetCartQueryKey,
+  getGetWishlistQueryKey,
   getListAddressesQueryKey,
   createBkashPayment,
-  createBkashPaymentGuest,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,7 @@ import {
 import { Link } from "wouter";
 import { useUser } from "@clerk/react";
 import { useGuestCart } from "@/hooks/useGuestCart";
+import { useGuestWishlist } from "@/hooks/useGuestWishlist";
 import { apiClient } from "@/lib/apiClient";
 
 type PaymentMethod = "bkash" | "cod";
@@ -78,6 +79,7 @@ export function CheckoutPage() {
   const isGuest = userLoaded && !user && !isVerified;
   const [showOtpModal, setShowOtpModal] = useState(false);
   const guestCart = useGuestCart();
+  const guestWishlist = useGuestWishlist();
   const { data: cart, isLoading: cartLoading } = useGetCart({
     query: { enabled: !isGuest, queryKey: getGetCartQueryKey() },
   });
@@ -358,42 +360,6 @@ export function CheckoutPage() {
         "Your order was placed, but we couldn't start bKash payment just now. You can retry payment from your order page.",
       );
       setLocation(`/orders/${firstBkash.id}`);
-    }
-  }
-
-  /**
-   * GUEST equivalent — uses the same session-based endpoint when a
-   * paymentSessionId is available. Guest checkout always produces one
-   * order (admin-direct only), so there's no multi-seller problem, but
-   * using the session endpoint keeps the flow consistent.
-   */
-  async function payGuestBkashOrderOrGoToOrder(
-    trackingId: string,
-    method: PaymentMethod,
-    paymentSessionId?: number | null,
-  ) {
-    if (method !== "bkash") {
-      setLocation(`/orders/${trackingId}`);
-      return;
-    }
-    setRedirectingToBkash(true);
-    try {
-      if (paymentSessionId) {
-        const { data: sessionData } = await apiClient.post<{
-          bkashURL: string;
-          paymentID: string;
-        }>("/bkash/create-payment-session", { paymentSessionId });
-        window.location.href = sessionData.bkashURL;
-      } else {
-        const session = await createBkashPaymentGuest({ trackingId });
-        window.location.href = session.bkashURL;
-      }
-    } catch {
-      setRedirectingToBkash(false);
-      setSubmitError(
-        "Your order was placed, but we couldn't start bKash payment just now. You can retry payment from your order page.",
-      );
-      setLocation(`/orders/${trackingId}`);
     }
   }
 
@@ -1231,6 +1197,43 @@ export function CheckoutPage() {
             // Empty localStorage cart — just invalidate so useGetCart fires
             qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
           }
+
+          // Merge localStorage wishlist → server wishlist (same pattern
+          // as the cart merge above). A verified guest can now persist
+          // their wishlist server-side under userId = "guest_<phone>",
+          // and when they later sign up with the same phone, the rows
+          // migrate to their clerkId via accountClaim.ts (mirroring the
+          // cart + orders claim flow).
+          const wishlistProducts = guestWishlist.items;
+          const wishlistVariants = guestWishlist.sellerListingItems;
+          if (wishlistProducts.length > 0 || wishlistVariants.length > 0) {
+            apiClient
+              .post("/wishlist/merge", {
+                products: wishlistProducts.map((i) => ({ productId: i.productId })),
+                sellerListingVariants: wishlistVariants.map((i) => ({
+                  sellerListingVariantId: i.sellerListingVariantId,
+                })),
+              })
+              .then(() => {
+                // Clear localStorage wishlist on success — same pattern
+                // as guestCart.clearCart(). The server wishlist is now
+                // the source of truth; localStorage would just cause a
+                // duplicate merge on the next OTP verify.
+                guestWishlist.clearWishlist();
+                guestWishlist.clearSellerListingWishlist();
+                qc.invalidateQueries({ queryKey: getGetWishlistQueryKey() });
+              })
+              .catch(() => {
+                // Non-fatal — wishlist isn't on the checkout critical
+                // path. The buyer's hearts are still in localStorage
+                // and will retry on the next OTP verify, or be visible
+                // via the client-side wishlist context.
+                qc.invalidateQueries({ queryKey: getGetWishlistQueryKey() });
+              });
+          } else {
+            // Empty localStorage wishlist — just invalidate so useGetWishlist fires
+            qc.invalidateQueries({ queryKey: getGetWishlistQueryKey() });
+          }
         }}
       />
 
@@ -1249,22 +1252,19 @@ export function CheckoutPage() {
           <DialogHeader>
             <DialogTitle>Order placed! 🎉</DialogTitle>
             <DialogDescription>
-              Your order has been placed successfully. Create an account to track your order,
-              earn loyalty points, and save your details for next time.
+              Your order has been placed successfully. Create an account to track your order, earn
+              loyalty points, and save your details for next time.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
               Your phone number{" "}
-              <span className="font-medium text-foreground">{guestPhone ?? address.phone}</span>{" "}
-              is already verified — creating an account takes seconds.
+              <span className="font-medium text-foreground">{guestPhone ?? address.phone}</span> is
+              already verified — creating an account takes seconds.
             </p>
           </div>
           <div className="flex flex-col gap-2 mt-4">
-            <Button
-              className="w-full rounded-full h-11"
-              onClick={() => setLocation("/sign-up")}
-            >
+            <Button className="w-full rounded-full h-11" onClick={() => setLocation("/sign-up")}>
               Create Account
             </Button>
             <Button
@@ -1272,7 +1272,9 @@ export function CheckoutPage() {
               className="w-full text-sm text-muted-foreground hover:text-foreground"
               onClick={() => {
                 // Navigate to the first order's detail page
-                const orderIds = JSON.parse(sessionStorage.getItem("last_checkout_order_ids") ?? "[]");
+                const orderIds = JSON.parse(
+                  sessionStorage.getItem("last_checkout_order_ids") ?? "[]",
+                );
                 if (orderIds.length > 0) {
                   setLocation(`/orders/${orderIds[0]}`);
                 } else {
