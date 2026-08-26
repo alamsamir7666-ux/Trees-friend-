@@ -163,26 +163,37 @@ function ProductPicker({
   disabled?: boolean;
 }) {
   const [query, setQuery] = useState("");
-  const { data, isFetching } = useListProducts(
-    { search: query.trim(), limit: 8 },
-    { query: { enabled: query.trim().length > 1 } } as any,
-  );
+  const { data, isFetching } = useListProducts({ search: query.trim(), limit: 8 }, {
+    query: { enabled: query.trim().length > 1 },
+  } as any);
   const results = data?.products ?? [];
 
   if (selected) {
     return (
       <div className="flex items-center gap-3 border rounded-xl p-2.5 bg-muted/20">
         {selected.images?.[0] ? (
-          <img src={selected.images[0]} alt="" className="h-10 w-10 rounded-lg object-cover shrink-0" />
+          <img
+            src={selected.images[0]}
+            alt=""
+            className="h-10 w-10 rounded-lg object-cover shrink-0"
+          />
         ) : (
           <div className="h-10 w-10 rounded-lg bg-muted shrink-0" />
         )}
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium truncate">{selected.name}</p>
-          {selected.scientificName && <p className="text-xs text-muted-foreground italic truncate">{selected.scientificName}</p>}
+          {selected.scientificName && (
+            <p className="text-xs text-muted-foreground italic truncate">
+              {selected.scientificName}
+            </p>
+          )}
         </div>
         {!disabled && (
-          <button type="button" onClick={() => onSelect(null)} className="text-muted-foreground hover:text-destructive shrink-0">
+          <button
+            type="button"
+            onClick={() => onSelect(null)}
+            className="text-muted-foreground hover:text-destructive shrink-0"
+          >
             <X className="h-4 w-4" />
           </button>
         )}
@@ -206,7 +217,9 @@ function ProductPicker({
           {isFetching ? (
             <div className="p-3 text-sm text-muted-foreground">Searching…</div>
           ) : results.length === 0 ? (
-            <div className="p-3 text-sm text-muted-foreground">No varieties found. Only admin-created varieties can be listed against.</div>
+            <div className="p-3 text-sm text-muted-foreground">
+              No varieties found. Only admin-created varieties can be listed against.
+            </div>
           ) : (
             results.map((p) => (
               <button
@@ -216,13 +229,21 @@ function ProductPicker({
                 className="w-full flex items-center gap-3 p-2.5 text-left hover:bg-muted/50 transition-colors"
               >
                 {p.images?.[0] ? (
-                  <img src={p.images[0]} alt="" className="h-9 w-9 rounded-lg object-cover shrink-0" />
+                  <img
+                    src={p.images[0]}
+                    alt=""
+                    className="h-9 w-9 rounded-lg object-cover shrink-0"
+                  />
                 ) : (
                   <div className="h-9 w-9 rounded-lg bg-muted shrink-0" />
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium truncate">{p.name}</p>
-                  {p.scientificName && <p className="text-xs text-muted-foreground italic truncate">{p.scientificName}</p>}
+                  {p.scientificName && (
+                    <p className="text-xs text-muted-foreground italic truncate">
+                      {p.scientificName}
+                    </p>
+                  )}
                 </div>
               </button>
             ))
@@ -256,7 +277,9 @@ function ControlledAttributeSelect({
   value: string;
   onChange: (v: string) => void;
 }) {
-  const { data: options, isLoading } = useListListingAttributeOptions(categoryId, { attributeName });
+  const { data: options, isLoading } = useListListingAttributeOptions(categoryId, {
+    attributeName,
+  });
 
   return (
     <div>
@@ -265,7 +288,8 @@ function ControlledAttributeSelect({
         <div className="h-9 mt-1 rounded-lg border bg-muted/30 animate-pulse" />
       ) : !options || options.length === 0 ? (
         <p className="text-xs text-muted-foreground mt-1.5 border rounded-lg px-3 py-2 bg-muted/20">
-          No {label.toLowerCase()} options configured for this variety's category yet — ask admin to add some.
+          No {label.toLowerCase()} options configured for this variety's category yet — ask admin to
+          add some.
         </p>
       ) : (
         <select
@@ -275,7 +299,9 @@ function ControlledAttributeSelect({
         >
           <option value="">Not specified</option>
           {options.map((o) => (
-            <option key={o.id} value={o.value}>{o.value}</option>
+            <option key={o.id} value={o.value}>
+              {o.value}
+            </option>
           ))}
         </select>
       )}
@@ -291,7 +317,15 @@ function ControlledAttributeSelect({
  * create; `onDone` is called after a successful save so the parent
  * (SellerDashboardPage) can close the form and refresh the inventory list.
  */
-export function SellerListingForm({ editing, onDone, onCancel }: { editing?: SellerListing; onDone: () => void; onCancel: () => void }) {
+export function SellerListingForm({
+  editing,
+  onDone,
+  onCancel,
+}: {
+  editing?: SellerListing;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
   const qc = useQueryClient();
   const { getToken } = useAuth();
   const [product, setProduct] = useState<Product | null>(null);
@@ -342,7 +376,11 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
     setDraft((d) => ({ ...d, [key]: value }));
   }
 
-  function setVariantField<K extends keyof VariantDraft>(variantKey: string, key: K, value: VariantDraft[K]) {
+  function setVariantField<K extends keyof VariantDraft>(
+    variantKey: string,
+    key: K,
+    value: VariantDraft[K],
+  ) {
     setVariants((prev) => prev.map((v) => (v.key === variantKey ? { ...v, [key]: value } : v)));
   }
 
@@ -388,15 +426,21 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
   }
 
   function removeImage(url: string) {
-    set("images", draft.images.filter((i) => i !== url));
+    set(
+      "images",
+      draft.images.filter((i) => i !== url),
+    );
   }
 
   function validateVariantsLocally(): string | null {
-    if (variants.length === 0) return "At least one variant (e.g. Seed, Sapling, Grafted, Potted) is required";
+    if (variants.length === 0)
+      return "At least one variant (e.g. Seed, Sapling, Grafted, Potted) is required";
     for (const v of variants) {
       const label = v.form || "this variant";
-      if (!v.price || isNaN(Number(v.price)) || Number(v.price) <= 0) return `A valid price is required for ${label}`;
-      if (v.discountPrice && Number(v.discountPrice) >= Number(v.price)) return `Discount price must be less than regular price for ${label}`;
+      if (!v.price || isNaN(Number(v.price)) || Number(v.price) <= 0)
+        return `A valid price is required for ${label}`;
+      if (v.discountPrice && Number(v.discountPrice) >= Number(v.price))
+        return `Discount price must be less than regular price for ${label}`;
     }
     return null;
   }
@@ -424,7 +468,10 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
       description: draft.description || undefined,
       offerText: draft.offerText || undefined,
       certification: draft.certification || undefined,
-      tags: draft.tags.split(",").map((t) => t.trim()).filter(Boolean),
+      tags: draft.tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean),
     };
 
     if (editing) {
@@ -498,44 +545,86 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
   return (
     <form onSubmit={handleSubmit} className="space-y-4 bg-card border rounded-2xl p-6">
       <div>
-        <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Variety *</Label>
+        <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Variety *
+        </Label>
         <div className="mt-1.5">
-          <ProductPicker selected={product} onSelect={(p) => { setProduct(p); set("productId", p?.id ?? null); }} disabled={!!editing} />
+          <ProductPicker
+            selected={product}
+            onSelect={(p) => {
+              setProduct(p);
+              set("productId", p?.id ?? null);
+            }}
+            disabled={!!editing}
+          />
         </div>
-        {editing && <p className="text-xs text-muted-foreground mt-1">The variety a listing is against can't be changed after creation.</p>}
+        {editing && (
+          <p className="text-xs text-muted-foreground mt-1">
+            The variety a listing is against can't be changed after creation.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label className="text-xs text-muted-foreground">Delivery Time (days)</Label>
-          <Input type="number" value={draft.deliveryTimeDays} onChange={(e) => set("deliveryTimeDays", e.target.value)} placeholder="Optional" className="mt-1 h-9 rounded-lg text-sm" />
+          <Input
+            type="number"
+            value={draft.deliveryTimeDays}
+            onChange={(e) => set("deliveryTimeDays", e.target.value)}
+            placeholder="Optional"
+            className="mt-1 h-9 rounded-lg text-sm"
+          />
         </div>
         <div>
           <Label className="text-xs text-muted-foreground">Warranty (days)</Label>
-          <Input type="number" value={draft.warrantyDays} onChange={(e) => set("warrantyDays", e.target.value)} placeholder="Optional" className="mt-1 h-9 rounded-lg text-sm" />
+          <Input
+            type="number"
+            value={draft.warrantyDays}
+            onChange={(e) => set("warrantyDays", e.target.value)}
+            placeholder="Optional"
+            className="mt-1 h-9 rounded-lg text-sm"
+          />
         </div>
         <div className="col-span-2">
           <Label className="text-xs text-muted-foreground">Payment Method</Label>
-          <select value={draft.paymentMethod} onChange={(e) => set("paymentMethod", e.target.value)} className="w-full mt-1 h-9 rounded-lg border border-input px-3 text-sm bg-background">
-            {PAYMENT_METHODS.map((m) => (<option key={m.value} value={m.value}>{m.label}</option>))}
+          <select
+            value={draft.paymentMethod}
+            onChange={(e) => set("paymentMethod", e.target.value)}
+            className="w-full mt-1 h-9 rounded-lg border border-input px-3 text-sm bg-background"
+          >
+            {PAYMENT_METHODS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
           </select>
         </div>
       </div>
-      <p className="text-xs text-warning-foreground -mt-1">
-        Advance payment requires a verified bKash merchant account (Payment Settings tab). Saving credentials
-        there isn't enough by itself — an admin has to verify the account first, so selecting advance/both here
-        will be rejected until that happens.
+      <p className="text-xs text-muted-foreground -mt-1">
+        Advance payments go to the platform's bKash merchant account, then your share is disbursed
+        to your personal bKash number after delivery. To offer advance or both, add your bKash
+        payout number in the Payment Settings tab first.
       </p>
 
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Variants *</Label>
-          <Button type="button" variant="outline" size="sm" className="rounded-full h-7 text-xs gap-1" onClick={addVariant}>
+          <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Variants *
+          </Label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="rounded-full h-7 text-xs gap-1"
+            onClick={addVariant}
+          >
             <Plus className="h-3 w-3" /> Add another variant
           </Button>
         </div>
         <p className="text-xs text-muted-foreground -mt-1">
-          Each variant is a separately priced/stocked option under this listing (e.g. Seed, Sapling, Grafted). A listing needs at least one.
+          Each variant is a separately priced/stocked option under this listing (e.g. Seed, Sapling,
+          Grafted). A listing needs at least one.
         </p>
 
         {variants.map((v, i) => (
@@ -557,7 +646,11 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs text-muted-foreground">Form</Label>
-                <select value={v.form} onChange={(e) => setVariantField(v.key, "form", e.target.value)} className="w-full mt-1 h-9 rounded-lg border border-input px-3 text-sm bg-background">
+                <select
+                  value={v.form}
+                  onChange={(e) => setVariantField(v.key, "form", e.target.value)}
+                  className="w-full mt-1 h-9 rounded-lg border border-input px-3 text-sm bg-background"
+                >
                   <option value="">Not specified</option>
                   <option value="seed">Seed</option>
                   <option value="sapling">Sapling</option>
@@ -567,7 +660,12 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Condition</Label>
-                <Input value={v.condition} onChange={(e) => setVariantField(v.key, "condition", e.target.value)} placeholder="e.g. Healthy, disease-free" className="mt-1 h-9 rounded-lg text-sm" />
+                <Input
+                  value={v.condition}
+                  onChange={(e) => setVariantField(v.key, "condition", e.target.value)}
+                  placeholder="e.g. Healthy, disease-free"
+                  className="mt-1 h-9 rounded-lg text-sm"
+                />
               </div>
             </div>
 
@@ -586,26 +684,51 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
               </div>
             ) : (
               <p className="text-xs text-muted-foreground border rounded-lg px-3 py-2 bg-muted/20">
-                Select a variety above to set Height, Pot Size, Age, and Root Type — these come from a fixed list per category, not free text.
+                Select a variety above to set Height, Pot Size, Age, and Root Type — these come from
+                a fixed list per category, not free text.
               </p>
             )}
 
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs text-muted-foreground">Price (Tk) *</Label>
-                <Input type="number" value={v.price} onChange={(e) => setVariantField(v.key, "price", e.target.value)} placeholder="0" className="mt-1 h-9 rounded-lg text-sm" />
+                <Input
+                  type="number"
+                  value={v.price}
+                  onChange={(e) => setVariantField(v.key, "price", e.target.value)}
+                  placeholder="0"
+                  className="mt-1 h-9 rounded-lg text-sm"
+                />
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Discount Price (Tk)</Label>
-                <Input type="number" value={v.discountPrice} onChange={(e) => setVariantField(v.key, "discountPrice", e.target.value)} placeholder="Optional" className="mt-1 h-9 rounded-lg text-sm" />
+                <Input
+                  type="number"
+                  value={v.discountPrice}
+                  onChange={(e) => setVariantField(v.key, "discountPrice", e.target.value)}
+                  placeholder="Optional"
+                  className="mt-1 h-9 rounded-lg text-sm"
+                />
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Stock</Label>
-                <Input type="number" value={v.stock} onChange={(e) => setVariantField(v.key, "stock", e.target.value)} placeholder="0" className="mt-1 h-9 rounded-lg text-sm" />
+                <Input
+                  type="number"
+                  value={v.stock}
+                  onChange={(e) => setVariantField(v.key, "stock", e.target.value)}
+                  placeholder="0"
+                  className="mt-1 h-9 rounded-lg text-sm"
+                />
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Delivery Charge (Tk)</Label>
-                <Input type="number" value={v.deliveryCharge} onChange={(e) => setVariantField(v.key, "deliveryCharge", e.target.value)} placeholder="0" className="mt-1 h-9 rounded-lg text-sm" />
+                <Input
+                  type="number"
+                  value={v.deliveryCharge}
+                  onChange={(e) => setVariantField(v.key, "deliveryCharge", e.target.value)}
+                  placeholder="0"
+                  className="mt-1 h-9 rounded-lg text-sm"
+                />
               </div>
             </div>
 
@@ -638,25 +761,51 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
       </div>
       <div>
         <Label className="text-xs text-muted-foreground">Description</Label>
-        <Textarea value={draft.description} onChange={(e) => set("description", e.target.value)} rows={3} className="mt-1" placeholder="Optional" />
+        <Textarea
+          value={draft.description}
+          onChange={(e) => set("description", e.target.value)}
+          rows={3}
+          className="mt-1"
+          placeholder="Optional"
+        />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label className="text-xs text-muted-foreground">Special Offer Text</Label>
-          <Input value={draft.offerText} onChange={(e) => set("offerText", e.target.value)} placeholder="Optional" className="mt-1 h-9 rounded-lg text-sm" />
+          <Input
+            value={draft.offerText}
+            onChange={(e) => set("offerText", e.target.value)}
+            placeholder="Optional"
+            className="mt-1 h-9 rounded-lg text-sm"
+          />
         </div>
         <div>
           <Label className="text-xs text-muted-foreground">Certification</Label>
-          <Input value={draft.certification} onChange={(e) => set("certification", e.target.value)} placeholder="Optional" className="mt-1 h-9 rounded-lg text-sm" />
+          <Input
+            value={draft.certification}
+            onChange={(e) => set("certification", e.target.value)}
+            placeholder="Optional"
+            className="mt-1 h-9 rounded-lg text-sm"
+          />
         </div>
       </div>
       <div>
         <Label className="text-xs text-muted-foreground">Tags (comma-separated)</Label>
-        <Input value={draft.tags} onChange={(e) => set("tags", e.target.value)} placeholder="e.g. organic, best-seller" className="mt-1 h-9 rounded-lg text-sm" />
+        <Input
+          value={draft.tags}
+          onChange={(e) => set("tags", e.target.value)}
+          placeholder="e.g. organic, best-seller"
+          className="mt-1 h-9 rounded-lg text-sm"
+        />
       </div>
       <div>
         <Label className="text-xs text-muted-foreground">Video URL</Label>
-        <Input value={draft.videoUrl} onChange={(e) => set("videoUrl", e.target.value)} placeholder="Optional" className="mt-1 h-9 rounded-lg text-sm" />
+        <Input
+          value={draft.videoUrl}
+          onChange={(e) => set("videoUrl", e.target.value)}
+          placeholder="Optional"
+          className="mt-1 h-9 rounded-lg text-sm"
+        />
       </div>
 
       <div>
@@ -665,23 +814,46 @@ export function SellerListingForm({ editing, onDone, onCancel }: { editing?: Sel
           {draft.images.map((url) => (
             <div key={url} className="relative">
               <img src={url} alt="" className="h-16 w-16 rounded-lg object-cover border" />
-              <button type="button" onClick={() => removeImage(url)} className="absolute -top-1.5 -right-1.5 bg-foreground/60 hover:bg-foreground/80 text-background rounded-full p-0.5">
+              <button
+                type="button"
+                onClick={() => removeImage(url)}
+                className="absolute -top-1.5 -right-1.5 bg-foreground/60 hover:bg-foreground/80 text-background rounded-full p-0.5"
+              >
                 <X className="h-3 w-3" />
               </button>
             </div>
           ))}
           <label className="h-16 w-16 rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer text-muted-foreground hover:bg-muted/30 transition-colors">
-            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            <input type="file" accept="image/*" multiple className="hidden" disabled={uploading} onChange={(e) => handleImageUpload(e.target.files)} />
+            {uploading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Upload className="h-4 w-4" />
+            )}
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              disabled={uploading}
+              onChange={(e) => handleImageUpload(e.target.files)}
+            />
           </label>
         </div>
       </div>
 
       <div className="flex gap-3 pt-2">
         <Button type="submit" className="flex-1 rounded-full" disabled={saving}>
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? "Save Changes" : "Create Listing"}
+          {saving ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : editing ? (
+            "Save Changes"
+          ) : (
+            "Create Listing"
+          )}
         </Button>
-        <Button type="button" variant="outline" className="rounded-full" onClick={onCancel}>Cancel</Button>
+        <Button type="button" variant="outline" className="rounded-full" onClick={onCancel}>
+          Cancel
+        </Button>
       </div>
     </form>
   );
