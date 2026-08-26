@@ -29,7 +29,6 @@ export * from "./sellers";
 export * from "./sellerListings";
 export * from "./sellerListingVariants";
 export * from "./sellerSubscriptions";
-export * from "./sellerPaymentConfigs";
 export * from "./sellerCourierConfigs";
 export * from "./listingAttributeOptions";
 export * from "./orderShipments";

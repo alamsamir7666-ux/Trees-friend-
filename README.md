@@ -42,7 +42,7 @@ A Bangladesh-targeted plant marketplace where buyers can purchase trees, sapling
 │   │   └── vite.config.ts
 │   └── mockup-sandbox/      # Vite sandbox for design previews
 ├── lib/
-│   ├── db/                  # Drizzle ORM schema + migrations (41 tables)
+│   ├── db/                  # Drizzle ORM schema + migrations (40 tables)
 │   │   ├── src/
 │   │   │   ├── schema/      # One file per table
 │   │   │   ├── logic/       # Shared DB logic (orders, sellerListings)
@@ -82,7 +82,7 @@ pnpm install
 cp artifacts/api-server/.env.example artifacts/api-server/.env
 # Edit .env with your DATABASE_URL, CLERK_SECRET_KEY, CLERK_PUBLISHABLE_KEY, etc.
 
-# 3. Push DB schema (creates all 41 tables)
+# 3. Push DB schema (creates all 40 tables)
 cd lib/db
 DATABASE_URL="postgresql://..." pnpm run push
 cd ../..
@@ -175,13 +175,13 @@ If no reranker API keys are set, the system gracefully degrades to local fallbac
 
 ## Database Schema
 
-41 tables across 9 domains:
+40 tables across 9 domains:
 
 - **Users/auth** (3): `users`, `addresses`, `email_preferences`
 - **Products/catalog** (6): `products`, `product_variants`, `categories`, `homepage_sections`, `listing_attribute_options`, `blog_posts`
 - **Orders/checkout** (8): `orders`, `cart_items`, `wishlist`, `returns`, `pre_orders`, `subscriptions`, `gift_cards`, `gift_card_transactions`
 - **Sellers/marketplace** (5): `sellers`, `seller_listings`, `seller_listing_variants`, `seller_subscriptions`, `follows`
-- **Payments** (4): `seller_payment_configs`, `platform_payment_config`, `seller_payout_accounts`, `payouts`
+- **Payments** (3): `platform_payment_config`, `seller_payout_accounts`, `payouts`
 - **Shipping** (2): `order_shipments`, `seller_courier_configs`
 - **Conversations** (2): `conversations`, `messages`
 - **Marketing** (7): `coupons`, `referrals`, `loyalty_points`, `loyalty_transactions`, `stock_alerts`, `abandoned_carts`, `newsletter_subscribers`

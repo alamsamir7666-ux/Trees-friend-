@@ -1,22 +1,42 @@
 import { useState, type ReactNode } from "react";
 import {
-  CheckCircle2, XCircle, Ban, Loader2, ExternalLink,
-  Wallet, Truck, ShieldCheck, BadgeCheck, Store, MapPin, Phone, Mail,
-  User, FileText, CalendarDays, Users2, Inbox, Search,
+  CheckCircle2,
+  XCircle,
+  Ban,
+  Loader2,
+  ExternalLink,
+  BadgeCheck,
+  Store,
+  MapPin,
+  Phone,
+  Mail,
+  User,
+  FileText,
+  CalendarDays,
+  Users2,
+  Inbox,
+  Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select";
-import {
-  Card, CardContent,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Pagination, PaginationContent, PaginationItem, PaginationLink,
-  PaginationEllipsis, PaginationNext, PaginationPrevious,
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationEllipsis,
+  PaginationNext,
+  PaginationPrevious,
 } from "@/components/ui/pagination";
 import {
   useListSellers,
@@ -26,12 +46,6 @@ import {
   useSuspendSeller,
   getListSellersQueryKey,
   getListSellerCountsQueryKey,
-  useListAdminSellerPaymentConfigs,
-  useVerifySellerPaymentConfig,
-  getListAdminSellerPaymentConfigsQueryKey,
-  useListAdminSellerCourierConfigs,
-  useVerifySellerCourierConfig,
-  getListAdminSellerCourierConfigsQueryKey,
   useListSellerVerificationRequests,
   useVerifySeller,
   useRejectSellerVerification,
@@ -44,10 +58,7 @@ import { toast } from "sonner";
 // Mirrors the sellersTable.status enum (pending_verification | active |
 // suspended | vacation). Falls back to a neutral style for unknown values.
 
-const STATUS_META: Record<
-  string,
-  { label: string; tone: string; dot: string }
-> = {
+const STATUS_META: Record<string, { label: string; tone: string; dot: string }> = {
   pending_verification: {
     label: "Pending Review",
     tone: "bg-warning/15 text-warning-foreground border-warning-border",
@@ -125,9 +136,7 @@ function EmptyState({
         <Icon className="h-5 w-5" />
       </div>
       <p className="text-sm font-medium text-foreground">{title}</p>
-      {description && (
-        <p className="text-xs text-muted-foreground mt-1 max-w-sm">{description}</p>
-      )}
+      {description && <p className="text-xs text-muted-foreground mt-1 max-w-sm">{description}</p>}
     </div>
   );
 }
@@ -198,14 +207,18 @@ export function SellersTab() {
   // Per-status counts -- single request for all 4 tab badges. Stale time
   // 60s so switching tabs doesn't refetch; invalidated alongside the list
   // when a mutation flips a seller's status.
-  const { data: counts } = useListSellerCounts(
-    { query: { queryKey: getListSellerCountsQueryKey(), staleTime: 60_000 } },
-  );
+  const { data: counts } = useListSellerCounts({
+    query: { queryKey: getListSellerCountsQueryKey(), staleTime: 60_000 },
+  });
 
   const offset = (page - 1) * pageSize;
   const { data: sellers, isLoading } = useListSellers(
     { status: statusFilter, limit: pageSize, offset },
-    { query: { queryKey: getListSellersQueryKey({ status: statusFilter, limit: pageSize, offset }) } },
+    {
+      query: {
+        queryKey: getListSellersQueryKey({ status: statusFilter, limit: pageSize, offset }),
+      },
+    },
   );
 
   const approveSeller = useApproveSeller();
@@ -225,20 +238,37 @@ export function SellersTab() {
     approveSeller.mutate(
       { id },
       {
-        onSuccess: () => { toast.success("Seller approved"); invalidateAll(); setActingOn(null); },
-        onError: (err: any) => { toast.error(err?.message ?? "Failed to approve seller"); setActingOn(null); },
+        onSuccess: () => {
+          toast.success("Seller approved");
+          invalidateAll();
+          setActingOn(null);
+        },
+        onError: (err: any) => {
+          toast.error(err?.message ?? "Failed to approve seller");
+          setActingOn(null);
+        },
       },
     );
   }
 
   function handleReject(id: number) {
-    if (!confirm("Reject this application? The seller record will be removed and they can re-apply.")) return;
+    if (
+      !confirm("Reject this application? The seller record will be removed and they can re-apply.")
+    )
+      return;
     setActingOn(id);
     rejectSeller.mutate(
       { id, data: {} },
       {
-        onSuccess: () => { toast.success("Application rejected"); invalidateAll(); setActingOn(null); },
-        onError: (err: any) => { toast.error(err?.message ?? "Failed to reject application"); setActingOn(null); },
+        onSuccess: () => {
+          toast.success("Application rejected");
+          invalidateAll();
+          setActingOn(null);
+        },
+        onError: (err: any) => {
+          toast.error(err?.message ?? "Failed to reject application");
+          setActingOn(null);
+        },
       },
     );
   }
@@ -249,8 +279,15 @@ export function SellersTab() {
     suspendSeller.mutate(
       { id },
       {
-        onSuccess: () => { toast.success("Seller suspended"); invalidateAll(); setActingOn(null); },
-        onError: (err: any) => { toast.error(err?.message ?? "Failed to suspend seller"); setActingOn(null); },
+        onSuccess: () => {
+          toast.success("Seller suspended");
+          invalidateAll();
+          setActingOn(null);
+        },
+        onError: (err: any) => {
+          toast.error(err?.message ?? "Failed to suspend seller");
+          setActingOn(null);
+        },
       },
     );
   }
@@ -299,7 +336,9 @@ export function SellersTab() {
               {totalForCurrentStatus === 1 ? "seller" : "sellers"}
             </span>
             <span className="text-muted-foreground/50 mx-0.5">·</span>
-            <span className="text-muted-foreground font-normal">{STATUS_META[statusFilter].label}</span>
+            <span className="text-muted-foreground font-normal">
+              {STATUS_META[statusFilter].label}
+            </span>
           </Badge>
         }
       />
@@ -367,10 +406,7 @@ export function SellersTab() {
               {filtered.map((s: any) => {
                 const meta = STATUS_META[s.status as string] ?? STATUS_META.active;
                 return (
-                  <div
-                    key={s.id}
-                    className="p-4 sm:p-5 transition-colors hover:bg-muted/20"
-                  >
+                  <div key={s.id} className="p-4 sm:p-5 transition-colors hover:bg-muted/20">
                     <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
                       {/* ── Left: identity ────────────────────────────────────── */}
                       <div className="min-w-0 flex-1">
@@ -431,7 +467,12 @@ export function SellersTab() {
                           )}
                           {s.createdAt && (
                             <InfoRow icon={CalendarDays}>
-                              Applied {new Date(s.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
+                              Applied{" "}
+                              {new Date(s.createdAt).toLocaleDateString(undefined, {
+                                year: "numeric",
+                                month: "short",
+                                day: "numeric",
+                              })}
                             </InfoRow>
                           )}
                           {s.nidOrTradeLicenseUrl && (
@@ -512,7 +553,9 @@ export function SellersTab() {
           {!search.trim() && totalForCurrentStatus > 0 && (
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-5 py-3 border-t bg-muted/20">
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="tabular-nums">{rangeText(page, pageSize, totalForCurrentStatus)}</span>
+                <span className="tabular-nums">
+                  {rangeText(page, pageSize, totalForCurrentStatus)}
+                </span>
                 <span className="hidden sm:inline text-muted-foreground/40">·</span>
                 <div className="hidden sm:flex items-center gap-1.5">
                   <span>Rows:</span>
@@ -537,7 +580,10 @@ export function SellersTab() {
                     <PaginationItem>
                       <PaginationPrevious
                         href="#"
-                        onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setPage(Math.max(1, page - 1));
+                        }}
                         aria-disabled={page === 1}
                         className={page === 1 ? "pointer-events-none opacity-50" : ""}
                       />
@@ -552,7 +598,10 @@ export function SellersTab() {
                           <PaginationLink
                             href="#"
                             isActive={p === page}
-                            onClick={(e) => { e.preventDefault(); setPage(p); }}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setPage(p);
+                            }}
                           >
                             {p}
                           </PaginationLink>
@@ -562,7 +611,10 @@ export function SellersTab() {
                     <PaginationItem>
                       <PaginationNext
                         href="#"
-                        onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setPage(Math.min(totalPages, page + 1));
+                        }}
                         aria-disabled={page === totalPages}
                         className={page === totalPages ? "pointer-events-none opacity-50" : ""}
                       />
@@ -576,7 +628,6 @@ export function SellersTab() {
       </Card>
 
       <PendingSellerVerification />
-      <PendingConfigVerification />
     </div>
   );
 }
@@ -586,9 +637,8 @@ export function SellersTab() {
 /**
  * Verified-seller badge review queue (public trust checkmark, separate
  * from the account-status queue above — see sellers.ts schema doc
- * comment / routes/adminSellers.ts's verify routes). Mirrors
- * PendingConfigVerification's shape/pending-vs-approved tab pattern
- * just below it, for a seller-level rather than config-level request.
+ * comment / routes/adminSellers.ts's verify routes). Mirrors the same
+ * pending-vs-approved tab pattern used by the seller-status queue above.
  */
 function PendingSellerVerification() {
   const qc = useQueryClient();
@@ -607,13 +657,21 @@ function PendingSellerVerification() {
   }
 
   function handleApprove(id: number) {
-    if (!confirm("Grant this seller the verified badge? It will show on all their listings.")) return;
+    if (!confirm("Grant this seller the verified badge? It will show on all their listings."))
+      return;
     setActingOn(id);
     verifySeller.mutate(
       { id },
       {
-        onSuccess: () => { toast.success("Seller verified"); invalidate(); setActingOn(null); },
-        onError: (err: any) => { toast.error(err?.message ?? "Failed to verify seller"); setActingOn(null); },
+        onSuccess: () => {
+          toast.success("Seller verified");
+          invalidate();
+          setActingOn(null);
+        },
+        onError: (err: any) => {
+          toast.error(err?.message ?? "Failed to verify seller");
+          setActingOn(null);
+        },
       },
     );
   }
@@ -624,14 +682,22 @@ function PendingSellerVerification() {
     rejectVerification.mutate(
       { id, data: { reason } },
       {
-        onSuccess: () => { toast.success("Verification request rejected"); invalidate(); setActingOn(null); },
-        onError: (err: any) => { toast.error(err?.message ?? "Failed to reject request"); setActingOn(null); },
+        onSuccess: () => {
+          toast.success("Verification request rejected");
+          invalidate();
+          setActingOn(null);
+        },
+        onError: (err: any) => {
+          toast.error(err?.message ?? "Failed to reject request");
+          setActingOn(null);
+        },
       },
     );
   }
 
   const count = sellers?.length ?? 0;
-  const filterLabel = filter === "requested" ? "Pending" : filter === "approved" ? "Verified" : "Rejected";
+  const filterLabel =
+    filter === "requested" ? "Pending" : filter === "approved" ? "Verified" : "Rejected";
 
   return (
     <section className="pt-2">
@@ -649,11 +715,13 @@ function PendingSellerVerification() {
           <div className="mt-3">
             <Tabs value={filter} onValueChange={(v) => setFilter(v as typeof filter)}>
               <TabsList className="rounded-lg bg-muted/50 p-1">
-                {([
-                  { value: "requested", label: "Pending" },
-                  { value: "approved", label: "Verified" },
-                  { value: "rejected", label: "Rejected" },
-                ] as const).map((t) => (
+                {(
+                  [
+                    { value: "requested", label: "Pending" },
+                    { value: "approved", label: "Verified" },
+                    { value: "rejected", label: "Rejected" },
+                  ] as const
+                ).map((t) => (
                   <TabsTrigger
                     key={t.value}
                     value={t.value}
@@ -710,12 +778,19 @@ function PendingSellerVerification() {
                         </div>
                         {s.location && (
                           <div className="mt-1">
-                            <InfoRow icon={MapPin} title={s.location}>{s.location}</InfoRow>
+                            <InfoRow icon={MapPin} title={s.location}>
+                              {s.location}
+                            </InfoRow>
                           </div>
                         )}
                         {filter === "requested" && s.verificationRequestedAt && (
                           <p className="text-xs text-muted-foreground/70 mt-1.5">
-                            Requested {new Date(s.verificationRequestedAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
+                            Requested{" "}
+                            {new Date(s.verificationRequestedAt).toLocaleDateString(undefined, {
+                              year: "numeric",
+                              month: "short",
+                              day: "numeric",
+                            })}
                           </p>
                         )}
                         {filter === "rejected" && s.verificationRejectionReason && (
@@ -751,205 +826,6 @@ function PendingSellerVerification() {
                           Reject
                         </Button>
                       </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </section>
-  );
-}
-
-// ─── Sub-section: Payment & Courier Config Verification ───────────────────────
-
-/**
- * Payment/courier config verification queue (Part 6). Separate from the
- * seller status queue above — a seller must already be "active" to have
- * saved a config at all (routes/sellerPaymentConfigs.ts and
- * sellerCourierConfigs.ts both gate on requireSeller, which requires
- * status === "active"), so this doesn't need its own status filter, just
- * a verified/unverified toggle per config type. Defaults to showing
- * unverified (the actual review queue); "Verified" lets admin
- * double-check or revoke an existing approval.
- */
-function PendingConfigVerification() {
-  const qc = useQueryClient();
-  const [tab, setTab] = useState<"payment" | "courier">("payment");
-  const [showVerified, setShowVerified] = useState(false);
-  const [actingOn, setActingOn] = useState<number | null>(null);
-
-  const paymentConfigs = useListAdminSellerPaymentConfigs(
-    { verified: showVerified },
-    { query: { queryKey: getListAdminSellerPaymentConfigsQueryKey({ verified: showVerified }), enabled: tab === "payment" } },
-  );
-  const courierConfigs = useListAdminSellerCourierConfigs(
-    { verified: showVerified },
-    { query: { queryKey: getListAdminSellerCourierConfigsQueryKey({ verified: showVerified }), enabled: tab === "courier" } },
-  );
-  const verifyPayment = useVerifySellerPaymentConfig();
-  const verifyCourier = useVerifySellerCourierConfig();
-
-  function invalidateBoth() {
-    qc.invalidateQueries({ queryKey: getListAdminSellerPaymentConfigsQueryKey() });
-    qc.invalidateQueries({ queryKey: getListAdminSellerCourierConfigsQueryKey() });
-  }
-
-  function handleVerifyPayment(id: number) {
-    if (!confirm("Mark this bKash account as verified? This unlocks advance/bKash payment for the seller's listings. Confirm you've checked these credentials work before approving.")) return;
-    setActingOn(id);
-    verifyPayment.mutate(
-      { id },
-      {
-        onSuccess: () => { toast.success("Payment config verified"); invalidateBoth(); setActingOn(null); },
-        onError: (err: any) => { toast.error(err?.message ?? "Failed to verify payment config"); setActingOn(null); },
-      },
-    );
-  }
-
-  function handleVerifyCourier(id: number) {
-    if (!confirm("Mark this courier account as verified?")) return;
-    setActingOn(id);
-    verifyCourier.mutate(
-      { id },
-      {
-        onSuccess: () => { toast.success("Courier config verified"); invalidateBoth(); setActingOn(null); },
-        onError: (err: any) => { toast.error(err?.message ?? "Failed to verify courier config"); setActingOn(null); },
-      },
-    );
-  }
-
-  const isLoading = tab === "payment" ? paymentConfigs.isLoading : courierConfigs.isLoading;
-  const configs = tab === "payment" ? paymentConfigs.data : courierConfigs.data;
-  const configCount = configs?.length ?? 0;
-
-  return (
-    <section className="pt-2">
-      <div className="flex items-start gap-3 mb-4">
-        <div className="hidden sm:flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <ShieldCheck className="h-4.5 w-4.5" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-base font-semibold tracking-tight text-foreground">
-            Payment &amp; Courier Verification
-          </h2>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Manual review only — no live bKash/Pathao/Steadfast API check is performed here.
-            Confirm credentials work by some means outside this system before approving.
-          </p>
-          <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
-              <TabsList className="rounded-lg bg-muted/50 p-1">
-                <TabsTrigger
-                  value="payment"
-                  className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                >
-                  <Wallet className="h-3 w-3" />
-                  Payment
-                </TabsTrigger>
-                <TabsTrigger
-                  value="courier"
-                  className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                >
-                  <Truck className="h-3 w-3" />
-                  Courier
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-            <Tabs value={String(showVerified)} onValueChange={(v) => setShowVerified(v === "true")}>
-              <TabsList className="rounded-lg bg-muted/50 p-1">
-                <TabsTrigger
-                  value="false"
-                  className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                >
-                  Pending
-                  <span
-                    className={
-                      "inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums " +
-                      (!showVerified ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")
-                    }
-                  >
-                    {configCount}
-                  </span>
-                </TabsTrigger>
-                <TabsTrigger
-                  value="true"
-                  className="rounded-md text-xs gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                >
-                  Verified
-                  <span
-                    className={
-                      "inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums " +
-                      (showVerified ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")
-                    }
-                  >
-                    {configCount}
-                  </span>
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
-        </div>
-      </div>
-
-      <Card>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <div className="space-y-3 p-4 sm:p-5">
-              {[1, 2].map((i) => (
-                <div key={i} className="h-16 rounded-xl bg-muted/40 animate-pulse" />
-              ))}
-            </div>
-          ) : !configs || configs.length === 0 ? (
-            <EmptyState
-              icon={tab === "payment" ? Wallet : Truck}
-              title={`No ${showVerified ? "verified" : "pending"} ${tab} configs`}
-              description="When a seller saves a config for review, it'll appear here."
-            />
-          ) : (
-            <div className="divide-y">
-              {configs.map((c: any) => (
-                <div key={c.id} className="p-4 transition-colors hover:bg-muted/20">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-start gap-3 min-w-0">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-                        {tab === "payment" ? (
-                          <Wallet className="h-4 w-4" />
-                        ) : (
-                          <Truck className="h-4 w-4" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-medium text-sm text-foreground capitalize">
-                            {c.provider}
-                          </p>
-                          <span className="text-xs text-muted-foreground/70">·</span>
-                          <p className="text-xs text-muted-foreground">Seller #{c.sellerId}</p>
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-1 font-mono">
-                          {tab === "payment"
-                            ? `App Key: ${c.merchantAppKeyMasked} · Username: ${c.merchantUsernameMasked}`
-                            : `Key: ${c.apiKeyMasked} · Secret: ${c.apiSecretMasked}${c.storeId ? ` · Store ${c.storeId}` : ""}`}
-                        </p>
-                      </div>
-                    </div>
-                    {!showVerified && (
-                      <Button
-                        size="sm"
-                        className="gap-1.5 shrink-0"
-                        disabled={actingOn === c.id}
-                        onClick={() => (tab === "payment" ? handleVerifyPayment(c.id) : handleVerifyCourier(c.id))}
-                      >
-                        {actingOn === c.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                        )}
-                        Verify
-                      </Button>
                     )}
                   </div>
                 </div>

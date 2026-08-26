@@ -217,8 +217,8 @@ export interface CartItemSeller {
   businessName: string;
   nurseryName: string;
   location: string;
-  /** True only if this seller has a seller_payment_configs row with isVerified = true. Reflects the seller's live config state, which can drift from the listing's own paymentMethod field (e.g. after an admin unverifies a seller without touching their listings). Checkout uses this, not listing.paymentMethod alone, to decide whether bKash can actually be offered for this line. */
-  hasVerifiedPaymentConfig: boolean;
+  /** True if the platform's bKash merchant account is configured and verified (platformPaymentConfigTable.isVerified). Under the post-migration platform-custodial payments model, every buyer bKash payment settles into the platform's single merchant account regardless of which seller's listing is being bought, so this is a global flag — every seller on the cart gets the same value. Checkout uses this, not listing.paymentMethod alone, to decide whether bKash can actually be offered for this line. */
+  platformBkashVerified: boolean;
 }
 
 /**
@@ -402,47 +402,6 @@ export interface CreateSellerCourierConfigBody {
   storeId?: string;
 }
 
-export type SellerPaymentConfigProvider = typeof SellerPaymentConfigProvider[keyof typeof SellerPaymentConfigProvider];
-
-
-export const SellerPaymentConfigProvider = {
-  bkash: 'bkash',
-} as const;
-
-/**
- * Masked seller bKash merchant credentials (plan doc §4, §7 — Part 5). Never contains decrypted merchantAppKey/merchantAppSecret/ merchantUsername/merchantPassword -- only a last-4-style mask, per the schema's security note. isVerified is never set true by the create/replace route itself (no live-credential check exists) -- it stays false until some future verification step sets it, and routes/sellerListings.ts + routes/orders.ts both gate "advance"/"both"/"bkash" on isVerified specifically, not just row existence.
- */
-export interface SellerPaymentConfig {
-  id: number;
-  sellerId: number;
-  provider: SellerPaymentConfigProvider;
-  merchantAppKeyMasked: string;
-  merchantAppSecretMasked: string;
-  merchantUsernameMasked: string;
-  merchantPasswordMasked: string;
-  isVerified: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export type CreateSellerPaymentConfigBodyProvider = typeof CreateSellerPaymentConfigBodyProvider[keyof typeof CreateSellerPaymentConfigBodyProvider];
-
-
-export const CreateSellerPaymentConfigBodyProvider = {
-  bkash: 'bkash',
-} as const;
-
-/**
- * provider defaults to "bkash" (the only provider this schema/plan support today) if omitted. All four merchant credential fields are required -- bKash's merchant API needs all of them together, there is no partial-credential state.
- */
-export interface CreateSellerPaymentConfigBody {
-  provider?: CreateSellerPaymentConfigBodyProvider;
-  merchantAppKey: string;
-  merchantAppSecret: string;
-  merchantUsername: string;
-  merchantPassword: string;
-}
-
 export type PlatformPaymentConfigProvider = typeof PlatformPaymentConfigProvider[keyof typeof PlatformPaymentConfigProvider];
 
 
@@ -473,7 +432,7 @@ export const CreatePlatformPaymentConfigBodyProvider = {
 } as const;
 
 /**
- * provider defaults to "bkash" if omitted. All four merchant credential fields are required, same shape as CreateSellerPaymentConfigBody — this is the same bKash Merchant credential set, held by the admin account instead of a per-seller account.
+ * provider defaults to "bkash" if omitted. All four merchant credential fields are required. This is the bKash merchant credential set, held by the admin account (under the post-migration platform-custodial payments model, sellers no longer register their own merchant credentials).
  */
 export interface CreatePlatformPaymentConfigBody {
   provider?: CreatePlatformPaymentConfigBodyProvider;
@@ -524,7 +483,7 @@ export interface BkashQueryPaymentResult {
 }
 
 /**
- * A seller's plain bKash payout NUMBER (new admin-custodial payments design, Part 1 of 4) — not a secret credential, so unlike SellerPaymentConfig this is returned unmasked.
+ * A seller's plain bKash payout NUMBER (platform-custodial payments model) — not a secret credential, so it is returned unmasked. Under the post-migration model, sellers no longer register their own bKash merchant credentials — the admin configures ONE platform merchant account (PlatformPaymentConfig), and sellers only register a personal bKash number here for the platform to disburse their share of each order after courier-confirmed delivery.
  */
 export interface SellerPayoutAccount {
   id: number;
@@ -1839,10 +1798,6 @@ export const ListSellerVerificationRequestsStatus = {
 
 export type RejectSellerVerificationBody = {
   reason?: string;
-};
-
-export type ListAdminSellerPaymentConfigsParams = {
-verified?: boolean;
 };
 
 export type ListAdminSellerCourierConfigsParams = {

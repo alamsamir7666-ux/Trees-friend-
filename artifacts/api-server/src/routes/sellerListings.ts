@@ -15,11 +15,13 @@ import {
 } from "@workspace/db";
 import { eq, and, inArray, sql, desc, asc } from "drizzle-orm";
 import { requireSeller, requireAdmin } from "../middlewares/auth";
-import { hasVerifiedPaymentConfig } from "@workspace/db/logic";
+import { hasSellerPayoutAccount } from "@workspace/db/logic";
 import { notifyPreOrderCustomers } from "./preOrders";
 import { invalidateCatalogCache } from "../lib/catalogCache";
 
-export { hasVerifiedPaymentConfig };
+// Re-export for any caller that imported this name from the route file
+// historically. The function itself lives in @workspace/db/logic.
+export { hasSellerPayoutAccount };
 
 // Use the shared Cloudinary singleton from lib/cloudinary.ts (configured once
 // at module load).
@@ -191,24 +193,33 @@ function validateVariantShape(v: any, label: string): string | null {
 }
 
 /**
- * Payment-method enforcement (plan doc §7): "A seller with no verified
- * seller_payment_configs row can only offer COD -- enforce this at the
- * listing level (reject payment_method = 'advance' or 'both' if no
- * verified config exists)." This was flagged as unenforced in both the
- * Phase 2 and Phase 4 handoffs; this is the actual enforcement, added in
- * Part 5. Unaffected by the Phase 2 listing/variant split -- payment method
- * is a listing-level field, not a variant-level one.
+ * Payment-method enforcement (platform-custodial payments model).
  *
- * hasVerifiedPaymentConfig itself lives in @workspace/db/logic (moved there
- * post-Phase-9 so scripts/src/verify-seller-marketplace.ts can import the
- * real implementation instead of reimplementing it -- see that module's doc
- * comment for why). Imported above and re-exported here so every existing
- * caller of this file's hasVerifiedPaymentConfig export is unaffected.
+ * A seller may set paymentMethod = "cod" | "advance" | "both" on a listing.
+ * Under the post-migration payments design:
+ *   - "cod": buyer pays the courier in cash on delivery. No platform-side
+ *     settlement, no payout account needed.
+ *   - "advance" / "both": buyer pays the platform's bKash merchant account
+ *     upfront. The platform then disburses the seller's share to the bKash
+ *     personal number registered in seller_payout_accounts after courier-
+ *     confirmed delivery (see lib/payouts.ts:attemptSellerPayout).
+ *
+ * The eligibility gate for "advance" / "both" is therefore: the seller must
+ * have a payout account on file (sellerPayoutAccountsTable row exists). If
+ * they don't, the platform would collect buyer money it has nowhere to
+ * disburse — so the listing write is rejected at the API layer with the
+ * error below. The seller adds their payout number via the Payment tab
+ * (PaymentSettingsForm.tsx → POST /seller-payout-accounts).
+ *
+ * This gate is enforced on BOTH POST (create) and PUT (update) of a
+ * listing. Checkout-time enforcement is separate and lives in orders.ts
+ * (isPlatformBkashAvailable checks the platform merchant config is verified
+ * — a global concern, not per-seller).
  */
 
 const PAYMENT_METHOD_ERROR =
-  'You need a verified bKash payment config before offering "advance" or "both" as a payment method. ' +
-  'Add your bKash merchant credentials in Payment Settings, or choose "cod" for this listing.';
+  'You need a bKash payout number on file before offering "advance" or "both" as a payment method. ' +
+  'Add your bKash personal number in Payment Settings, or choose "cod" for this listing.';
 
 /**
  * Seller: list the current seller's own listings (all approval statuses,
@@ -778,8 +789,8 @@ router.post(
       return;
     }
     if (paymentMethod === "advance" || paymentMethod === "both") {
-      const verified = await hasVerifiedPaymentConfig(req.dbSeller!.id);
-      if (!verified) {
+      const hasPayout = await hasSellerPayoutAccount(req.dbSeller!.id);
+      if (!hasPayout) {
         res.status(400).json({ error: PAYMENT_METHOD_ERROR });
         return;
       }
@@ -943,8 +954,8 @@ router.put(
       return;
     }
     if (paymentMethod === "advance" || paymentMethod === "both") {
-      const verified = await hasVerifiedPaymentConfig(req.dbSeller!.id);
-      if (!verified) {
+      const hasPayout = await hasSellerPayoutAccount(req.dbSeller!.id);
+      if (!hasPayout) {
         res.status(400).json({ error: PAYMENT_METHOD_ERROR });
         return;
       }

@@ -1,17 +1,47 @@
 import { useMemo, useState } from "react";
 import {
-  Package2, ShoppingCart, TrendingUp, ChevronRight, Clock,
-  DollarSign, ArrowUpRight, ArrowDownRight, CheckCircle2, Truck,
-  XCircle, BarChart3, AlertTriangle, Wallet, CreditCard, Sprout,
-  Star, PackageCheck, RotateCcw, BadgeCheck, Plus, Download,
-  ShoppingBag, Users, Sparkles, ArrowRight, Minus,
+  Package2,
+  ShoppingCart,
+  TrendingUp,
+  ChevronRight,
+  Clock,
+  DollarSign,
+  ArrowUpRight,
+  ArrowDownRight,
+  CheckCircle2,
+  Truck,
+  XCircle,
+  BarChart3,
+  AlertTriangle,
+  Wallet,
+  CreditCard,
+  Sprout,
+  Star,
+  PackageCheck,
+  RotateCcw,
+  BadgeCheck,
+  Plus,
+  Download,
+  ShoppingBag,
+  Users,
+  Sparkles,
+  ArrowRight,
+  Minus,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, Cell,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  Cell,
 } from "recharts";
 import { useChartColors } from "@/hooks/useChartColors";
 import { ORDER_STATUS_CHART_COLORS } from "@/lib/chartColors";
@@ -22,7 +52,7 @@ import {
   useGetSellerMonthlyHistory,
   useListSellerReturns,
   useGetMySellerCourierConfig,
-  useGetMySellerPaymentConfig,
+  useGetMySellerPayoutAccount,
   type Seller,
 } from "@workspace/api-client-react";
 
@@ -77,7 +107,12 @@ const ORDER_STATUS_META: Record<
 };
 
 const STATUS_ORDER: OrderStatus[] = [
-  "pending", "confirmed", "processing", "shipped", "delivered", "cancelled",
+  "pending",
+  "confirmed",
+  "processing",
+  "shipped",
+  "delivered",
+  "cancelled",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,15 +163,10 @@ function ChartTooltip({ active, payload, label, metric }: any) {
       <p className="text-[11px] font-medium text-muted-foreground mb-1.5">{label}</p>
       {payload.map((p: any, i: number) => (
         <div key={i} className="flex items-center gap-2 text-xs">
-          <span
-            className="h-2 w-2 rounded-full"
-            style={{ backgroundColor: p.color }}
-          />
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: p.color }} />
           <span className="text-muted-foreground capitalize">{p.name}:</span>
           <span className="font-semibold text-foreground">
-            {metric === "revenue" || p.name === "revenue"
-              ? formatTk(p.value)
-              : p.value}
+            {metric === "revenue" || p.name === "revenue" ? formatTk(p.value) : p.value}
           </span>
         </div>
       ))}
@@ -148,8 +178,15 @@ function ChartTooltip({ active, payload, label, metric }: any) {
 // KPI Card — with sparkline, % change vs previous range
 // ─────────────────────────────────────────────────────────────────────────────
 function KpiCard({
-  label, value, sublabel, icon: Icon, accentClass,
-  change, sparkData, sparkKey, isLoading,
+  label,
+  value,
+  sublabel,
+  icon: Icon,
+  accentClass,
+  change,
+  sparkData,
+  sparkKey,
+  isLoading,
 }: {
   label: string;
   value: string;
@@ -179,8 +216,7 @@ function KpiCard({
   const trendUp = change !== null && change > 0;
   const trendDown = change !== null && change < 0;
   const trendNeutral = change === null || change === 0;
-  const sparkColor =
-    trendUp ? chart.trendUp : trendDown ? chart.trendDown : chart.primary;
+  const sparkColor = trendUp ? chart.trendUp : trendDown ? chart.trendDown : chart.primary;
 
   return (
     <div className="group rounded-2xl border border-border bg-card p-5 transition-all duration-200 hover:shadow-md hover:border-foreground/10">
@@ -190,15 +226,18 @@ function KpiCard({
             {label}
           </p>
         </div>
-        <div className={cn("h-9 w-9 rounded-xl flex items-center justify-center shrink-0", accentClass)}>
+        <div
+          className={cn(
+            "h-9 w-9 rounded-xl flex items-center justify-center shrink-0",
+            accentClass,
+          )}
+        >
           <Icon className="h-4 w-4" />
         </div>
       </div>
 
       <div className="flex items-end justify-between gap-3 mb-3">
-        <p className="text-2xl font-bold tracking-tight text-foreground tabular-nums">
-          {value}
-        </p>
+        <p className="text-2xl font-bold tracking-tight text-foreground tabular-nums">{value}</p>
         {change !== null && (
           <div
             className={cn(
@@ -216,9 +255,7 @@ function KpiCard({
         )}
       </div>
 
-      {sublabel && (
-        <p className="text-[11px] text-muted-foreground mb-2 truncate">{sublabel}</p>
-      )}
+      {sublabel && <p className="text-[11px] text-muted-foreground mb-2 truncate">{sublabel}</p>}
 
       {/* Sparkline */}
       <div className="h-8 -mx-1">
@@ -272,7 +309,14 @@ function StatusDonut({ counts, total }: { counts: Record<OrderStatus, number>; t
     <div className="flex flex-col sm:flex-row items-center gap-6">
       <div className="relative h-36 w-36 shrink-0">
         <svg viewBox="0 0 160 160" className="h-full w-full -rotate-90">
-          <circle cx="80" cy="80" r={radius} fill="none" stroke="hsl(var(--muted))" strokeWidth={strokeWidth} />
+          <circle
+            cx="80"
+            cy="80"
+            r={radius}
+            fill="none"
+            stroke="hsl(var(--muted))"
+            strokeWidth={strokeWidth}
+          />
           {segments.map((s) => {
             const value = counts[s];
             const fraction = value / total;
@@ -311,7 +355,9 @@ function StatusDonut({ counts, total }: { counts: Record<OrderStatus, number>; t
               <span className={cn("h-2.5 w-2.5 rounded-sm shrink-0", meta.dot)} />
               <span className="text-xs text-muted-foreground truncate flex-1">{meta.label}</span>
               <span className="text-xs font-semibold text-foreground tabular-nums">{count}</span>
-              <span className="text-[10px] text-muted-foreground tabular-nums w-8 text-right">{pct}%</span>
+              <span className="text-[10px] text-muted-foreground tabular-nums w-8 text-right">
+                {pct}%
+              </span>
             </div>
           );
         })}
@@ -324,7 +370,13 @@ function StatusDonut({ counts, total }: { counts: Record<OrderStatus, number>; t
 // Action item (smart alert)
 // ─────────────────────────────────────────────────────────────────────────────
 function ActionItem({
-  icon: Icon, iconClass, title, detail, ctaLabel, onClick, severity,
+  icon: Icon,
+  iconClass,
+  title,
+  detail,
+  ctaLabel,
+  onClick,
+  severity,
 }: {
   icon: React.ElementType;
   iconClass: string;
@@ -335,13 +387,17 @@ function ActionItem({
   severity: "warning" | "info" | "danger";
 }) {
   const severityRing =
-    severity === "danger" ? "ring-destructive/20 bg-destructive/10"
-    : severity === "warning" ? "ring-warning-border/70 bg-warning/40"
-    : "ring-info-border/70 bg-info/40";
+    severity === "danger"
+      ? "ring-destructive/20 bg-destructive/10"
+      : severity === "warning"
+        ? "ring-warning-border/70 bg-warning/40"
+        : "ring-info-border/70 bg-info/40";
 
   return (
     <div className={cn("flex items-center gap-3 rounded-xl ring-1 px-3.5 py-3", severityRing)}>
-      <div className={cn("h-9 w-9 rounded-lg flex items-center justify-center shrink-0", iconClass)}>
+      <div
+        className={cn("h-9 w-9 rounded-lg flex items-center justify-center shrink-0", iconClass)}
+      >
         <Icon className="h-4 w-4" />
       </div>
       <div className="flex-1 min-w-0">
@@ -365,7 +421,11 @@ function ActionItem({
 // Health check row
 // ─────────────────────────────────────────────────────────────────────────────
 function HealthRow({
-  label, status, icon: Icon, detail, cta,
+  label,
+  status,
+  icon: Icon,
+  detail,
+  cta,
 }: {
   label: string;
   status: "ok" | "warning" | "missing";
@@ -374,9 +434,21 @@ function HealthRow({
   cta?: { label: string; onClick: () => void };
 }) {
   const styles = {
-    ok: { dot: "bg-success-foreground", chip: "bg-success text-success-foreground ring-success-border/60", label: "Active" },
-    warning: { dot: "bg-warning-foreground", chip: "bg-warning text-warning-foreground ring-warning-border/60", label: "Pending" },
-    missing: { dot: "bg-muted-foreground/40", chip: "bg-muted text-muted-foreground ring-border", label: "Not set up" },
+    ok: {
+      dot: "bg-success-foreground",
+      chip: "bg-success text-success-foreground ring-success-border/60",
+      label: "Active",
+    },
+    warning: {
+      dot: "bg-warning-foreground",
+      chip: "bg-warning text-warning-foreground ring-warning-border/60",
+      label: "Pending",
+    },
+    missing: {
+      dot: "bg-muted-foreground/40",
+      chip: "bg-muted text-muted-foreground ring-border",
+      label: "Not set up",
+    },
   }[status];
 
   return (
@@ -398,7 +470,12 @@ function HealthRow({
           {cta.label}
         </Button>
       ) : (
-        <span className={cn("text-[11px] font-medium rounded-full px-2 py-0.5 ring-1 flex items-center gap-1.5 shrink-0", styles.chip)}>
+        <span
+          className={cn(
+            "text-[11px] font-medium rounded-full px-2 py-0.5 ring-1 flex items-center gap-1.5 shrink-0",
+            styles.chip,
+          )}
+        >
           <span className={cn("h-1.5 w-1.5 rounded-full", styles.dot)} />
           {styles.label}
         </span>
@@ -411,17 +488,25 @@ function HealthRow({
 // Top listing row
 // ─────────────────────────────────────────────────────────────────────────────
 function TopListingRow({
-  listing, orderCount, revenue, rank,
+  listing,
+  orderCount,
+  revenue,
+  rank,
 }: {
-  listing: any; orderCount: number; revenue: number; rank: number;
+  listing: any;
+  orderCount: number;
+  revenue: number;
+  rank: number;
 }) {
   const name = listing.productName ?? `Listing #${listing.id}`;
   const imageUrl = listing.images?.[0];
   const approvalStatus: string = listing.approvalStatus ?? "approved";
   const approvalChip =
-    approvalStatus === "approved" ? "bg-success text-success-foreground ring-success-border/60"
-    : approvalStatus === "pending" ? "bg-warning text-warning-foreground ring-warning-border/60"
-    : "bg-destructive/10 text-destructive ring-destructive/20";
+    approvalStatus === "approved"
+      ? "bg-success text-success-foreground ring-success-border/60"
+      : approvalStatus === "pending"
+        ? "bg-warning text-warning-foreground ring-warning-border/60"
+        : "bg-destructive/10 text-destructive ring-destructive/20";
 
   return (
     <div className="flex items-center gap-3 py-3">
@@ -429,7 +514,11 @@ function TopListingRow({
         {rank}
       </span>
       {imageUrl ? (
-        <img src={imageUrl} alt={name} className="h-10 w-10 rounded-lg object-cover border border-border shrink-0" />
+        <img
+          src={imageUrl}
+          alt={name}
+          className="h-10 w-10 rounded-lg object-cover border border-border shrink-0"
+        />
       ) : (
         <div className="h-10 w-10 rounded-lg bg-secondary flex items-center justify-center shrink-0">
           <Sprout className="h-4 w-4 text-muted-foreground" />
@@ -438,7 +527,12 @@ function TopListingRow({
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-foreground truncate">{name}</p>
         <div className="flex items-center gap-2 mt-0.5">
-          <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium capitalize ring-1", approvalChip)}>
+          <span
+            className={cn(
+              "px-1.5 py-0.5 rounded text-[10px] font-medium capitalize ring-1",
+              approvalChip,
+            )}
+          >
             {approvalStatus}
           </span>
           <span className="text-[11px] text-muted-foreground">{orderCount} sold</span>
@@ -456,7 +550,11 @@ function TopListingRow({
 // Section shell — consistent card styling
 // ─────────────────────────────────────────────────────────────────────────────
 function Section({
-  title, subtitle, action, children, className,
+  title,
+  subtitle,
+  action,
+  children,
+  className,
 }: {
   title: string;
   subtitle?: string;
@@ -497,20 +595,18 @@ export function SellerOverviewTab({
   const { data: publicProfile } = useGetPublicSeller(seller.id, {
     query: { enabled: !!seller.id, queryKey: ["public-seller", seller.id] },
   });
-  const { data: monthlyHistory } = useGetSellerMonthlyHistory(
-    { months: 6 },
-    { query: { enabled: !!seller.id, queryKey: ["seller-monthly-history", seller.id] } } as any,
-  );
-  const { data: returns } = useListSellerReturns(
-    {},
-    { query: { enabled: !!seller.id, queryKey: ["seller-returns-overview"] } } as any,
-  );
-  const { data: courierConfig } = useGetMySellerCourierConfig(
-    { query: { enabled: !!seller.id, queryKey: ["seller-courier-overview"] } } as any,
-  );
-  const { data: paymentConfig } = useGetMySellerPaymentConfig(
-    { query: { enabled: !!seller.id, queryKey: ["seller-payment-overview"] } } as any,
-  );
+  const { data: monthlyHistory } = useGetSellerMonthlyHistory({ months: 6 }, {
+    query: { enabled: !!seller.id, queryKey: ["seller-monthly-history", seller.id] },
+  } as any);
+  const { data: returns } = useListSellerReturns({}, {
+    query: { enabled: !!seller.id, queryKey: ["seller-returns-overview"] },
+  } as any);
+  const { data: courierConfig } = useGetMySellerCourierConfig({
+    query: { enabled: !!seller.id, queryKey: ["seller-courier-overview"] },
+  } as any);
+  const { data: payoutAccount } = useGetMySellerPayoutAccount({
+    query: { enabled: !!seller.id, queryKey: ["seller-payout-overview"] },
+  } as any);
 
   const loading = listingsLoading || ordersLoading;
   const range = RANGES.find((r) => r.key === rangeKey)!;
@@ -591,9 +687,10 @@ export function SellerOverviewTab({
   }, [rangedOrders, range.days]);
 
   const aovSpark = useMemo(
-    () => revenueSpark.map((r, i) => ({
-      v: ordersSpark[i]?.v ? r.v / ordersSpark[i].v : 0,
-    })),
+    () =>
+      revenueSpark.map((r, i) => ({
+        v: ordersSpark[i]?.v ? r.v / ordersSpark[i].v : 0,
+      })),
     [revenueSpark, ordersSpark],
   );
 
@@ -646,7 +743,12 @@ export function SellerOverviewTab({
   // Order status counts (within range)
   const statusCounts = useMemo(() => {
     const counts: Record<OrderStatus, number> = {
-      pending: 0, confirmed: 0, processing: 0, shipped: 0, delivered: 0, cancelled: 0,
+      pending: 0,
+      confirmed: 0,
+      processing: 0,
+      shipped: 0,
+      delivered: 0,
+      cancelled: 0,
     };
     for (const o of rangedOrders) {
       const s = o.orderStatus as OrderStatus;
@@ -726,9 +828,12 @@ export function SellerOverviewTab({
   const pendingReturnsCount =
     (returns as any)?.returns?.filter((r: any) => r.status === "requested").length ?? 0;
 
-  // Store health
-  const isPaymentConfigured = !!(paymentConfig as any);
-  const isPaymentVerified = (paymentConfig as any)?.verificationStatus === "verified";
+  // Store health — under the platform-custodial payments model, a seller's
+  // payment setup is just "do they have a payout bKash number on file".
+  // There is no separate "verified" state (the number's validity is
+  // enforced at write time by isValidBdPhone and at disbursement time by
+  // bKash's B2C API, neither of which needs an admin-gated toggle).
+  const isPaymentConfigured = !!(payoutAccount as any);
   const isCourierConfigured = !!(courierConfig as any);
   const isCourierVerified = (courierConfig as any)?.verificationStatus === "verified";
 
@@ -758,7 +863,9 @@ export function SellerOverviewTab({
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 rounded-2xl border border-border bg-card p-5">
             <Skeleton className="h-5 w-40 mb-5" />
-            <div className="h-64"><Skeleton className="h-full w-full rounded-xl" /></div>
+            <div className="h-64">
+              <Skeleton className="h-full w-full rounded-xl" />
+            </div>
           </div>
           <div className="rounded-2xl border border-border bg-card p-5">
             <Skeleton className="h-5 w-32 mb-5" />
@@ -809,8 +916,8 @@ export function SellerOverviewTab({
         key="payment"
         icon={CreditCard}
         iconClass="bg-success text-success-foreground"
-        title="Set up payments to receive payouts"
-        detail="Connect bKash or bank account to receive order payments"
+        title="Set up payouts"
+        detail="Add your bKash personal number to receive payouts after delivery"
         ctaLabel="Set up"
         onClick={() => onNavigate("payment")}
         severity="info"
@@ -860,9 +967,7 @@ export function SellerOverviewTab({
                 {greeting}, {firstName}
               </p>
             </div>
-            <h2 className="text-xl sm:text-2xl font-bold tracking-tight">
-              {seller.businessName}
-            </h2>
+            <h2 className="text-xl sm:text-2xl font-bold tracking-tight">{seller.businessName}</h2>
             <p className="text-xs sm:text-sm text-primary-foreground/70 mt-1">
               Here's your store performance for the last {range.label.toLowerCase()}.
             </p>
@@ -916,11 +1021,11 @@ export function SellerOverviewTab({
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-warning-foreground" />
             <h3 className="text-sm font-semibold text-foreground">Action required</h3>
-            <span className="text-xs text-muted-foreground">· {actionItems.length} item{actionItems.length > 1 ? "s" : ""}</span>
+            <span className="text-xs text-muted-foreground">
+              · {actionItems.length} item{actionItems.length > 1 ? "s" : ""}
+            </span>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
-            {actionItems}
-          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">{actionItems}</div>
         </div>
       )}
 
@@ -1007,7 +1112,11 @@ export function SellerOverviewTab({
                       <stop offset="100%" stopColor={chart.primary} stopOpacity={0.02} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="hsl(var(--border))"
+                    vertical={false}
+                  />
                   <XAxis
                     dataKey="label"
                     tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
@@ -1022,7 +1131,9 @@ export function SellerOverviewTab({
                     axisLine={false}
                     tickFormatter={(v: number) =>
                       chartMetric === "revenue"
-                        ? v >= 1000 ? `Tk${(v / 1000).toFixed(0)}k` : `Tk${v}`
+                        ? v >= 1000
+                          ? `Tk${(v / 1000).toFixed(0)}k`
+                          : `Tk${v}`
                         : `${v}`
                     }
                     width={56}
@@ -1039,7 +1150,12 @@ export function SellerOverviewTab({
                     fill="url(#mainChartGrad)"
                     name={chartMetric}
                     dot={false}
-                    activeDot={{ r: 4, fill: chart.primary, stroke: "hsl(var(--card))", strokeWidth: 2 }}
+                    activeDot={{
+                      r: 4,
+                      fill: chart.primary,
+                      stroke: "hsl(var(--card))",
+                      strokeWidth: 2,
+                    }}
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -1047,7 +1163,9 @@ export function SellerOverviewTab({
               <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
                 <TrendingUp className="h-10 w-10 mb-3 text-muted-foreground/40" />
                 <p className="text-sm font-medium">No {chartMetric} data in this period</p>
-                <p className="text-xs text-muted-foreground/70 mt-0.5">Try a different date range</p>
+                <p className="text-xs text-muted-foreground/70 mt-0.5">
+                  Try a different date range
+                </p>
               </div>
             )}
           </div>
@@ -1138,7 +1256,13 @@ export function SellerOverviewTab({
           <div className="divide-y divide-border/60">
             <HealthRow
               label="Verified Seller Badge"
-              status={seller.isVerified ? "ok" : seller.verificationRequestStatus === "requested" ? "warning" : "missing"}
+              status={
+                seller.isVerified
+                  ? "ok"
+                  : seller.verificationRequestStatus === "requested"
+                    ? "warning"
+                    : "missing"
+              }
               icon={BadgeCheck}
               detail={
                 seller.isVerified
@@ -1157,19 +1281,17 @@ export function SellerOverviewTab({
               }
             />
             <HealthRow
-              label="Payment Setup"
-              status={isPaymentVerified ? "ok" : isPaymentConfigured ? "warning" : "missing"}
+              label="Payout Number"
+              status={isPaymentConfigured ? "ok" : "missing"}
               icon={CreditCard}
               detail={
-                isPaymentVerified
-                  ? "bKash connected & verified"
-                  : isPaymentConfigured
-                    ? "Connected — pending verification"
-                    : "Connect bKash to receive payouts"
+                isPaymentConfigured
+                  ? `bKash ${(payoutAccount as any)?.bkashNumber ?? ""} — payouts active`
+                  : "Add your bKash number to receive payouts"
               }
               cta={
-                !isPaymentVerified
-                  ? { label: isPaymentConfigured ? "View" : "Set up", onClick: () => onNavigate("payment") }
+                !isPaymentConfigured
+                  ? { label: "Set up", onClick: () => onNavigate("payment") }
                   : undefined
               }
             />
@@ -1186,16 +1308,21 @@ export function SellerOverviewTab({
               }
               cta={
                 !isCourierVerified
-                  ? { label: isCourierConfigured ? "View" : "Set up", onClick: () => onNavigate("courier") }
+                  ? {
+                      label: isCourierConfigured ? "View" : "Set up",
+                      onClick: () => onNavigate("courier"),
+                    }
                   : undefined
               }
             />
             <HealthRow
               label="Subscription"
               status={
-                seller.subscriptionStatus === "active" ? "ok"
-                : seller.subscriptionStatus === "trial" ? "warning"
-                : "missing"
+                seller.subscriptionStatus === "active"
+                  ? "ok"
+                  : seller.subscriptionStatus === "trial"
+                    ? "warning"
+                    : "missing"
               }
               icon={Wallet}
               detail={
@@ -1249,13 +1376,21 @@ export function SellerOverviewTab({
                   tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={(v: number) => (v >= 1000 ? `Tk${(v / 1000).toFixed(0)}k` : `Tk${v}`)}
+                  tickFormatter={(v: number) =>
+                    v >= 1000 ? `Tk${(v / 1000).toFixed(0)}k` : `Tk${v}`
+                  }
                   width={56}
                 />
-                <Tooltip content={<ChartTooltip metric="revenue" />} cursor={{ fill: "hsl(var(--muted))", opacity: 0.5 }} />
+                <Tooltip
+                  content={<ChartTooltip metric="revenue" />}
+                  cursor={{ fill: "hsl(var(--muted))", opacity: 0.5 }}
+                />
                 <Bar dataKey="revenue" radius={[6, 6, 0, 0]} name="revenue" maxBarSize={48}>
                   {monthlyBarData.map((_: any, i: number) => (
-                    <Cell key={i} fill={i === monthlyBarData.length - 1 ? chart.accent : chart.primary} />
+                    <Cell
+                      key={i}
+                      fill={i === monthlyBarData.length - 1 ? chart.accent : chart.primary}
+                    />
                   ))}
                 </Bar>
               </BarChart>
@@ -1264,7 +1399,9 @@ export function SellerOverviewTab({
             <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
               <BarChart3 className="h-10 w-10 mb-3 text-muted-foreground/40" />
               <p className="text-sm font-medium">No monthly revenue yet</p>
-              <p className="text-xs text-muted-foreground/70 mt-0.5">Data appears after first delivered order</p>
+              <p className="text-xs text-muted-foreground/70 mt-0.5">
+                Data appears after first delivered order
+              </p>
             </div>
           )}
         </div>
@@ -1292,16 +1429,25 @@ export function SellerOverviewTab({
             <table className="w-full min-w-[640px]">
               <thead>
                 <tr className="border-b border-border/60 text-left">
-                  <th className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Order</th>
-                  <th className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Date</th>
-                  <th className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
-                  <th className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Total</th>
+                  <th className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Order
+                  </th>
+                  <th className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Date
+                  </th>
+                  <th className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Status
+                  </th>
+                  <th className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground text-right">
+                    Total
+                  </th>
                   <th className="px-5 py-2 w-8"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
                 {recentOrders.map((o) => {
-                  const meta = ORDER_STATUS_META[o.orderStatus as OrderStatus] ?? ORDER_STATUS_META.pending;
+                  const meta =
+                    ORDER_STATUS_META[o.orderStatus as OrderStatus] ?? ORDER_STATUS_META.pending;
                   const StatusIcon = meta.icon;
                   return (
                     <tr
@@ -1327,7 +1473,12 @@ export function SellerOverviewTab({
                         })}
                       </td>
                       <td className="px-5 py-3">
-                        <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium rounded-full px-2 py-0.5 ring-1", meta.chip)}>
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1.5 text-xs font-medium rounded-full px-2 py-0.5 ring-1",
+                            meta.chip,
+                          )}
+                        >
                           <span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />
                           {meta.label}
                         </span>
@@ -1360,16 +1511,41 @@ export function SellerOverviewTab({
       ───────────────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: "Lifetime Revenue", value: formatTk(lifetimeRevenue), icon: DollarSign, color: "bg-success text-success-foreground" },
-          { label: "Delivered Orders", value: lifetimeDelivered.toLocaleString(), icon: PackageCheck, color: "bg-info text-info-foreground" },
-          { label: "Followers", value: followersCount.toLocaleString(), icon: Users, color: "bg-primary/10 text-primary" },
-          { label: "Avg. Rating", value: "—", icon: Star, color: "bg-warning text-warning-foreground" },
+          {
+            label: "Lifetime Revenue",
+            value: formatTk(lifetimeRevenue),
+            icon: DollarSign,
+            color: "bg-success text-success-foreground",
+          },
+          {
+            label: "Delivered Orders",
+            value: lifetimeDelivered.toLocaleString(),
+            icon: PackageCheck,
+            color: "bg-info text-info-foreground",
+          },
+          {
+            label: "Followers",
+            value: followersCount.toLocaleString(),
+            icon: Users,
+            color: "bg-primary/10 text-primary",
+          },
+          {
+            label: "Avg. Rating",
+            value: "—",
+            icon: Star,
+            color: "bg-warning text-warning-foreground",
+          },
         ].map((stat) => (
           <div
             key={stat.label}
             className="rounded-xl border border-border bg-card px-4 py-3 flex items-center gap-3"
           >
-            <div className={cn("h-9 w-9 rounded-lg flex items-center justify-center shrink-0", stat.color)}>
+            <div
+              className={cn(
+                "h-9 w-9 rounded-lg flex items-center justify-center shrink-0",
+                stat.color,
+              )}
+            >
               <stat.icon className="h-4 w-4" />
             </div>
             <div className="min-w-0">

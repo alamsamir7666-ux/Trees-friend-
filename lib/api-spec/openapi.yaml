@@ -46,8 +46,6 @@ tags:
     description: Seller listing marketplace operations (plan doc §10.2)
   - name: sellerOrders
     description: Seller order management + courier booking operations (plan doc §4, §8 — Part 4)
-  - name: sellerPaymentConfigs
-    description: Seller bKash payment settings CRUD (plan doc §4, §7 — Part 5)
   - name: platformPaymentConfig
     description: >-
       Admin-only platform bKash merchant config (new admin-custodial payments
@@ -1668,56 +1666,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/SellerCourierConfig"
 
-  /seller-payment-configs/mine:
-    get:
-      operationId: getMySellerPaymentConfig
-      tags: [sellerPaymentConfigs]
-      summary: Seller — get their own bKash payment config (masked credentials). Returns null when not set up yet (COD-only).
-      responses:
-        "200":
-          description: >-
-            Masked payment config, or null if not set up yet (COD-only).
-            Returning 200/null instead of 404 lets the frontend cache the
-            "not configured" state like any other successful response,
-            instead of treating it as an error that gets retried/refetched
-            on every token refresh.
-          content:
-            application/json:
-              schema:
-                oneOf:
-                  - $ref: "#/components/schemas/SellerPaymentConfig"
-                  - type: "null"
-    delete:
-      operationId: deleteMySellerPaymentConfig
-      tags: [sellerPaymentConfigs]
-      summary: Seller — remove their payment config (listings fall back to COD-only)
-      responses:
-        "200":
-          description: Removed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MessageResponse"
-
-  /seller-payment-configs:
-    post:
-      operationId: createSellerPaymentConfig
-      tags: [sellerPaymentConfigs]
-      summary: Seller — create/replace their bKash merchant payment config
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateSellerPaymentConfigBody"
-      responses:
-        "201":
-          description: Created (masked) payment config
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SellerPaymentConfig"
-
   /platform-payment-config:
     get:
       operationId: getPlatformPaymentConfig
@@ -2559,71 +2507,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/Seller"
 
-  /admin/seller-payment-configs:
-    get:
-      operationId: listAdminSellerPaymentConfigs
-      tags: [admin]
-      summary: >-
-        List seller bKash payment configs for admin review (admin only).
-        Defaults to unverified/pending-review configs; pass verified=true
-        to see already-verified ones instead.
-      parameters:
-        - name: verified
-          in: query
-          required: false
-          schema:
-            type: boolean
-      responses:
-        "200":
-          description: Payment configs (masked)
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SellerPaymentConfig"
-
-  /admin/seller-payment-configs/{id}/verify:
-    put:
-      operationId: verifySellerPaymentConfig
-      tags: [admin]
-      summary: >-
-        Mark a seller's bKash payment config as verified (admin only,
-        manual review — no live bKash API check). Unlocks
-        "advance"/"both"/"bkash" for that seller.
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Verified payment config
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SellerPaymentConfig"
-
-  /admin/seller-payment-configs/{id}/unverify:
-    put:
-      operationId: unverifySellerPaymentConfig
-      tags: [admin]
-      summary: Revoke verification on a seller's bKash payment config (admin only)
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Unverified payment config
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SellerPaymentConfig"
-
   /admin/seller-courier-configs:
     get:
       operationId: listAdminSellerCourierConfigs
@@ -3083,21 +2966,23 @@ components:
           type: string
         location:
           type: string
-        hasVerifiedPaymentConfig:
+        platformBkashVerified:
           type: boolean
           description: >-
-            True only if this seller has a seller_payment_configs row with
-            isVerified = true. Reflects the seller's live config state, which
-            can drift from the listing's own paymentMethod field (e.g. after
-            an admin unverifies a seller without touching their listings).
-            Checkout uses this, not listing.paymentMethod alone, to decide
-            whether bKash can actually be offered for this line.
+            True if the platform's bKash merchant account is configured and
+            verified (platformPaymentConfigTable.isVerified). Under the
+            post-migration platform-custodial payments model, every buyer
+            bKash payment settles into the platform's single merchant
+            account regardless of which seller's listing is being bought,
+            so this is a global flag — every seller on the cart gets the
+            same value. Checkout uses this, not listing.paymentMethod alone,
+            to decide whether bKash can actually be offered for this line.
       required:
         - id
         - businessName
         - nurseryName
         - location
-        - hasVerifiedPaymentConfig
+        - platformBkashVerified
 
     CartItemListing:
       type: object
@@ -3400,77 +3285,6 @@ components:
         - apiKey
         - apiSecret
 
-    SellerPaymentConfig:
-      type: object
-      description: >-
-        Masked seller bKash merchant credentials (plan doc §4, §7 — Part 5).
-        Never contains decrypted merchantAppKey/merchantAppSecret/
-        merchantUsername/merchantPassword -- only a last-4-style mask, per
-        the schema's security note. isVerified is never set true by the
-        create/replace route itself (no live-credential check exists) --
-        it stays false until some future verification step sets it, and
-        routes/sellerListings.ts + routes/orders.ts both gate
-        "advance"/"both"/"bkash" on isVerified specifically, not just row
-        existence.
-      properties:
-        id:
-          type: integer
-        sellerId:
-          type: integer
-        provider:
-          type: string
-          enum: [bkash]
-        merchantAppKeyMasked:
-          type: string
-        merchantAppSecretMasked:
-          type: string
-        merchantUsernameMasked:
-          type: string
-        merchantPasswordMasked:
-          type: string
-        isVerified:
-          type: boolean
-        createdAt:
-          type: string
-        updatedAt:
-          type: string
-      required:
-        - id
-        - sellerId
-        - provider
-        - merchantAppKeyMasked
-        - merchantAppSecretMasked
-        - merchantUsernameMasked
-        - merchantPasswordMasked
-        - isVerified
-        - createdAt
-        - updatedAt
-
-    CreateSellerPaymentConfigBody:
-      type: object
-      description: >-
-        provider defaults to "bkash" (the only provider this schema/plan
-        support today) if omitted. All four merchant credential fields are
-        required -- bKash's merchant API needs all of them together, there
-        is no partial-credential state.
-      properties:
-        provider:
-          type: string
-          enum: [bkash]
-        merchantAppKey:
-          type: string
-        merchantAppSecret:
-          type: string
-        merchantUsername:
-          type: string
-        merchantPassword:
-          type: string
-      required:
-        - merchantAppKey
-        - merchantAppSecret
-        - merchantUsername
-        - merchantPassword
-
     PlatformPaymentConfig:
       type: object
       description: >-
@@ -3514,9 +3328,10 @@ components:
       type: object
       description: >-
         provider defaults to "bkash" if omitted. All four merchant credential
-        fields are required, same shape as CreateSellerPaymentConfigBody —
-        this is the same bKash Merchant credential set, held by the admin
-        account instead of a per-seller account.
+        fields are required. This is the bKash merchant credential set,
+        held by the admin account (under the post-migration platform-
+        custodial payments model, sellers no longer register their own
+        merchant credentials).
       properties:
         provider:
           type: string
@@ -3604,9 +3419,13 @@ components:
     SellerPayoutAccount:
       type: object
       description: >-
-        A seller's plain bKash payout NUMBER (new admin-custodial payments
-        design, Part 1 of 4) — not a secret credential, so unlike
-        SellerPaymentConfig this is returned unmasked.
+        A seller's plain bKash payout NUMBER (platform-custodial payments
+        model) — not a secret credential, so it is returned unmasked.
+        Under the post-migration model, sellers no longer register their
+        own bKash merchant credentials — the admin configures ONE platform
+        merchant account (PlatformPaymentConfig), and sellers only register
+        a personal bKash number here for the platform to disburse their
+        share of each order after courier-confirmed delivery.
       properties:
         id:
           type: integer

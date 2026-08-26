@@ -581,7 +581,7 @@ export const GetCartResponse = zod.object({
   "businessName": zod.string(),
   "nurseryName": zod.string(),
   "location": zod.string(),
-  "hasVerifiedPaymentConfig": zod.boolean().describe('True only if this seller has a seller_payment_configs row with isVerified = true. Reflects the seller\'s live config state, which can drift from the listing\'s own paymentMethod field (e.g. after an admin unverifies a seller without touching their listings). Checkout uses this, not listing.paymentMethod alone, to decide whether bKash can actually be offered for this line.')
+  "platformBkashVerified": zod.boolean().describe('True if the platform\'s bKash merchant account is configured and verified (platformPaymentConfigTable.isVerified). Under the post-migration platform-custodial payments model, every buyer bKash payment settles into the platform\'s single merchant account regardless of which seller\'s listing is being bought, so this is a global flag — every seller on the cart gets the same value. Checkout uses this, not listing.paymentMethod alone, to decide whether bKash can actually be offered for this line.')
 }).describe('Present only on seller_listing-kind cart lines.'),zod.null()]).optional(),
   "listing": zod.object({
   "id": zod.number(),
@@ -664,7 +664,7 @@ export const AddToCartResponse = zod.object({
   "businessName": zod.string(),
   "nurseryName": zod.string(),
   "location": zod.string(),
-  "hasVerifiedPaymentConfig": zod.boolean().describe('True only if this seller has a seller_payment_configs row with isVerified = true. Reflects the seller\'s live config state, which can drift from the listing\'s own paymentMethod field (e.g. after an admin unverifies a seller without touching their listings). Checkout uses this, not listing.paymentMethod alone, to decide whether bKash can actually be offered for this line.')
+  "platformBkashVerified": zod.boolean().describe('True if the platform\'s bKash merchant account is configured and verified (platformPaymentConfigTable.isVerified). Under the post-migration platform-custodial payments model, every buyer bKash payment settles into the platform\'s single merchant account regardless of which seller\'s listing is being bought, so this is a global flag — every seller on the cart gets the same value. Checkout uses this, not listing.paymentMethod alone, to decide whether bKash can actually be offered for this line.')
 }).describe('Present only on seller_listing-kind cart lines.'),zod.null()]).optional(),
   "listing": zod.object({
   "id": zod.number(),
@@ -740,7 +740,7 @@ export const UpdateCartItemResponse = zod.object({
   "businessName": zod.string(),
   "nurseryName": zod.string(),
   "location": zod.string(),
-  "hasVerifiedPaymentConfig": zod.boolean().describe('True only if this seller has a seller_payment_configs row with isVerified = true. Reflects the seller\'s live config state, which can drift from the listing\'s own paymentMethod field (e.g. after an admin unverifies a seller without touching their listings). Checkout uses this, not listing.paymentMethod alone, to decide whether bKash can actually be offered for this line.')
+  "platformBkashVerified": zod.boolean().describe('True if the platform\'s bKash merchant account is configured and verified (platformPaymentConfigTable.isVerified). Under the post-migration platform-custodial payments model, every buyer bKash payment settles into the platform\'s single merchant account regardless of which seller\'s listing is being bought, so this is a global flag — every seller on the cart gets the same value. Checkout uses this, not listing.paymentMethod alone, to decide whether bKash can actually be offered for this line.')
 }).describe('Present only on seller_listing-kind cart lines.'),zod.null()]).optional(),
   "listing": zod.object({
   "id": zod.number(),
@@ -812,7 +812,7 @@ export const RemoveFromCartResponse = zod.object({
   "businessName": zod.string(),
   "nurseryName": zod.string(),
   "location": zod.string(),
-  "hasVerifiedPaymentConfig": zod.boolean().describe('True only if this seller has a seller_payment_configs row with isVerified = true. Reflects the seller\'s live config state, which can drift from the listing\'s own paymentMethod field (e.g. after an admin unverifies a seller without touching their listings). Checkout uses this, not listing.paymentMethod alone, to decide whether bKash can actually be offered for this line.')
+  "platformBkashVerified": zod.boolean().describe('True if the platform\'s bKash merchant account is configured and verified (platformPaymentConfigTable.isVerified). Under the post-migration platform-custodial payments model, every buyer bKash payment settles into the platform\'s single merchant account regardless of which seller\'s listing is being bought, so this is a global flag — every seller on the cart gets the same value. Checkout uses this, not listing.paymentMethod alone, to decide whether bKash can actually be offered for this line.')
 }).describe('Present only on seller_listing-kind cart lines.'),zod.null()]).optional(),
   "listing": zod.object({
   "id": zod.number(),
@@ -2466,43 +2466,6 @@ export const CreateSellerCourierConfigBody = zod.object({
 
 
 /**
- * @summary Seller — get their own bKash payment config (masked credentials). Returns null when not set up yet (COD-only).
- */
-export const GetMySellerPaymentConfigResponse = zod.union([zod.object({
-  "id": zod.number(),
-  "sellerId": zod.number(),
-  "provider": zod.enum(['bkash']),
-  "merchantAppKeyMasked": zod.string(),
-  "merchantAppSecretMasked": zod.string(),
-  "merchantUsernameMasked": zod.string(),
-  "merchantPasswordMasked": zod.string(),
-  "isVerified": zod.boolean(),
-  "createdAt": zod.string(),
-  "updatedAt": zod.string()
-}).describe('Masked seller bKash merchant credentials (plan doc §4, §7 — Part 5). Never contains decrypted merchantAppKey\/merchantAppSecret\/ merchantUsername\/merchantPassword -- only a last-4-style mask, per the schema\'s security note. isVerified is never set true by the create\/replace route itself (no live-credential check exists) -- it stays false until some future verification step sets it, and routes\/sellerListings.ts + routes\/orders.ts both gate \"advance\"\/\"both\"\/\"bkash\" on isVerified specifically, not just row existence.'),zod.null()])
-
-
-/**
- * @summary Seller — remove their payment config (listings fall back to COD-only)
- */
-export const DeleteMySellerPaymentConfigResponse = zod.object({
-  "message": zod.string()
-})
-
-
-/**
- * @summary Seller — create/replace their bKash merchant payment config
- */
-export const CreateSellerPaymentConfigBody = zod.object({
-  "provider": zod.enum(['bkash']).optional(),
-  "merchantAppKey": zod.string(),
-  "merchantAppSecret": zod.string(),
-  "merchantUsername": zod.string(),
-  "merchantPassword": zod.string()
-}).describe('provider defaults to \"bkash\" (the only provider this schema\/plan support today) if omitted. All four merchant credential fields are required -- bKash\'s merchant API needs all of them together, there is no partial-credential state.')
-
-
-/**
  * @summary Admin — get the platform's bKash merchant config (masked). 404 means not configured yet.
  */
 export const GetPlatformPaymentConfigResponse = zod.object({
@@ -2527,7 +2490,7 @@ export const CreatePlatformPaymentConfigBody = zod.object({
   "merchantAppSecret": zod.string(),
   "merchantUsername": zod.string(),
   "merchantPassword": zod.string()
-}).describe('provider defaults to \"bkash\" if omitted. All four merchant credential fields are required, same shape as CreateSellerPaymentConfigBody — this is the same bKash Merchant credential set, held by the admin account instead of a per-seller account.')
+}).describe('provider defaults to \"bkash\" if omitted. All four merchant credential fields are required. This is the bKash merchant credential set, held by the admin account (under the post-migration platform-custodial payments model, sellers no longer register their own merchant credentials).')
 
 
 /**
@@ -2586,7 +2549,7 @@ export const GetMySellerPayoutAccountResponse = zod.union([zod.object({
   "accountHolderName": zod.string().nullish(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
-}).describe('A seller\'s plain bKash payout NUMBER (new admin-custodial payments design, Part 1 of 4) — not a secret credential, so unlike SellerPaymentConfig this is returned unmasked.'),zod.null()])
+}).describe('A seller\'s plain bKash payout NUMBER (platform-custodial payments model) — not a secret credential, so it is returned unmasked. Under the post-migration model, sellers no longer register their own bKash merchant credentials — the admin configures ONE platform merchant account (PlatformPaymentConfig), and sellers only register a personal bKash number here for the platform to disburse their share of each order after courier-confirmed delivery.'),zod.null()])
 
 
 /**
@@ -3635,70 +3598,6 @@ export const RejectSellerVerificationResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })
-
-
-/**
- * @summary List seller bKash payment configs for admin review (admin only). Defaults to unverified/pending-review configs; pass verified=true to see already-verified ones instead.
- */
-export const ListAdminSellerPaymentConfigsQueryParams = zod.object({
-  "verified": zod.coerce.boolean().optional()
-})
-
-export const ListAdminSellerPaymentConfigsResponseItem = zod.object({
-  "id": zod.number(),
-  "sellerId": zod.number(),
-  "provider": zod.enum(['bkash']),
-  "merchantAppKeyMasked": zod.string(),
-  "merchantAppSecretMasked": zod.string(),
-  "merchantUsernameMasked": zod.string(),
-  "merchantPasswordMasked": zod.string(),
-  "isVerified": zod.boolean(),
-  "createdAt": zod.string(),
-  "updatedAt": zod.string()
-}).describe('Masked seller bKash merchant credentials (plan doc §4, §7 — Part 5). Never contains decrypted merchantAppKey\/merchantAppSecret\/ merchantUsername\/merchantPassword -- only a last-4-style mask, per the schema\'s security note. isVerified is never set true by the create\/replace route itself (no live-credential check exists) -- it stays false until some future verification step sets it, and routes\/sellerListings.ts + routes\/orders.ts both gate \"advance\"\/\"both\"\/\"bkash\" on isVerified specifically, not just row existence.')
-export const ListAdminSellerPaymentConfigsResponse = zod.array(ListAdminSellerPaymentConfigsResponseItem)
-
-
-/**
- * @summary Mark a seller's bKash payment config as verified (admin only, manual review — no live bKash API check). Unlocks "advance"/"both"/"bkash" for that seller.
- */
-export const VerifySellerPaymentConfigParams = zod.object({
-  "id": zod.coerce.number()
-})
-
-export const VerifySellerPaymentConfigResponse = zod.object({
-  "id": zod.number(),
-  "sellerId": zod.number(),
-  "provider": zod.enum(['bkash']),
-  "merchantAppKeyMasked": zod.string(),
-  "merchantAppSecretMasked": zod.string(),
-  "merchantUsernameMasked": zod.string(),
-  "merchantPasswordMasked": zod.string(),
-  "isVerified": zod.boolean(),
-  "createdAt": zod.string(),
-  "updatedAt": zod.string()
-}).describe('Masked seller bKash merchant credentials (plan doc §4, §7 — Part 5). Never contains decrypted merchantAppKey\/merchantAppSecret\/ merchantUsername\/merchantPassword -- only a last-4-style mask, per the schema\'s security note. isVerified is never set true by the create\/replace route itself (no live-credential check exists) -- it stays false until some future verification step sets it, and routes\/sellerListings.ts + routes\/orders.ts both gate \"advance\"\/\"both\"\/\"bkash\" on isVerified specifically, not just row existence.')
-
-
-/**
- * @summary Revoke verification on a seller's bKash payment config (admin only)
- */
-export const UnverifySellerPaymentConfigParams = zod.object({
-  "id": zod.coerce.number()
-})
-
-export const UnverifySellerPaymentConfigResponse = zod.object({
-  "id": zod.number(),
-  "sellerId": zod.number(),
-  "provider": zod.enum(['bkash']),
-  "merchantAppKeyMasked": zod.string(),
-  "merchantAppSecretMasked": zod.string(),
-  "merchantUsernameMasked": zod.string(),
-  "merchantPasswordMasked": zod.string(),
-  "isVerified": zod.boolean(),
-  "createdAt": zod.string(),
-  "updatedAt": zod.string()
-}).describe('Masked seller bKash merchant credentials (plan doc §4, §7 — Part 5). Never contains decrypted merchantAppKey\/merchantAppSecret\/ merchantUsername\/merchantPassword -- only a last-4-style mask, per the schema\'s security note. isVerified is never set true by the create\/replace route itself (no live-credential check exists) -- it stays false until some future verification step sets it, and routes\/sellerListings.ts + routes\/orders.ts both gate \"advance\"\/\"both\"\/\"bkash\" on isVerified specifically, not just row existence.')
 
 
 /**

@@ -12,7 +12,7 @@ import {
   seedSeller,
   seedUser,
   seedListing,
-  seedVerifiedPaymentConfig,
+  seedVerifiedPlatformPaymentConfig,
 } from "./testDb";
 
 /**
@@ -40,9 +40,18 @@ describe("cart routes (HTTP)", () => {
       businessName: "Cart Test Nursery",
     });
     sellerId = seller.id;
-    await seedVerifiedPaymentConfig(sellerId);
+    // Post-migration: cart.ts's `platformBkashVerified` flag (was
+    // `hasVerifiedPaymentConfig`) reads platformPaymentConfigTable.isVerified,
+    // not seller_payment_configs (which has been dropped). Seed a verified
+    // platform config so the cart's bKash-availability flag returns true.
+    await seedVerifiedPlatformPaymentConfig();
 
-    const listing = await seedListing({ productId, sellerId, price: "500.00", availableQuantity: 5 });
+    const listing = await seedListing({
+      productId,
+      sellerId,
+      price: "500.00",
+      availableQuantity: 5,
+    });
     listingId = listing.id;
 
     // Seed the buyer explicitly (rather than relying on requireAuth's
@@ -68,9 +77,7 @@ describe("cart routes (HTTP)", () => {
   });
 
   it("returns an empty cart for a fresh authenticated buyer", async () => {
-    const res = await request(app)
-      .get("/api/cart")
-      .set(authHeader(buyerClerkId, buyerEmail));
+    const res = await request(app).get("/api/cart").set(authHeader(buyerClerkId, buyerEmail));
     expect(res.status).toBe(200);
     expect(res.body.items).toEqual([]);
     expect(res.body.total).toBe(0);
@@ -87,20 +94,22 @@ describe("cart routes (HTTP)", () => {
     expect(addRes.body.items[0].kind).toBe("seller_listing");
     expect(addRes.body.items[0].sellerListingId).toBe(listingId);
     expect(addRes.body.items[0].quantity).toBe(2);
-    // hasVerifiedPaymentConfig batched query (cart.ts) should read true, since
-    // this seller has a verified seller_payment_configs row (seeded above).
-    expect(addRes.body.items[0].seller.hasVerifiedPaymentConfig).toBe(true);
+    // platformBkashVerified (cart.ts) should read true, since the platform
+    // payment config was seeded as verified above. This is now a global flag,
+    // not per-seller.
+    expect(addRes.body.items[0].seller.platformBkashVerified).toBe(true);
     expect(addRes.body.subtotal).toBe(1000);
 
-    const getRes = await request(app)
-      .get("/api/cart")
-      .set(authHeader(buyerClerkId, buyerEmail));
+    const getRes = await request(app).get("/api/cart").set(authHeader(buyerClerkId, buyerEmail));
     expect(getRes.status).toBe(200);
     expect(getRes.body.items).toHaveLength(1);
     expect(getRes.body.items[0].quantity).toBe(2);
 
     // Confirm the write actually landed in the DB, not just in the response body.
-    const rows = await db.select().from(cartItemsTable).where(eq(cartItemsTable.userId, buyerClerkId));
+    const rows = await db
+      .select()
+      .from(cartItemsTable)
+      .where(eq(cartItemsTable.userId, buyerClerkId));
     expect(rows).toHaveLength(1);
     expect(rows[0].sellerListingId).toBe(listingId);
     expect(rows[0].quantity).toBe(2);
@@ -124,12 +133,13 @@ describe("cart routes (HTTP)", () => {
   });
 
   it("DELETE /api/cart clears the authenticated buyer's cart", async () => {
-    const res = await request(app)
-      .delete("/api/cart")
-      .set(authHeader(buyerClerkId, buyerEmail));
+    const res = await request(app).delete("/api/cart").set(authHeader(buyerClerkId, buyerEmail));
     expect(res.status).toBe(200);
 
-    const rows = await db.select().from(cartItemsTable).where(eq(cartItemsTable.userId, buyerClerkId));
+    const rows = await db
+      .select()
+      .from(cartItemsTable)
+      .where(eq(cartItemsTable.userId, buyerClerkId));
     expect(rows).toHaveLength(0);
   });
 });

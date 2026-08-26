@@ -182,17 +182,17 @@ async function buildCart(userId: string) {
       .where(and(eq(cartItemsTable.userId, userId), gte(cartItemsTable.expiresAt, new Date()))),
   ]);
 
-  // Part 2 change (see PART2_HANDOFF.md): "hasVerifiedPaymentConfig" used
-  // to be a PER-SELLER lookup against sellerPaymentConfigsTable (each
-  // seller's own bKash merchant account). Under the new admin-custodial
-  // model every buyer bKash payment settles into the platform's single
-  // merchant account (platformPaymentConfigTable, Part 1) regardless of
-  // which seller's listing is being bought -- so this is now ONE lookup
-  // for the whole cart, not one per distinct seller. The field name/shape
-  // on each mapped listing line (seller.hasVerifiedPaymentConfig, below)
-  // is left unchanged so CheckoutPage.tsx's existing per-line read doesn't
-  // need restructuring -- every seller on the cart just gets the SAME
-  // value now, computed once here.
+  // Platform-custodial payments model (post-migration): every buyer bKash
+  // payment settles into the platform's single merchant account
+  // (platformPaymentConfigTable), regardless of which seller's listing is
+  // being bought. So this is ONE lookup for the whole cart, not one per
+  // distinct seller. Exposed on every cart line as `seller.platformBkashVerified`
+  // so CheckoutPage.tsx can decide whether bKash is a selectable payment
+  // method per line — every seller gets the same value (it's a global flag),
+  // but per-line shape keeps the frontend's "decide per cart line" rendering
+  // simple. (The pre-migration field name `hasVerifiedPaymentConfig` was
+  // renamed during the migration cleanup — it referenced a per-seller
+  // concept that no longer exists.)
   const [platformConfig] = await db
     .select({ isVerified: platformPaymentConfigTable.isVerified })
     .from(platformPaymentConfigTable)
@@ -315,7 +315,7 @@ async function buildCart(userId: string) {
           businessName: seller.businessName,
           nurseryName: seller.nurseryName,
           location: seller.location,
-          hasVerifiedPaymentConfig: platformBkashVerified,
+          platformBkashVerified,
         },
         quantity: cart.quantity,
         variant: null,

@@ -2,12 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import request from "supertest";
 import app from "../src/app";
 import { db } from "@workspace/db";
-import {
-  sellersTable,
-  sellerPaymentConfigsTable,
-  sellerCourierConfigsTable,
-  sellerListingsTable,
-} from "@workspace/db/schema";
+import { sellersTable, sellerCourierConfigsTable } from "@workspace/db/schema";
 import { eq } from "drizzle-orm";
 import { authHeader } from "./authHelper";
 import {
@@ -17,7 +12,6 @@ import {
   seedSeller,
   seedUser,
   seedListing,
-  seedVerifiedPaymentConfig,
   seedVerifiedCourierConfig,
 } from "./testDb";
 
@@ -26,10 +20,18 @@ import {
  * this file: every existing test (this suite's other files AND
  * scripts/src/verify-seller-marketplace.ts) seeds isVerified/status
  * directly via the DB, bypassing these routes entirely. That means the
- * actual admin-facing verification/approval workflow -- the thing Part 1's
- * hasVerifiedPaymentConfig and Part 2's order_shipments fix both assume
- * gets triggered through a real admin action -- had never actually been
- * driven through a real request before this file existed.
+ * actual admin-facing verification/approval workflow -- the thing
+ * hasSellerPayoutAccount (post-migration, was hasVerifiedPaymentConfig
+ * pre-migration) and Part 2's order_shipments fix both assume gets
+ * triggered through a real admin action -- had never actually been driven
+ * through a real request before this file existed.
+ *
+ * NOTE: The payment-config verify/unverify/list routes were REMOVED during
+ * the payments-model migration (sellers no longer register merchant
+ * credentials — admin configures the platform merchant account via
+ * platformPaymentConfig, sellers register a payout number via
+ * sellerPayoutAccounts). Only the seller-approval and courier-config
+ * verify/unverify routes remain in routes/adminSellers.ts.
  *
  * Admin identity: requireAdmin checks req.dbUser.role === "admin" (see
  * middlewares/auth.ts's requireAdmin/requireAuth). The mobile-JWT auth path
@@ -54,10 +56,17 @@ describe("admin-sellers routes (HTTP)", () => {
     const product = await seedProduct(category.id);
     productId = product.id;
 
-    const admin = await seedUser({ clerkIdSuffix: "adminsellers-admin", email: "adminsellers-admin@test.example", role: "admin" });
+    const admin = await seedUser({
+      clerkIdSuffix: "adminsellers-admin",
+      email: "adminsellers-admin@test.example",
+      role: "admin",
+    });
     adminClerkId = admin.clerkId;
 
-    const buyer = await seedUser({ clerkIdSuffix: "adminsellers-buyer", email: "adminsellers-buyer@test.example" });
+    const buyer = await seedUser({
+      clerkIdSuffix: "adminsellers-buyer",
+      email: "adminsellers-buyer@test.example",
+    });
     buyerClerkId = buyer.clerkId;
 
     const { user: nonAdminSellerUser } = await seedSeller({
@@ -74,7 +83,8 @@ describe("admin-sellers routes (HTTP)", () => {
 
   const adminAuth = () => authHeader(adminClerkId, "adminsellers-admin@test.example");
   const buyerAuth = () => authHeader(buyerClerkId, "adminsellers-buyer@test.example");
-  const nonAdminSellerAuth = () => authHeader(nonAdminSellerClerkId, "adminsellers-nonadmin-seller@test.example");
+  const nonAdminSellerAuth = () =>
+    authHeader(nonAdminSellerClerkId, "adminsellers-nonadmin-seller@test.example");
 
   describe("401/403 gating on every route in this file", () => {
     it("401s GET /api/admin/sellers with no auth", async () => {
@@ -111,11 +121,8 @@ describe("admin-sellers routes (HTTP)", () => {
       }
     }, 45000);
 
-    it("401/403s the payment/courier config list + verify + unverify routes for no-auth and non-admin", async () => {
+    it("401/403s the courier config list + verify + unverify routes for no-auth and non-admin", async () => {
       for (const { method, path } of [
-        { method: "get" as const, path: "/api/admin/seller-payment-configs" },
-        { method: "put" as const, path: "/api/admin/seller-payment-configs/-1/verify" },
-        { method: "put" as const, path: "/api/admin/seller-payment-configs/-1/unverify" },
         { method: "get" as const, path: "/api/admin/seller-courier-configs" },
         { method: "put" as const, path: "/api/admin/seller-courier-configs/-1/verify" },
         { method: "put" as const, path: "/api/admin/seller-courier-configs/-1/unverify" },
@@ -139,11 +146,16 @@ describe("admin-sellers routes (HTTP)", () => {
         status: "pending_verification",
       });
 
-      const res = await request(app).put(`/api/admin/sellers/${seller.id}/approve`).set(adminAuth());
+      const res = await request(app)
+        .put(`/api/admin/sellers/${seller.id}/approve`)
+        .set(adminAuth());
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("active");
 
-      const [refetched] = await db.select().from(sellersTable).where(eq(sellersTable.id, seller.id));
+      const [refetched] = await db
+        .select()
+        .from(sellersTable)
+        .where(eq(sellersTable.id, seller.id));
       expect(refetched.status).toBe("active");
     });
 
@@ -154,7 +166,9 @@ describe("admin-sellers routes (HTTP)", () => {
         businessName: "Already Active Nursery",
         status: "active",
       });
-      const res = await request(app).put(`/api/admin/sellers/${seller.id}/approve`).set(adminAuth());
+      const res = await request(app)
+        .put(`/api/admin/sellers/${seller.id}/approve`)
+        .set(adminAuth());
       expect(res.status).toBe(400);
     });
 
@@ -218,18 +232,27 @@ describe("admin-sellers routes (HTTP)", () => {
       // state change through the real buyer-facing route, not assumed.
       const beforeRes = await request(app).get(`/api/products/${productId}/seller-listings`);
       expect(beforeRes.status).toBe(200);
-      expect(beforeRes.body.some((r: any) => r.listing?.id === listing.id || r.id === listing.id)).toBe(true);
+      expect(
+        beforeRes.body.some((r: any) => r.listing?.id === listing.id || r.id === listing.id),
+      ).toBe(true);
 
-      const suspendRes = await request(app).put(`/api/admin/sellers/${seller.id}/suspend`).set(adminAuth());
+      const suspendRes = await request(app)
+        .put(`/api/admin/sellers/${seller.id}/suspend`)
+        .set(adminAuth());
       expect(suspendRes.status).toBe(200);
       expect(suspendRes.body.status).toBe("suspended");
 
-      const [refetched] = await db.select().from(sellersTable).where(eq(sellersTable.id, seller.id));
+      const [refetched] = await db
+        .select()
+        .from(sellersTable)
+        .where(eq(sellersTable.id, seller.id));
       expect(refetched.status).toBe("suspended");
 
       const afterRes = await request(app).get(`/api/products/${productId}/seller-listings`);
       expect(afterRes.status).toBe(200);
-      expect(afterRes.body.some((r: any) => r.listing?.id === listing.id || r.id === listing.id)).toBe(false);
+      expect(
+        afterRes.body.some((r: any) => r.listing?.id === listing.id || r.id === listing.id),
+      ).toBe(false);
     });
 
     it("400s suspending a seller that isn't active", async () => {
@@ -239,140 +262,10 @@ describe("admin-sellers routes (HTTP)", () => {
         businessName: "Suspend Pending Nursery",
         status: "pending_verification",
       });
-      const res = await request(app).put(`/api/admin/sellers/${seller.id}/suspend`).set(adminAuth());
+      const res = await request(app)
+        .put(`/api/admin/sellers/${seller.id}/suspend`)
+        .set(adminAuth());
       expect(res.status).toBe(400);
-    });
-  });
-
-  describe("seller-payment-configs verify/unverify routes", () => {
-    it("verify: real admin HTTP call actually flips isVerified to true in the DB (not a direct insert standing in for it)", async () => {
-      const { seller } = await seedSeller({
-        clerkIdSuffix: "payverify-seller",
-        email: "payverify-seller@test.example",
-        businessName: "Pay Verify Nursery",
-      });
-      const [config] = await db
-        .insert(sellerPaymentConfigsTable)
-        .values({
-          sellerId: seller.id,
-          provider: "bkash",
-          merchantAppKey: "k",
-          merchantAppSecret: "s",
-          merchantUsername: "u",
-          merchantPassword: "p",
-          isVerified: false,
-        })
-        .returning();
-
-      const res = await request(app).put(`/api/admin/seller-payment-configs/${config.id}/verify`).set(adminAuth());
-      expect(res.status).toBe(200);
-      expect(res.body.isVerified).toBe(true);
-
-      const [refetched] = await db.select().from(sellerPaymentConfigsTable).where(eq(sellerPaymentConfigsTable.id, config.id));
-      expect(refetched.isVerified).toBe(true);
-    });
-
-    it("400s verifying a payment config that's already verified", async () => {
-      const { seller } = await seedSeller({
-        clerkIdSuffix: "payverify-dup",
-        email: "payverify-dup@test.example",
-        businessName: "Pay Verify Dup Nursery",
-      });
-      const config = await seedVerifiedPaymentConfig(seller.id);
-      const res = await request(app).put(`/api/admin/seller-payment-configs/${config.id}/verify`).set(adminAuth());
-      expect(res.status).toBe(400);
-    });
-
-    it("404s verifying a payment config id that doesn't exist", async () => {
-      const res = await request(app).put("/api/admin/seller-payment-configs/999999999/verify").set(adminAuth());
-      expect(res.status).toBe(404);
-    });
-
-    /**
-     * Mutation-tested per the session brief's core lesson (from Part 3's own
-     * fixed race test): a test asserting a specific behavior is not proof
-     * of that behavior unless it's been shown to fail when that behavior is
-     * removed. This test asserts the unverify route's listing reconciliation
-     * (advance/both -> cod) actually fires when triggered through the real
-     * HTTP route, not via a direct DB update standing in for it.
-     *
-     * Mutation-test proof (see PART4A_HANDOFF.md for the full transcript):
-     * with the reconciliation UPDATE in adminSellers.ts's unverify-payment-
-     * config route commented out, this exact test was re-run and FAILED
-     * (`expected 'advance' to be 'cod'` -- the seeded advance listing kept
-     * its original paymentMethod instead of being reconciled). The
-     * reconciliation was then restored and this test was re-confirmed
-     * passing (27/27).
-     */
-    it("unverify: real admin HTTP call flips isVerified false AND reconciles this seller's advance/both listings back to cod", async () => {
-      const { seller } = await seedSeller({
-        clerkIdSuffix: "payunverify-seller",
-        email: "payunverify-seller@test.example",
-        businessName: "Pay Unverify Nursery",
-      });
-      const config = await seedVerifiedPaymentConfig(seller.id);
-      const advanceListing = await seedListing({ productId, sellerId: seller.id, paymentMethod: "advance" });
-      const bothListing = await seedListing({ productId, sellerId: seller.id, paymentMethod: "both" });
-      const codListing = await seedListing({ productId, sellerId: seller.id, paymentMethod: "cod" });
-
-      const res = await request(app).put(`/api/admin/seller-payment-configs/${config.id}/unverify`).set(adminAuth());
-      expect(res.status).toBe(200);
-      expect(res.body.isVerified).toBe(false);
-
-      const [refetchedConfig] = await db.select().from(sellerPaymentConfigsTable).where(eq(sellerPaymentConfigsTable.id, config.id));
-      expect(refetchedConfig.isVerified).toBe(false);
-
-      const [refetchedAdvance] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, advanceListing.id));
-      expect(refetchedAdvance.paymentMethod).toBe("cod");
-
-      const [refetchedBoth] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, bothListing.id));
-      expect(refetchedBoth.paymentMethod).toBe("cod");
-
-      // A listing that was already "cod" should be untouched (not a
-      // meaningful mutation-catch on its own, but confirms the WHERE
-      // clause's ne(paymentMethod, 'cod') scoping isn't accidentally
-      // touching rows it shouldn't).
-      const [refetchedCod] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, codListing.id));
-      expect(refetchedCod.paymentMethod).toBe("cod");
-    });
-
-    it("400s unverifying a payment config that isn't currently verified", async () => {
-      const { seller } = await seedSeller({
-        clerkIdSuffix: "payunverify-notverified",
-        email: "payunverify-notverified@test.example",
-        businessName: "Pay Unverify Not Verified Nursery",
-      });
-      const [config] = await db
-        .insert(sellerPaymentConfigsTable)
-        .values({
-          sellerId: seller.id,
-          provider: "bkash",
-          merchantAppKey: "k",
-          merchantAppSecret: "s",
-          merchantUsername: "u",
-          merchantPassword: "p",
-          isVerified: false,
-        })
-        .returning();
-      const res = await request(app).put(`/api/admin/seller-payment-configs/${config.id}/unverify`).set(adminAuth());
-      expect(res.status).toBe(400);
-    });
-
-    it("list route: ?verified=true / default (unverified) return the right rows", async () => {
-      const { seller } = await seedSeller({
-        clerkIdSuffix: "paylist-seller",
-        email: "paylist-seller@test.example",
-        businessName: "Pay List Nursery",
-      });
-      const verifiedConfig = await seedVerifiedPaymentConfig(seller.id);
-
-      const verifiedRes = await request(app).get("/api/admin/seller-payment-configs?verified=true").set(adminAuth());
-      expect(verifiedRes.status).toBe(200);
-      expect(verifiedRes.body.some((c: any) => c.id === verifiedConfig.id)).toBe(true);
-
-      const unverifiedRes = await request(app).get("/api/admin/seller-payment-configs").set(adminAuth());
-      expect(unverifiedRes.status).toBe(200);
-      expect(unverifiedRes.body.some((c: any) => c.id === verifiedConfig.id)).toBe(false);
     });
   });
 
@@ -395,11 +288,16 @@ describe("admin-sellers routes (HTTP)", () => {
         })
         .returning();
 
-      const res = await request(app).put(`/api/admin/seller-courier-configs/${config.id}/verify`).set(adminAuth());
+      const res = await request(app)
+        .put(`/api/admin/seller-courier-configs/${config.id}/verify`)
+        .set(adminAuth());
       expect(res.status).toBe(200);
       expect(res.body.isVerified).toBe(true);
 
-      const [refetched] = await db.select().from(sellerCourierConfigsTable).where(eq(sellerCourierConfigsTable.id, config.id));
+      const [refetched] = await db
+        .select()
+        .from(sellerCourierConfigsTable)
+        .where(eq(sellerCourierConfigsTable.id, config.id));
       expect(refetched.isVerified).toBe(true);
     });
 
@@ -410,12 +308,16 @@ describe("admin-sellers routes (HTTP)", () => {
         businessName: "Cour Verify Dup Nursery",
       });
       const config = await seedVerifiedCourierConfig(seller.id);
-      const res = await request(app).put(`/api/admin/seller-courier-configs/${config.id}/verify`).set(adminAuth());
+      const res = await request(app)
+        .put(`/api/admin/seller-courier-configs/${config.id}/verify`)
+        .set(adminAuth());
       expect(res.status).toBe(400);
     });
 
     it("404s verifying a courier config id that doesn't exist", async () => {
-      const res = await request(app).put("/api/admin/seller-courier-configs/999999999/verify").set(adminAuth());
+      const res = await request(app)
+        .put("/api/admin/seller-courier-configs/999999999/verify")
+        .set(adminAuth());
       expect(res.status).toBe(404);
     });
 
@@ -464,11 +366,16 @@ describe("admin-sellers routes (HTTP)", () => {
         productId,
       });
 
-      const unverifyRes = await request(app).put(`/api/admin/seller-courier-configs/${config.id}/unverify`).set(adminAuth());
+      const unverifyRes = await request(app)
+        .put(`/api/admin/seller-courier-configs/${config.id}/unverify`)
+        .set(adminAuth());
       expect(unverifyRes.status).toBe(200);
       expect(unverifyRes.body.isVerified).toBe(false);
 
-      const [refetchedConfig] = await db.select().from(sellerCourierConfigsTable).where(eq(sellerCourierConfigsTable.id, config.id));
+      const [refetchedConfig] = await db
+        .select()
+        .from(sellerCourierConfigsTable)
+        .where(eq(sellerCourierConfigsTable.id, config.id));
       expect(refetchedConfig.isVerified).toBe(false);
 
       const sellerAuth = authHeader(user.clerkId, "courunverify-seller@test.example");
@@ -496,7 +403,9 @@ describe("admin-sellers routes (HTTP)", () => {
           isVerified: false,
         })
         .returning();
-      const res = await request(app).put(`/api/admin/seller-courier-configs/${config.id}/unverify`).set(adminAuth());
+      const res = await request(app)
+        .put(`/api/admin/seller-courier-configs/${config.id}/unverify`)
+        .set(adminAuth());
       expect(res.status).toBe(400);
     });
 
@@ -508,66 +417,21 @@ describe("admin-sellers routes (HTTP)", () => {
       });
       const verifiedConfig = await seedVerifiedCourierConfig(seller.id);
 
-      const verifiedRes = await request(app).get("/api/admin/seller-courier-configs?verified=true").set(adminAuth());
+      const verifiedRes = await request(app)
+        .get("/api/admin/seller-courier-configs?verified=true")
+        .set(adminAuth());
       expect(verifiedRes.status).toBe(200);
       expect(verifiedRes.body.some((c: any) => c.id === verifiedConfig.id)).toBe(true);
 
-      const unverifiedRes = await request(app).get("/api/admin/seller-courier-configs").set(adminAuth());
+      const unverifiedRes = await request(app)
+        .get("/api/admin/seller-courier-configs")
+        .set(adminAuth());
       expect(unverifiedRes.status).toBe(200);
       expect(unverifiedRes.body.some((c: any) => c.id === verifiedConfig.id)).toBe(false);
     });
   });
 
   describe("ownership/scoping: one admin action never touches a seller not named in the request", () => {
-    it("verifying seller A's payment config does not affect seller B's payment config", async () => {
-      const { seller: sellerA } = await seedSeller({
-        clerkIdSuffix: "scope-pay-a",
-        email: "scope-pay-a@test.example",
-        businessName: "Scope Pay A Nursery",
-      });
-      const { seller: sellerB } = await seedSeller({
-        clerkIdSuffix: "scope-pay-b",
-        email: "scope-pay-b@test.example",
-        businessName: "Scope Pay B Nursery",
-      });
-      const [configA] = await db
-        .insert(sellerPaymentConfigsTable)
-        .values({ sellerId: sellerA.id, provider: "bkash", merchantAppKey: "k", merchantAppSecret: "s", merchantUsername: "u", merchantPassword: "p", isVerified: false })
-        .returning();
-      const [configB] = await db
-        .insert(sellerPaymentConfigsTable)
-        .values({ sellerId: sellerB.id, provider: "bkash", merchantAppKey: "k2", merchantAppSecret: "s2", merchantUsername: "u2", merchantPassword: "p2", isVerified: false })
-        .returning();
-
-      const res = await request(app).put(`/api/admin/seller-payment-configs/${configA.id}/verify`).set(adminAuth());
-      expect(res.status).toBe(200);
-
-      const [refetchedB] = await db.select().from(sellerPaymentConfigsTable).where(eq(sellerPaymentConfigsTable.id, configB.id));
-      expect(refetchedB.isVerified).toBe(false);
-    });
-
-    it("unverifying seller A's payment config does not reconcile seller B's listings", async () => {
-      const { seller: sellerA } = await seedSeller({
-        clerkIdSuffix: "scope-unverify-a",
-        email: "scope-unverify-a@test.example",
-        businessName: "Scope Unverify A Nursery",
-      });
-      const { seller: sellerB } = await seedSeller({
-        clerkIdSuffix: "scope-unverify-b",
-        email: "scope-unverify-b@test.example",
-        businessName: "Scope Unverify B Nursery",
-      });
-      const configA = await seedVerifiedPaymentConfig(sellerA.id);
-      await seedVerifiedPaymentConfig(sellerB.id);
-      const listingB = await seedListing({ productId, sellerId: sellerB.id, paymentMethod: "advance" });
-
-      const res = await request(app).put(`/api/admin/seller-payment-configs/${configA.id}/unverify`).set(adminAuth());
-      expect(res.status).toBe(200);
-
-      const [refetchedListingB] = await db.select().from(sellerListingsTable).where(eq(sellerListingsTable.id, listingB.id));
-      expect(refetchedListingB.paymentMethod).toBe("advance");
-    });
-
     it("suspending seller A does not affect seller B's status or listing visibility", async () => {
       const { seller: sellerA } = await seedSeller({
         clerkIdSuffix: "scope-suspend-a",
@@ -583,14 +447,21 @@ describe("admin-sellers routes (HTTP)", () => {
       });
       const listingB = await seedListing({ productId, sellerId: sellerB.id });
 
-      const res = await request(app).put(`/api/admin/sellers/${sellerA.id}/suspend`).set(adminAuth());
+      const res = await request(app)
+        .put(`/api/admin/sellers/${sellerA.id}/suspend`)
+        .set(adminAuth());
       expect(res.status).toBe(200);
 
-      const [refetchedB] = await db.select().from(sellersTable).where(eq(sellersTable.id, sellerB.id));
+      const [refetchedB] = await db
+        .select()
+        .from(sellersTable)
+        .where(eq(sellersTable.id, sellerB.id));
       expect(refetchedB.status).toBe("active");
 
       const listingsRes = await request(app).get(`/api/products/${productId}/seller-listings`);
-      expect(listingsRes.body.some((r: any) => r.listing?.id === listingB.id || r.id === listingB.id)).toBe(true);
+      expect(
+        listingsRes.body.some((r: any) => r.listing?.id === listingB.id || r.id === listingB.id),
+      ).toBe(true);
     });
   });
 });

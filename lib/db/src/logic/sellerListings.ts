@@ -1,39 +1,43 @@
 import { eq } from "drizzle-orm";
 import { db } from "../index";
-import { sellerPaymentConfigsTable } from "../schema";
+import { sellerPayoutAccountsTable } from "../schema";
 
 /**
- * Moved here (Part 1 of the post-Phase-9 backlog) from
- * artifacts/api-server/src/routes/sellerListings.ts, where it was a
- * module-local function. It's still exported from sellerListings.ts (that
- * file re-exports it) so every existing call site there is unchanged.
+ * Listing-eligibility gate for the platform-custodial payments model.
  *
- * It was moved rather than simply marked `export` in place because
- * sellerListings.ts transitively imports express/multer/cloudinary and
- * (via ../middlewares/auth -> ./mobileJwt) throws at module-load time if
- * MOBILE_JWT_SECRET isn't set. That makes the route file unsafe to import
- * from anywhere that doesn't already run inside the full api-server process
- * -- including scripts/src/verify-seller-marketplace.ts, which has no
- * reason to depend on Express, Clerk, Cloudinary, or a JWT secret just to
- * reach a pure DB-read helper. Moving the function to @workspace/db (which
- * the script already depends on for `db` and the schema) removes that
- * coupling entirely: this module only imports drizzle-orm and this
- * package's own db/schema, both of which every consumer already needs.
+ * Under the new (post-migration) payments design:
+ *   - The platform holds ONE bKash merchant account (platformPaymentConfigTable),
+ *     configured by an admin. Buyers pay the platform directly.
+ *   - Each seller registers a plain bKash PERSONAL number (sellerPayoutAccountsTable)
+ *     where the platform disburses their share after courier-confirmed delivery.
+ *   - Per-seller bKash merchant credentials (the old sellerPaymentConfigsTable)
+ *     no longer exist — sellers never touch merchant API credentials.
  *
- * Original doc comment, preserved: seller_payment_configs row can only
- * offer COD -- enforce this at the listing level (reject payment_method =
- * 'advance' or 'both' if no verified config exists). Checks for a row with
- * isVerified = true specifically, not just any row existing. The only
- * place isVerified is ever set true is routes/adminSellers.ts's
- * PUT /admin/seller-payment-configs/:id/verify (a manual admin-review
- * toggle) -- so this returns false for every seller until an admin
- * explicitly verifies their config.
+ * The real invariant for "can this seller offer paymentMethod = 'advance' | 'both'
+ * on a listing" is therefore: **the platform must have somewhere to send the
+ * seller's money**. If a seller has no payout account on file, they cannot
+ * accept advance payments — the platform would collect money it has nowhere
+ * to disburse. Cash-on-delivery is unaffected (the buyer pays the courier
+ * directly, no platform-side settlement involved).
+ *
+ * This function replaces the pre-migration `hasVerifiedPaymentConfig(sellerId)`
+ * which read the old sellerPaymentConfigsTable. Callers (sellerListings.ts
+ * POST/PUT routes) now call this instead — same signature, same boolean
+ * return, but the underlying check is "payout account exists" rather than
+ * "merchant credentials verified by an admin".
+ *
+ * Unlike the old check, there is no separate "verified" flag to flip: a
+ * payout account is just a phone number the seller typed in, and its
+ * existence is the only eligibility signal. (The number's actual validity
+ * is enforced at write time by isValidBdPhone, and at disbursement time by
+ * bKash's B2C API call — neither needs an admin-gated "isVerified" toggle
+ * here.)
  */
-export async function hasVerifiedPaymentConfig(sellerId: number): Promise<boolean> {
-  const [config] = await db
-    .select({ isVerified: sellerPaymentConfigsTable.isVerified })
-    .from(sellerPaymentConfigsTable)
-    .where(eq(sellerPaymentConfigsTable.sellerId, sellerId))
+export async function hasSellerPayoutAccount(sellerId: number): Promise<boolean> {
+  const [account] = await db
+    .select({ id: sellerPayoutAccountsTable.id })
+    .from(sellerPayoutAccountsTable)
+    .where(eq(sellerPayoutAccountsTable.sellerId, sellerId))
     .limit(1);
-  return config?.isVerified === true;
+  return !!account;
 }

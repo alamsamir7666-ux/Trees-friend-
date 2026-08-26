@@ -1,7 +1,11 @@
 import crypto from "crypto";
 
 /**
- * Encrypt-at-rest for seller_payment_configs / seller_courier_configs.
+ * Encrypt-at-rest for platform_payment_config / seller_courier_configs.
+ *
+ * (Pre-migration, also handled seller_payment_configs; that table has
+ * been dropped — sellers no longer touch merchant credentials, only the
+ * admin-configured platform merchant account needs encryption now.)
  *
  * Neither table's schema comments ("SECURITY: ... Encrypt at rest, same
  * standard as password storage") were ever backed by an actual utility in
@@ -38,7 +42,7 @@ function loadKey(): Buffer {
       `${KEY_ENV_VAR} environment variable is not set. Generate one with ` +
         "`openssl rand -base64 32` and add it to your Render environment " +
         "variables. Required to store/read seller payment and courier " +
-        "credentials (seller_payment_configs, seller_courier_configs).",
+        "credentials (platform_payment_config, seller_courier_configs).",
     );
   }
   const key = Buffer.from(raw, "base64");
@@ -53,7 +57,7 @@ function loadKey(): Buffer {
 
 // Lazy: only throws when a route actually tries to encrypt/decrypt, not at
 // module import time for every process that happens to import this file
-// transitively. Matches how sellerPaymentConfigs/sellerCourierConfigs
+// transitively. Matches how platformPaymentConfig/sellerCourierConfigs
 // routes are only hit when those features are used.
 let _key: Buffer | null = null;
 function getKey(): Buffer {

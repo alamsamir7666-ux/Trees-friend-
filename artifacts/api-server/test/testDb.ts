@@ -6,7 +6,8 @@ import {
   productsTable,
   sellerListingsTable,
   sellerListingVariantsTable,
-  sellerPaymentConfigsTable,
+  sellerPayoutAccountsTable,
+  platformPaymentConfigTable,
   sellerCourierConfigsTable,
   cartItemsTable,
   ordersTable,
@@ -108,9 +109,10 @@ export async function cleanupAll(): Promise<void> {
     .from(usersTable)
     .where(like(usersTable.clerkId, `${TEST_MARKER}%`));
   for (const u of staleUsers) {
-    // Cascades: sellers -> seller_listings, seller_payment_configs, seller_courier_configs.
-    // cart_items.userId is also free-text (clerkId), clean explicitly too.
-    // wishlist.userId is also free-text (clerkId), clean explicitly too.
+    // Cascades: sellers -> seller_listings, seller_payout_accounts,
+    // seller_courier_configs. cart_items.userId is also free-text (clerkId),
+    // clean explicitly too. wishlist.userId is also free-text (clerkId),
+    // clean explicitly too.
     await db.delete(cartItemsTable).where(eq(cartItemsTable.userId, u.clerkId));
     await db.delete(wishlistTable).where(eq(wishlistTable.userId, u.clerkId));
     await db.delete(usersTable).where(eq(usersTable.id, u.id));
@@ -202,17 +204,65 @@ export async function seedSeller(opts: SeedSellerOptions) {
   return { user, seller };
 }
 
-/** Inserts a verified seller_payment_configs row directly (bypassing the route, same as verify-seller-marketplace.ts -- admin verification isn't under test here, only its downstream enforcement). */
-export async function seedVerifiedPaymentConfig(sellerId: number) {
-  const [config] = await db
-    .insert(sellerPaymentConfigsTable)
+/**
+ * Inserts a seller_payout_accounts row directly for the given seller —
+ * this is what gates a seller's ability to set paymentMethod="advance"|"both"
+ * on their listings under the post-migration platform-custodial payments
+ * model (see lib/db/src/logic/sellerListings.ts:hasSellerPayoutAccount).
+ *
+ * Replaces the pre-migration `seedVerifiedPaymentConfig` helper, which
+ * inserted a verified seller_payment_configs row (per-seller bKash merchant
+ * credentials). That table has been dropped — sellers no longer touch
+ * merchant credentials at all. A payout account is just a phone number the
+ * seller typed in; there's no "verified" flag to flip.
+ *
+ * Tests that need bKash checkout to actually work ALSO need to seed a
+ * verified platform_payment_config row via `seedVerifiedPlatformPaymentConfig`
+ * (the platform-wide merchant account — admin-configured, not per-seller).
+ */
+export async function seedSellerPayoutAccount(sellerId: number, bkashNumber = "01700000000") {
+  const [account] = await db
+    .insert(sellerPayoutAccountsTable)
     .values({
       sellerId,
+      bkashNumber,
+      accountHolderName: "Test Seller",
+    })
+    .returning();
+  return account;
+}
+
+/**
+ * Inserts a verified platform_payment_config row directly — the platform's
+ * own bKash merchant account (admin-configured). Under the post-migration
+ * model, ALL buyer bKash payments settle into this account; per-seller
+ * merchant credentials no longer exist.
+ *
+ * Tests that exercise the bKash checkout flow (cart → orders → bkashPayment)
+ * need this row to exist and be verified, otherwise orders.ts's
+ * isPlatformBkashAvailable() gate rejects bKash as a payment method.
+ *
+ * Idempotent: deletes any existing platform_payment_config row first
+ * (the table has a singleton unique constraint).
+ *
+ * Credentials are REAL encrypted values (via encryptCredential), not
+ * plaintext — lib/bkash.ts:loadPlatformCredentials calls decryptCredential
+ * before using them, so plaintext fixtures would throw. The values
+ * themselves are dummy test strings; no real bKash API call is made in
+ * tests (the bKash HTTP calls are stubbed/mocked at the fetch layer in
+ * test setup, OR the test simply doesn't trigger a real disbursement).
+ */
+export async function seedVerifiedPlatformPaymentConfig() {
+  await db.delete(platformPaymentConfigTable);
+  const [config] = await db
+    .insert(platformPaymentConfigTable)
+    .values({
+      singleton: "singleton",
       provider: "bkash",
-      merchantAppKey: "test-app-key",
-      merchantAppSecret: "test-app-secret",
-      merchantUsername: "test-username",
-      merchantPassword: "test-password",
+      merchantAppKey: encryptCredential("test-app-key"),
+      merchantAppSecret: encryptCredential("test-app-secret"),
+      merchantUsername: encryptCredential("test-username"),
+      merchantPassword: encryptCredential("test-password"),
       isVerified: true,
     })
     .returning();

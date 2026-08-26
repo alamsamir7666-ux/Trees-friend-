@@ -48,23 +48,22 @@ type PaymentMethod = "bkash" | "cod";
  * A cart line (kind: "seller_listing") is only buyable with the payment
  * methods that seller's listing enables (listing.paymentMethod: "cod" |
  * "advance" | "both") -- "advance" means bkash only, "both" means both.
- * See plan doc §7. Admin-direct lines (kind: "variant") accept both,
- * unchanged from pre-marketplace behavior.
  *
- * A listing's own paymentMethod field can drift from the seller's actual
- * payment-config state (e.g. an admin unverifies a seller's bKash config
- * without touching their listings), so this also takes the live
- * hasVerifiedPaymentConfig flag from the cart response (routes/cart.ts) and
+ * A listing's own paymentMethod field can drift from the platform's actual
+ * bKash availability (e.g. admin hasn't verified the platform merchant
+ * account yet, or has temporarily disabled it), so this also takes the live
+ * platformBkashVerified flag from the cart response (routes/cart.ts reads
+ * platformPaymentConfigTable.isVerified once for the whole cart) and
  * excludes "bkash" whenever it's false, regardless of what the listing
  * itself claims to support.
  */
 function allowedMethodsForListingPaymentMethod(
   pm: string,
-  hasVerifiedPaymentConfig: boolean,
+  platformBkashVerified: boolean,
 ): PaymentMethod[] {
   if (pm === "cod") return ["cod"];
-  if (pm === "advance") return hasVerifiedPaymentConfig ? ["bkash"] : [];
-  return hasVerifiedPaymentConfig ? ["bkash", "cod"] : ["cod"];
+  if (pm === "advance") return platformBkashVerified ? ["bkash"] : [];
+  return platformBkashVerified ? ["bkash", "cod"] : ["cod"];
 }
 
 export function CheckoutPage() {
@@ -767,7 +766,7 @@ export function CheckoutPage() {
                       .map((ci) =>
                         allowedMethodsForListingPaymentMethod(
                           ci.listing!.paymentMethod,
-                          ci.seller?.hasVerifiedPaymentConfig ?? false,
+                          ci.seller?.platformBkashVerified ?? false,
                         ),
                       );
                     const allowed: PaymentMethod[] =

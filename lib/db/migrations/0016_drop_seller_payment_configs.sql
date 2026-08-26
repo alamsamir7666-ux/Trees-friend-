@@ -1,0 +1,58 @@
+-- ─── Migration 0016: Drop seller_payment_configs (payments-model migration)
+--
+-- Removes the OLD per-seller bKash merchant-credentials table as the final
+-- step of the platform-custodial payments migration.
+--
+-- Context: under the OLD model, every seller registered their own bKash
+-- merchant API credentials (App Key, App Secret, Username, Password) in
+-- seller_payment_configs, and buyers paid each seller's merchant account
+-- directly. Under the NEW model ( Parts 1-4, now complete ):
+--   - The platform holds ONE bKash merchant account (platform_payment_config,
+--     configured by an admin via routes/platformPaymentConfig.ts).
+--   - Each seller registers a plain bKash PERSONAL number for payouts
+--     (seller_payout_accounts, configured by the seller via
+--     routes/sellerPayoutAccounts.ts).
+--   - Buyers pay the platform directly; after courier-confirmed delivery,
+--     the platform disburses the seller's share to their registered payout
+--     number via bKash B2C (lib/payouts.ts:attemptSellerPayout →
+--     lib/bkash.ts:disburseToSeller).
+--   - Listing-eligibility for paymentMethod = "advance" | "both" is now
+--     gated on hasSellerPayoutAccount(sellerId) (existence of a payout
+--     account), NOT on a per-seller admin-verified merchant config.
+--
+-- Checkout (cart.ts, orders.ts) and the bKash client (lib/bkash.ts) were
+-- already migrated off this table in earlier parts — they read
+-- platformPaymentConfigTable exclusively. The last live readers were:
+--   1. lib/db/src/logic/sellerListings.ts:hasVerifiedPaymentConfig(sellerId)
+--      → REPLACED by hasSellerPayoutAccount(sellerId).
+--   2. routes/sellerListings.ts POST/PUT paymentMethod gate
+--      → now calls hasSellerPayoutAccount.
+--   3. routes/sellerPaymentConfigs.ts (GET/POST/DELETE seller routes)
+--      → DELETED (file removed).
+--   4. routes/adminSellers.ts (admin verify/unverify/list routes)
+--      → DELETED (only the courier-config verify routes remain).
+--   5. Frontend: admin SellersTab PendingConfigVerification,
+--      DashboardTab unverified-counts widget, seller SellerOverviewTab
+--      payment-config status display → all REMOVED or rewritten to read
+--      seller_payout_accounts instead.
+--
+-- ─── Safety ──────────────────────────────────────────────────────────────────
+--   * Idempotent (IF EXISTS on every DROP).
+--   * No data migration — the old merchant credentials are financial
+--     secrets with no equivalent under the new model. They are simply
+--     dropped along with the table. Sellers who had a verified config
+--     under the old model must register a payout number under the new
+--     model to keep offering advance payments (the listing reconciliation
+--     on first listing write will guide them).
+--   * The reconciliation side-effect that used to live on the OLD
+--     DELETE /seller-payment-configs/mine route (flip listings back to
+--     "cod") now lives on the NEW DELETE /seller-payout-accounts/mine
+--     route, preserving the invariant: a seller with no payout destination
+--     cannot offer advance payments.
+--   * Trigger update_seller_payment_configs_updated_at is dropped along
+--     with the table (Postgres drops triggers automatically when their
+--     table is dropped, but we DROP IF EXISTS for explicitness and
+--     idempotency against any future re-run).
+-- ────────────────────────────────────────────────────────────────────────────
+
+DROP TABLE IF EXISTS seller_payment_configs CASCADE;
