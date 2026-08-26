@@ -1,9 +1,21 @@
 import { useState, useMemo } from "react";
 import {
-  Plus, Sprout, Eye, EyeOff, Pencil, Trash2, Clock, CheckCircle2, XCircle,
-  Package2, Search, LayoutGrid, List, AlertCircle, Loader2,
+  Plus,
+  Sprout,
+  Eye,
+  EyeOff,
+  Pencil,
+  Trash2,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  Package2,
+  Search,
+  LayoutGrid,
+  List,
+  AlertCircle,
+  Loader2,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,9 +35,21 @@ const APPROVAL_BADGE: Record<
   string,
   { icon: React.ElementType; className: string; label: string }
 > = {
-  pending: { icon: Clock, className: "bg-warning text-warning-foreground ring-warning-border/60", label: "Pending" },
-  approved: { icon: CheckCircle2, className: "bg-success text-success-foreground ring-success-border/60", label: "Approved" },
-  rejected: { icon: XCircle, className: "bg-destructive/10 text-destructive ring-destructive/20", label: "Rejected" },
+  pending: {
+    icon: Clock,
+    className: "bg-warning text-warning-foreground ring-warning-border/60",
+    label: "Pending",
+  },
+  approved: {
+    icon: CheckCircle2,
+    className: "bg-success text-success-foreground ring-success-border/60",
+    label: "Approved",
+  },
+  rejected: {
+    icon: XCircle,
+    className: "bg-destructive/10 text-destructive ring-destructive/20",
+    label: "Rejected",
+  },
 };
 
 function variantPriceStockSummary(variants: SellerListing["variants"]): {
@@ -42,10 +66,6 @@ function variantPriceStockSummary(variants: SellerListing["variants"]): {
   return { priceLabel, totalStock, variantCount: variants.length };
 }
 
-function formatTk(n: number): string {
-  return `Tk${Math.round(n).toLocaleString()}`;
-}
-
 export function SellerListingsTab() {
   const qc = useQueryClient();
   const { data: listings, isLoading: listingsLoading } = useListMySellerListings();
@@ -55,7 +75,9 @@ export function SellerListingsTab() {
   const [showForm, setShowForm] = useState(false);
   const [editingListing, setEditingListing] = useState<SellerListing | undefined>(undefined);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "pending" | "rejected">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "pending" | "rejected">(
+    "all",
+  );
   const [view, setView] = useState<"list" | "grid">("list");
 
   function invalidate() {
@@ -96,7 +118,10 @@ export function SellerListingsTab() {
     deleteListing.mutate(
       { id: l.id },
       {
-        onSuccess: () => { toast.success("Listing deleted"); invalidate(); },
+        onSuccess: () => {
+          toast.success("Listing deleted");
+          invalidate();
+        },
         onError: (err: any) => toast.error(err?.message ?? "Failed to delete listing"),
       },
     );
@@ -108,9 +133,14 @@ export function SellerListingsTab() {
       if (statusFilter !== "all" && l.approvalStatus !== statusFilter) return false;
       if (search.trim()) {
         const q = search.trim().toLowerCase();
-        if (!`Product #${l.productId}`.toLowerCase().includes(q) &&
-            !(l.description ?? "").toLowerCase().includes(q) &&
-            !l.tags.some((t) => t.toLowerCase().includes(q))) {
+        // Search the variety name (primary identifier), the seller's
+        // free-text description, and tags. Previously searched "Product #ID"
+        // which never matched what a seller would actually type.
+        if (
+          !(l.productName ?? "").toLowerCase().includes(q) &&
+          !(l.description ?? "").toLowerCase().includes(q) &&
+          !l.tags.some((t) => t.toLowerCase().includes(q))
+        ) {
           return false;
         }
       }
@@ -120,14 +150,15 @@ export function SellerListingsTab() {
 
   // Stats summary
   const stats = useMemo(() => {
-    if (!listings) return { total: 0, approved: 0, pending: 0, rejected: 0, lowStock: 0, hidden: 0 };
+    if (!listings)
+      return { total: 0, approved: 0, pending: 0, rejected: 0, lowStock: 0, hidden: 0 };
     return {
       total: listings.length,
       approved: listings.filter((l) => l.approvalStatus === "approved").length,
       pending: listings.filter((l) => l.approvalStatus === "pending").length,
       rejected: listings.filter((l) => l.approvalStatus === "rejected").length,
-      lowStock: listings.filter((l) =>
-        l.variants.length > 0 && l.variants.every((v) => v.stock <= 5),
+      lowStock: listings.filter(
+        (l) => l.variants.length > 0 && l.variants.every((v) => v.stock <= 5),
       ).length,
       hidden: listings.filter((l) => l.visibility === "hidden").length,
     };
@@ -138,10 +169,30 @@ export function SellerListingsTab() {
   }
 
   const statCards = [
-    { label: "Total Listings", value: stats.total, icon: Package2, color: "bg-info text-info-foreground" },
-    { label: "Approved", value: stats.approved, icon: CheckCircle2, color: "bg-success text-success-foreground" },
-    { label: "Pending Review", value: stats.pending, icon: Clock, color: "bg-warning text-warning-foreground" },
-    { label: "Low Stock", value: stats.lowStock, icon: AlertCircle, color: "bg-destructive/10 text-destructive" },
+    {
+      label: "Total Listings",
+      value: stats.total,
+      icon: Package2,
+      color: "bg-info text-info-foreground",
+    },
+    {
+      label: "Approved",
+      value: stats.approved,
+      icon: CheckCircle2,
+      color: "bg-success text-success-foreground",
+    },
+    {
+      label: "Pending Review",
+      value: stats.pending,
+      icon: Clock,
+      color: "bg-warning text-warning-foreground",
+    },
+    {
+      label: "Low Stock",
+      value: stats.lowStock,
+      icon: AlertCircle,
+      color: "bg-destructive/10 text-destructive",
+    },
   ];
 
   return (
@@ -153,11 +204,18 @@ export function SellerListingsTab() {
             key={s.label}
             className="rounded-2xl border border-border bg-card p-4 flex items-center gap-3"
           >
-            <div className={cn("h-10 w-10 rounded-xl flex items-center justify-center shrink-0", s.color)}>
+            <div
+              className={cn(
+                "h-10 w-10 rounded-xl flex items-center justify-center shrink-0",
+                s.color,
+              )}
+            >
               <s.icon className="h-4.5 w-4.5" />
             </div>
             <div className="min-w-0">
-              <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{s.label}</p>
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                {s.label}
+              </p>
               <p className="text-xl font-bold text-foreground tabular-nums">{s.value}</p>
             </div>
           </div>
@@ -171,7 +229,7 @@ export function SellerListingsTab() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by product ID or name…"
+            placeholder="Search by variety name, description, or tags…"
             className="pl-9 h-10 rounded-xl bg-card"
           />
         </div>
@@ -198,7 +256,9 @@ export function SellerListingsTab() {
             onClick={() => setView("list")}
             className={cn(
               "p-1.5 rounded-md transition-all",
-              view === "list" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              view === "list"
+                ? "bg-card text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
             )}
             aria-label="List view"
           >
@@ -208,7 +268,9 @@ export function SellerListingsTab() {
             onClick={() => setView("grid")}
             className={cn(
               "p-1.5 rounded-md transition-all",
-              view === "grid" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              view === "grid"
+                ? "bg-card text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
             )}
             aria-label="Grid view"
           >
@@ -226,7 +288,10 @@ export function SellerListingsTab() {
       {listingsLoading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="bg-card rounded-2xl border border-border p-4 flex items-center gap-4">
+            <div
+              key={i}
+              className="bg-card rounded-2xl border border-border p-4 flex items-center gap-4"
+            >
               <Skeleton className="h-16 w-16 rounded-xl shrink-0" />
               <div className="flex-1 space-y-2">
                 <Skeleton className="h-4 w-40 rounded-full" />
@@ -261,19 +326,33 @@ export function SellerListingsTab() {
             <table className="w-full min-w-[760px]">
               <thead>
                 <tr className="border-b border-border text-left bg-muted/40">
-                  <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Product</th>
-                  <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
-                  <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Price</th>
-                  <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Stock</th>
-                  <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Visibility</th>
-                  <th className="px-5 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Actions</th>
+                  <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Product
+                  </th>
+                  <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Status
+                  </th>
+                  <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Price
+                  </th>
+                  <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Stock
+                  </th>
+                  <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Visibility
+                  </th>
+                  <th className="px-5 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
                 {filtered.map((l) => {
                   const approval = APPROVAL_BADGE[l.approvalStatus] ?? APPROVAL_BADGE.pending;
                   const ApprovalIcon = approval.icon;
-                  const { priceLabel, totalStock, variantCount } = variantPriceStockSummary(l.variants);
+                  const { priceLabel, totalStock, variantCount } = variantPriceStockSummary(
+                    l.variants,
+                  );
                   const isLowStock = variantCount > 0 && l.variants.every((v) => v.stock <= 5);
                   return (
                     <tr key={l.id} className="hover:bg-muted/30 transition-colors">
@@ -291,20 +370,32 @@ export function SellerListingsTab() {
                             </div>
                           )}
                           <div className="min-w-0">
-                            <p className="text-sm font-medium text-foreground">
-                              {l.description?.trim() ? l.description.split("\n")[0].slice(0, 60) : `Product #${l.productId}`}
+                            <p className="text-sm font-medium text-foreground truncate">
+                              {l.productName ?? `Untitled variety #${l.productId}`}
                             </p>
-                            <p className="text-[11px] text-muted-foreground">ID #{l.productId}</p>
+                            <p className="text-[11px] text-muted-foreground truncate">
+                              {l.description?.trim()
+                                ? l.description.split("\n")[0].slice(0, 70)
+                                : `Listing #${l.id}`}
+                            </p>
                           </div>
                         </div>
                       </td>
                       <td className="px-5 py-3.5">
-                        <span className={cn("inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 ring-1 capitalize", approval.className)}>
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 ring-1 capitalize",
+                            approval.className,
+                          )}
+                        >
                           <ApprovalIcon className="h-3 w-3" />
                           {approval.label}
                         </span>
                         {l.approvalStatus === "rejected" && l.rejectionReason && (
-                          <p className="text-[10px] text-destructive mt-1 max-w-[160px] truncate" title={l.rejectionReason}>
+                          <p
+                            className="text-[10px] text-destructive mt-1 max-w-[160px] truncate"
+                            title={l.rejectionReason}
+                          >
                             {l.rejectionReason}
                           </p>
                         )}
@@ -313,11 +404,13 @@ export function SellerListingsTab() {
                         {priceLabel}
                       </td>
                       <td className="px-5 py-3.5">
-                        <span className={cn(
-                          "text-sm font-semibold tabular-nums",
-                          isLowStock && totalStock > 0 && "text-destructive",
-                          totalStock === 0 && "text-muted-foreground",
-                        )}>
+                        <span
+                          className={cn(
+                            "text-sm font-semibold tabular-nums",
+                            isLowStock && totalStock > 0 && "text-destructive",
+                            totalStock === 0 && "text-muted-foreground",
+                          )}
+                        >
                           {totalStock}
                         </span>
                         <span className="text-[11px] text-muted-foreground ml-1">
@@ -335,7 +428,9 @@ export function SellerListingsTab() {
                           </span>
                         )}
                         {l.hiddenReason === "subscription_expired" && (
-                          <p className="text-[10px] text-warning-foreground mt-0.5">Auto: sub expired</p>
+                          <p className="text-[10px] text-warning-foreground mt-0.5">
+                            Auto: sub expired
+                          </p>
                         )}
                       </td>
                       <td className="px-5 py-3.5">
@@ -346,7 +441,11 @@ export function SellerListingsTab() {
                             className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                             title={l.visibility === "public" ? "Hide listing" : "Show listing"}
                           >
-                            {l.visibility === "public" ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            {l.visibility === "public" ? (
+                              <EyeOff className="h-4 w-4" />
+                            ) : (
+                              <Eye className="h-4 w-4" />
+                            )}
                           </button>
                           <button
                             onClick={() => openEdit(l)}
@@ -396,7 +495,12 @@ export function SellerListingsTab() {
                       <Sprout className="h-8 w-8 text-muted-foreground/40" />
                     </div>
                   )}
-                  <span className={cn("absolute top-2 left-2 inline-flex items-center gap-1 text-[10px] font-medium rounded-full px-2 py-0.5 ring-1 capitalize backdrop-blur bg-card/80", approval.className)}>
+                  <span
+                    className={cn(
+                      "absolute top-2 left-2 inline-flex items-center gap-1 text-[10px] font-medium rounded-full px-2 py-0.5 ring-1 capitalize backdrop-blur bg-card/80",
+                      approval.className,
+                    )}
+                  >
                     <ApprovalIcon className="h-3 w-3" />
                     {approval.label}
                   </span>
@@ -408,10 +512,17 @@ export function SellerListingsTab() {
                 </div>
                 <div className="p-4">
                   <p className="text-sm font-medium text-foreground truncate mb-1">
-                    {l.description?.trim() ? l.description.split("\n")[0].slice(0, 60) : `Product #${l.productId}`}
+                    {l.productName ?? `Untitled variety #${l.productId}`}
                   </p>
+                  {l.description?.trim() && (
+                    <p className="text-[11px] text-muted-foreground truncate mb-1">
+                      {l.description.split("\n")[0].slice(0, 70)}
+                    </p>
+                  )}
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-foreground tabular-nums">{priceLabel}</span>
+                    <span className="text-sm font-semibold text-foreground tabular-nums">
+                      {priceLabel}
+                    </span>
                     <span className="text-xs text-muted-foreground">Stock: {totalStock}</span>
                   </div>
                   <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-end gap-1">
@@ -421,7 +532,11 @@ export function SellerListingsTab() {
                       className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                       title={l.visibility === "public" ? "Hide" : "Show"}
                     >
-                      {l.visibility === "public" ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      {l.visibility === "public" ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
                     </button>
                     <button
                       onClick={() => openEdit(l)}

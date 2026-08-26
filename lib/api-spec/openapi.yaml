@@ -4709,6 +4709,21 @@ components:
           enum: [pending, approved, rejected]
         rejectionReason:
           type: ["string", "null"]
+        # Parent product (variety) info — populated on READ endpoints that
+        # join with productsTable (GET /seller-listings/mine, GET /:id,
+        # GET /admin/seller-listings). NOT populated on POST/PUT responses
+        # (those return only listing-level fields the seller just wrote).
+        # Optional in the schema so orval-generated clients treat them as
+        # `field?: string | null` rather than required-on-write.
+        productName:
+          type: ["string", "null"]
+          description: Admin-owned variety name (e.g. "Langra Mango") from the parent productsTable row.
+        productSlug:
+          type: ["string", "null"]
+          description: URL slug of the parent product (for linking to the variety detail page).
+        productImage:
+          type: ["string", "null"]
+          description: First image of the parent product (fallback thumbnail when the listing has no images of its own).
         variants:
           type: array
           items:

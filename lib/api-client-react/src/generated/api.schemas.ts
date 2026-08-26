@@ -1259,6 +1259,12 @@ export interface SellerListing {
   approvalStatus: SellerListingApprovalStatus;
   /** @nullable */
   rejectionReason?: string | null;
+  /** Admin-owned variety name (e.g. "Langra Mango") from the parent productsTable row. @nullable */
+  productName?: string | null;
+  /** URL slug of the parent product (for linking to the variety detail page). @nullable */
+  productSlug?: string | null;
+  /** First image of the parent product (fallback thumbnail when the listing has no images of its own). @nullable */
+  productImage?: string | null;
   variants: SellerListingVariant[];
   createdAt: string;
   updatedAt: string;

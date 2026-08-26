@@ -1906,6 +1906,9 @@ export const ListMySellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "productName": zod.string().nullish(),
+  "productSlug": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -1990,6 +1993,9 @@ export const GetSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "productName": zod.string().nullish(),
+  "productSlug": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2078,6 +2084,9 @@ export const UpdateSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "productName": zod.string().nullish(),
+  "productSlug": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2143,6 +2152,9 @@ export const ListProductSellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "productName": zod.string().nullish(),
+  "productSlug": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2208,6 +2220,9 @@ export const ListSellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "productName": zod.string().nullish(),
+  "productSlug": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2304,6 +2319,9 @@ export const ListAdminSellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "productName": zod.string().nullish(),
+  "productSlug": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2356,6 +2374,9 @@ export const ApproveSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "productName": zod.string().nullish(),
+  "productSlug": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2408,6 +2429,9 @@ export const RejectSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
+  "productName": zod.string().nullish(),
+  "productSlug": zod.string().nullish(),
+  "productImage": zod.string().nullish(),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),

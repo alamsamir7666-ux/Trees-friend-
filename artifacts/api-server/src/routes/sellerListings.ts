@@ -64,13 +64,35 @@ type SellerListingRow = typeof sellerListingsTable.$inferSelect;
 type SellerListingVariantRow = typeof sellerListingVariantsTable.$inferSelect;
 
 /**
+ * Minimal parent-product info needed by toListing/toListingWithVariants to
+ * populate the response's productName/productSlug/productImage fields.
+ *
+ * Populated on READ endpoints (GET /seller-listings/mine, GET /:id,
+ * GET /admin/seller-listings) via a join with productsTable. NOT populated
+ * on POST/PUT responses — those return only listing-level fields the
+ * seller just wrote, since the frontend re-fetches the list immediately
+ * after a successful write anyway.
+ *
+ * Optional parameter — callers that don't have the product row on hand
+ * (POST/PUT) just pass nothing, and the response's productName/etc. fields
+ * are simply omitted from the JSON (the OpenAPI schema marks them as
+ * nullable+optional, so orval-generated clients treat them as
+ * `field?: string | null`).
+ */
+type ProductInfo = {
+  name: string;
+  slug: string;
+  images: string[] | null;
+};
+
+/**
  * Listing-level fields only (Phase 2 shape). No price/stock/form/etc. here
  * anymore -- those live on variants, see toVariant() below. Existing
  * callers that expect a flat listing+variant shape (pre-Phase-2 toListing())
  * must move to toListingWithVariants() -- see the "which consumers need
  * which shape" note near the bottom of this file's route handlers.
  */
-function toListing(l: SellerListingRow) {
+function toListing(l: SellerListingRow, product?: ProductInfo) {
   return {
     id: l.id,
     productId: l.productId,
@@ -89,6 +111,13 @@ function toListing(l: SellerListingRow) {
     hiddenReason: l.hiddenReason ?? null,
     approvalStatus: l.approvalStatus,
     rejectionReason: l.rejectionReason ?? null,
+    // Parent product (variety) info — populated only on read endpoints
+    // that join with productsTable. Undefined on POST/PUT responses (the
+    // frontend re-fetches the list after a write anyway, so the missing
+    // fields are not a problem there).
+    productName: product?.name ?? null,
+    productSlug: product?.slug ?? null,
+    productImage: product?.images?.[0] ?? null,
     createdAt: l.createdAt.toISOString(),
     updatedAt: l.updatedAt.toISOString(),
   };
@@ -121,9 +150,13 @@ function toVariant(v: SellerListingVariantRow) {
  * GET /admin/seller-listings, POST/PUT responses) -- see the doc comment
  * above each route for why nested-over-flat is correct for that consumer.
  */
-function toListingWithVariants(l: SellerListingRow, variants: SellerListingVariantRow[]) {
+function toListingWithVariants(
+  l: SellerListingRow,
+  variants: SellerListingVariantRow[],
+  product?: ProductInfo,
+) {
   return {
-    ...toListing(l),
+    ...toListing(l, product),
     variants: variants.map(toVariant),
   };
 }
@@ -720,7 +753,41 @@ router.get(
       variantsByListing.set(v.sellerListingId, list);
     }
 
-    res.json(listings.map((l) => toListingWithVariants(l, variantsByListing.get(l.id) ?? [])));
+    // Fetch parent products (varieties) so the response can include
+    // productName/productSlug/productImage. Without this join the frontend
+    // has no way to display the actual variety name (e.g. "Langra Mango")
+    // and falls back to using the seller's free-text description or a
+    // "Product #ID" placeholder — both look broken in the listings table.
+    // One batched query for all distinct productIds, not one per listing.
+    const productIds = [...new Set(listings.map((l) => l.productId))];
+    const products =
+      productIds.length > 0
+        ? await db
+            .select({
+              id: productsTable.id,
+              name: productsTable.name,
+              slug: productsTable.slug,
+              images: productsTable.images,
+            })
+            .from(productsTable)
+            .where(inArray(productsTable.id, productIds))
+        : [];
+    const productById = new Map<number, ProductInfo>(
+      products.map((p) => [
+        p.id,
+        {
+          name: p.name,
+          slug: p.slug,
+          images: (p.images as string[] | null) ?? null,
+        },
+      ]),
+    );
+
+    res.json(
+      listings.map((l) =>
+        toListingWithVariants(l, variantsByListing.get(l.id) ?? [], productById.get(l.productId)),
+      ),
+    );
   }),
 );
 
@@ -1507,7 +1574,7 @@ router.get(
       return;
     }
 
-    const [variants, reviewStats] = await Promise.all([
+    const [variants, reviewStats, products] = await Promise.all([
       db
         .select()
         .from(sellerListingVariantsTable)
@@ -1519,12 +1586,31 @@ router.get(
         })
         .from(reviewsTable)
         .where(eq(reviewsTable.sellerListingId, id)),
+      // Fetch the parent product (variety) so the response includes
+      // productName/productSlug/productImage — same rationale as the /mine
+      // route above. Single-row lookup, batched with the other two queries.
+      db
+        .select({
+          name: productsTable.name,
+          slug: productsTable.slug,
+          images: productsTable.images,
+        })
+        .from(productsTable)
+        .where(eq(productsTable.id, row.listing.productId))
+        .limit(1),
     ]);
 
     const stats = reviewStats[0] ?? { avg: "0", count: "0" };
+    const product: ProductInfo | undefined = products[0]
+      ? {
+          name: products[0].name,
+          slug: products[0].slug,
+          images: (products[0].images as string[] | null) ?? null,
+        }
+      : undefined;
 
     res.json({
-      listing: toListingWithVariants(row.listing, variants),
+      listing: toListingWithVariants(row.listing, variants, product),
       seller: {
         id: row.seller.id,
         businessName: row.seller.businessName,
@@ -1859,9 +1945,20 @@ router.get(
 
     res.json(
       rows.map(({ listing, seller, product }) => ({
-        ...toListingWithVariants(listing, variantsByListing.get(listing.id) ?? []),
+        ...toListingWithVariants(
+          listing,
+          variantsByListing.get(listing.id) ?? [],
+          // Pass the already-joined product row through so productName,
+          // productSlug, AND productImage are all populated (previously
+          // only productName was set via a manual override, leaving
+          // productSlug/productImage undefined).
+          {
+            name: product.name,
+            slug: product.slug,
+            images: (product.images as string[] | null) ?? null,
+          },
+        ),
         sellerBusinessName: seller.businessName,
-        productName: product.name,
       })),
     );
   }),
