@@ -108,7 +108,7 @@ function PaymentMethodBadge({ method }: { method: "cod" | "advance" }) {
   if (method === "cod") {
     return (
       <span
-        className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-warning/15 text-warning-foreground ring-1 ring-warning-border/40"
+        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.06em] rounded-full px-2 py-0.5 bg-warning/20 text-warning-foreground ring-1 ring-warning-border/50"
         title="This listing only supports Cash on Delivery"
       >
         <Truck className="h-3 w-3" />
@@ -118,7 +118,7 @@ function PaymentMethodBadge({ method }: { method: "cod" | "advance" }) {
   }
   return (
     <span
-      className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-success/15 text-success-foreground ring-1 ring-success-border/40"
+      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.06em] rounded-full px-2 py-0.5 bg-success/20 text-success-foreground ring-1 ring-success-border/50"
       title="This listing only supports Advance Payment (bKash)"
     >
       <CreditCard className="h-3 w-3" />
@@ -203,11 +203,11 @@ function ItemPaymentSelector({
 
   return (
     <div
-      className="mt-3 pt-3 border-t border-border/60 space-y-2"
+      className="mt-3 pt-3.5 border-t border-border/60 space-y-2.5"
       role="radiogroup"
       aria-label="Choose payment method for this item"
     >
-      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground mb-1">
         Choose payment method for this item
       </p>
 
@@ -218,38 +218,56 @@ function ItemPaymentSelector({
         aria-checked={selected === "bkash"}
         disabled={!advanceAvailable}
         onClick={() => onSelect("bkash")}
-        className={`w-full text-left rounded-xl border p-3 transition-all ${
+        className={`w-full text-left rounded-2xl border-[1.5px] p-3.5 transition-all ${
           !advanceAvailable
             ? "opacity-40 cursor-not-allowed border-border bg-muted/20"
             : selected === "bkash"
-              ? "border-success ring-1 ring-success/30 bg-success/5"
-              : "border-border hover:border-foreground/30 bg-card"
+              ? "border-success-foreground bg-card"
+              : "border-border bg-card hover:border-muted-foreground/40"
         }`}
       >
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-center gap-3 min-w-0">
+            {/* Radio — filled green with white inner dot when selected */}
             <span
-              className={`h-4 w-4 rounded-full border-2 shrink-0 flex items-center justify-center ${
+              className={`h-[22px] w-[22px] rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${
                 selected === "bkash" && advanceAvailable
-                  ? "border-success"
-                  : "border-muted-foreground/40"
+                  ? "border-success-foreground bg-success-foreground"
+                  : "border-muted-foreground/30 bg-transparent"
               }`}
             >
               {selected === "bkash" && advanceAvailable && (
-                <span className="h-2 w-2 rounded-full bg-success" />
+                <span className="h-2.5 w-2.5 rounded-full bg-card" />
               )}
             </span>
-            <CreditCard className="h-4 w-4 text-muted-foreground shrink-0" />
+            <CreditCard
+              className={`h-5 w-5 shrink-0 transition-colors ${
+                selected === "bkash" && advanceAvailable
+                  ? "text-success-foreground"
+                  : "text-foreground"
+              }`}
+            />
             <div className="min-w-0">
-              <p className="text-sm font-medium text-foreground">Advance Payment</p>
-              <p className="text-[11px] text-muted-foreground leading-tight">
-                Pay item price now. Delivery charge due on delivery.
+              <p className="text-[15px] font-bold text-foreground leading-tight">Advance Payment</p>
+              <p className="text-[12.5px] text-muted-foreground leading-snug mt-0.5">
+                Pay item price now. Delivery due on delivery.
               </p>
             </div>
           </div>
-          <span className="text-sm font-semibold text-success-foreground shrink-0">
-            Pay now: {formatTk(lineTotal)}
-          </span>
+          <div className="text-right shrink-0">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+              Pay now
+            </p>
+            <p
+              className={`text-[15px] font-bold tabular-nums transition-colors ${
+                selected === "bkash" && advanceAvailable
+                  ? "text-success-foreground"
+                  : "text-warning-foreground"
+              }`}
+            >
+              {formatTk(lineTotal)}
+            </p>
+          </div>
         </div>
       </button>
 
@@ -260,38 +278,55 @@ function ItemPaymentSelector({
         aria-checked={selected === "cod"}
         disabled={!codAvailable}
         onClick={() => onSelect("cod")}
-        className={`w-full text-left rounded-xl border p-3 transition-all ${
+        className={`w-full text-left rounded-2xl border-[1.5px] p-3.5 transition-all ${
           !codAvailable
             ? "opacity-40 cursor-not-allowed border-border bg-muted/20"
             : selected === "cod"
-              ? "border-warning ring-1 ring-warning/30 bg-warning/5"
-              : "border-border hover:border-foreground/30 bg-card"
+              ? "border-success-foreground bg-card"
+              : "border-border bg-card hover:border-muted-foreground/40"
         }`}
       >
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-center gap-3 min-w-0">
             <span
-              className={`h-4 w-4 rounded-full border-2 shrink-0 flex items-center justify-center ${
+              className={`h-[22px] w-[22px] rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${
                 selected === "cod" && codAvailable
-                  ? "border-warning-foreground"
-                  : "border-muted-foreground/40"
+                  ? "border-success-foreground bg-success-foreground"
+                  : "border-muted-foreground/30 bg-transparent"
               }`}
             >
               {selected === "cod" && codAvailable && (
-                <span className="h-2 w-2 rounded-full bg-warning-foreground" />
+                <span className="h-2.5 w-2.5 rounded-full bg-card" />
               )}
             </span>
-            <Truck className="h-4 w-4 text-muted-foreground shrink-0" />
+            <Truck
+              className={`h-5 w-5 shrink-0 transition-colors ${
+                selected === "cod" && codAvailable ? "text-success-foreground" : "text-foreground"
+              }`}
+            />
             <div className="min-w-0">
-              <p className="text-sm font-medium text-foreground">Cash on Delivery</p>
-              <p className="text-[11px] text-muted-foreground leading-tight">
+              <p className="text-[15px] font-bold text-foreground leading-tight">
+                Cash on Delivery
+              </p>
+              <p className="text-[12.5px] text-muted-foreground leading-snug mt-0.5">
                 Pay full amount (item + delivery) on delivery.
               </p>
             </div>
           </div>
-          <span className="text-sm font-semibold text-warning-foreground shrink-0">
-            Pay on delivery: {formatTk(codTotal)}
-          </span>
+          <div className="text-right shrink-0">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+              Pay on delivery
+            </p>
+            <p
+              className={`text-[15px] font-bold tabular-nums transition-colors ${
+                selected === "cod" && codAvailable
+                  ? "text-success-foreground"
+                  : "text-warning-foreground"
+              }`}
+            >
+              {formatTk(codTotal)}
+            </p>
+          </div>
         </div>
       </button>
     </div>
@@ -489,26 +524,33 @@ function CartItemCard({
         />
       )}
 
-      {/* Delivery footer */}
-      {codTotal > 0 && !outOfStock && (
-        <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-between gap-2 flex-wrap">
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-warning/15 text-warning-foreground text-[11px] font-medium">
-            Delivery charge: {formatTk(codTotal)}
-          </span>
-          {deliveryEstimate && (
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              <Truck className="h-3.5 w-3.5 text-success-foreground" />
-              Estimated delivery:{" "}
-              <span className="font-semibold text-success-foreground">{deliveryEstimate}</span>
-            </span>
+      {/* Delivery footer — matches the reference design's two-row layout:
+          row 1: delivery charge (amber/brown theme), row 2: estimated delivery (green theme).
+          When there's no charge (e.g. free delivery), only the estimate row is shown. */}
+      {!outOfStock && (codTotal > 0 || deliveryEstimate) && (
+        <div className="mt-3 pt-3 border-t border-border/60 space-y-1.5">
+          {codTotal > 0 && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[12px] text-warning-foreground">
+                <Truck className="h-3.5 w-3.5 text-warning-foreground" />
+                Delivery charge
+              </span>
+              <span className="text-[12px] font-bold text-warning-foreground tabular-nums">
+                {formatTk(codTotal)}
+              </span>
+            </div>
           )}
-        </div>
-      )}
-      {codTotal === 0 && deliveryEstimate && !outOfStock && (
-        <div className="mt-3 pt-3 border-t border-border/60 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <Truck className="h-3.5 w-3.5 text-success-foreground" />
-          Estimated delivery:{" "}
-          <span className="font-semibold text-success-foreground">{deliveryEstimate}</span>
+          {deliveryEstimate && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                <Truck className="h-3.5 w-3.5 text-success-foreground" />
+                Estimated delivery
+              </span>
+              <span className="text-[12px] font-bold text-success-foreground">
+                {deliveryEstimate}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
