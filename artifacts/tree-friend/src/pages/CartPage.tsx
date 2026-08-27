@@ -90,7 +90,41 @@ function formatDeliveryEstimate(deliveryTimeDays: number | null | undefined): st
 function paymentBadgeLabel(paymentMethod: string): string {
   if (paymentMethod === "cod") return "Payment: COD only";
   if (paymentMethod === "advance") return "Payment: Advance only";
-  return "Payment: Both";
+  return "Payment: Advance or COD";
+}
+
+/**
+ * Compact per-item payment-method badge. Shown on seller-listing cart
+ * items where the listing supports exactly one payment method (COD or
+ * Advance). For "both" listings, the ItemPaymentSelector radio below
+ * the item already makes the choice explicit, so no badge is needed
+ * there — the badge is only for items where the buyer has no choice.
+ *
+ * Color coding matches the ItemPaymentSelector:
+ *   COD only     → warning (amber)   — pay on delivery
+ *   Advance only → success (green)   — pay now via bKash
+ */
+function PaymentMethodBadge({ method }: { method: "cod" | "advance" }) {
+  if (method === "cod") {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-warning/15 text-warning-foreground ring-1 ring-warning-border/40"
+        title="This listing only supports Cash on Delivery"
+      >
+        <Truck className="h-3 w-3" />
+        COD only
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-success/15 text-success-foreground ring-1 ring-success-border/40"
+      title="This listing only supports Advance Payment (bKash)"
+    >
+      <CreditCard className="h-3 w-3" />
+      Advance only
+    </span>
+  );
 }
 
 // ─── Empty State ──────────────────────────────────────────────────────────────
@@ -168,7 +202,11 @@ function ItemPaymentSelector({
   const codAvailable = allowed.includes("cod");
 
   return (
-    <div className="mt-3 pt-3 border-t border-border/60 space-y-2">
+    <div
+      className="mt-3 pt-3 border-t border-border/60 space-y-2"
+      role="radiogroup"
+      aria-label="Choose payment method for this item"
+    >
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         Choose payment method for this item
       </p>
@@ -176,6 +214,8 @@ function ItemPaymentSelector({
       {/* Advance Payment option */}
       <button
         type="button"
+        role="radio"
+        aria-checked={selected === "bkash"}
         disabled={!advanceAvailable}
         onClick={() => onSelect("bkash")}
         className={`w-full text-left rounded-xl border p-3 transition-all ${
@@ -216,6 +256,8 @@ function ItemPaymentSelector({
       {/* COD option */}
       <button
         type="button"
+        role="radio"
+        aria-checked={selected === "cod"}
         disabled={!codAvailable}
         onClick={() => onSelect("cod")}
         className={`w-full text-left rounded-xl border p-3 transition-all ${
@@ -282,6 +324,11 @@ interface CartItemCardProps {
     onSelect: (m: PaymentMethod) => void;
     itemPrice: number;
   };
+  // The listing's payment method. Only set for seller-listing items —
+  // used to show a compact "COD only" or "Advance only" badge on items
+  // where the buyer has no payment choice. For "both" listings, the
+  // radio selector (paymentSelector prop) handles the UI instead.
+  paymentMethod?: "cod" | "advance" | "both";
 }
 
 function CartItemCard({
@@ -300,6 +347,7 @@ function CartItemCard({
   onRemove,
   disabled,
   paymentSelector,
+  paymentMethod,
 }: CartItemCardProps) {
   const atMaxStock = stock != null && quantity >= stock;
   const lowStock = stock != null && stock <= 5 && stock > 0;
@@ -361,7 +409,7 @@ function CartItemCard({
             </button>
           </div>
 
-          {/* Variant + stock */}
+          {/* Variant + payment method + stock */}
           <div className="mt-0.5 flex items-center gap-2 flex-wrap">
             {variantLabel && (
               <p
@@ -369,6 +417,14 @@ function CartItemCard({
               >
                 {variantLabel}
               </p>
+            )}
+            {/* Per-item payment-method badge. Only shown for seller-listing
+             items where the listing supports exactly one method (COD or
+             Advance). For "both" listings, the ItemPaymentSelector radio
+             below makes the choice explicit — no badge needed there.
+             Hidden when out of stock (consistent with the selector). */}
+            {paymentMethod && paymentMethod !== "both" && !outOfStock && (
+              <PaymentMethodBadge method={paymentMethod} />
             )}
             {!outOfStock && lowStock && (
               <span className="text-[11px] text-warning-foreground font-medium">
@@ -878,16 +934,20 @@ function AuthenticatedCartPage() {
   // actually shown — "cod" and "advance" listings have no buyer-facing
   // choice, so their effective method is derived on the fly in dueNow /
   // handleCheckout (no state needed). This keeps the selection stable
-  // across cart refreshes while still respecting listing/platform changes.
+  // across cart refreshes while still respecting listing changes.
   useEffect(() => {
     setItemPaymentMethods((prev) => {
       const next: Record<string, PaymentMethod> = {};
       for (const item of items) {
         if (item.kind !== "seller_listing" || !item.listing) continue;
-        // Only track items where the selector is shown (paymentMethod
-        // "both" + platform bKash verified). Skip everything else.
-        const platformVerified = item.seller?.platformBkashVerified ?? false;
-        if (item.listing.paymentMethod !== "both" || !platformVerified) continue;
+        // Track all "both" listings — the selector is shown for all of
+        // them regardless of platform bKash verification. Platform
+        // verification is a checkout-time concern (orders.ts falls back
+        // to COD if bKash isn't available), not a bag-display concern.
+        // This was previously gated on platformBkashVerified, which
+        // contradicted the rendering (the selector was shown but the
+        // selection was silently dropped on cart refresh).
+        if (item.listing.paymentMethod !== "both") continue;
         const current = prev[item.id];
         // Both "bkash" and "cod" are valid for "both" listings — keep
         // the buyer's previous pick, default to "bkash" (pay now) for
@@ -1132,9 +1192,14 @@ function AuthenticatedCartPage() {
           <div className="lg:col-span-2 space-y-4">
             {sellerGroups.map((group) => {
               // Determine the seller's payment badge from the listings in
-              // this group. If any listing supports "both", show "Both". If
-              // all are "advance", show "Advance only". If all are "cod",
-              // show "COD only".
+              // this group. If all listings support the same method, show
+              // that method's label. If listings have different methods
+              // (e.g. one COD-only and one Advance-only from the same
+              // nursery), show "Mixed payment methods" — the per-item
+              // badges on each card make the individual listing's method
+              // clear. Previously this used a cascade that picked
+              // "advance" whenever any advance listing existed, silently
+              // mislabeling COD-only items in the same group.
               const listingsPaymentMethods = group.items
                 .filter(
                   (
@@ -1145,13 +1210,13 @@ function AuthenticatedCartPage() {
                   } => i.kind === "seller_listing" && !!i.listing,
                 )
                 .map((i) => i.listing.paymentMethod);
-              const sellerBadge = listingsPaymentMethods.includes("both")
-                ? paymentBadgeLabel("both")
-                : listingsPaymentMethods.includes("advance")
-                  ? paymentBadgeLabel("advance")
-                  : listingsPaymentMethods.includes("cod")
-                    ? paymentBadgeLabel("cod")
-                    : "Payment: chosen at checkout";
+              const uniqueMethods = [...new Set(listingsPaymentMethods)];
+              const sellerBadge =
+                uniqueMethods.length === 0
+                  ? "Payment: chosen at checkout"
+                  : uniqueMethods.length === 1
+                    ? paymentBadgeLabel(uniqueMethods[0])
+                    : "Mixed payment methods";
 
               return (
                 <div
@@ -1218,6 +1283,11 @@ function AuthenticatedCartPage() {
                           onDecrement={() => handleUpdate(item.id, item.quantity - 1)}
                           onRemove={() => handleRemove(item.id)}
                           disabled={removeItem.isPending}
+                          paymentMethod={
+                            isListing
+                              ? (item.listing!.paymentMethod as "cod" | "advance" | "both")
+                              : undefined
+                          }
                           paymentSelector={paymentSelector}
                         />
                       );
