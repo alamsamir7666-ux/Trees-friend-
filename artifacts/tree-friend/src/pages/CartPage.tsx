@@ -79,12 +79,18 @@ function formatDeliveryEstimate(deliveryTimeDays: number | null | undefined): st
   return `${startStr} – ${endStr}`;
 }
 
-/** Human-readable badge label for the seller header pill. */
-function paymentBadgeLabel(paymentMethod: string, platformBkashVerified: boolean): string {
+/**
+ * Human-readable badge label for the seller header pill.
+ * Reflects what the SELLER chose for their listing — NOT the platform's
+ * current bKash availability. The platform verification state is a
+ * checkout-time concern (it gates whether bKash can actually be used),
+ * not a bag-display concern. The badge should always say what the listing
+ * itself supports.
+ */
+function paymentBadgeLabel(paymentMethod: string): string {
   if (paymentMethod === "cod") return "Payment: COD only";
-  if (paymentMethod === "advance")
-    return platformBkashVerified ? "Payment: Advance only" : "Payment: Advance (pending)";
-  return platformBkashVerified ? "Payment: Both" : "Payment: COD only";
+  if (paymentMethod === "advance") return "Payment: Advance only";
+  return "Payment: Both";
 }
 
 // ─── Empty State ──────────────────────────────────────────────────────────────
@@ -1166,13 +1172,12 @@ function AuthenticatedCartPage() {
                   } => i.kind === "seller_listing" && !!i.listing,
                 )
                 .map((i) => i.listing.paymentMethod);
-              const platformBkashVerified = group.seller?.platformBkashVerified ?? false;
               const sellerBadge = listingsPaymentMethods.includes("both")
-                ? paymentBadgeLabel("both", platformBkashVerified)
+                ? paymentBadgeLabel("both")
                 : listingsPaymentMethods.includes("advance")
-                  ? paymentBadgeLabel("advance", platformBkashVerified)
+                  ? paymentBadgeLabel("advance")
                   : listingsPaymentMethods.includes("cod")
-                    ? paymentBadgeLabel("cod", platformBkashVerified)
+                    ? paymentBadgeLabel("cod")
                     : "Payment: chosen at checkout";
 
               return (
