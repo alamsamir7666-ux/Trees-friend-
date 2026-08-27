@@ -1182,16 +1182,15 @@ function AuthenticatedCartPage() {
                         : null;
 
                       // Per-item payment selector: ONLY shown when the listing
-                      // is "both" AND the platform's bKash is verified — that's
-                      // the only case where the buyer has a real choice to make.
-                      // For "cod" listings the buyer pays on delivery (no choice).
-                      // For "advance" listings the buyer pays now (no choice).
-                      // For "both" when platform bKash is NOT verified, only COD
-                      // is effectively available, so again no real choice.
-                      const platformVerified = item.seller?.platformBkashVerified ?? false;
+                      // is "both" — that's the only case where the buyer has a
+                      // real choice to make. For "cod" listings the buyer pays
+                      // on delivery (no choice). For "advance" listings the
+                      // buyer pays now (no choice). The platform verification
+                      // state is NOT gated here — the bag reflects what the
+                      // seller chose. If bKash isn't actually available at
+                      // checkout, orders.ts will fall back to COD at that point.
                       const listingPaymentMethod = item.listing!.paymentMethod;
-                      const showItemPaymentSelector =
-                        isListing && listingPaymentMethod === "both" && platformVerified;
+                      const showItemPaymentSelector = isListing && listingPaymentMethod === "both";
                       const paymentSelector = showItemPaymentSelector
                         ? {
                             allowed: ["bkash", "cod"] as PaymentMethod[],
