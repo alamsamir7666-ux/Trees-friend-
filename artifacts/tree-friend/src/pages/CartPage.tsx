@@ -79,28 +79,6 @@ function formatDeliveryEstimate(deliveryTimeDays: number | null | undefined): st
   return `${startStr} – ${endStr}`;
 }
 
-/**
- * Compute the payment methods a listing enables for the buyer, accounting
- * for the platform's bKash availability. Mirrors CheckoutPage's
- * allowedMethodsForListingPaymentMethod so the bag and checkout agree.
- *
- *   listing.paymentMethod = "cod"     → ["cod"]
- *   listing.paymentMethod = "advance" → platformBkashVerified ? ["bkash"] : []
- *   listing.paymentMethod = "both"    → platformBkashVerified ? ["bkash","cod"] : ["cod"]
- *
- * Returns [] when no method is available (listing is "advance" but the
- * platform merchant account isn't verified yet) — the UI shows a warning
- * in that case.
- */
-function allowedMethodsForListing(
-  paymentMethod: string,
-  platformBkashVerified: boolean,
-): PaymentMethod[] {
-  if (paymentMethod === "cod") return ["cod"];
-  if (paymentMethod === "advance") return platformBkashVerified ? ["bkash"] : [];
-  return platformBkashVerified ? ["bkash", "cod"] : ["cod"];
-}
-
 /** Human-readable badge label for the seller header pill. */
 function paymentBadgeLabel(paymentMethod: string, platformBkashVerified: boolean): string {
   if (paymentMethod === "cod") return "Payment: COD only";
@@ -857,22 +835,25 @@ function AuthenticatedCartPage() {
   const subtotal = cart?.subtotal ?? 0;
 
   // Initialize / refresh per-item payment method defaults whenever the
-  // cart changes. For each line, if the buyer hasn't picked a method yet
-  // (or their previous pick is no longer allowed), default to the first
-  // allowed method. This keeps the selection stable across cart refreshes
-  // while still respecting listing/platform changes.
+  // cart changes. Only tracks "both" listings where the selector is
+  // actually shown — "cod" and "advance" listings have no buyer-facing
+  // choice, so their effective method is derived on the fly in dueNow /
+  // handleCheckout (no state needed). This keeps the selection stable
+  // across cart refreshes while still respecting listing/platform changes.
   useEffect(() => {
     setItemPaymentMethods((prev) => {
       const next: Record<string, PaymentMethod> = {};
       for (const item of items) {
         if (item.kind !== "seller_listing" || !item.listing) continue;
-        const allowed = allowedMethodsForListing(
-          item.listing.paymentMethod,
-          item.seller?.platformBkashVerified ?? false,
-        );
-        if (allowed.length === 0) continue;
+        // Only track items where the selector is shown (paymentMethod
+        // "both" + platform bKash verified). Skip everything else.
+        const platformVerified = item.seller?.platformBkashVerified ?? false;
+        if (item.listing.paymentMethod !== "both" || !platformVerified) continue;
         const current = prev[item.id];
-        next[item.id] = allowed.includes(current) ? current : allowed[0];
+        // Both "bkash" and "cod" are valid for "both" listings — keep
+        // the buyer's previous pick, default to "bkash" (pay now) for
+        // new items.
+        next[item.id] = current === "cod" ? "cod" : "bkash";
       }
       return next;
     });
@@ -970,10 +951,30 @@ function AuthenticatedCartPage() {
   // Due now = sum of (item price × qty) for items where the buyer selected
   // "bkash" (advance payment). COD items contribute 0 to "due now" — the
   // buyer pays the full amount (item + delivery) on delivery instead.
+  // For listings that aren't "both" (i.e. "cod" or "advance"), there's no
+  // per-item selector shown so the buyer never explicitly picks — the
+  // default is derived from the listing's own paymentMethod:
+  //   "cod"     → COD (pay on delivery, not now)
+  //   "advance" → bKash (pay now)
+  //   "both"    → buyer's selection via the radio (defaults to "bkash")
   const dueNow = items.reduce((sum, item) => {
     if (item.kind !== "seller_listing")
       return sum + (item.variant!.discountPrice ?? item.variant!.price) * item.quantity;
-    const method = itemPaymentMethods[item.id] ?? "bkash";
+    const listingPm = item.listing!.paymentMethod;
+    const platformVerified = item.seller?.platformBkashVerified ?? false;
+    // Derive the effective method: explicit buyer selection wins; otherwise
+    // default from the listing's paymentMethod (with platform-verified gate).
+    const method =
+      itemPaymentMethods[item.id] ??
+      (listingPm === "cod"
+        ? "cod"
+        : listingPm === "advance"
+          ? platformVerified
+            ? "bkash"
+            : "cod"
+          : platformVerified
+            ? "bkash"
+            : "cod");
     if (method !== "bkash") return sum; // COD — pay on delivery, not now
     return sum + (item.listing!.discountPrice ?? item.listing!.price) * item.quantity;
   }, 0);
@@ -981,10 +982,32 @@ function AuthenticatedCartPage() {
   function handleCheckout() {
     // Persist per-item payment methods so CheckoutPage can read them as
     // defaults. Keyed by cart line id → "bkash" | "cod". CheckoutPage
-    // groups by seller and uses the first item's method per seller (or
-    // the majority — sellers can only have one method per order).
+    // groups by seller and uses the first item's method per seller.
+    //
+    // For listings where no selector was shown ("cod" / "advance" / "both"
+    // when platform bKash is unverified), the method is derived from the
+    // listing's own paymentMethod — same logic as the dueNow calculation
+    // above — so CheckoutPage gets the correct default per seller even
+    // without an explicit buyer selection.
+    const methodsToPersist: Record<string, PaymentMethod> = {};
+    for (const item of items) {
+      if (item.kind !== "seller_listing") continue;
+      const listingPm = item.listing!.paymentMethod;
+      const platformVerified = item.seller?.platformBkashVerified ?? false;
+      methodsToPersist[item.id] =
+        itemPaymentMethods[item.id] ??
+        (listingPm === "cod"
+          ? "cod"
+          : listingPm === "advance"
+            ? platformVerified
+              ? "bkash"
+              : "cod"
+            : platformVerified
+              ? "bkash"
+              : "cod");
+    }
     try {
-      sessionStorage.setItem(BAG_PAYMENT_METHODS_KEY, JSON.stringify(itemPaymentMethods));
+      sessionStorage.setItem(BAG_PAYMENT_METHODS_KEY, JSON.stringify(methodsToPersist));
     } catch {
       // sessionStorage unavailable (private mode) — non-critical, checkout
       // will just fall back to its own defaults.
@@ -1113,13 +1136,20 @@ function AuthenticatedCartPage() {
                       ? formatDeliveryEstimate(item.listing!.deliveryTimeDays)
                       : null;
 
-                    // Per-item payment selector props (marketplace lines only)
-                    const paymentSelector = isListing
+                    // Per-item payment selector: ONLY shown when the listing
+                    // is "both" AND the platform's bKash is verified — that's
+                    // the only case where the buyer has a real choice to make.
+                    // For "cod" listings the buyer pays on delivery (no choice).
+                    // For "advance" listings the buyer pays now (no choice).
+                    // For "both" when platform bKash is NOT verified, only COD
+                    // is effectively available, so again no real choice.
+                    const platformVerified = item.seller?.platformBkashVerified ?? false;
+                    const listingPaymentMethod = item.listing!.paymentMethod;
+                    const showItemPaymentSelector =
+                      isListing && listingPaymentMethod === "both" && platformVerified;
+                    const paymentSelector = showItemPaymentSelector
                       ? {
-                          allowed: allowedMethodsForListing(
-                            item.listing!.paymentMethod,
-                            item.seller?.platformBkashVerified ?? false,
-                          ),
+                          allowed: ["bkash", "cod"] as PaymentMethod[],
                           selected: itemPaymentMethods[item.id] ?? "bkash",
                           onSelect: (m: PaymentMethod) =>
                             setItemPaymentMethods((prev) => ({ ...prev, [item.id]: m })),
