@@ -21,55 +21,92 @@ import {
   AlertCircle,
   AlertTriangle,
   Truck,
-  Wallet,
   Info,
   ShieldCheck,
+  CreditCard,
 } from "lucide-react";
 import { useUser } from "@clerk/react";
 import { useGuestCart } from "@/hooks/useGuestCart";
 import { useGuestSession } from "@/hooks/useGuestSession";
-import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
 import { apiClient } from "@/lib/apiClient";
 import { OtpModal } from "@/components/cart/OtpModal";
 import { useToast } from "@/hooks/use-toast";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type PaymentMethod = "bkash" | "cod";
 
 /**
- * Format a taka amount with the "Tk" prefix and thousands separators.
- * Centralized so every cart line, summary row, and badge renders identically.
- * `Tk1,300`, `Tk80`, `Tk1,580`.
+ * Per-item payment method selection made in the bag. Keyed by cart line id
+ * (for authenticated carts) or by a synthetic composite key (for guest
+ * carts, which have no server-side line id).
+ *
+ * Stored to sessionStorage on "Proceed to Checkout" so CheckoutPage can
+ * pick it up as the default per-seller payment method — turning the bag
+ * into the "choose how to pay" step and checkout into the "confirm and
+ * place" step. This matches the user's approved design: each item card
+ * shows its own Advance / COD radio selector.
  */
+const BAG_PAYMENT_METHODS_KEY = "treefriend_bag_payment_methods";
+
+function lineKeyFor(
+  productId: number,
+  variantId?: number | null,
+  sellerListingVariantId?: number | null,
+) {
+  if (sellerListingVariantId != null) return `slv:${productId}:${sellerListingVariantId}`;
+  return `v:${productId}:${variantId ?? "null"}`;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function formatTk(n: number): string {
   return `Tk${Math.round(n).toLocaleString("en-US")}`;
 }
 
-/**
- * Compute a human-readable delivery estimate date range from a seller's
- * `deliveryTimeDays` (e.g. 3 → "Aug 27–29"). Returns null when the input
- * is missing/invalid so the caller can skip the footer entirely.
- *
- * The end date is `deliveryTimeDays + 2` to give a realistic window —
- * same convention used by Amazon / Shopify for "estimated delivery".
- */
 function formatDeliveryEstimate(deliveryTimeDays: number | null | undefined): string | null {
   if (deliveryTimeDays == null || deliveryTimeDays <= 0) return null;
   const start = new Date();
   start.setDate(start.getDate() + deliveryTimeDays);
   const end = new Date(start);
   end.setDate(end.getDate() + 2);
-
   const startStr = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   const endStr = end.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-
-  // If the range spans months, show both months ("Aug 30 – Sep 1");
-  // otherwise collapse to one month ("Aug 27–29").
   if (start.getMonth() === end.getMonth()) {
-    const dayRange = `${start.getDate()}–${end.getDate()}`;
-    return `${start.toLocaleDateString("en-US", { month: "short" })} ${dayRange}`;
+    return `${start.toLocaleDateString("en-US", { month: "short" })} ${start.getDate()}–${end.getDate()}`;
   }
   return `${startStr} – ${endStr}`;
+}
+
+/**
+ * Compute the payment methods a listing enables for the buyer, accounting
+ * for the platform's bKash availability. Mirrors CheckoutPage's
+ * allowedMethodsForListingPaymentMethod so the bag and checkout agree.
+ *
+ *   listing.paymentMethod = "cod"     → ["cod"]
+ *   listing.paymentMethod = "advance" → platformBkashVerified ? ["bkash"] : []
+ *   listing.paymentMethod = "both"    → platformBkashVerified ? ["bkash","cod"] : ["cod"]
+ *
+ * Returns [] when no method is available (listing is "advance" but the
+ * platform merchant account isn't verified yet) — the UI shows a warning
+ * in that case.
+ */
+function allowedMethodsForListing(
+  paymentMethod: string,
+  platformBkashVerified: boolean,
+): PaymentMethod[] {
+  if (paymentMethod === "cod") return ["cod"];
+  if (paymentMethod === "advance") return platformBkashVerified ? ["bkash"] : [];
+  return platformBkashVerified ? ["bkash", "cod"] : ["cod"];
+}
+
+/** Human-readable badge label for the seller header pill. */
+function paymentBadgeLabel(paymentMethod: string, platformBkashVerified: boolean): string {
+  if (paymentMethod === "cod") return "Payment: COD only";
+  if (paymentMethod === "advance")
+    return platformBkashVerified ? "Payment: Advance only" : "Payment: Advance (pending)";
+  return platformBkashVerified ? "Payment: Both" : "Payment: COD only";
 }
 
 // ─── Empty State ──────────────────────────────────────────────────────────────
@@ -93,39 +130,174 @@ function EmptyCart() {
   );
 }
 
-// ─── Shared Cart Item Card ────────────────────────────────────────────────────
+// ─── Seller Group Header ──────────────────────────────────────────────────────
+
+function SellerGroupHeader({
+  sellerName,
+  paymentBadge,
+}: {
+  sellerName: string | null;
+  paymentBadge: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-border/60">
+      <div className="flex items-center gap-2 text-sm font-semibold text-foreground min-w-0">
+        <Sprout className="h-4 w-4 text-success-foreground shrink-0" />
+        <span className="truncate">{sellerName ? `Sold by ${sellerName}` : "Tree Friend"}</span>
+      </div>
+      <span className="shrink-0 inline-flex items-center text-[11px] font-medium rounded-full px-2.5 py-1 bg-success/15 text-success-foreground ring-1 ring-success-border/40">
+        {paymentBadge}
+      </span>
+    </div>
+  );
+}
+
+// ─── Per-item Payment Method Radio ────────────────────────────────────────────
 
 /**
- * Unified card layout for both guest and authenticated cart items.
- * Visual spec (matches the user's approved design):
- *   - White card, rounded-2xl, subtle shadow, p-4
- *   - Image: w-24 h-24 rounded-xl object-cover (left column)
- *   - Content (flex-1):
- *       Row 1: product name (font-semibold) + Trash2 icon (top-right)
- *       Row 2: variant attributes (text-xs text-muted-foreground, • separator)
- *       Row 3: quantity stepper (left, border rounded-lg h-9 w-24) +
- *              price block (right, current + strikethrough)
- *       Row 4 (optional): blue COD badge if marketplace line with deliveryCharge > 0
- *       Row 5 (optional, with top border): truck icon + green delivery estimate
+ * Radio selector for choosing how to pay for a single item. Mirrors the
+ * design's "Choose payment method for this item" section: two options
+ * (Advance Payment / Cash on Delivery), each showing what the buyer pays
+ * now vs on delivery.
  *
- * Stock indicators: out-of-stock (red), low-stock ≤5 (orange), at-max-stock
- * (disables + button).
+ * Disabled when the listing doesn't support that method (e.g. a "cod"-
+ * only listing grays out the Advance option).
  */
+function ItemPaymentSelector({
+  allowed,
+  selected,
+  onSelect,
+  itemPrice,
+  codCharge,
+  quantity,
+}: {
+  allowed: PaymentMethod[];
+  selected: PaymentMethod;
+  onSelect: (m: PaymentMethod) => void;
+  itemPrice: number;
+  codCharge: number;
+  quantity: number;
+}) {
+  const lineTotal = itemPrice * quantity;
+  const codTotal = (itemPrice + codCharge) * quantity;
+  const advanceAvailable = allowed.includes("bkash");
+  const codAvailable = allowed.includes("cod");
+
+  return (
+    <div className="mt-3 pt-3 border-t border-border/60 space-y-2">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Choose payment method for this item
+      </p>
+
+      {/* Advance Payment option */}
+      <button
+        type="button"
+        disabled={!advanceAvailable}
+        onClick={() => onSelect("bkash")}
+        className={`w-full text-left rounded-xl border p-3 transition-all ${
+          !advanceAvailable
+            ? "opacity-40 cursor-not-allowed border-border bg-muted/20"
+            : selected === "bkash"
+              ? "border-success ring-1 ring-success/30 bg-success/5"
+              : "border-border hover:border-foreground/30 bg-card"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span
+              className={`h-4 w-4 rounded-full border-2 shrink-0 flex items-center justify-center ${
+                selected === "bkash" && advanceAvailable
+                  ? "border-success"
+                  : "border-muted-foreground/40"
+              }`}
+            >
+              {selected === "bkash" && advanceAvailable && (
+                <span className="h-2 w-2 rounded-full bg-success" />
+              )}
+            </span>
+            <CreditCard className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">Advance Payment</p>
+              <p className="text-[11px] text-muted-foreground leading-tight">
+                Pay item price now. Delivery charge due on delivery.
+              </p>
+            </div>
+          </div>
+          <span className="text-sm font-semibold text-success-foreground shrink-0">
+            Pay now: {formatTk(lineTotal)}
+          </span>
+        </div>
+      </button>
+
+      {/* COD option */}
+      <button
+        type="button"
+        disabled={!codAvailable}
+        onClick={() => onSelect("cod")}
+        className={`w-full text-left rounded-xl border p-3 transition-all ${
+          !codAvailable
+            ? "opacity-40 cursor-not-allowed border-border bg-muted/20"
+            : selected === "cod"
+              ? "border-warning ring-1 ring-warning/30 bg-warning/5"
+              : "border-border hover:border-foreground/30 bg-card"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span
+              className={`h-4 w-4 rounded-full border-2 shrink-0 flex items-center justify-center ${
+                selected === "cod" && codAvailable
+                  ? "border-warning-foreground"
+                  : "border-muted-foreground/40"
+              }`}
+            >
+              {selected === "cod" && codAvailable && (
+                <span className="h-2 w-2 rounded-full bg-warning-foreground" />
+              )}
+            </span>
+            <Truck className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">Cash on Delivery</p>
+              <p className="text-[11px] text-muted-foreground leading-tight">
+                Pay full amount (item + delivery) on delivery.
+              </p>
+            </div>
+          </div>
+          <span className="text-sm font-semibold text-warning-foreground shrink-0">
+            Pay on delivery: {formatTk(codTotal)}
+          </span>
+        </div>
+      </button>
+    </div>
+  );
+}
+
+// ─── Cart Item Card ───────────────────────────────────────────────────────────
+
 interface CartItemCardProps {
   name: string;
   image: string | null;
   variantLabel: string | null;
   quantity: number;
-  price: number; // effective price (discountPrice ?? price)
-  originalPrice: number; // base price for strikethrough
+  price: number;
+  originalPrice: number;
   stock: number | null;
-  codDeliveryCharge: number; // marketplace per-unit courier fee (0 for admin-direct)
-  deliveryEstimate: string | null; // pre-computed "Aug 27–29" or null
+  codDeliveryCharge: number;
+  deliveryEstimate: string | null;
   href: string;
   onIncrement: () => void;
   onDecrement: () => void;
   onRemove: () => void;
   disabled?: boolean;
+  // Per-item payment selector (new design). When both are undefined the
+  // selector is hidden — used by the guest cart (payment method is chosen
+  // at checkout for guests).
+  paymentSelector?: {
+    allowed: PaymentMethod[];
+    selected: PaymentMethod;
+    onSelect: (m: PaymentMethod) => void;
+    itemPrice: number;
+  };
 }
 
 function CartItemCard({
@@ -143,6 +315,7 @@ function CartItemCard({
   onDecrement,
   onRemove,
   disabled,
+  paymentSelector,
 }: CartItemCardProps) {
   const atMaxStock = stock != null && quantity >= stock;
   const lowStock = stock != null && stock <= 5 && stock > 0;
@@ -158,20 +331,20 @@ function CartItemCard({
           : "border-border hover:shadow-md"
       }`}
     >
-      <div className="flex gap-4">
-        {/* Image — wrapped in relative so we can overlay an "Out of stock" badge */}
+      {/* Item content row */}
+      <div className="flex gap-3">
         <Link href={href} className="shrink-0 relative">
           {image ? (
             <img
               src={image}
               alt={name}
-              className={`w-24 h-24 object-cover rounded-xl cursor-pointer ${
+              className={`w-20 h-20 object-cover rounded-xl cursor-pointer ${
                 outOfStock ? "grayscale" : ""
               }`}
               loading="lazy"
             />
           ) : (
-            <NoImagePlaceholder className="w-24 h-24 rounded-xl cursor-pointer" />
+            <NoImagePlaceholder className="w-20 h-20 rounded-xl cursor-pointer" />
           )}
           {outOfStock && (
             <span className="absolute inset-0 flex items-center justify-center bg-destructive/10 rounded-xl">
@@ -182,13 +355,12 @@ function CartItemCard({
           )}
         </Link>
 
-        {/* Content */}
         <div className="flex-1 min-w-0">
-          {/* Row 1: Name + Remove */}
+          {/* Name + remove */}
           <div className="flex justify-between items-start gap-2">
             <Link href={href} className="min-w-0 flex-1">
               <h3
-                className={`font-semibold text-base leading-snug truncate transition-colors ${
+                className={`font-semibold text-sm leading-snug truncate transition-colors ${
                   outOfStock ? "text-muted-foreground" : "text-foreground hover:text-accent-text"
                 }`}
               >
@@ -205,334 +377,105 @@ function CartItemCard({
             </button>
           </div>
 
-          {/* Row 2: Variant attributes + stock indicators */}
+          {/* Variant + stock */}
           <div className="mt-0.5 flex items-center gap-2 flex-wrap">
             {variantLabel && (
               <p
-                className={`text-xs leading-relaxed ${
-                  outOfStock ? "text-muted-foreground/60" : "text-muted-foreground"
-                }`}
+                className={`text-[11px] leading-relaxed ${outOfStock ? "text-muted-foreground/60" : "text-muted-foreground"}`}
               >
                 {variantLabel}
               </p>
             )}
-            {/* Low-stock indicator (only shown when NOT out of stock —
-                out-of-stock is shown on the image overlay instead, so the
-                buyer's eye goes to the image first). */}
             {!outOfStock && lowStock && (
-              <span className="text-xs text-warning-foreground font-medium">Only {stock} left</span>
+              <span className="text-[11px] text-warning-foreground font-medium">
+                Only {stock} left
+              </span>
             )}
           </div>
 
-          {/* Row 3: Quantity stepper + price block */}
-          <div className="flex items-center justify-between mt-3 gap-3">
-            {/* Quantity stepper — fully disabled when out of stock */}
-            <div
-              className={`flex items-center border rounded-lg overflow-hidden h-9 w-24 shrink-0 ${
-                outOfStock ? "border-muted opacity-50 pointer-events-none" : "border-input"
-              }`}
+          {/* Quantity stepper */}
+          <div
+            className={`flex items-center border rounded-lg overflow-hidden h-8 w-24 mt-2 shrink-0 ${
+              outOfStock ? "border-muted opacity-50 pointer-events-none" : "border-input"
+            }`}
+          >
+            <button
+              onClick={onDecrement}
+              disabled={disabled || outOfStock || quantity <= 1}
+              className="w-7 h-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              aria-label="Decrease quantity"
             >
-              <button
-                onClick={onDecrement}
-                disabled={disabled || outOfStock || quantity <= 1}
-                className="w-8 h-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Decrease quantity"
-              >
-                <Minus className="h-3.5 w-3.5" />
-              </button>
-              <span className="flex-1 text-center text-sm font-semibold text-foreground border-x border-input">
-                {quantity}
-              </span>
-              <button
-                onClick={onIncrement}
-                disabled={disabled || outOfStock || atMaxStock}
-                className="w-8 h-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Increase quantity"
-                title={atMaxStock ? `Only ${stock} available` : undefined}
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-            </div>
-
-            {/* Price block */}
-            <div className="text-right">
-              <p
-                className={`text-lg font-bold leading-tight ${
-                  outOfStock ? "text-muted-foreground" : "text-foreground"
-                }`}
-              >
-                {formatTk(price * quantity)}
-              </p>
-              {hasDiscount && (
-                <p className="text-xs text-muted-foreground line-through">
-                  {formatTk(originalPrice * quantity)}
-                </p>
-              )}
-            </div>
+              <Minus className="h-3 w-3" />
+            </button>
+            <span className="flex-1 text-center text-sm font-semibold text-foreground border-x border-input">
+              {quantity}
+            </span>
+            <button
+              onClick={onIncrement}
+              disabled={disabled || outOfStock || atMaxStock}
+              className="w-7 h-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              aria-label="Increase quantity"
+              title={atMaxStock ? `Only ${stock} available` : undefined}
+            >
+              <Plus className="h-3 w-3" />
+            </button>
           </div>
+        </div>
 
-          {/* Row 4: COD badge (marketplace lines only — hidden when OOS) */}
-          {codTotal > 0 && !outOfStock && (
-            <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-info/60 text-info-foreground">
-              <Wallet className="h-3.5 w-3.5 shrink-0" />
-              <span className="text-xs font-medium">{formatTk(codTotal)} due on delivery</span>
-            </div>
-          )}
-
-          {/* Row 5: Delivery estimate footer (marketplace lines only —
-              hidden when OOS since the listing can't ship anyway) */}
-          {deliveryEstimate && !outOfStock && (
-            <div className="mt-3 pt-3 border-t border-border/60 flex items-center gap-2">
-              <Truck className="h-4 w-4 text-success-foreground shrink-0" />
-              <span className="text-xs text-muted-foreground">Estimated delivery:</span>
-              <span className="text-xs font-semibold text-success-foreground">
-                {deliveryEstimate}
-              </span>
-            </div>
+        {/* Price block (right column) */}
+        <div className="text-right shrink-0">
+          <p
+            className={`text-base font-bold leading-tight ${outOfStock ? "text-muted-foreground" : "text-foreground"}`}
+          >
+            {formatTk(price * quantity)}
+          </p>
+          {hasDiscount && (
+            <p className="text-xs text-muted-foreground line-through">
+              {formatTk(originalPrice * quantity)}
+            </p>
           )}
         </div>
       </div>
-    </div>
-  );
-}
 
-// ─── Guest Cart Page ──────────────────────────────────────────────────────────
-
-function GuestCartPage() {
-  const guestCart = useGuestCart();
-  const [, setLocation] = useLocation();
-  const [showOtpModal, setShowOtpModal] = useState(false);
-  const { toast } = useToast();
-
-  const items = guestCart.items;
-  const subtotal = items.reduce((sum, item) => {
-    const price = item.discountPrice ?? item.price;
-    return sum + price * item.quantity;
-  }, 0);
-  // Delivery charge = sum of each variant's real deliveryCharge × quantity.
-  // The old hardcoded `subtotal > 2000 ? 0 : 120` was wrong: it ignored the
-  // actual per-variant deliveryCharge stored on productVariants /
-  // sellerListingVariants. The authenticated cart gets the real sum from
-  // GET /api/cart (cart.deliveryTotal); the guest cart mirrors the same
-  // field on each item so the preview matches.
-  const shipping = items.reduce((sum, item) => sum + (item.deliveryCharge ?? 0) * item.quantity, 0);
-
-  if (items.length === 0) return <EmptyCart />;
-
-  return (
-    <div className="min-h-screen bg-background">
-      <PageHeader itemCount={items.length} />
-
-      {/* Phone verification banner — unverified guests must verify before
-          they can check out. This is the Daraz-style "light identity" gate:
-          the buyer provides a phone number, receives an OTP via WhatsApp,
-          and verifies it. Once verified, the cart moves from localStorage
-          to the server (POST /cart/merge), and the buyer can proceed to
-          checkout. */}
-      <div className="bg-info/30 border-b border-info-border">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-3 text-sm text-info-foreground">
-          <span className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 shrink-0" />
-            Verify your phone number to check out securely.
-          </span>
-          <Button size="sm" onClick={() => setShowOtpModal(true)} className="shrink-0 rounded-full">
-            Verify Phone
-          </Button>
-        </div>
-      </div>
-
-      <OtpModal
-        open={showOtpModal}
-        onOpenChange={setShowOtpModal}
-        onVerified={() => {
-          // After verification, the CartPage component re-renders and
-          // routes to AuthenticatedCartPage (because isVerified is now
-          // true). The cart merge happens in AuthenticatedCartPage's
-          // useEffect — see below.
-          //
-          // But we also need to trigger the merge of localStorage → server
-          // cart here, because AuthenticatedCartPage doesn't know about the
-          // localStorage items. The merge endpoint reads items from the
-          // request body, so we pass the localStorage items directly.
-          const guestItems = guestCart.items;
-          if (guestItems.length > 0) {
-            apiClient
-              .post("/cart/merge", {
-                items: guestItems.map((i) => ({
-                  productId: i.productId,
-                  variantId: i.variantId ?? null,
-                  sellerListingVariantId: i.sellerListingVariantId ?? null,
-                  quantity: i.quantity,
-                })),
-              })
-              .then(() => {
-                // Clear the localStorage cart after a successful merge
-                guestCart.clearCart();
-              })
-              .catch(() => {
-                // Non-fatal — the server cart still works, and the
-                // localStorage items can be re-added manually if needed.
-                // Show a toast so the buyer knows the merge failed.
-                toast({
-                  title: "Couldn't sync your bag",
-                  description:
-                    "Some items from your bag may not have transferred. Please re-add them if missing.",
-                  variant: "destructive",
-                });
-              });
-          }
-        }}
-      />
-
-      <div className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
-          {/* Items, grouped by seller — mirrors the authenticated cart's
-              groupBySeller + SellerGroupHeader pattern. Without this
-              grouping, a guest's bag showed "Tree Friend" for EVERY
-              item, which was wrong: the platform never sells anything,
-              every cart line is a seller's listing. */}
-          <div className="lg:col-span-2 space-y-6">
-            {(() => {
-              const groups = groupGuestCartBySeller(items);
-              return groups.map((group, gi) => (
-                <div key={group.sellerName ?? "tree-friend"} className="space-y-3">
-                  <SellerGroupHeader sellerName={group.sellerName ?? null} />
-                  {groups.length > 1 && gi > 0 && <div className="border-t border-border" />}
-                  {group.items.map((item) => {
-                    const price = item.discountPrice ?? item.price;
-                    const stock = item.stock;
-                    const atMaxStock = stock != null && item.quantity >= stock;
-                    return (
-                      <CartItemCard
-                        key={`${item.productId}:${item.variantId ?? "null"}:${item.sellerListingVariantId ?? "null"}`}
-                        name={item.name}
-                        image={item.image || null}
-                        variantLabel={null}
-                        quantity={item.quantity}
-                        price={price}
-                        originalPrice={item.price}
-                        stock={stock ?? null}
-                        codDeliveryCharge={0}
-                        deliveryEstimate={null}
-                        href={`/products/${item.productId}`}
-                        onIncrement={() =>
-                          !atMaxStock &&
-                          guestCart.updateQuantity(
-                            item.productId,
-                            item.quantity + 1,
-                            item.variantId,
-                            item.sellerListingVariantId,
-                          )
-                        }
-                        onDecrement={() =>
-                          item.quantity > 1 &&
-                          guestCart.updateQuantity(
-                            item.productId,
-                            item.quantity - 1,
-                            item.variantId,
-                            item.sellerListingVariantId,
-                          )
-                        }
-                        onRemove={() =>
-                          guestCart.removeItem(
-                            item.productId,
-                            item.variantId,
-                            item.sellerListingVariantId,
-                          )
-                        }
-                      />
-                    );
-                  })}
-                </div>
-              ));
-            })()}
-
-            <div className="pt-2">
-              <Link href="/products">
-                <Button
-                  variant="ghost"
-                  className="text-sm text-muted-foreground hover:text-foreground"
-                >
-                  ← Continue Shopping
-                </Button>
-              </Link>
-            </div>
-          </div>
-
-          {/* Summary */}
-          <div>
-            <OrderSummary
-              subtotal={subtotal}
-              shipping={shipping}
-              codDeliveryTotal={0}
-              codBreakdown={[]}
-              giftWrapCost={0}
-              discount={0}
-              loyaltyDiscount={0}
-              // Unverified guest — checkout button triggers OTP verification
-              // instead of going to /checkout. Once verified, the CartPage
-              // re-renders to AuthenticatedCartPage, and the buyer can
-              // proceed to checkout normally.
-              onCheckout={() => setShowOtpModal(true)}
-              isGuest
-              onSignIn={() => setLocation("/sign-in")}
-            />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Seller Group Header ──────────────────────────────────────────────────────
-
-function SellerGroupHeader({ sellerName }: { sellerName: string | null }) {
-  return (
-    <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-      <Sprout className="h-4 w-4 text-success-foreground" />
-      {sellerName ? `Sold by ${sellerName}` : "Tree Friend"}
-    </div>
-  );
-}
-
-// ─── Page Header ───────────────────────────────────────────────────────────────
-
-interface PageHeaderProps {
-  itemCount: number;
-  onBack?: () => void;
-}
-
-function PageHeader({ itemCount, onBack }: PageHeaderProps) {
-  return (
-    <div className="bg-muted/30 border-b py-10">
-      <div className="container mx-auto px-4">
-        {/* Back button — explicit < chevron above the breadcrumb so the
-            buyer has a clear "go back" affordance (industry-standard cart
-            page pattern, matches the approved design reference). Falls
-            back to `history.back()` when no onBack handler is provided. */}
-        <button
-          onClick={onBack ?? (() => window.history.back())}
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 -ml-1"
-          aria-label="Go back"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back
-        </button>
-
-        <PageBreadcrumb
-          crumbs={[{ label: "Your Bag", icon: <ShoppingBag className="h-3 w-3" /> }]}
-          className="mb-3"
+      {/* Per-item payment selector (new design) */}
+      {paymentSelector && !outOfStock && (
+        <ItemPaymentSelector
+          allowed={paymentSelector.allowed}
+          selected={paymentSelector.selected}
+          onSelect={paymentSelector.onSelect}
+          itemPrice={price}
+          codCharge={codDeliveryCharge}
+          quantity={quantity}
         />
-        <h1 className="font-serif text-4xl md:text-5xl font-medium tracking-tight">Your Bag</h1>
-        <p className="text-muted-foreground mt-1.5 text-sm">
-          {itemCount} item{itemCount !== 1 ? "s" : ""}
-        </p>
-      </div>
+      )}
+
+      {/* Delivery footer */}
+      {codTotal > 0 && !outOfStock && (
+        <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-between gap-2 flex-wrap">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-warning/15 text-warning-foreground text-[11px] font-medium">
+            Delivery charge: {formatTk(codTotal)}
+          </span>
+          {deliveryEstimate && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Truck className="h-3.5 w-3.5 text-success-foreground" />
+              Estimated delivery:{" "}
+              <span className="font-semibold text-success-foreground">{deliveryEstimate}</span>
+            </span>
+          )}
+        </div>
+      )}
+      {codTotal === 0 && deliveryEstimate && !outOfStock && (
+        <div className="mt-3 pt-3 border-t border-border/60 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Truck className="h-3.5 w-3.5 text-success-foreground" />
+          Estimated delivery:{" "}
+          <span className="font-semibold text-success-foreground">{deliveryEstimate}</span>
+        </div>
+      )}
     </div>
   );
 }
 
-// ─── Order Summary (restructured: Due now / Due on delivery split) ───────────
+// ─── Order Summary ────────────────────────────────────────────────────────────
 
 interface CodBreakdownEntry {
   sellerName: string;
@@ -541,165 +484,72 @@ interface CodBreakdownEntry {
 
 interface OrderSummaryProps {
   subtotal: number;
-  shipping: number;
-  codDeliveryTotal: number;
+  dueNow: number;
   codBreakdown: CodBreakdownEntry[];
-  giftWrapCost: number;
-  discount: number;
-  loyaltyDiscount: number;
   onCheckout: () => void;
   isGuest?: boolean;
   onSignIn?: () => void;
 }
 
 /**
- * Honest order summary that correctly distinguishes the two delivery
- * charge concepts in the data model:
- *
- *   1. Admin-direct deliveryCharge (productVariantsTable.deliveryCharge)
- *      — set by the admin, COLLECTED BY THE PLATFORM at checkout,
- *        summed into cart.deliveryTotal by routes/cart.ts:buildCart.
- *
- *   2. Marketplace seller deliveryCharge (sellerListingVariantsTable.
- *      deliveryCharge) — set by the SELLER per variant, NOT collected
- *      by the platform at checkout (see cart.ts line 290-295 doc
- *      comment: "courier fee is paid by the buyer directly to the
- *      seller's own courier account"). Buyer pays this amount to the
- *      courier on delivery (COD).
- *
- * Layout (matches the user's reference):
+ * Redesigned order summary matching the approved design:
  *
  *   Order Summary
- *   Subtotal                          Tk1,300
- *   Delivery                          Tk280
- *                                      (Due on delivery)
- *
- *   Due now (You'll be charged now)   Tk1,300
- *
+ *   Subtotal (item price)              Tk1,300
+ *   Delivery Charge                    Tk360  [DUE ON DELIVERY]
+ *   ─────────────────────────────────────────
+ *   Due now (You'll be charged now)    Tk1,300  (green)
  *   Due on delivery (COD)
- *     Haven Garden                    Tk80
- *     Green Garden                    Tk200
- *   Total                             Tk280
+ *     Green Garden                     Tk280
+ *     Haven Garden                     Tk80
+ *   Total due on delivery              Tk360  (orange)
+ *   ─────────────────────────────────────────
+ *   Total order value                  Tk1,660  (large bold)
  *
- *   Total order value                 Tk1,580
- *
- * "Delivery" line logic (honest, never misleading):
- *   - totalDelivery = admin-direct delivery (cart.deliveryTotal) +
- *                     marketplace COD total
- *   - If totalDelivery === 0 → "Free" (genuinely free — either no
- *     delivery charge exists, or sellers set deliveryCharge=0)
- *   - If admin-direct delivery > 0 AND marketplace COD === 0 → show
- *     the amount (collected at checkout, included in "Due now")
- *   - If marketplace COD > 0 (regardless of admin-direct) → show the
- *     TOTAL amount + a "Due on delivery" badge, because at least part
- *     of it is COD. The breakdown below shows which portion goes to
- *     which seller.
- *
- *   A seller setting deliveryCharge=0 means the seller is offering
- *   free shipping (they absorb the courier cost) — "Free" is honest
- *   in that case. The misleading old behavior was showing "Free"
- *   when the platform wasn't collecting but the buyer still owed the
- *   courier — that can't happen with this model because the
- *   deliveryCharge field IS the truth (0 = free, >0 = buyer pays).
- *
- * "Due now" = subtotal − discount − loyaltyDiscount + admin-direct
- *   delivery (cart.deliveryTotal) + giftWrap. This is what bKash/COD
- *   collects at checkout — does NOT include marketplace COD.
- *
- * "Due on delivery (COD)" = sum of marketplace sellers' courier fees
- *   (paid directly to each seller's courier on delivery). Listed
- *   per-seller so the buyer sees exactly what they'll owe each
- *   courier.
- *
- * "Total order value" = due now + due on delivery (the grand total).
+ *   [Proceed to Checkout →]  (dark green, full-width, pill)
+ *   Continue Shopping       (green text link)
  */
 function OrderSummary({
   subtotal,
-  shipping,
-  codDeliveryTotal,
+  dueNow,
   codBreakdown,
-  giftWrapCost,
-  discount,
-  loyaltyDiscount,
   onCheckout,
   isGuest,
   onSignIn,
 }: OrderSummaryProps) {
-  // shipping here = cart.deliveryTotal = admin-direct delivery charges
-  // ONLY (marketplace COD is in codDeliveryTotal, never in shipping).
-  const adminDirectDelivery = shipping;
-  const totalDelivery = adminDirectDelivery + codDeliveryTotal;
-  const dueNow = Math.max(
-    0,
-    subtotal - discount - loyaltyDiscount + adminDirectDelivery + giftWrapCost,
-  );
-  const totalOrderValue = dueNow + codDeliveryTotal;
-
-  // "Delivery" line: honest about whether the buyer pays anything and when.
-  // - totalDelivery === 0 → "Free" (no delivery charge anywhere — either no
-  //   items have a delivery charge, or every seller set deliveryCharge=0
-  //   meaning they're offering free shipping)
-  // - marketplace COD > 0 → show total + "Due on delivery" badge (the
-  //   breakdown below shows which seller gets what)
-  // - admin-direct delivery > 0 only (no COD) → show the amount (collected
-  //   at checkout, included in "Due now")
-  const deliveryDisplay =
-    totalDelivery === 0
-      ? { label: "Free", tone: "free" as const }
-      : codDeliveryTotal > 0
-        ? { label: formatTk(totalDelivery), tone: "due" as const }
-        : { label: formatTk(totalDelivery), tone: "amount" as const };
+  const codTotal = codBreakdown.reduce((s, e) => s + e.amount, 0);
+  const totalOrderValue = dueNow + codTotal;
 
   return (
-    <div className="bg-card border border-border rounded-2xl p-5 shadow-md sticky top-24 space-y-4">
+    <div className="bg-card border border-border rounded-2xl p-5 shadow-sm space-y-4">
       <h2 className="font-serif text-xl font-medium text-foreground">Order Summary</h2>
 
-      {/* Top-level line items */}
+      {/* Top lines */}
       <div className="space-y-2 text-sm">
         <div className="flex justify-between">
-          <span className="text-muted-foreground">Subtotal</span>
+          <span className="text-muted-foreground">
+            Subtotal <span className="text-xs">(item price)</span>
+          </span>
           <span className="font-semibold text-foreground">{formatTk(subtotal)}</span>
         </div>
         <div className="flex justify-between items-center">
-          <span className="text-muted-foreground">Delivery</span>
+          <span className="text-muted-foreground">Delivery Charge</span>
           <span className="flex items-center gap-2">
-            {deliveryDisplay.tone === "free" ? (
+            {codTotal === 0 ? (
               <span className="font-semibold text-success-foreground">Free</span>
-            ) : deliveryDisplay.tone === "due" ? (
+            ) : (
               <>
-                <span className="font-semibold text-foreground">{deliveryDisplay.label}</span>
+                <span className="font-semibold text-foreground">{formatTk(codTotal)}</span>
                 <span className="text-[10px] font-medium uppercase tracking-wide text-warning-foreground bg-warning/40 px-1.5 py-0.5 rounded">
                   Due on delivery
                 </span>
               </>
-            ) : (
-              <span className="font-semibold text-foreground">{deliveryDisplay.label}</span>
             )}
           </span>
         </div>
-        {giftWrapCost > 0 && (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">🎁 Gift Wrapping</span>
-            <span className="font-semibold text-foreground">{formatTk(giftWrapCost)}</span>
-          </div>
-        )}
-        {discount > 0 && (
-          <div className="flex justify-between text-success-foreground">
-            <span>Coupon Discount</span>
-            <span className="font-semibold">-{formatTk(discount)}</span>
-          </div>
-        )}
-        {loyaltyDiscount > 0 && (
-          <div className="flex justify-between text-warning-foreground">
-            <span>⭐ Loyalty Points</span>
-            <span className="font-semibold">-{formatTk(loyaltyDiscount)}</span>
-          </div>
-        )}
       </div>
 
-      {/* Due now section — what the buyer pays at checkout (bKash or COD).
-          Includes admin-direct delivery but NOT marketplace COD (that's
-          paid to couriers on delivery, see breakdown below). */}
+      {/* Due now */}
       <div className="border-t border-border pt-3">
         <div className="flex justify-between items-baseline">
           <span className="text-sm font-semibold text-foreground">
@@ -708,25 +558,19 @@ function OrderSummary({
               (You'll be charged now)
             </span>
           </span>
-          <span className="text-lg font-bold text-foreground">{formatTk(dueNow)}</span>
+          <span className="text-lg font-bold text-success-foreground">{formatTk(dueNow)}</span>
         </div>
       </div>
 
-      {/* Due on delivery (COD) section — marketplace courier fees,
-          broken down per seller so the buyer sees exactly what they'll
-          owe each courier. Hidden entirely when there are no COD charges
-          (cart is 100% admin-direct, or all sellers set deliveryCharge=0). */}
-      {codDeliveryTotal > 0 && (
+      {/* Due on delivery breakdown */}
+      {codTotal > 0 && (
         <div className="border-t border-border pt-3 space-y-2">
-          {/* Section header — no amount on this line */}
           <div className="flex justify-between items-baseline">
             <span className="text-sm font-semibold text-foreground">
               Due on delivery{" "}
               <span className="text-xs font-normal text-muted-foreground">(COD)</span>
             </span>
           </div>
-
-          {/* Per-seller COD breakdown */}
           <div className="pl-3 space-y-1.5">
             {codBreakdown.map((entry, i) => (
               <div key={i} className="flex justify-between items-center text-sm">
@@ -738,16 +582,14 @@ function OrderSummary({
               </div>
             ))}
           </div>
-
-          {/* Total of the COD section */}
           <div className="flex justify-between items-center text-sm pt-1">
-            <span className="font-semibold text-foreground">Total</span>
-            <span className="font-bold text-foreground">{formatTk(codDeliveryTotal)}</span>
+            <span className="font-semibold text-foreground">Total due on delivery</span>
+            <span className="font-bold text-warning-foreground">{formatTk(codTotal)}</span>
           </div>
         </div>
       )}
 
-      {/* Total order value (grand total = due now + due on delivery) */}
+      {/* Total order value */}
       <div className="border-t border-border pt-3">
         <div className="flex justify-between items-baseline">
           <span className="text-sm font-bold text-foreground">Total order value</span>
@@ -781,10 +623,10 @@ function OrderSummary({
         </>
       )}
 
-      <Link href="/products">
+      <Link href="/products" className="block">
         <Button
           variant="ghost"
-          className="w-full text-sm text-muted-foreground hover:text-foreground"
+          className="w-full text-sm text-success-foreground hover:text-success-foreground/80"
         >
           Continue Shopping
         </Button>
@@ -793,69 +635,199 @@ function OrderSummary({
   );
 }
 
-// ─── Authenticated Cart Page ──────────────────────────────────────────────────
+// ─── Guest Cart Page ──────────────────────────────────────────────────────────
 
-/**
- * Groups cart items by seller for display (plan doc §6: buyer sees which
- * seller they're buying from). Admin-direct (kind: "variant") lines are
- * grouped under a null key, rendered without a seller header -- this is
- * the pre-marketplace behavior and stays visually unchanged when a cart is
- * 100% admin-direct.
- */
-function groupBySeller<
-  T extends {
-    kind: string;
-    sellerId?: number | null;
-    seller?: { id: number; nurseryName: string; location: string } | null;
-  },
->(items: T[]) {
-  const groups = new Map<number | null, { seller: T["seller"] | null; items: T[] }>();
-  for (const item of items) {
-    const key = item.kind === "seller_listing" ? (item.sellerId ?? null) : null;
-    let group = groups.get(key);
-    if (!group) {
-      group = {
-        seller: item.kind === "seller_listing" ? (item.seller ?? null) : null,
-        items: [],
-      };
-      groups.set(key, group);
-    }
-    group.items.push(item);
-  }
-  return Array.from(groups.values());
-}
+function GuestCartPage() {
+  const guestCart = useGuestCart();
+  const [, setLocation] = useLocation();
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const { toast } = useToast();
 
-/**
- * Groups guest cart items by seller for display — mirrors the authenticated
- * cart's groupBySeller, but for the simpler GuestCartItem shape (no sellerId,
- * just a denormalized sellerName string from localStorage).
- *
- * Items with no sellerName (admin-direct variant lines) are grouped under
- * a null key — rendered with the "Tree Friend" platform header. In practice
- * these are rare on this marketplace (admin never sells — every product is
- * a seller's listing), but the code handles them correctly for the legacy
- * case where a guest added an admin-direct variant before the marketplace
- * migration.
- *
- * Preserves insertion order (first-seen seller first), so the seller the
- * buyer added first appears at the top of the bag — matching the
- * authenticated cart's behavior.
- */
-function groupGuestCartBySeller<T extends { sellerName?: string }>(
-  items: T[],
-): { sellerName: string | null; items: T[] }[] {
-  const groups = new Map<string | null, { sellerName: string | null; items: T[] }>();
+  const items = guestCart.items;
+  const subtotal = items.reduce((sum, item) => {
+    const price = item.discountPrice ?? item.price;
+    return sum + price * item.quantity;
+  }, 0);
+
+  if (items.length === 0) return <EmptyCart />;
+
+  // Group by seller for display
+  const groups = new Map<string | null, { sellerName: string | null; items: typeof items }>();
   for (const item of items) {
     const key = item.sellerName ?? null;
-    let group = groups.get(key);
-    if (!group) {
-      group = { sellerName: key, items: [] };
-      groups.set(key, group);
-    }
-    group.items.push(item);
+    if (!groups.has(key)) groups.set(key, { sellerName: key, items: [] });
+    groups.get(key)!.items.push(item);
   }
-  return Array.from(groups.values());
+  const sellerGroups = Array.from(groups.values());
+  const sellerCount = sellerGroups.filter((g) => g.sellerName).length;
+
+  return (
+    <div className="min-h-screen bg-[#FAFAF7]">
+      {/* Phone verification banner */}
+      <div className="bg-info/30 border-b border-info-border">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between gap-3 text-sm text-info-foreground">
+          <span className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 shrink-0" />
+            Verify your phone number to check out securely.
+          </span>
+          <Button size="sm" onClick={() => setShowOtpModal(true)} className="shrink-0 rounded-full">
+            Verify Phone
+          </Button>
+        </div>
+      </div>
+
+      <OtpModal
+        open={showOtpModal}
+        onOpenChange={setShowOtpModal}
+        onVerified={() => {
+          const guestItems = guestCart.items;
+          if (guestItems.length > 0) {
+            apiClient
+              .post("/cart/merge", {
+                items: guestItems.map((i) => ({
+                  productId: i.productId,
+                  variantId: i.variantId ?? null,
+                  sellerListingVariantId: i.sellerListingVariantId ?? null,
+                  quantity: i.quantity,
+                })),
+              })
+              .then(() => {
+                guestCart.clearCart();
+              })
+              .catch(() => {
+                toast({
+                  title: "Couldn't sync your bag",
+                  description:
+                    "Some items from your bag may not have transferred. Please re-add them if missing.",
+                  variant: "destructive",
+                });
+              });
+          }
+        }}
+      />
+
+      {/* Header */}
+      <div className="bg-muted/30 border-b py-8">
+        <div className="max-w-2xl mx-auto px-4">
+          <button
+            onClick={() => window.history.back()}
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 -ml-1"
+            aria-label="Go back"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </button>
+          <h1 className="font-serif text-3xl md:text-4xl font-medium tracking-tight">Your Bag</h1>
+          <p className="text-muted-foreground mt-1.5 text-sm">
+            {items.length} item{items.length !== 1 ? "s" : ""}
+            {sellerCount > 1 && ` from ${sellerCount} sellers`}
+          </p>
+        </div>
+      </div>
+
+      <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
+        {/* Items grouped by seller */}
+        <div className="space-y-4">
+          {sellerGroups.map((group) => {
+            // Determine payment badge from items — guests don't have the
+            // listing's paymentMethod in localStorage, so we show a generic
+            // "Payment: chosen at checkout" badge.
+            return (
+              <div
+                key={group.sellerName ?? "tree-friend"}
+                className="bg-card border border-border rounded-2xl p-4 shadow-sm"
+              >
+                <SellerGroupHeader
+                  sellerName={group.sellerName}
+                  paymentBadge="Payment: chosen at checkout"
+                />
+                <div className="space-y-3">
+                  {group.items.map((item) => {
+                    const price = item.discountPrice ?? item.price;
+                    const stock = item.stock ?? null;
+                    const atMaxStock = stock != null && item.quantity >= stock;
+                    return (
+                      <CartItemCard
+                        key={lineKeyFor(
+                          item.productId,
+                          item.variantId,
+                          item.sellerListingVariantId,
+                        )}
+                        name={item.name}
+                        image={item.image || null}
+                        variantLabel={null}
+                        quantity={item.quantity}
+                        price={price}
+                        originalPrice={item.price}
+                        stock={stock}
+                        codDeliveryCharge={item.deliveryCharge ?? 0}
+                        deliveryEstimate={null}
+                        href={`/products/${item.productId}`}
+                        onIncrement={() =>
+                          !atMaxStock &&
+                          guestCart.updateQuantity(
+                            item.productId,
+                            item.quantity + 1,
+                            item.variantId,
+                            item.sellerListingVariantId,
+                          )
+                        }
+                        onDecrement={() =>
+                          item.quantity > 1 &&
+                          guestCart.updateQuantity(
+                            item.productId,
+                            item.quantity - 1,
+                            item.variantId,
+                            item.sellerListingVariantId,
+                          )
+                        }
+                        onRemove={() =>
+                          guestCart.removeItem(
+                            item.productId,
+                            item.variantId,
+                            item.sellerListingVariantId,
+                          )
+                        }
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Multi-seller info */}
+        {sellerCount > 1 && (
+          <div className="bg-muted/40 border border-border rounded-xl px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground">
+            <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/70" />
+            <span>
+              Items from different sellers ship separately and become separate orders at checkout.
+            </span>
+          </div>
+        )}
+
+        {/* Order summary */}
+        <OrderSummary
+          subtotal={subtotal}
+          dueNow={subtotal}
+          codBreakdown={sellerGroups
+            .filter((g) => g.sellerName)
+            .map((g) => ({
+              sellerName: g.sellerName!,
+              amount: g.items.reduce((s, i) => s + (i.deliveryCharge ?? 0) * i.quantity, 0),
+            }))
+            .filter((e) => e.amount > 0)}
+          onCheckout={() => setShowOtpModal(true)}
+          isGuest
+          onSignIn={() => setLocation("/sign-in")}
+        />
+      </div>
+    </div>
+  );
 }
+
+// ─── Authenticated Cart Page ──────────────────────────────────────────────────
 
 function AuthenticatedCartPage() {
   const [, setLocation] = useLocation();
@@ -864,121 +836,78 @@ function AuthenticatedCartPage() {
   const updateItem = useUpdateCartItem();
   const removeItem = useRemoveFromCart();
 
-  // ── Abandoned cart recovery sync ───────────────────────────────────────────
-  //
-  // Industry-standard abandoned cart recovery (Shopify, WooCommerce,
-  // Magento all do this): whenever the authenticated cart changes, sync
-  // a snapshot to the `abandoned_carts` table so the 24-hour cron job
-  // (routes/abandonedCart.ts:runAbandonedCartJob) can send a recovery
-  // email if the buyer leaves without checking out. The sync endpoint
-  // reads the cart from the DB (not from the request body), so it's
-  // idempotent — calling it multiple times with the same cart state
-  // produces the same result. When the cart is emptied (checkout
-  // complete or buyer cleared it), the sync endpoint deletes the
-  // abandoned_carts row — no recovery email for an empty cart.
-  //
-  // Debounced 2s so a rapid add→remove→add sequence fires only one
-  // sync, not three. The sync is fire-and-forget (no await, no error
-  // handling) — if it fails, the cron job simply won't send a recovery
-  // email for this session, which is acceptable (the buyer can still
-  // come back and find their cart via the persistent cart_items table).
+  // Per-item payment method selection. Keyed by cart line id. Default is
+  // "bkash" when the listing allows it, else "cod". The buyer can change
+  // this per item via the radio selector in each card.
+  const [itemPaymentMethods, setItemPaymentMethods] = useState<Record<string, PaymentMethod>>({});
+
+  // Abandoned cart sync (debounced 2s) — same pattern as before.
   const syncAbandonedCartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (syncAbandonedCartTimeoutRef.current) {
-      clearTimeout(syncAbandonedCartTimeoutRef.current);
-    }
+    if (syncAbandonedCartTimeoutRef.current) clearTimeout(syncAbandonedCartTimeoutRef.current);
     syncAbandonedCartTimeoutRef.current = setTimeout(() => {
-      // Fire-and-forget — errors are logged server-side, not surfaced
-      // to the buyer. The buyer's cart experience must not depend on
-      // the abandoned cart sync succeeding.
-      apiClient.post("/abandoned-cart/sync").catch(() => {
-        // Silently ignore — see comment above.
-      });
+      apiClient.post("/abandoned-cart/sync").catch(() => {});
     }, 2000);
     return () => {
-      if (syncAbandonedCartTimeoutRef.current) {
-        clearTimeout(syncAbandonedCartTimeoutRef.current);
-      }
+      if (syncAbandonedCartTimeoutRef.current) clearTimeout(syncAbandonedCartTimeoutRef.current);
     };
   }, [cart?.items, cart?.subtotal]);
 
   const items = cart?.items ?? [];
   const subtotal = cart?.subtotal ?? 0;
-  // Use the REAL per-variant delivery total computed by the API
-  // (cart.deliveryTotal = sum of variant.deliveryCharge × quantity for
-  // admin-direct lines). The old hardcoded `subtotal > 2000 ? 0 : 120`
-  // was wrong: it showed 120 for every cart regardless of what the
-  // variant actually charged (e.g. a variant with deliveryCharge=80
-  // showed 120 in the bag). Also removed the "free over 2000" rule
-  // entirely — delivery is always the real per-variant charge now.
-  const shipping = cart?.deliveryTotal ?? 0;
-  const sellerGroups = groupBySeller(items);
-  // Marketplace (seller_listing) lines charge their courier fee separately,
-  // collected by the seller on delivery -- it's never summed into
-  // deliveryTotal/total above (see routes/cart.ts). Surface that as a
-  // total across the whole cart so "Delivery: Free" in the summary below
-  // doesn't read as "nothing more to pay" when it isn't.
-  const codBreakdown = sellerGroups
-    .map((g) => ({ seller: g.seller, items: g.items }))
-    .filter(
-      (g): g is { seller: NonNullable<typeof g.seller>; items: typeof g.items } => g.seller != null,
-    )
-    .map((g) => ({
-      sellerName: g.seller.nurseryName,
-      amount: g.items.reduce(
-        (sum, item) =>
-          sum +
-          (item.kind === "seller_listing"
-            ? (item.listing?.deliveryCharge ?? 0) * item.quantity
-            : 0),
-        0,
-      ),
-    }))
-    .filter((entry) => entry.amount > 0);
-  const codDeliveryTotal = codBreakdown.reduce((s, e) => s + e.amount, 0);
+
+  // Initialize / refresh per-item payment method defaults whenever the
+  // cart changes. For each line, if the buyer hasn't picked a method yet
+  // (or their previous pick is no longer allowed), default to the first
+  // allowed method. This keeps the selection stable across cart refreshes
+  // while still respecting listing/platform changes.
+  useEffect(() => {
+    setItemPaymentMethods((prev) => {
+      const next: Record<string, PaymentMethod> = {};
+      for (const item of items) {
+        if (item.kind !== "seller_listing" || !item.listing) continue;
+        const allowed = allowedMethodsForListing(
+          item.listing.paymentMethod,
+          item.seller?.platformBkashVerified ?? false,
+        );
+        if (allowed.length === 0) continue;
+        const current = prev[item.id];
+        next[item.id] = allowed.includes(current) ? current : allowed[0];
+      }
+      return next;
+    });
+  }, [items]);
 
   function handleUpdate(id: number, quantity: number) {
     if (quantity < 1) return;
     updateItem.mutate(
       { id, data: { quantity } },
-      {
-        onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
-      },
+      { onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }) },
     );
   }
 
   function handleRemove(id: number) {
     removeItem.mutate(
       { id },
-      {
-        onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
-      },
+      { onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }) },
     );
   }
 
-  // Batch-remove every out-of-stock line in the cart. Called by the
-  // "Remove unavailable items" banner action below. Each remove fires
-  // an independent DELETE /cart/items/:id — the cart query is
-  // invalidated once per success so the UI updates incrementally as
-  // each line is removed (better perceived performance than waiting for
-  // all N removes to complete before updating the UI).
   function handleRemoveUnavailable(ids: number[]) {
     for (const id of ids) {
       removeItem.mutate(
         { id },
-        {
-          onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }),
-        },
+        { onSuccess: () => qc.invalidateQueries({ queryKey: getGetCartQueryKey() }) },
       );
     }
   }
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-10">
+      <div className="max-w-2xl mx-auto px-4 py-10">
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-32 rounded-2xl" />
+            <Skeleton key={i} className="h-40 rounded-2xl" />
           ))}
         </div>
       </div>
@@ -987,27 +916,32 @@ function AuthenticatedCartPage() {
 
   if (items.length === 0) return <EmptyCart />;
 
-  // Price-change warning: if any line's price has drifted since the buyer
-  // added it to the cart, show a warning banner so the buyer knows the
-  // total at checkout may differ from what they saw in the bag. The
-  // actual charge always uses the current variant price (after
-  // re-validation at checkout) — this is a heads-up, not a price lock.
-  //
-  // Cast through `any` because the generated API client (lib/api-client-react)
-  // doesn't yet know about the `priceChangedCount` field added to the cart
-  // response in routes/cart.ts:buildCart. The field IS sent by the backend
-  // (verified in the route handler), but the OpenAPI spec + generated
-  // client haven't been regenerated to include it. This is the standard
-  // pattern for backend-first evolution — regenerate the client later.
+  // Group by seller
+  const groups = new Map<
+    number | null,
+    {
+      sellerId: number | null;
+      seller: (typeof items)[number]["seller"] | null;
+      items: typeof items;
+    }
+  >();
+  for (const item of items) {
+    const key = item.kind === "seller_listing" ? (item.sellerId ?? null) : null;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        sellerId: key,
+        seller: item.kind === "seller_listing" ? (item.seller ?? null) : null,
+        items: [],
+      });
+    }
+    groups.get(key)!.items.push(item);
+  }
+  const sellerGroups = Array.from(groups.values());
+  const sellerCount = sellerGroups.filter((g) => g.seller).length;
+
+  // Price-change + out-of-stock detection (same as before)
   const priceChangedCount =
     (cart as unknown as { priceChangedCount?: number })?.priceChangedCount ?? 0;
-
-  // Out-of-stock detection: collect every cart line whose variant/listing
-  // has stock <= 0. These lines are rendered with a disabled, dimmed card
-  // (see CartItemCard) AND surfaced in a page-level banner with a
-  // "Remove unavailable items" action so the buyer can clear them in one
-  // click instead of removing each one individually. Industry-standard
-  // pattern (Amazon, Shopify both do this at the top of the cart page).
   const outOfStockItems = items
     .map((item) => {
       const stock =
@@ -1017,13 +951,53 @@ function AuthenticatedCartPage() {
     .filter((x) => x.outOfStock);
   const outOfStockIds = outOfStockItems.map((x) => x.id);
 
-  return (
-    <div className="min-h-screen bg-background">
-      <PageHeader itemCount={items.length} />
+  // COD breakdown per seller for the summary
+  const codBreakdown = sellerGroups
+    .filter((g): g is typeof g & { seller: NonNullable<typeof g.seller> } => g.seller != null)
+    .map((g) => ({
+      sellerName: g.seller.nurseryName ?? g.seller.businessName,
+      amount: g.items.reduce(
+        (sum, item) =>
+          sum +
+          (item.kind === "seller_listing"
+            ? (item.listing?.deliveryCharge ?? 0) * item.quantity
+            : 0),
+        0,
+      ),
+    }))
+    .filter((e) => e.amount > 0);
 
+  // Due now = sum of (item price × qty) for items where the buyer selected
+  // "bkash" (advance payment). COD items contribute 0 to "due now" — the
+  // buyer pays the full amount (item + delivery) on delivery instead.
+  const dueNow = items.reduce((sum, item) => {
+    if (item.kind !== "seller_listing")
+      return sum + (item.variant!.discountPrice ?? item.variant!.price) * item.quantity;
+    const method = itemPaymentMethods[item.id] ?? "bkash";
+    if (method !== "bkash") return sum; // COD — pay on delivery, not now
+    return sum + (item.listing!.discountPrice ?? item.listing!.price) * item.quantity;
+  }, 0);
+
+  function handleCheckout() {
+    // Persist per-item payment methods so CheckoutPage can read them as
+    // defaults. Keyed by cart line id → "bkash" | "cod". CheckoutPage
+    // groups by seller and uses the first item's method per seller (or
+    // the majority — sellers can only have one method per order).
+    try {
+      sessionStorage.setItem(BAG_PAYMENT_METHODS_KEY, JSON.stringify(itemPaymentMethods));
+    } catch {
+      // sessionStorage unavailable (private mode) — non-critical, checkout
+      // will just fall back to its own defaults.
+    }
+    setLocation("/checkout");
+  }
+
+  return (
+    <div className="min-h-screen bg-[#FAFAF7]">
+      {/* Banners */}
       {outOfStockItems.length > 0 && (
         <div className="bg-destructive/10 border-b border-destructive/20">
-          <div className="container mx-auto px-4 py-3 flex items-start justify-between gap-3 text-sm text-destructive">
+          <div className="max-w-2xl mx-auto px-4 py-3 flex items-start justify-between gap-3 text-sm text-destructive">
             <div className="flex items-start gap-2">
               <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
               <span>
@@ -1054,7 +1028,7 @@ function AuthenticatedCartPage() {
 
       {priceChangedCount > 0 && (
         <div className="bg-warning/40 border-b border-warning-border">
-          <div className="container mx-auto px-4 py-3 flex items-start gap-2 text-sm text-warning-foreground">
+          <div className="max-w-2xl mx-auto px-4 py-3 flex items-start gap-2 text-sm text-warning-foreground">
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
             <span>
               Prices for {priceChangedCount} item{priceChangedCount !== 1 ? "s" : ""} in your bag
@@ -1065,93 +1039,138 @@ function AuthenticatedCartPage() {
         </div>
       )}
 
-      <div className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
-          {/* Items, grouped by seller */}
-          <div className="lg:col-span-2 space-y-6">
-            {sellerGroups.map((group, gi) => (
-              <div key={group.seller?.id ?? "admin-direct"} className="space-y-3">
-                <SellerGroupHeader sellerName={group.seller?.nurseryName ?? null} />
-                {sellerGroups.length > 1 && gi > 0 && <div className="border-t border-border" />}
-                {group.items.map((item) => {
-                  const isListing = item.kind === "seller_listing";
-                  const price = isListing
-                    ? (item.listing!.discountPrice ?? item.listing!.price)
-                    : (item.variant!.discountPrice ?? item.variant!.price);
-                  const originalPrice = isListing ? item.listing!.price : item.variant!.price;
-                  const stock = isListing ? item.listing!.stock : item.variant!.stock;
-                  const img = item.product.images?.[0] ?? null;
-                  const variantLabel = isListing
-                    ? [item.listing!.height, item.listing!.potSize, item.listing!.age]
-                        .filter(Boolean)
-                        .join(" · ")
-                    : item.variant!.name;
-                  const codDeliveryCharge = isListing ? (item.listing!.deliveryCharge ?? 0) : 0;
-                  // Delivery estimate is ONLY shown for marketplace
-                  // (seller_listing) lines because delivery time is set
-                  // BY THE SELLER per-listing (sellerListingsTable.
-                  // deliveryTimeDays). Admin-direct variant lines have no
-                  // seller, so there's no per-listing delivery promise to
-                  // surface — showing a fabricated "3-5 days" estimate
-                  // would be misleading. This is intentional, not a gap.
-                  // If/when admin-direct products get a delivery-time
-                  // field on productVariantsTable, this branch will
-                  // extend to cover them.
-                  const deliveryEstimate = isListing
-                    ? formatDeliveryEstimate(item.listing!.deliveryTimeDays)
-                    : null;
-
-                  return (
-                    <CartItemCard
-                      key={item.id}
-                      name={item.product.name}
-                      image={img}
-                      variantLabel={variantLabel || null}
-                      quantity={item.quantity}
-                      price={price}
-                      originalPrice={originalPrice}
-                      stock={stock ?? null}
-                      codDeliveryCharge={codDeliveryCharge}
-                      deliveryEstimate={deliveryEstimate}
-                      href={`/products/${item.productId}`}
-                      onIncrement={() => handleUpdate(item.id, item.quantity + 1)}
-                      onDecrement={() => handleUpdate(item.id, item.quantity - 1)}
-                      onRemove={() => handleRemove(item.id)}
-                      // Disable the remove button (and stepper, via
-                      // CartItemCard's own outOfStock/disabled logic)
-                      // while a batch remove is in flight, so the buyer
-                      // can't fire concurrent DELETEs on the same line.
-                      disabled={removeItem.isPending}
-                    />
-                  );
-                })}
-              </div>
-            ))}
-            {sellerGroups.length > 1 && (
-              <div className="bg-muted/40 border border-border rounded-xl px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground">
-                <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/70" />
-                <span>
-                  Items from different sellers ship separately and become separate orders at
-                  checkout.
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* Summary */}
-          <div>
-            <OrderSummary
-              subtotal={subtotal}
-              shipping={shipping}
-              codDeliveryTotal={codDeliveryTotal}
-              codBreakdown={codBreakdown}
-              giftWrapCost={0}
-              discount={0}
-              loyaltyDiscount={0}
-              onCheckout={() => setLocation("/checkout")}
-            />
-          </div>
+      {/* Header */}
+      <div className="bg-muted/30 border-b py-8">
+        <div className="max-w-2xl mx-auto px-4">
+          <button
+            onClick={() => window.history.back()}
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 -ml-1"
+            aria-label="Go back"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </button>
+          <h1 className="font-serif text-3xl md:text-4xl font-medium tracking-tight">Your Bag</h1>
+          <p className="text-muted-foreground mt-1.5 text-sm">
+            {items.length} item{items.length !== 1 ? "s" : ""}
+            {sellerCount > 1 && ` from ${sellerCount} sellers`}
+          </p>
         </div>
+      </div>
+
+      <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
+        {/* Items grouped by seller */}
+        <div className="space-y-4">
+          {sellerGroups.map((group) => {
+            // Determine the seller's payment badge from the listings in
+            // this group. If any listing supports "both", show "Both". If
+            // all are "advance", show "Advance only". If all are "cod",
+            // show "COD only".
+            const listingsPaymentMethods = group.items
+              .filter(
+                (
+                  i,
+                ): i is typeof i & {
+                  kind: "seller_listing";
+                  listing: NonNullable<typeof i.listing>;
+                } => i.kind === "seller_listing" && !!i.listing,
+              )
+              .map((i) => i.listing.paymentMethod);
+            const platformBkashVerified = group.seller?.platformBkashVerified ?? false;
+            const sellerBadge = listingsPaymentMethods.includes("both")
+              ? paymentBadgeLabel("both", platformBkashVerified)
+              : listingsPaymentMethods.includes("advance")
+                ? paymentBadgeLabel("advance", platformBkashVerified)
+                : listingsPaymentMethods.includes("cod")
+                  ? paymentBadgeLabel("cod", platformBkashVerified)
+                  : "Payment: chosen at checkout";
+
+            return (
+              <div
+                key={group.sellerId ?? "admin-direct"}
+                className="bg-card border border-border rounded-2xl p-4 shadow-sm"
+              >
+                <SellerGroupHeader
+                  sellerName={group.seller?.nurseryName ?? null}
+                  paymentBadge={sellerBadge}
+                />
+                <div className="space-y-3">
+                  {group.items.map((item) => {
+                    const isListing = item.kind === "seller_listing";
+                    const price = isListing
+                      ? (item.listing!.discountPrice ?? item.listing!.price)
+                      : (item.variant!.discountPrice ?? item.variant!.price);
+                    const originalPrice = isListing ? item.listing!.price : item.variant!.price;
+                    const stock = isListing ? item.listing!.stock : item.variant!.stock;
+                    const img = item.product.images?.[0] ?? null;
+                    const variantLabel = isListing
+                      ? [item.listing!.height, item.listing!.potSize, item.listing!.age]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : item.variant!.name;
+                    const codDeliveryCharge = isListing ? (item.listing!.deliveryCharge ?? 0) : 0;
+                    const deliveryEstimate = isListing
+                      ? formatDeliveryEstimate(item.listing!.deliveryTimeDays)
+                      : null;
+
+                    // Per-item payment selector props (marketplace lines only)
+                    const paymentSelector = isListing
+                      ? {
+                          allowed: allowedMethodsForListing(
+                            item.listing!.paymentMethod,
+                            item.seller?.platformBkashVerified ?? false,
+                          ),
+                          selected: itemPaymentMethods[item.id] ?? "bkash",
+                          onSelect: (m: PaymentMethod) =>
+                            setItemPaymentMethods((prev) => ({ ...prev, [item.id]: m })),
+                          itemPrice: price,
+                        }
+                      : undefined;
+
+                    return (
+                      <CartItemCard
+                        key={item.id}
+                        name={item.product.name}
+                        image={img}
+                        variantLabel={variantLabel || null}
+                        quantity={item.quantity}
+                        price={price}
+                        originalPrice={originalPrice}
+                        stock={stock ?? null}
+                        codDeliveryCharge={codDeliveryCharge}
+                        deliveryEstimate={deliveryEstimate}
+                        href={`/products/${item.productId}`}
+                        onIncrement={() => handleUpdate(item.id, item.quantity + 1)}
+                        onDecrement={() => handleUpdate(item.id, item.quantity - 1)}
+                        onRemove={() => handleRemove(item.id)}
+                        disabled={removeItem.isPending}
+                        paymentSelector={paymentSelector}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Multi-seller info */}
+        {sellerCount > 1 && (
+          <div className="bg-muted/40 border border-border rounded-xl px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground">
+            <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/70" />
+            <span>
+              Items from different sellers ship separately and become separate orders at checkout.
+            </span>
+          </div>
+        )}
+
+        {/* Order summary */}
+        <OrderSummary
+          subtotal={subtotal}
+          dueNow={dueNow}
+          codBreakdown={codBreakdown}
+          onCheckout={handleCheckout}
+        />
       </div>
     </div>
   );
@@ -1165,20 +1184,16 @@ export function CartPage() {
 
   if (!isLoaded) {
     return (
-      <div className="container mx-auto px-4 py-10">
+      <div className="max-w-2xl mx-auto px-4 py-10">
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-32 rounded-2xl" />
+            <Skeleton key={i} className="h-40 rounded-2xl" />
           ))}
         </div>
       </div>
     );
   }
 
-  // Logged-in users AND phone-verified guests both use the server-side
-  // cart (AuthenticatedCartPage reads via useGetCart, which attaches the
-  // guest JWT as Authorization: Bearer — see App.tsx's TokenSync). Only
-  // unverified guests use the localStorage cart (GuestCartPage).
   if (user || isVerified) return <AuthenticatedCartPage />;
   return <GuestCartPage />;
 }

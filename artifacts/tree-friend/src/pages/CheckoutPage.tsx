@@ -1,5 +1,5 @@
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { useLoyalty } from "@/hooks/useLoyalty";
 import { useGuestSession } from "@/hooks/useGuestSession";
@@ -104,6 +104,61 @@ export function CheckoutPage() {
   // this per group.
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("bkash");
   const [sellerPaymentMethod, setSellerPaymentMethod] = useState<Record<string, PaymentMethod>>({});
+
+  // ── Read per-item payment methods chosen in the bag ──────────────────
+  //
+  // The redesigned bag page (CartPage.tsx) lets the buyer pick Advance vs
+  // COD per item via radio buttons. That selection is stored to
+  // sessionStorage under "treefriend_bag_payment_methods" (keyed by cart
+  // line id → "bkash" | "cod") and read here so checkout starts with the
+  // buyer's bag choices instead of defaulting everything to "bkash".
+  //
+  // The per-item choices are collapsed into per-SELLER choices here
+  // because orders.ts creates one order per seller with one payment
+  // method — a seller can't split an order into "some items advance, some
+  // COD". If items from the same seller disagree, the first item's choice
+  // wins (arbitrary but stable — the buyer can fix it in the checkout UI).
+  //
+  // Only runs once on mount (empty dep array) — the buyer's bag choices
+  // are a one-time default, not a live sync. If they change the cart
+  // after arriving at checkout, the per-seller pickers below are the
+  // source of truth.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("treefriend_bag_payment_methods");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Record<string, PaymentMethod>;
+      bagPaymentMethodsRef.current = parsed;
+    } catch {
+      // Corrupted sessionStorage — ignore, fall back to "bkash" defaults.
+    }
+  }, []);
+
+  const bagPaymentMethodsRef = useRef<Record<string, PaymentMethod> | null>(null);
+  useEffect(() => {
+    if (!bagPaymentMethodsRef.current || isGuest) return;
+    const itemMethods = bagPaymentMethodsRef.current;
+    const cartItems = cart?.items ?? [];
+    if (cartItems.length === 0) return;
+    // Map cart line id → sellerId, then pick the first item's method per seller.
+    const sellerDefaults: Record<string, PaymentMethod> = {};
+    for (const item of cartItems) {
+      if (item.kind !== "seller_listing") continue;
+      const key = String(item.sellerId);
+      if (key in sellerDefaults) continue;
+      const method = itemMethods[item.id];
+      if (method) sellerDefaults[key] = method;
+    }
+    if (Object.keys(sellerDefaults).length > 0) {
+      setSellerPaymentMethod(sellerDefaults);
+    }
+    // Clear the ref so this only runs once per checkout mount.
+    bagPaymentMethodsRef.current = null;
+    // Intentionally not depending on setSellerPaymentMethod (stable) or
+    // isGuest (re-evaluated each render but we only want this to fire once
+    // per cart load — the ref guard handles the "run once" semantics).
+  }, [cart?.items]);
+
   const [couponCode, setCouponCode] = useState("");
   const [discount, setDiscount] = useState(0);
   const [couponApplied, setCouponApplied] = useState(false);
