@@ -457,12 +457,17 @@ function CartItemCard({
 
 interface CodBreakdownEntry {
   sellerName: string;
+  /** Full amount due on delivery to this seller's courier: COD item prices + delivery charges. */
   amount: number;
 }
 
 interface OrderSummaryProps {
   subtotal: number;
+  /** Sum of ALL marketplace delivery charges (always due on delivery, regardless of item payment method). */
+  deliveryTotal: number;
+  /** Sum of item prices paid via bKash (Advance) now. */
   dueNow: number;
+  /** Per-seller breakdown of everything due on delivery (COD item prices + delivery charges). */
   codBreakdown: CodBreakdownEntry[];
   onCheckout: () => void;
   isGuest?: boolean;
@@ -470,25 +475,42 @@ interface OrderSummaryProps {
 }
 
 /**
- * Redesigned order summary matching the approved design:
+ * Order summary matching the approved design.
  *
- *   Order Summary
+ * The math correctly distinguishes:
+ *   - Subtotal = sum of ALL item prices (regardless of payment method)
+ *   - Delivery Charge = sum of ALL marketplace delivery charges (always COD)
+ *   - Due now = item prices for items the buyer chose to pay via Advance (bKash)
+ *   - Due on delivery = item prices for COD items + ALL delivery charges
+ *   - Total order value = Due now + Due on delivery = Subtotal + Delivery
+ *
+ * Example (all items COD, Tk1,300 items + Tk280 delivery):
  *   Subtotal (item price)              Tk1,300
- *   Delivery Charge                    Tk360  [DUE ON DELIVERY]
+ *   Delivery Charge                    Tk280  [DUE ON DELIVERY]
  *   ─────────────────────────────────────────
- *   Due now (You'll be charged now)    Tk1,300  (green)
+ *   Due now (You'll be charged now)    Tk0
  *   Due on delivery (COD)
- *     Green Garden                     Tk280
- *     Haven Garden                     Tk80
- *   Total due on delivery              Tk360  (orange)
+ *     Haven Garden                     Tk1,180  (Tk1,100 items + Tk80 delivery)
+ *     Green Garden                     Tk400    (Tk200 items + Tk200 delivery)
+ *   Total due on delivery              Tk1,580
  *   ─────────────────────────────────────────
- *   Total order value                  Tk1,660  (large bold)
+ *   Total order value                  Tk1,580
  *
- *   [Proceed to Checkout →]  (dark green, full-width, pill)
- *   Continue Shopping       (green text link)
+ * Example (all items Advance, Tk1,300 items + Tk280 delivery):
+ *   Subtotal (item price)              Tk1,300
+ *   Delivery Charge                    Tk280  [DUE ON DELIVERY]
+ *   ─────────────────────────────────────────
+ *   Due now (You'll be charged now)    Tk1,300
+ *   Due on delivery (COD)
+ *     Haven Garden                     Tk80     (delivery only, items paid now)
+ *     Green Garden                     Tk200
+ *   Total due on delivery              Tk280
+ *   ─────────────────────────────────────────
+ *   Total order value                  Tk1,580
  */
 function OrderSummary({
   subtotal,
+  deliveryTotal,
   dueNow,
   codBreakdown,
   onCheckout,
@@ -499,7 +521,7 @@ function OrderSummary({
   const totalOrderValue = dueNow + codTotal;
 
   return (
-    <div className="bg-card border border-border rounded-2xl p-5 shadow-sm space-y-4">
+    <div className="bg-card border border-border rounded-2xl p-5 shadow-md sticky top-24 space-y-4">
       <h2 className="font-serif text-xl font-medium text-foreground">Order Summary</h2>
 
       {/* Top lines */}
@@ -513,11 +535,11 @@ function OrderSummary({
         <div className="flex justify-between items-center">
           <span className="text-muted-foreground">Delivery Charge</span>
           <span className="flex items-center gap-2">
-            {codTotal === 0 ? (
+            {deliveryTotal === 0 ? (
               <span className="font-semibold text-success-foreground">Free</span>
             ) : (
               <>
-                <span className="font-semibold text-foreground">{formatTk(codTotal)}</span>
+                <span className="font-semibold text-foreground">{formatTk(deliveryTotal)}</span>
                 <span className="text-[10px] font-medium uppercase tracking-wide text-warning-foreground bg-warning/40 px-1.5 py-0.5 rounded">
                   Due on delivery
                 </span>
@@ -643,7 +665,7 @@ function GuestCartPage() {
     <div className="min-h-screen bg-[#FAFAF7]">
       {/* Phone verification banner */}
       <div className="bg-info/30 border-b border-info-border">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between gap-3 text-sm text-info-foreground">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3 text-sm text-info-foreground">
           <span className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 shrink-0" />
             Verify your phone number to check out securely.
@@ -686,7 +708,7 @@ function GuestCartPage() {
 
       {/* Header */}
       <div className="bg-muted/30 border-b py-8">
-        <div className="max-w-2xl mx-auto px-4">
+        <div className="max-w-6xl mx-auto px-4">
           <button
             onClick={() => window.history.back()}
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 -ml-1"
@@ -703,103 +725,114 @@ function GuestCartPage() {
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
-        {/* Items grouped by seller */}
-        <div className="space-y-4">
-          {sellerGroups.map((group) => {
-            // Determine payment badge from items — guests don't have the
-            // listing's paymentMethod in localStorage, so we show a generic
-            // "Payment: chosen at checkout" badge.
-            return (
-              <div
-                key={group.sellerName ?? "tree-friend"}
-                className="bg-card border border-border rounded-2xl p-4 shadow-sm"
-              >
-                <SellerGroupHeader
-                  sellerName={group.sellerName}
-                  paymentBadge="Payment: chosen at checkout"
-                />
-                <div className="space-y-3">
-                  {group.items.map((item) => {
-                    const price = item.discountPrice ?? item.price;
-                    const stock = item.stock ?? null;
-                    const atMaxStock = stock != null && item.quantity >= stock;
-                    return (
-                      <CartItemCard
-                        key={lineKeyFor(
-                          item.productId,
-                          item.variantId,
-                          item.sellerListingVariantId,
-                        )}
-                        name={item.name}
-                        image={item.image || null}
-                        variantLabel={null}
-                        quantity={item.quantity}
-                        price={price}
-                        originalPrice={item.price}
-                        stock={stock}
-                        codDeliveryCharge={item.deliveryCharge ?? 0}
-                        deliveryEstimate={null}
-                        href={`/products/${item.productId}`}
-                        onIncrement={() =>
-                          !atMaxStock &&
-                          guestCart.updateQuantity(
-                            item.productId,
-                            item.quantity + 1,
-                            item.variantId,
-                            item.sellerListingVariantId,
-                          )
-                        }
-                        onDecrement={() =>
-                          item.quantity > 1 &&
-                          guestCart.updateQuantity(
-                            item.productId,
-                            item.quantity - 1,
-                            item.variantId,
-                            item.sellerListingVariantId,
-                          )
-                        }
-                        onRemove={() =>
-                          guestCart.removeItem(
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
+          {/* Items grouped by seller */}
+          <div className="lg:col-span-2 space-y-4">
+            {sellerGroups.map((group) => {
+              // Determine payment badge from items — guests don't have the
+              // listing's paymentMethod in localStorage, so we show a generic
+              // "Payment: chosen at checkout" badge.
+              return (
+                <div
+                  key={group.sellerName ?? "tree-friend"}
+                  className="bg-card border border-border rounded-2xl p-4 shadow-sm"
+                >
+                  <SellerGroupHeader
+                    sellerName={group.sellerName}
+                    paymentBadge="Payment: chosen at checkout"
+                  />
+                  <div className="space-y-3">
+                    {group.items.map((item) => {
+                      const price = item.discountPrice ?? item.price;
+                      const stock = item.stock ?? null;
+                      const atMaxStock = stock != null && item.quantity >= stock;
+                      return (
+                        <CartItemCard
+                          key={lineKeyFor(
                             item.productId,
                             item.variantId,
                             item.sellerListingVariantId,
-                          )
-                        }
-                      />
-                    );
-                  })}
+                          )}
+                          name={item.name}
+                          image={item.image || null}
+                          variantLabel={null}
+                          quantity={item.quantity}
+                          price={price}
+                          originalPrice={item.price}
+                          stock={stock}
+                          codDeliveryCharge={item.deliveryCharge ?? 0}
+                          deliveryEstimate={null}
+                          href={`/products/${item.productId}`}
+                          onIncrement={() =>
+                            !atMaxStock &&
+                            guestCart.updateQuantity(
+                              item.productId,
+                              item.quantity + 1,
+                              item.variantId,
+                              item.sellerListingVariantId,
+                            )
+                          }
+                          onDecrement={() =>
+                            item.quantity > 1 &&
+                            guestCart.updateQuantity(
+                              item.productId,
+                              item.quantity - 1,
+                              item.variantId,
+                              item.sellerListingVariantId,
+                            )
+                          }
+                          onRemove={() =>
+                            guestCart.removeItem(
+                              item.productId,
+                              item.variantId,
+                              item.sellerListingVariantId,
+                            )
+                          }
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Multi-seller info */}
-        {sellerCount > 1 && (
-          <div className="bg-muted/40 border border-border rounded-xl px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground">
-            <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/70" />
-            <span>
-              Items from different sellers ship separately and become separate orders at checkout.
-            </span>
+              );
+            })}
           </div>
-        )}
 
-        {/* Order summary */}
-        <OrderSummary
-          subtotal={subtotal}
-          dueNow={subtotal}
-          codBreakdown={sellerGroups
-            .filter((g) => g.sellerName)
-            .map((g) => ({
-              sellerName: g.sellerName!,
-              amount: g.items.reduce((s, i) => s + (i.deliveryCharge ?? 0) * i.quantity, 0),
-            }))
-            .filter((e) => e.amount > 0)}
-          onCheckout={() => setShowOtpModal(true)}
-          isGuest
-          onSignIn={() => setLocation("/sign-in")}
-        />
+          {/* Multi-seller info */}
+          {sellerCount > 1 && (
+            <div className="lg:col-span-2 bg-muted/40 border border-border rounded-xl px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground">
+              <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/70" />
+              <span>
+                Items from different sellers ship separately and become separate orders at checkout.
+              </span>
+            </div>
+          )}
+
+          {/* Order summary — right sidebar on desktop, full-width on mobile */}
+          <div className="lg:col-span-1">
+            <OrderSummary
+              subtotal={subtotal}
+              deliveryTotal={items.reduce((s, i) => s + (i.deliveryCharge ?? 0) * i.quantity, 0)}
+              dueNow={0}
+              codBreakdown={sellerGroups
+                .filter((g) => g.sellerName)
+                .map((g) => ({
+                  sellerName: g.sellerName!,
+                  // Guest cart: all items are COD (no Advance option for
+                  // unverified guests), so each seller's COD total = item
+                  // prices + delivery charges.
+                  amount: g.items.reduce(
+                    (s, i) =>
+                      s + ((i.discountPrice ?? i.price) + (i.deliveryCharge ?? 0)) * i.quantity,
+                    0,
+                  ),
+                }))}
+              onCheckout={() => setShowOtpModal(true)}
+              isGuest
+              onSignIn={() => setLocation("/sign-in")}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -885,7 +918,7 @@ function AuthenticatedCartPage() {
 
   if (isLoading) {
     return (
-      <div className="max-w-2xl mx-auto px-4 py-10">
+      <div className="max-w-6xl mx-auto px-4 py-10">
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-40 rounded-2xl" />
@@ -932,21 +965,54 @@ function AuthenticatedCartPage() {
     .filter((x) => x.outOfStock);
   const outOfStockIds = outOfStockItems.map((x) => x.id);
 
-  // COD breakdown per seller for the summary
+  // COD breakdown per seller for the summary. Each entry is the FULL amount
+  // the buyer pays that seller's courier on delivery: COD item prices + the
+  // seller's delivery charges. (Delivery charges are ALWAYS due on delivery
+  // for marketplace items, regardless of whether the item itself is paid via
+  // Advance or COD — see routes/cart.ts's buildCart doc comment.)
+  //
+  // For an Advance item: only its delivery charge goes into the COD breakdown
+  // (the item price was paid now via bKash).
+  // For a COD item: item price + delivery charge both go into the breakdown.
   const codBreakdown = sellerGroups
     .filter((g): g is typeof g & { seller: NonNullable<typeof g.seller> } => g.seller != null)
-    .map((g) => ({
-      sellerName: g.seller.nurseryName ?? g.seller.businessName,
-      amount: g.items.reduce(
-        (sum, item) =>
-          sum +
-          (item.kind === "seller_listing"
-            ? (item.listing?.deliveryCharge ?? 0) * item.quantity
-            : 0),
-        0,
-      ),
-    }))
+    .map((g) => {
+      const platformVerified = g.seller.platformBkashVerified ?? false;
+      return {
+        sellerName: g.seller.nurseryName ?? g.seller.businessName,
+        amount: g.items.reduce((sum, item) => {
+          if (item.kind !== "seller_listing" || !item.listing) return sum;
+          const listingPm = item.listing.paymentMethod;
+          // Derive effective method: explicit buyer selection wins; otherwise
+          // default from the listing's paymentMethod (with platform gate).
+          const method =
+            itemPaymentMethods[item.id] ??
+            (listingPm === "cod"
+              ? "cod"
+              : listingPm === "advance"
+                ? platformVerified
+                  ? "bkash"
+                  : "cod"
+                : platformVerified
+                  ? "bkash"
+                  : "cod");
+          const itemPrice = (item.listing.discountPrice ?? item.listing.price) * item.quantity;
+          const delivery = (item.listing.deliveryCharge ?? 0) * item.quantity;
+          // Delivery is always due on delivery. Item price is due on delivery
+          // only when the method is COD.
+          return sum + delivery + (method === "cod" ? itemPrice : 0);
+        }, 0),
+      };
+    })
     .filter((e) => e.amount > 0);
+
+  // Total of ALL marketplace delivery charges (always due on delivery).
+  const deliveryTotal = items.reduce(
+    (sum, item) =>
+      sum +
+      (item.kind === "seller_listing" ? (item.listing?.deliveryCharge ?? 0) * item.quantity : 0),
+    0,
+  );
 
   // Due now = sum of (item price × qty) for items where the buyer selected
   // "bkash" (advance payment). COD items contribute 0 to "due now" — the
@@ -1020,7 +1086,7 @@ function AuthenticatedCartPage() {
       {/* Banners */}
       {outOfStockItems.length > 0 && (
         <div className="bg-destructive/10 border-b border-destructive/20">
-          <div className="max-w-2xl mx-auto px-4 py-3 flex items-start justify-between gap-3 text-sm text-destructive">
+          <div className="max-w-6xl mx-auto px-4 py-3 flex items-start justify-between gap-3 text-sm text-destructive">
             <div className="flex items-start gap-2">
               <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
               <span>
@@ -1051,7 +1117,7 @@ function AuthenticatedCartPage() {
 
       {priceChangedCount > 0 && (
         <div className="bg-warning/40 border-b border-warning-border">
-          <div className="max-w-2xl mx-auto px-4 py-3 flex items-start gap-2 text-sm text-warning-foreground">
+          <div className="max-w-6xl mx-auto px-4 py-3 flex items-start gap-2 text-sm text-warning-foreground">
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
             <span>
               Prices for {priceChangedCount} item{priceChangedCount !== 1 ? "s" : ""} in your bag
@@ -1064,7 +1130,7 @@ function AuthenticatedCartPage() {
 
       {/* Header */}
       <div className="bg-muted/30 border-b py-8">
-        <div className="max-w-2xl mx-auto px-4">
+        <div className="max-w-6xl mx-auto px-4">
           <button
             onClick={() => window.history.back()}
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 -ml-1"
@@ -1081,126 +1147,131 @@ function AuthenticatedCartPage() {
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
-        {/* Items grouped by seller */}
-        <div className="space-y-4">
-          {sellerGroups.map((group) => {
-            // Determine the seller's payment badge from the listings in
-            // this group. If any listing supports "both", show "Both". If
-            // all are "advance", show "Advance only". If all are "cod",
-            // show "COD only".
-            const listingsPaymentMethods = group.items
-              .filter(
-                (
-                  i,
-                ): i is typeof i & {
-                  kind: "seller_listing";
-                  listing: NonNullable<typeof i.listing>;
-                } => i.kind === "seller_listing" && !!i.listing,
-              )
-              .map((i) => i.listing.paymentMethod);
-            const platformBkashVerified = group.seller?.platformBkashVerified ?? false;
-            const sellerBadge = listingsPaymentMethods.includes("both")
-              ? paymentBadgeLabel("both", platformBkashVerified)
-              : listingsPaymentMethods.includes("advance")
-                ? paymentBadgeLabel("advance", platformBkashVerified)
-                : listingsPaymentMethods.includes("cod")
-                  ? paymentBadgeLabel("cod", platformBkashVerified)
-                  : "Payment: chosen at checkout";
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
+          {/* Items grouped by seller */}
+          <div className="lg:col-span-2 space-y-4">
+            {sellerGroups.map((group) => {
+              // Determine the seller's payment badge from the listings in
+              // this group. If any listing supports "both", show "Both". If
+              // all are "advance", show "Advance only". If all are "cod",
+              // show "COD only".
+              const listingsPaymentMethods = group.items
+                .filter(
+                  (
+                    i,
+                  ): i is typeof i & {
+                    kind: "seller_listing";
+                    listing: NonNullable<typeof i.listing>;
+                  } => i.kind === "seller_listing" && !!i.listing,
+                )
+                .map((i) => i.listing.paymentMethod);
+              const platformBkashVerified = group.seller?.platformBkashVerified ?? false;
+              const sellerBadge = listingsPaymentMethods.includes("both")
+                ? paymentBadgeLabel("both", platformBkashVerified)
+                : listingsPaymentMethods.includes("advance")
+                  ? paymentBadgeLabel("advance", platformBkashVerified)
+                  : listingsPaymentMethods.includes("cod")
+                    ? paymentBadgeLabel("cod", platformBkashVerified)
+                    : "Payment: chosen at checkout";
 
-            return (
-              <div
-                key={group.sellerId ?? "admin-direct"}
-                className="bg-card border border-border rounded-2xl p-4 shadow-sm"
-              >
-                <SellerGroupHeader
-                  sellerName={group.seller?.nurseryName ?? null}
-                  paymentBadge={sellerBadge}
-                />
-                <div className="space-y-3">
-                  {group.items.map((item) => {
-                    const isListing = item.kind === "seller_listing";
-                    const price = isListing
-                      ? (item.listing!.discountPrice ?? item.listing!.price)
-                      : (item.variant!.discountPrice ?? item.variant!.price);
-                    const originalPrice = isListing ? item.listing!.price : item.variant!.price;
-                    const stock = isListing ? item.listing!.stock : item.variant!.stock;
-                    const img = item.product.images?.[0] ?? null;
-                    const variantLabel = isListing
-                      ? [item.listing!.height, item.listing!.potSize, item.listing!.age]
-                          .filter(Boolean)
-                          .join(" · ")
-                      : item.variant!.name;
-                    const codDeliveryCharge = isListing ? (item.listing!.deliveryCharge ?? 0) : 0;
-                    const deliveryEstimate = isListing
-                      ? formatDeliveryEstimate(item.listing!.deliveryTimeDays)
-                      : null;
+              return (
+                <div
+                  key={group.sellerId ?? "admin-direct"}
+                  className="bg-card border border-border rounded-2xl p-4 shadow-sm"
+                >
+                  <SellerGroupHeader
+                    sellerName={group.seller?.nurseryName ?? null}
+                    paymentBadge={sellerBadge}
+                  />
+                  <div className="space-y-3">
+                    {group.items.map((item) => {
+                      const isListing = item.kind === "seller_listing";
+                      const price = isListing
+                        ? (item.listing!.discountPrice ?? item.listing!.price)
+                        : (item.variant!.discountPrice ?? item.variant!.price);
+                      const originalPrice = isListing ? item.listing!.price : item.variant!.price;
+                      const stock = isListing ? item.listing!.stock : item.variant!.stock;
+                      const img = item.product.images?.[0] ?? null;
+                      const variantLabel = isListing
+                        ? [item.listing!.height, item.listing!.potSize, item.listing!.age]
+                            .filter(Boolean)
+                            .join(" · ")
+                        : item.variant!.name;
+                      const codDeliveryCharge = isListing ? (item.listing!.deliveryCharge ?? 0) : 0;
+                      const deliveryEstimate = isListing
+                        ? formatDeliveryEstimate(item.listing!.deliveryTimeDays)
+                        : null;
 
-                    // Per-item payment selector: ONLY shown when the listing
-                    // is "both" AND the platform's bKash is verified — that's
-                    // the only case where the buyer has a real choice to make.
-                    // For "cod" listings the buyer pays on delivery (no choice).
-                    // For "advance" listings the buyer pays now (no choice).
-                    // For "both" when platform bKash is NOT verified, only COD
-                    // is effectively available, so again no real choice.
-                    const platformVerified = item.seller?.platformBkashVerified ?? false;
-                    const listingPaymentMethod = item.listing!.paymentMethod;
-                    const showItemPaymentSelector =
-                      isListing && listingPaymentMethod === "both" && platformVerified;
-                    const paymentSelector = showItemPaymentSelector
-                      ? {
-                          allowed: ["bkash", "cod"] as PaymentMethod[],
-                          selected: itemPaymentMethods[item.id] ?? "bkash",
-                          onSelect: (m: PaymentMethod) =>
-                            setItemPaymentMethods((prev) => ({ ...prev, [item.id]: m })),
-                          itemPrice: price,
-                        }
-                      : undefined;
+                      // Per-item payment selector: ONLY shown when the listing
+                      // is "both" AND the platform's bKash is verified — that's
+                      // the only case where the buyer has a real choice to make.
+                      // For "cod" listings the buyer pays on delivery (no choice).
+                      // For "advance" listings the buyer pays now (no choice).
+                      // For "both" when platform bKash is NOT verified, only COD
+                      // is effectively available, so again no real choice.
+                      const platformVerified = item.seller?.platformBkashVerified ?? false;
+                      const listingPaymentMethod = item.listing!.paymentMethod;
+                      const showItemPaymentSelector =
+                        isListing && listingPaymentMethod === "both" && platformVerified;
+                      const paymentSelector = showItemPaymentSelector
+                        ? {
+                            allowed: ["bkash", "cod"] as PaymentMethod[],
+                            selected: itemPaymentMethods[item.id] ?? "bkash",
+                            onSelect: (m: PaymentMethod) =>
+                              setItemPaymentMethods((prev) => ({ ...prev, [item.id]: m })),
+                            itemPrice: price,
+                          }
+                        : undefined;
 
-                    return (
-                      <CartItemCard
-                        key={item.id}
-                        name={item.product.name}
-                        image={img}
-                        variantLabel={variantLabel || null}
-                        quantity={item.quantity}
-                        price={price}
-                        originalPrice={originalPrice}
-                        stock={stock ?? null}
-                        codDeliveryCharge={codDeliveryCharge}
-                        deliveryEstimate={deliveryEstimate}
-                        href={`/products/${item.productId}`}
-                        onIncrement={() => handleUpdate(item.id, item.quantity + 1)}
-                        onDecrement={() => handleUpdate(item.id, item.quantity - 1)}
-                        onRemove={() => handleRemove(item.id)}
-                        disabled={removeItem.isPending}
-                        paymentSelector={paymentSelector}
-                      />
-                    );
-                  })}
+                      return (
+                        <CartItemCard
+                          key={item.id}
+                          name={item.product.name}
+                          image={img}
+                          variantLabel={variantLabel || null}
+                          quantity={item.quantity}
+                          price={price}
+                          originalPrice={originalPrice}
+                          stock={stock ?? null}
+                          codDeliveryCharge={codDeliveryCharge}
+                          deliveryEstimate={deliveryEstimate}
+                          href={`/products/${item.productId}`}
+                          onIncrement={() => handleUpdate(item.id, item.quantity + 1)}
+                          onDecrement={() => handleUpdate(item.id, item.quantity - 1)}
+                          onRemove={() => handleRemove(item.id)}
+                          disabled={removeItem.isPending}
+                          paymentSelector={paymentSelector}
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Multi-seller info */}
-        {sellerCount > 1 && (
-          <div className="bg-muted/40 border border-border rounded-xl px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground">
-            <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/70" />
-            <span>
-              Items from different sellers ship separately and become separate orders at checkout.
-            </span>
+              );
+            })}
           </div>
-        )}
 
-        {/* Order summary */}
-        <OrderSummary
-          subtotal={subtotal}
-          dueNow={dueNow}
-          codBreakdown={codBreakdown}
-          onCheckout={handleCheckout}
-        />
+          {/* Multi-seller info */}
+          {sellerCount > 1 && (
+            <div className="lg:col-span-2 bg-muted/40 border border-border rounded-xl px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground">
+              <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/70" />
+              <span>
+                Items from different sellers ship separately and become separate orders at checkout.
+              </span>
+            </div>
+          )}
+
+          {/* Order summary — right sidebar on desktop, full-width on mobile */}
+          <div className="lg:col-span-1">
+            <OrderSummary
+              subtotal={subtotal}
+              deliveryTotal={deliveryTotal}
+              dueNow={dueNow}
+              codBreakdown={codBreakdown}
+              onCheckout={handleCheckout}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1214,7 +1285,7 @@ export function CartPage() {
 
   if (!isLoaded) {
     return (
-      <div className="max-w-2xl mx-auto px-4 py-10">
+      <div className="max-w-6xl mx-auto px-4 py-10">
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-40 rounded-2xl" />
