@@ -983,25 +983,16 @@ function AuthenticatedCartPage() {
   const codBreakdown = sellerGroups
     .filter((g): g is typeof g & { seller: NonNullable<typeof g.seller> } => g.seller != null)
     .map((g) => {
-      const platformVerified = g.seller.platformBkashVerified ?? false;
       return {
         sellerName: g.seller.nurseryName ?? g.seller.businessName,
         amount: g.items.reduce((sum, item) => {
           if (item.kind !== "seller_listing" || !item.listing) return sum;
           const listingPm = item.listing.paymentMethod;
           // Derive effective method: explicit buyer selection wins; otherwise
-          // default from the listing's paymentMethod (with platform gate).
-          const method =
-            itemPaymentMethods[item.id] ??
-            (listingPm === "cod"
-              ? "cod"
-              : listingPm === "advance"
-                ? platformVerified
-                  ? "bkash"
-                  : "cod"
-                : platformVerified
-                  ? "bkash"
-                  : "cod");
+          // default from the listing's paymentMethod. No platform verification
+          // gate — the bag reflects what the seller chose. Checkout handles
+          // the actual bKash availability enforcement.
+          const method = itemPaymentMethods[item.id] ?? (listingPm === "cod" ? "cod" : "bkash");
           const itemPrice = (item.listing.discountPrice ?? item.listing.price) * item.quantity;
           const delivery = (item.listing.deliveryCharge ?? 0) * item.quantity;
           // Delivery is always due on delivery. Item price is due on delivery
@@ -1033,20 +1024,12 @@ function AuthenticatedCartPage() {
     if (item.kind !== "seller_listing")
       return sum + (item.variant!.discountPrice ?? item.variant!.price) * item.quantity;
     const listingPm = item.listing!.paymentMethod;
-    const platformVerified = item.seller?.platformBkashVerified ?? false;
     // Derive the effective method: explicit buyer selection wins; otherwise
-    // default from the listing's paymentMethod (with platform-verified gate).
-    const method =
-      itemPaymentMethods[item.id] ??
-      (listingPm === "cod"
-        ? "cod"
-        : listingPm === "advance"
-          ? platformVerified
-            ? "bkash"
-            : "cod"
-          : platformVerified
-            ? "bkash"
-            : "cod");
+    // default from the listing's paymentMethod. The platform verification
+    // state is NOT gated here — the bag should reflect what the seller chose
+    // for their listing. If bKash isn't actually available at checkout,
+    // orders.ts will fall back to COD at that point.
+    const method = itemPaymentMethods[item.id] ?? (listingPm === "cod" ? "cod" : "bkash");
     if (method !== "bkash") return sum; // COD — pay on delivery, not now
     return sum + (item.listing!.discountPrice ?? item.listing!.price) * item.quantity;
   }, 0);
@@ -1065,18 +1048,8 @@ function AuthenticatedCartPage() {
     for (const item of items) {
       if (item.kind !== "seller_listing") continue;
       const listingPm = item.listing!.paymentMethod;
-      const platformVerified = item.seller?.platformBkashVerified ?? false;
       methodsToPersist[item.id] =
-        itemPaymentMethods[item.id] ??
-        (listingPm === "cod"
-          ? "cod"
-          : listingPm === "advance"
-            ? platformVerified
-              ? "bkash"
-              : "cod"
-            : platformVerified
-              ? "bkash"
-              : "cod");
+        itemPaymentMethods[item.id] ?? (listingPm === "cod" ? "cod" : "bkash");
     }
     try {
       sessionStorage.setItem(BAG_PAYMENT_METHODS_KEY, JSON.stringify(methodsToPersist));
