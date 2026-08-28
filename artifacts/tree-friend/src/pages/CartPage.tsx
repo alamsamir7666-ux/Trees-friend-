@@ -203,11 +203,11 @@ function ItemPaymentSelector({
 
   return (
     <div
-      className="mt-3 pt-3.5 border-t border-border/60 space-y-2.5"
+      className="mt-2.5 pt-3 border-t border-border/60 space-y-1.5"
       role="radiogroup"
       aria-label="Choose payment method for this item"
     >
-      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground mb-1">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground mb-0.5">
         Choose payment method for this item
       </p>
 
@@ -218,7 +218,7 @@ function ItemPaymentSelector({
         aria-checked={selected === "bkash"}
         disabled={!advanceAvailable}
         onClick={() => onSelect("bkash")}
-        className={`w-full text-left rounded-2xl border-[1.5px] p-3.5 transition-all ${
+        className={`w-full text-left rounded-xl border-[1.5px] px-3 py-2.5 transition-all ${
           !advanceAvailable
             ? "opacity-40 cursor-not-allowed border-border bg-muted/20"
             : selected === "bkash"
@@ -226,40 +226,42 @@ function ItemPaymentSelector({
               : "border-border bg-card hover:border-muted-foreground/40"
         }`}
       >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             {/* Radio — filled green with white inner dot when selected */}
             <span
-              className={`h-[22px] w-[22px] rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${
+              className={`h-[18px] w-[18px] rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${
                 selected === "bkash" && advanceAvailable
                   ? "border-success-foreground bg-success-foreground"
                   : "border-muted-foreground/30 bg-transparent"
               }`}
             >
               {selected === "bkash" && advanceAvailable && (
-                <span className="h-2.5 w-2.5 rounded-full bg-card" />
+                <span className="h-1.5 w-1.5 rounded-full bg-card" />
               )}
             </span>
             <CreditCard
-              className={`h-5 w-5 shrink-0 transition-colors ${
+              className={`h-[18px] w-[18px] shrink-0 transition-colors ${
                 selected === "bkash" && advanceAvailable
                   ? "text-success-foreground"
                   : "text-foreground"
               }`}
             />
             <div className="min-w-0">
-              <p className="text-[15px] font-bold text-foreground leading-tight">Advance Payment</p>
-              <p className="text-[12.5px] text-muted-foreground leading-snug mt-0.5">
+              <p className="text-[13.5px] font-bold text-foreground leading-tight">
+                Advance Payment
+              </p>
+              <p className="text-[11.5px] text-muted-foreground leading-tight mt-0.5 truncate">
                 Pay item price now. Delivery due on delivery.
               </p>
             </div>
           </div>
           <div className="text-right shrink-0">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+            <p className="text-[9px] uppercase tracking-wide text-muted-foreground font-medium leading-tight">
               Pay now
             </p>
             <p
-              className={`text-[15px] font-bold tabular-nums transition-colors ${
+              className={`text-[13.5px] font-bold tabular-nums leading-tight transition-colors ${
                 selected === "bkash" && advanceAvailable
                   ? "text-success-foreground"
                   : "text-warning-foreground"
@@ -278,7 +280,7 @@ function ItemPaymentSelector({
         aria-checked={selected === "cod"}
         disabled={!codAvailable}
         onClick={() => onSelect("cod")}
-        className={`w-full text-left rounded-2xl border-[1.5px] p-3.5 transition-all ${
+        className={`w-full text-left rounded-xl border-[1.5px] px-3 py-2.5 transition-all ${
           !codAvailable
             ? "opacity-40 cursor-not-allowed border-border bg-muted/20"
             : selected === "cod"
@@ -286,39 +288,39 @@ function ItemPaymentSelector({
               : "border-border bg-card hover:border-muted-foreground/40"
         }`}
       >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             <span
-              className={`h-[22px] w-[22px] rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${
+              className={`h-[18px] w-[18px] rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${
                 selected === "cod" && codAvailable
                   ? "border-success-foreground bg-success-foreground"
                   : "border-muted-foreground/30 bg-transparent"
               }`}
             >
               {selected === "cod" && codAvailable && (
-                <span className="h-2.5 w-2.5 rounded-full bg-card" />
+                <span className="h-1.5 w-1.5 rounded-full bg-card" />
               )}
             </span>
             <Truck
-              className={`h-5 w-5 shrink-0 transition-colors ${
+              className={`h-[18px] w-[18px] shrink-0 transition-colors ${
                 selected === "cod" && codAvailable ? "text-success-foreground" : "text-foreground"
               }`}
             />
             <div className="min-w-0">
-              <p className="text-[15px] font-bold text-foreground leading-tight">
+              <p className="text-[13.5px] font-bold text-foreground leading-tight">
                 Cash on Delivery
               </p>
-              <p className="text-[12.5px] text-muted-foreground leading-snug mt-0.5">
+              <p className="text-[11.5px] text-muted-foreground leading-tight mt-0.5 truncate">
                 Pay full amount (item + delivery) on delivery.
               </p>
             </div>
           </div>
           <div className="text-right shrink-0">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+            <p className="text-[9px] uppercase tracking-wide text-muted-foreground font-medium leading-tight">
               Pay on delivery
             </p>
             <p
-              className={`text-[15px] font-bold tabular-nums transition-colors ${
+              className={`text-[13.5px] font-bold tabular-nums leading-tight transition-colors ${
                 selected === "cod" && codAvailable
                   ? "text-success-foreground"
                   : "text-warning-foreground"
