@@ -108,20 +108,20 @@ function PaymentMethodBadge({ method }: { method: "cod" | "advance" }) {
   if (method === "cod") {
     return (
       <span
-        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.06em] rounded-full px-2 py-0.5 bg-warning/20 text-warning-foreground ring-1 ring-warning-border/50"
+        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.06em] rounded-full px-2 py-0.5 bg-warning/20 text-warning-foreground ring-1 ring-warning-border/50 whitespace-nowrap shrink-0"
         title="This listing only supports Cash on Delivery"
       >
-        <Truck className="h-3 w-3" />
+        <Truck className="h-3 w-3 shrink-0" />
         COD only
       </span>
     );
   }
   return (
     <span
-      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.06em] rounded-full px-2 py-0.5 bg-success/20 text-success-foreground ring-1 ring-success-border/50"
+      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.06em] rounded-full px-2 py-0.5 bg-success/20 text-success-foreground ring-1 ring-success-border/50 whitespace-nowrap shrink-0"
       title="This listing only supports Advance Payment (bKash)"
     >
-      <CreditCard className="h-3 w-3" />
+      <CreditCard className="h-3 w-3 shrink-0" />
       Advance only
     </span>
   );
