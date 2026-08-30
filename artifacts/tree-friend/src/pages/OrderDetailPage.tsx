@@ -7,7 +7,7 @@ import {
   createBkashPaymentGuest,
 } from "@workspace/api-client-react";
 import type { Order } from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -40,6 +40,8 @@ import {
   Calendar,
   Gift,
   Clock,
+  Package2,
+  ArrowRight,
 } from "lucide-react";
 import { PageBreadcrumb } from "@/components/ui/PageBreadcrumb";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
@@ -253,6 +255,7 @@ interface GuestOrder {
   paymentStatus: string;
   paymentMethod: string;
   totalAmount: number | string;
+  checkoutSessionId?: string | null;
   items?: {
     productName: string;
     productImage?: string;
@@ -285,6 +288,80 @@ interface ReturnRow {
 // removed to prevent drift between the two surfaces.
 
 const STEPS = ["pending", "confirmed", "processing", "shipped", "delivered"];
+
+// ─── Sibling Orders Section ──────────────────────────────────────────────────
+// Shows the buyer's OTHER orders from the same checkout (linked via
+// checkoutSessionId). When a cart has mixed payment methods, it splits into
+// multiple orders — this section lets the buyer navigate between them.
+
+function SiblingOrdersSection({
+  checkoutSessionId,
+  currentOrderId,
+}: {
+  checkoutSessionId: string;
+  currentOrderId: number;
+}) {
+  const { data: siblings, isLoading } = useQuery({
+    queryKey: ["order-siblings", checkoutSessionId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<any[]>("/orders", {
+        params: { checkoutSessionId, limit: 50 },
+      });
+      return Array.isArray(data) ? data : [];
+    },
+  });
+
+  if (isLoading || !siblings) return null;
+
+  // Filter out the current order — only show the OTHERS.
+  const others = siblings.filter((o) => o.id !== currentOrderId);
+  if (others.length === 0) return null;
+
+  return (
+    <div className="bg-muted/30 border border-border rounded-2xl p-4">
+      <p className="text-sm font-semibold text-foreground mb-2 flex items-center gap-2">
+        <Package2 className="h-4 w-4 text-muted-foreground" />
+        Also from this checkout
+      </p>
+      <div className="space-y-2">
+        {others.map((o) => (
+          <Link
+            key={o.id}
+            href={`/orders/${o.id}`}
+            className="flex items-center justify-between gap-2 rounded-lg bg-card border border-border px-3 py-2 hover:border-foreground/30 transition-colors"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm font-medium text-foreground">
+                Order #{o.orderNumber ?? o.trackingId}
+              </span>
+              <span
+                className={`text-[10px] font-bold uppercase tracking-wide rounded-full px-2 py-0.5 ${
+                  o.paymentMethod === "cod"
+                    ? "bg-warning/20 text-warning-foreground"
+                    : "bg-success/20 text-success-foreground"
+                }`}
+              >
+                {o.paymentMethod === "cod" ? "COD" : "Advance"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-muted-foreground">
+                {o.paymentStatus === "paid"
+                  ? "Paid"
+                  : o.paymentStatus === "payment_pending"
+                    ? "Payment pending"
+                    : o.paymentStatus === "cancelled"
+                      ? "Cancelled"
+                      : o.paymentStatus}
+              </span>
+              <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function OrderDetailPage() {
   const params = useParams<{ id: string }>();
@@ -812,6 +889,19 @@ export function OrderDetailPage() {
               )}
             </div>
           </div>
+        )}
+
+        {/* ── Sibling orders from this checkout ──────────────────────────
+            When a cart has mixed payment methods (COD + Advance), it splits
+            into multiple orders that share a checkoutSessionId. This section
+            shows the buyer's other orders from the same checkout so they can
+            navigate between them. Hidden for legacy orders (no checkoutSessionId)
+            or when this is the only order from the checkout. */}
+        {order.checkoutSessionId && (
+          <SiblingOrdersSection
+            checkoutSessionId={order.checkoutSessionId}
+            currentOrderId={order.id}
+          />
         )}
 
         {/* ── Items grouped by nursery ───────────────────────────────

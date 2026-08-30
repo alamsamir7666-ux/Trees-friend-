@@ -330,6 +330,7 @@ export interface AddressBody {
 
 export interface Order {
   id: number;
+  orderNumber?: number | null;
   trackingId: string;
   userId: string;
   /**
@@ -357,6 +358,18 @@ export interface Order {
   giftWrap?: string;
   /** @nullable */
   giftMessage?: string | null;
+  /** @nullable */
+  paymentSessionId?: number | null;
+  /** @nullable */
+  checkoutSessionId?: string | null;
+  /** @nullable */
+  confirmedAt?: string | null;
+  /** @nullable */
+  shippedAt?: string | null;
+  /** @nullable */
+  deliveredAt?: string | null;
+  /** @nullable */
+  cancelledAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
