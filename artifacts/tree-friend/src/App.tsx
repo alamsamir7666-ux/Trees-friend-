@@ -82,6 +82,9 @@ const CartPage = lazy(() => import("@/pages/CartPage").then((m) => ({ default: m
 const CheckoutPage = lazy(() =>
   import("@/pages/CheckoutPage").then((m) => ({ default: m.CheckoutPage })),
 );
+const CheckoutCompletePage = lazy(() =>
+  import("@/pages/CheckoutCompletePage").then((m) => ({ default: m.CheckoutCompletePage })),
+);
 const PreOrderCheckoutPage = lazy(() =>
   import("@/pages/PreOrderCheckoutPage").then((m) => ({ default: m.PreOrderCheckoutPage })),
 );
@@ -557,6 +560,7 @@ function ClerkProviderWithRoutes() {
                         <Route path="/products/:id" component={ProductDetailPage} />
                         <Route path="/cart" component={CartPage} />
                         <Route path="/checkout" component={CheckoutPage} />
+                        <Route path="/checkout/complete" component={CheckoutCompletePage} />
                         <Route path="/pre-order-checkout" component={PreOrderCheckoutPage} />
                         <Route path="/orders" component={OrdersPage} />
                         <Route path="/orders/:id" component={OrderDetailPage} />

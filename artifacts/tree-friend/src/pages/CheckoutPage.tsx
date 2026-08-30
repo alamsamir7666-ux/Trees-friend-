@@ -135,28 +135,31 @@ export function CheckoutPage() {
   }, []);
 
   const bagPaymentMethodsRef = useRef<Record<string, PaymentMethod> | null>(null);
+  // Per-cart-line payment method choices (keyed by cart line id as string).
+  // This is sent directly to the backend as itemPaymentMethods — the backend
+  // now splits orders by (seller × paymentMethod), so each line's choice
+  // determines which order it goes into.
+  const [itemPaymentMethods, setItemPaymentMethods] = useState<Record<string, PaymentMethod>>({});
   useEffect(() => {
     if (!bagPaymentMethodsRef.current || isGuest) return;
     const itemMethods = bagPaymentMethodsRef.current;
     const cartItems = cart?.items ?? [];
     if (cartItems.length === 0) return;
-    // Map cart line id → sellerId, then pick the first item's method per seller.
-    const sellerDefaults: Record<string, PaymentMethod> = {};
+    // Preserve per-line choices (don't collapse to per-seller). Each cart
+    // line keeps its own method, so a seller with both COD and Advance
+    // items splits into two orders at the backend.
+    const next: Record<string, PaymentMethod> = {};
     for (const item of cartItems) {
       if (item.kind !== "seller_listing") continue;
-      const key = String(item.sellerId);
-      if (key in sellerDefaults) continue;
-      const method = itemMethods[item.id];
-      if (method) sellerDefaults[key] = method;
+      const lineKey = String(item.id);
+      const method = itemMethods[lineKey];
+      if (method) next[lineKey] = method;
     }
-    if (Object.keys(sellerDefaults).length > 0) {
-      setSellerPaymentMethod(sellerDefaults);
+    if (Object.keys(next).length > 0) {
+      setItemPaymentMethods(next);
     }
     // Clear the ref so this only runs once per checkout mount.
     bagPaymentMethodsRef.current = null;
-    // Intentionally not depending on setSellerPaymentMethod (stable) or
-    // isGuest (re-evaluated each render but we only want this to fire once
-    // per cart load — the ref guard handles the "run once" semantics).
   }, [cart?.items]);
 
   const [couponCode, setCouponCode] = useState("");
@@ -489,19 +492,16 @@ export function CheckoutPage() {
     // headers — and we need the Idempotency-Key header on this specific
     // request only, not on every createOrder call in the app.
     apiClient
-      .post<{ id: number; trackingId: string }[] | { id: number; trackingId: string }>(
+      .post<{ orders: any[]; paymentSessionId?: number | null; checkoutSessionId?: string | null }>(
         "/orders",
         {
           shippingAddress,
           paymentMethod,
-          sellerPaymentMethods: isMultiSeller
-            ? Object.fromEntries(
-                sellerGroups.map((g) => {
-                  const key = g.sellerId == null ? "null" : String(g.sellerId);
-                  return [key, methodFor(key)];
-                }),
-              )
-            : undefined,
+          // Per-cart-line payment method choices, keyed by cart line id.
+          // Replaces the old sellerPaymentMethods (per-seller map) — now
+          // each line can independently be "bkash" or "cod", so a single
+          // seller with both COD and Advance items splits into two orders.
+          itemPaymentMethods: itemPaymentMethods || undefined,
           couponCode: couponApplied ? couponCode : null,
           loyaltyPointsToRedeem:
             usePoints && maxPointsDiscount > 0 ? Math.ceil(maxPointsDiscount) : 0,
@@ -511,14 +511,17 @@ export function CheckoutPage() {
         { headers: { "Idempotency-Key": idempotencyKey } },
       )
       .then(({ data }) => {
-        // The backend now returns { orders, paymentSessionId } instead of
-        // a bare array. Extract both — paymentSessionId is null for COD-only
-        // carts or if session creation failed (fallback to per-order flow).
-        const responseBody = data as { orders?: any[]; paymentSessionId?: number | null } | any[];
+        // The backend returns { orders, paymentSessionId, checkoutSessionId }.
+        const responseBody = data as
+          | { orders?: any[]; paymentSessionId?: number | null; checkoutSessionId?: string | null }
+          | any[];
         const orders = Array.isArray(responseBody) ? responseBody : (responseBody.orders ?? []);
         const paymentSessionId = Array.isArray(responseBody)
           ? null
           : (responseBody.paymentSessionId ?? null);
+        const checkoutSessionId = Array.isArray(responseBody)
+          ? null
+          : (responseBody.checkoutSessionId ?? null);
         qc.invalidateQueries({ queryKey: getGetCartQueryKey() });
         apiClient.post("/abandoned-cart/recover").catch(() => {
           // Silently ignore — recovery marking is best-effort.
@@ -531,21 +534,15 @@ export function CheckoutPage() {
         } catch {
           // sessionStorage may be unavailable (private mode) — non-critical.
         }
-        // Pass paymentSessionId so the buyer pays ALL bKash orders in ONE
-        // bKash redirect (session-based) instead of N redirects (per-order).
-        // For verified guests with COD orders: show "Create an account"
-        // prompt before navigating to the order detail page. This is the
-        // Daraz retention pattern — the buyer just had a positive
-        // experience, their phone is verified, so account creation is
-        // frictionless. For bKash orders, the prompt would need to show
-        // after the bKash redirect returns — skipped for now (the buyer
-        // can always sign up later from the order tracking page).
+        // Navigate to the Checkout Complete page showing all sibling orders
+        // from this checkout (both COD and bKash). If there are bKash orders,
+        // the Checkout Complete page handles the bKash redirect.
         const isVerifiedGuest = !user && isVerified;
         const isCodOnly = !orders.some((o: any) => o.paymentMethod === "bkash");
         if (isVerifiedGuest && isCodOnly) {
-          // Show the create-account dialog instead of navigating immediately.
-          // The dialog's "View Order" button navigates to the order page.
           setShowCreateAccountDialog(true);
+        } else if (checkoutSessionId) {
+          setLocation(`/checkout/complete?session=${checkoutSessionId}`);
         } else {
           payFirstBkashOrderOrGoToOrder(orders as any, paymentSessionId);
         }
