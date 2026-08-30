@@ -100,6 +100,12 @@ router.get(
     const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 50) : "";
     const dateFrom = typeof req.query.dateFrom === "string" ? new Date(req.query.dateFrom) : null;
     const dateTo = typeof req.query.dateTo === "string" ? new Date(req.query.dateTo) : null;
+    // ?checkoutSessionId=<uuid> — return ALL sibling orders from a single
+    // checkout (both COD and bKash). Used by the Checkout Complete page
+    // and the OrderDetailPage sibling section. Still scoped to the buyer's
+    // own orders (req.userId) so a buyer can't query another buyer's session.
+    const checkoutSessionId =
+      typeof req.query.checkoutSessionId === "string" ? req.query.checkoutSessionId.trim() : "";
 
     const conditions = [eq(ordersTable.userId, req.userId!)];
     if (orderStatus) {
@@ -129,6 +135,9 @@ router.get(
       const endOfDay = new Date(dateTo);
       endOfDay.setDate(endOfDay.getDate() + 1);
       conditions.push(lte(ordersTable.createdAt, endOfDay));
+    }
+    if (checkoutSessionId) {
+      conditions.push(eq(ordersTable.checkoutSessionId, checkoutSessionId));
     }
 
     const orders = await db
