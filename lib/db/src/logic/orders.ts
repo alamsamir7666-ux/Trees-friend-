@@ -4,22 +4,12 @@
  * function. It's still exported from orders.ts (that file re-exports it)
  * so the existing call site there is unchanged.
  *
- * It was moved rather than simply marked `export` in place because
- * orders.ts transitively imports ../middlewares/auth (-> ./mobileJwt,
- * which throws at module-load time if MOBILE_JWT_SECRET isn't set),
- * ../lib/email (resend), and ./loyalty. This function itself has none of
- * those dependencies -- it's pure and synchronous, no `db`, no I/O -- so
- * there's no reason a consumer that only wants this function (like
- * scripts/src/verify-seller-marketplace.ts) should have to pull in or
- * satisfy any of that. Living in @workspace/db/logic alongside
- * hasVerifiedPaymentConfig keeps both of this backlog item's extracted
- * functions in one predictable place.
- *
  * Original doc comment, preserved: given a flat list of resolved lines
  * (each already tagged with sellerId -- null for admin-direct), groups
- * them by seller and computes one order's worth of items[]/subtotal per
- * group. Both the guest and authenticated checkout paths in orders.ts use
- * this so the split-by-seller behavior can't drift between them.
+ * them by (sellerId, paymentMethod) and computes one order's worth of
+ * items[]/subtotal per group. Both the guest and authenticated checkout
+ * paths in orders.ts use this so the split-by-(seller×method) behavior
+ * can't drift between them.
  *
  * Discount (coupon + loyalty) assignment: a platform-wide coupon or
  * loyalty redemption is NOT pro-rated across every resulting order -- it
@@ -44,29 +34,57 @@
  * every group's discountAmount comes back 0 rather than silently falling
  * back to "largest group", since that fallback is exactly the bug this
  * parameter exists to prevent.
+ *
+ * Grouping key change (checkout-session refactor): previously grouped by
+ * `sellerId` only (one order per seller). Now groups by `(sellerId,
+ * paymentMethod)` — one order per (seller × payment method) combo. This
+ * means a single seller with both COD and Advance items in the cart
+ * produces TWO orders: one COD order and one bKash order. All sibling
+ * orders from the same checkout share a `checkoutSessionId` so the buyer
+ * can see them together in one UI.
  */
 export function groupBySellerAndAllocateDiscount<
-  L extends { sellerId: number | null; lineTotal: number },
+  L extends { sellerId: number | null; lineTotal: number; paymentMethod: string },
 >(lines: L[], totalDiscount: number, targetSellerId?: number | null) {
-  const groups = new Map<number | null, L[]>();
+  // Group by (sellerId, paymentMethod) — one order per combo. A seller
+  // with both COD and Advance items splits into two groups.
+  const groups = new Map<string, L[]>();
   for (const line of lines) {
-    const key = line.sellerId;
+    const key = `${line.sellerId ?? "null"}::${line.paymentMethod}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(line);
   }
 
-  const groupList = Array.from(groups.entries()).map(([sellerId, groupLines]) => ({
-    sellerId,
-    lines: groupLines,
-    subtotal: groupLines.reduce((s, l) => s + l.lineTotal, 0),
-  }));
+  const groupList = Array.from(groups.entries()).map(([key, groupLines]) => {
+    const [sellerIdStr, paymentMethod] = key.split("::");
+    const sellerId = sellerIdStr === "null" ? null : Number(sellerIdStr);
+    return {
+      sellerId,
+      paymentMethod,
+      lines: groupLines,
+      subtotal: groupLines.reduce((s, l) => s + l.lineTotal, 0),
+    };
+  });
 
   let targetIdx = -1;
   if (targetSellerId !== undefined) {
-    // Seller-scoped coupon: only ever discount that seller's own group.
-    // No fallback to "largest group" -- if the target isn't in the cart,
-    // targetIdx stays -1 and every group's discountAmount is 0 below.
-    targetIdx = groupList.findIndex((g) => g.sellerId === targetSellerId);
+    // Seller-scoped coupon: only ever discount that seller's own group(s).
+    // A seller with both COD + Advance groups: the discount lands on the
+    // LARGER of the two (by subtotal) — same "largest group" logic, scoped
+    // to just that seller's groups. No fallback to other sellers.
+    const sellerGroupIdxs = groupList
+      .map((g, i) => (g.sellerId === targetSellerId ? i : -1))
+      .filter((i) => i >= 0);
+    if (sellerGroupIdxs.length === 0) {
+      targetIdx = -1;
+    } else {
+      targetIdx = sellerGroupIdxs[0];
+      for (let i = 1; i < sellerGroupIdxs.length; i++) {
+        if (groupList[sellerGroupIdxs[i]].subtotal > groupList[targetIdx].subtotal) {
+          targetIdx = sellerGroupIdxs[i];
+        }
+      }
+    }
   } else {
     // Platform-wide discount (no seller to target): original behavior --
     // assign the full discount to the single largest-subtotal group.

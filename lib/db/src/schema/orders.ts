@@ -161,6 +161,15 @@ export const ordersTable = pgTable(
     // created before the payment_sessions table existed. See
     // schema/paymentSessions.ts for the full rationale.
     paymentSessionId: integer("payment_session_id"),
+    // Checkout session — links ALL sibling orders from a single checkout,
+    // regardless of payment method. When a cart with mixed payment methods
+    // (COD + Advance) splits into one order per (seller × payment method)
+    // combo, all those sibling orders share the same checkout_session_id.
+    // This enables the "Checkout Complete" page (showing all orders from one
+    // checkout) and the "Sibling orders" section on OrderDetailPage.
+    // NULL for legacy orders created before migration 0017. New orders
+    // always get a crypto.randomUUID() value (generated in POST /orders).
+    checkoutSessionId: text("checkout_session_id"),
     // ── Per-status timestamps (industry-standard) ──────────────────
     // Each timestamp records WHEN the order entered that status. Used by:
     //   1. The 7-day return window (now reads deliveredAt, not updatedAt —
@@ -223,6 +232,10 @@ export const ordersTable = pgTable(
     // Index for payment session lookup: "find all orders linked to this
     // session" (used by the callback cascade + the disbursement cron).
     index("orders_payment_session_id_idx").on(table.paymentSessionId),
+    // Index for checkout session lookup: "find all sibling orders from this
+    // checkout" (used by the Checkout Complete page + OrderDetailPage sibling
+    // section). Without this index the query seq-scans orders.
+    index("orders_checkout_session_id_idx").on(table.checkoutSessionId),
   ],
 );
 

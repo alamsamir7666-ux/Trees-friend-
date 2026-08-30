@@ -902,10 +902,11 @@ export const ListOrdersResponse = zod.array(ListOrdersResponseItem)
  * @summary Place an order
  */
 export const CreateOrderBody = zod.object({
-  "paymentMethod": zod.string().optional().describe('Fallback payment method for any seller group not present in sellerPaymentMethods.'),
-  "sellerPaymentMethods": zod.record(zod.string(), zod.string()).optional().describe('Per-seller-group payment method override, keyed by sellerId as a string (\"null\" for the admin-direct group). Each seller only accepts the payment methods enabled on their listings (plan doc §7) -- the buyer picks per group at checkout, not once globally.'),
+  "paymentMethod": zod.string().optional().describe('Fallback payment method for lines not in itemPaymentMethods (admin-direct lines, or when itemPaymentMethods is omitted).'),
+  "itemPaymentMethods": zod.record(zod.string(), zod.string()).optional().describe('Per-cart-line payment method choice, keyed by cart line id as a string. Values are "bkash" or "cod". Replaces the old sellerPaymentMethods (per-seller map) — now each line can independently be COD or Advance, so a single seller with both splits into two orders.'),
+  "sellerPaymentMethods": zod.record(zod.string(), zod.string()).optional().describe('DEPRECATED — kept for backward compat. Use itemPaymentMethods instead. Per-seller-group payment method override, keyed by sellerId as a string ("null" for the admin-direct group).'),
   "transactionId": zod.string().nullish(),
-  "senderNumber": zod.string().nullish().describe('Fallback bKash sending number for any seller group not present in sellerSenderNumbers. Required when the resolved payment method for a group is \"bkash\" and that group has no override in sellerSenderNumbers.'),
+  "senderNumber": zod.string().nullish().describe('Fallback bKash sending number for COD orders that record it. bKash orders no longer use senderNumber.'),
   "sellerSenderNumbers": zod.record(zod.string(), zod.string().nullable()).optional().describe('Per-seller-group bKash sending number override, keyed by sellerId as a string (\"null\" for the admin-direct group) -- same key convention as sellerPaymentMethods. Added in Part 5: previously a single top-level senderNumber was reused across every seller group resolving to \"bkash\", which doesn\'t hold up once a cart has multiple sellers with separate bKash merchant accounts (PHASE3_HANDOFF.md flagged this as a known gap).'),
   "shippingAddress": zod.object({
   "fullName": zod.string(),
@@ -920,7 +921,7 @@ export const CreateOrderBody = zod.object({
   "loyaltyPointsToRedeem": zod.number().optional(),
   "giftWrap": zod.boolean().optional(),
   "giftMessage": zod.string().nullish()
-}).describe('A cart spanning multiple sellers splits into one order per seller group (plan doc §2, §7). paymentMethod is the fallback\/default used for any group not present in sellerPaymentMethods; a single-seller or all-admin-direct cart can just send paymentMethod and omit sellerPaymentMethods entirely.')
+}).describe('A cart with mixed payment methods (COD + Advance) splits into one order per (seller × payment method) combo. All sibling orders share a checkoutSessionId so the buyer can see them together. paymentMethod is the fallback for admin-direct lines and lines without an explicit per-line choice; itemPaymentMethods (keyed by cart line id) lets the buyer choose per-line, matching the bag page per-item selector.')
 
 
 /**

@@ -285,6 +285,11 @@ async function main() {
   const lines = cartRows.map((r) => ({
     sellerId: r.sellerId,
     lineTotal: Number(r.price) * r.quantity,
+    // paymentMethod is now required by groupBySellerAndAllocateDiscount
+    // (groups by (sellerId, paymentMethod) tuple). This verification script
+    // uses "cod" for all lines — the grouping behavior being tested here
+    // (2 sellers → 2 groups) is unchanged when all lines share the same method.
+    paymentMethod: "cod" as string,
   }));
 
   const groups = groupBySellerAndAllocateDiscount(lines, 100);

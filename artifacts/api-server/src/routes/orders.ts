@@ -234,7 +234,12 @@ router.post(
           .from(ordersTable)
           .where(eq(ordersTable.idempotencyKey, idempotencyKey));
         if (existing.length > 0) {
-          res.status(200).json({ ...existing.map(formatOrder), idempotentReplay: true } as any);
+          res.status(200).json({
+            orders: existing.map(formatOrder),
+            paymentSessionId: existing[0].paymentSessionId ?? null,
+            checkoutSessionId: existing[0].checkoutSessionId ?? null,
+            idempotentReplay: true,
+          } as any);
           return;
         }
       }
@@ -249,7 +254,13 @@ router.post(
       // schema (the spec allows sellerPaymentMethods as an alternative).
       const {
         paymentMethod,
-        sellerPaymentMethods,
+        // Per-cart-line payment method choices (keyed by cart line id as
+        // string). Replaces the old sellerPaymentMethods (per-seller map)
+        // — now each line can independently be "bkash" or "cod", so a
+        // single seller with both COD and Advance items splits into two
+        // orders. The bag page stores these in sessionStorage and passes
+        // them at checkout.
+        itemPaymentMethods,
         transactionId,
         senderNumber,
         sellerSenderNumbers,
@@ -260,7 +271,13 @@ router.post(
         giftMessage,
       } = req.body;
 
-      if (!paymentMethod && !sellerPaymentMethods) {
+      // Generate a checkout session id — links ALL sibling orders from
+      // this checkout regardless of payment method. Stored on every order
+      // created in this POST /orders call so the frontend can query
+      // "show me all orders from this checkout" later.
+      const checkoutSessionId = crypto.randomUUID();
+
+      if (!paymentMethod && !itemPaymentMethods) {
         res.status(400).json({ error: "Payment method is required" });
         return;
       }
@@ -409,6 +426,16 @@ router.post(
         lineTotal: number;
         orderItem: OrderItem;
         deliveryCharge: number;
+        // The payment method this line will be ordered under ("bkash" or
+        // "cod"). For seller-listing lines, resolved from itemPaymentMethods
+        // (buyer's per-line choice) or the listing's own paymentMethod. For
+        // admin-direct lines, resolved from the fallback paymentMethod. This
+        // drives the (sellerId, paymentMethod) grouping — one order per combo.
+        paymentMethod: string;
+        // Cart line id — used to look up the buyer's per-line payment choice
+        // from itemPaymentMethods. Nullable for guest carts (no server-side
+        // cart line id).
+        cartLineId: number | null;
       };
 
       const resolvedVariantLines: ResolvedLine[] = variantLines.map(
@@ -420,6 +447,10 @@ router.post(
             sellerId: null,
             lineTotal: price * cart.quantity,
             deliveryCharge: deliveryCharge * cart.quantity,
+            // Admin-direct lines have no listing-level paymentMethod — they
+            // use the fallback paymentMethod from the request body.
+            paymentMethod: paymentMethod ?? "cod",
+            cartLineId: cart.id,
             orderItem: {
               productId: product.id,
               productName: product.name,
@@ -456,10 +487,28 @@ router.post(
           const price =
             variant.discountPrice != null ? Number(variant.discountPrice) : Number(variant.price);
           const deliveryCharge = Number(variant.deliveryCharge);
+          // Resolve this line's payment method:
+          //   1. If the buyer made an explicit per-line choice (itemPaymentMethods
+          //      keyed by cart line id), use that.
+          //   2. Else if the listing's paymentMethod is "cod" or "advance",
+          //      the buyer has no choice — use the listing's method (mapped
+          //      to "cod" / "bkash").
+          //   3. Else (listing is "both") default to "bkash" (pay now).
+          //    This matches the bag page's default behavior.
+          const buyerChoice = itemPaymentMethods?.[String(cart.id)];
+          const linePaymentMethod = buyerChoice
+            ? buyerChoice
+            : listing.paymentMethod === "cod"
+              ? "cod"
+              : listing.paymentMethod === "advance"
+                ? "bkash"
+                : "bkash"; // "both" defaults to bkash
           return {
             sellerId: listing.sellerId,
             lineTotal: price * cart.quantity,
             deliveryCharge: 0, // buyer pays courier directly to seller, NOT collected in groupTotal -- see doc comment above
+            paymentMethod: linePaymentMethod,
+            cartLineId: cart.id,
             orderItem: {
               productId: product.id,
               productName: product.name,
@@ -553,6 +602,9 @@ router.post(
       const remainingLines = afterCoupon.map((g) => ({
         sellerId: g.sellerId,
         lineTotal: g.subtotal - g.discountAmount,
+        // Carry paymentMethod through the loyalty pass so the second
+        // groupBySellerAndAllocateDiscount call groups by (seller, method).
+        paymentMethod: g.paymentMethod,
       }));
       const afterLoyalty = groupBySellerAndAllocateDiscount(remainingLines, loyaltyDiscount);
 
@@ -566,19 +618,13 @@ router.post(
         return;
       }
 
-      // Validate/resolve payment method per group up front, before writing
-      // any order rows, so a bad payment method for one seller doesn't leave
-      // earlier groups' orders already committed.
-      //
-      // Part 2 change: the platform-config verified-check below used to be a
-      // per-seller lookup (sellerPaymentConfigsTable, keyed by g.sellerId).
-      // It's now a single check against platformPaymentConfigTable, done
-      // ONCE before the loop (not per-group) since every group either can or
-      // can't use "bkash" for the exact same reason now -- there's only one
-      // merchant account, not one per seller. senderNumber/
-      // sellerSenderNumbers are no longer required for "bkash" -- see doc
-      // comment above this route.
-      let platformBkashAvailable: boolean | null = null; // computed lazily, only if some group actually resolves to "bkash"
+      // ── Payment method validation ─────────────────────────────────────
+      // Payment method is now resolved PER LINE (in the resolvedListingLines
+      // map above), not per seller. The groups already carry their
+      // paymentMethod from the line-level resolution. Here we just validate
+      // that bKash is available for any group that uses it — the platform
+      // config check is done once (there's only one merchant account now).
+      let platformBkashAvailable: boolean | null = null;
       async function isPlatformBkashAvailable(): Promise<boolean> {
         if (platformBkashAvailable !== null) return platformBkashAvailable;
         const [config] = await db
@@ -589,26 +635,23 @@ router.post(
         return platformBkashAvailable;
       }
 
-      const resolvedPaymentMethods = new Map<number | null, string>();
-      const resolvedSenderNumbers = new Map<number | null, string | null>();
       for (const g of groups) {
-        const key = g.sellerId === null ? "null" : String(g.sellerId);
-        const method = sellerPaymentMethods?.[key] ?? paymentMethod;
-        if (!method) {
-          res
-            .status(400)
-            .json({ error: "Payment method is required for every seller in your cart" });
-          return;
-        }
-        if (method === "bkash" && !(await isPlatformBkashAvailable())) {
+        if (g.paymentMethod === "bkash" && !(await isPlatformBkashAvailable())) {
           res.status(400).json({
             error: "bKash payment isn't available right now. Please choose Cash on Delivery.",
           });
           return;
         }
-        const groupSenderNumber: string | null = sellerSenderNumbers?.[key] ?? senderNumber ?? null;
-        resolvedPaymentMethods.set(g.sellerId, method);
-        resolvedSenderNumbers.set(g.sellerId, groupSenderNumber?.trim() || null);
+      }
+
+      // Resolve sender number per seller (for COD orders that record it).
+      // bKash orders don't use senderNumber anymore.
+      const resolvedSenderNumbers = new Map<number | null, string | null>();
+      for (const g of groups) {
+        const key = g.sellerId;
+        const groupSenderNumber: string | null =
+          sellerSenderNumbers?.[key === null ? "null" : String(key)] ?? senderNumber ?? null;
+        resolvedSenderNumbers.set(key, groupSenderNumber?.trim() || null);
       }
 
       // 6 bytes (48 bits) = ~281 trillion possibilities. Collision-safe at
@@ -642,35 +685,16 @@ router.post(
           const created: (typeof ordersTable.$inferSelect)[] = [];
 
           for (const g of groups) {
-            const method = resolvedPaymentMethods.get(g.sellerId)!;
+            const method = g.paymentMethod;
             const groupSenderNumber = resolvedSenderNumbers.get(g.sellerId) ?? null;
             const groupDeliveryFee = g.lines.reduce((s, l) => s + l.deliveryCharge, 0);
             const groupTotal = Math.max(0, g.subtotal - g.discountAmount + groupDeliveryFee);
-            // Part 2: "bkash" now creates the order BEFORE any bKash API call has
-            // happened at all -- see PART2_HANDOFF.md's order-sequencing
-            // decision. "payment_pending" (new value, distinct from the old
-            // "pending_verification") specifically means "a real bKash Create
-            // Payment/Execute Payment cycle for this order hasn't completed yet"
-            // -- routes/bkashPayment.ts's callback handler is the only place
-            // that ever moves an order OUT of this status (to "paid" on success;
-            // left as "payment_pending" -- not "failed" -- on a bKash-side
-            // cancel/failure, so the buyer can retry payment against the SAME
-            // order via a fresh Create Payment call rather than the order being
-            // silently dead-ended; see that route's doc comment for the full
-            // "pending_verification" is intentionally left alone and untouched by
-            // this part -- it remains preOrders.ts's status from the old manual
-            // payment-matching flow (since removed), not reused here, so a stale
-            // reader of "pending_verification" doesn't silently pick up unrelated
-            // bKash-in-progress orders.
             const paymentStatus = method === "cod" ? "pending" : "payment_pending";
 
             const [order] = await tx
               .insert(ordersTable)
               .values({
                 trackingId: trackingId(),
-                // Sequential order number from a Postgres SEQUENCE (created
-                // via migration). nextval is atomic and race-free — two
-                // concurrent checkouts always get different numbers.
                 orderNumber: sql`nextval('order_number_seq')`,
                 userId: req.userId!,
                 sellerId: g.sellerId,
@@ -687,10 +711,11 @@ router.post(
                 giftWrap: !!giftWrap,
                 giftMessage: giftWrap ? giftMessage : null,
                 // Idempotency key from the request header (NULL if not provided).
-                // Only the FIRST order in a multi-seller split gets the key —
-                // subsequent orders in the same checkout are part of the same
-                // idempotent operation, so they don't need their own keys.
+                // Only the FIRST order in a multi-group split gets the key.
                 idempotencyKey: created.length === 0 ? (idempotencyKey ?? null) : null,
+                // Checkout session — ALL sibling orders share this id so the
+                // frontend can query "show me all orders from this checkout."
+                checkoutSessionId,
                 // bKash orders get a 60-minute payment window; COD orders
                 // have no payment-pending state to expire.
                 paymentExpiresAt: method === "bkash" ? paymentExpiryDate() : null,
@@ -930,6 +955,10 @@ router.post(
       res.status(201).json({
         orders: formattedOrders,
         paymentSessionId,
+        // Checkout session id — links ALL sibling orders from this checkout
+        // (both COD and bKash). The frontend uses this to navigate to the
+        // "Checkout Complete" page showing all orders from this checkout.
+        checkoutSessionId,
       } as any);
     } catch (err) {
       logger.error({ err, userId: req.userId! }, "Order creation failed");
