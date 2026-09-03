@@ -467,6 +467,27 @@ function isBotChallengeError(err: unknown): boolean {
     return true;
   }
   const msg = (err as any)?.message ?? String(err);
+  // ─── HTTP status codes that indicate bot challenge ─────────────────────
+  //
+  // youtubei.js throws generic Error objects when fetch() gets a non-2xx
+  // response. The message format is:
+  //   "Request to https://www.youtube.com/youtubei/v1/next?... failed with status code 403"
+  //
+  // On datacenter IPs (Render, AWS, GCP, Vercel), YouTube returns:
+  //   - HTTP 403 Forbidden    — IP flagged as bot, request rejected
+  //   - HTTP 429 Too Many     — rate-limited (often a soft bot flag)
+  //
+  // Both of these ARE bot challenges — the previous regex missed them,
+  // causing the log to say "non-bot error" which is misleading. This
+  // made debugging harder ("why is InnerTube failing with a non-bot
+  // error on Render?") when the real cause was always the datacenter IP.
+  //
+  // We match both "status code 403" / "status code 429" and the bare
+  // "403" / "429" patterns (defensive against future youtubei.js
+  // message format changes).
+  if (/\bstatus code\s*(403|429)\b/i.test(msg) || /\b(403|429)\b/.test(msg)) {
+    return true;
+  }
   return /sign in to confirm|bot|captcha|unusual traffic/i.test(msg);
 }
 
