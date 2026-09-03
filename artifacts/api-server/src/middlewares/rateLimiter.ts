@@ -334,36 +334,56 @@ export const stockAlertLimiter = createRateLimiter({
   keyPrefix: "stockalert",
 });
 
-// YouTube transcript auto-fetch (admin-only, server-side scrape via youtubei.js).
+// YouTube transcript auto-fetch (admin-only, server-side fetch via the
+// 3-tier backend: Invidious -> InnerTube -> oEmbed).
 //
 // Why this needs a dedicated limiter (vs. relying on requireAdmin alone):
 //   YouTube's bot-protection kicks in around ~100 requests/hour per IP on
-//   datacenter IPs. Once an IP is flagged, EVERY admin on this Render
-//   instance loses the auto-fetch feature (they all hit the same outgoing
-//   IP). So a single compromised admin token — or even just an over-eager
-//   admin bulk-uploading 50 videos — could permanently break the feature
-//   for everyone on the instance.
+//   datacenter IPs. Even with a self-hosted Invidious backend, sustained
+//   high-volume requests can trip YouTube's per-IP flags on the Invidious
+//   server itself, breaking the feature for everyone using that instance.
 //
-// The limit is intentionally generous enough for normal admin use (10
-// fetches/hour = one video every 6 minutes, which is way more than any
-// human admin would do) but strict enough to stop the runaway-abuse case.
-// If an admin genuinely needs to bulk-import 20+ videos, they should
-// paste the URLs into a script and stagger them over a few hours, OR set
-// YOUTUBE_SESSION_COOKIE (which makes the bot check a non-issue).
+// ─── Default: 100/hour per admin ────────────────────────────────────────
+//
+// The default of 100/hour is calibrated for the 2026-09 redesign:
+//   - With a self-hosted Invidious instance, 100/hour is sustainable
+//     (Invidious handles ~200/hour comfortably on a free Oracle VM).
+//   - For 10k-video bulk ingestion, 100/hour = 100 hours = ~4 days,
+//     which is the practical sweet spot (fast enough to be useful,
+//     slow enough to not trip YouTube's per-IP rate limits).
+//   - Without a self-hosted Invidious (using only flaky public instances
+//     + InnerTube), the circuit breaker will naturally throttle most
+//     requests anyway.
+//
+// ─── Override via env var ───────────────────────────────────────────────
+//
+// For low-volume admin use (a handful of videos per day), set:
+//   YOUTUBE_FETCH_RATE_LIMIT_MAX=10
+//
+// For very-high-volume ingestion (50k+ videos, multiple Invidious
+// instances), set:
+//   YOUTUBE_FETCH_RATE_LIMIT_MAX=500
 //
 // Per-admin (not per-IP) because:
 //   - requireAdmin has already authenticated the user by the time this
 //     limiter runs, so req.userId is set. The key becomes
-//     `youtube:ip:userId`, which means each admin has their own 10/hour
-//     budget regardless of how many admins share the server's outgoing IP.
+//     `youtube:ip:userId`, which means each admin has their own budget
+//     regardless of how many admins share the server's outgoing IP.
 //   - This protects against one bad admin burning the quota for everyone.
+const YOUTUBE_FETCH_MAX_PER_HOUR = Number(process.env.YOUTUBE_FETCH_RATE_LIMIT_MAX ?? 100);
+const YOUTUBE_FETCH_WINDOW_MS = Number(
+  process.env.YOUTUBE_FETCH_RATE_LIMIT_WINDOW_MS ?? 60 * 60 * 1000,
+);
+
 export const youtubeFetchLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10,
+  windowMs: YOUTUBE_FETCH_WINDOW_MS,
+  max: YOUTUBE_FETCH_MAX_PER_HOUR,
   message:
-    "Too many YouTube transcript fetches (10/hour per admin). " +
-    "If you need to bulk-import, space requests over a few hours, or set " +
-    "YOUTUBE_SESSION_COOKIE to bypass bot protection.",
+    `Too many YouTube transcript fetches (${YOUTUBE_FETCH_MAX_PER_HOUR} per ` +
+    `${Math.round(YOUTUBE_FETCH_WINDOW_MS / 60000)} min per admin). ` +
+    "If you need higher throughput for bulk ingestion, set " +
+    "YOUTUBE_FETCH_RATE_LIMIT_MAX on the server, or self-host an Invidious " +
+    "instance and set INVIDIOUS_INSTANCES (see docs/INVIDIOUS_DEPLOYMENT.md).",
   keyPrefix: "youtube",
 });
 
