@@ -261,7 +261,15 @@ export interface YoutubeSourceMetadata {
   durationSeconds: number | null;
   viewCount: number | null;
   detectedLanguage: string | null;
-  /** How the transcript was obtained: innertube-noauth | innertube-cookie | manual-fallback */
+  /**
+   * How the transcript was obtained (2026-09 redesign — cookie path removed).
+   *   - `invidious`         — Tier 1: Invidious JSON API (multi-instance)
+   *   - `innertube-noauth`  — Tier 2: youtubei.js InnerTube API, no auth
+   *   - `innertube-cookie`  — DEPRECATED (kept for backward-compat with old sources)
+   *   - `manual-fallback`   — Tier 3: oEmbed metadata only, transcript empty
+   *   - `file-upload`       — Uploaded .vtt/.srt file via transcript-file route
+   *   - `unknown`           — old source with no fetchedVia field
+   */
   fetchedVia: string;
   /** ISO timestamp of when the transcript was fetched. */
   fetchedAt: string;

@@ -93,6 +93,7 @@ import {
   parseYoutubeUrl,
   TRANSCRIPT_PLACEHOLDER_PREFIX,
 } from "../lib/youtubeTranscript";
+import { getInvidiousHealth, resetInvidiousCircuits } from "../lib/youtubeInvidious";
 import { parseTranscriptFile } from "../lib/transcriptFileParser";
 import {
   listKbEntries,
@@ -2126,24 +2127,88 @@ router.post("/ai/admin/kb/sources", async (req: Request, res: Response) => {
   }
 });
 
+// ─── GET /ai/admin/youtube/health ───────────────────────────────────────────
+// Returns the health status of each YouTube transcript backend (Invidious
+// instances, InnerTube, oEmbed). Used by the admin UI to show a per-backend
+// dashboard with circuit breaker state, recent failures, and time until
+// retry.
+//
+// Why this exists: the YouTube fetcher uses a 3-tier fallback strategy
+// (Invidious → InnerTube → oEmbed). When fetching fails, the admin needs
+// to know WHICH backend failed and WHY — without this endpoint, they'd
+// have to dig through server logs. With it, the admin UI can render a
+// clear table showing:
+//
+//   ┌────────────────────────────────┬──────────┬──────────┬──────────┐
+//   │ Backend                        │ State    │ Failures │ Retry in │
+//   ├────────────────────────────────┼──────────┼──────────┼──────────┤
+//   │ invidious-self-hosted.example  │ closed   │ 0        │ -        │
+//   │ invidious-inv.nadeko.net       │ open     │ 3        │ 42s      │
+//   │ innertube-noauth               │ closed   │ 0        │ -        │
+//   └────────────────────────────────┴──────────┴──────────┴──────────┘
+//
+// Response: 200 OK
+//   {
+//     "invidious": [
+//       { "url": "https://...", "circuitState": "closed|open|half_open",
+//         "failures": 0, "openedAt": null, "retryInMs": null },
+//       ...
+//     ]
+//   }
+router.get("/ai/admin/youtube/health", async (_req: Request, res: Response) => {
+  try {
+    const invidious = await getInvidiousHealth();
+    res.json({ invidious });
+  } catch (err) {
+    logger.error({ err }, "AI admin: YouTube health endpoint failed");
+    res.status(500).json({ error: "Failed to fetch YouTube backend health." });
+  }
+});
+
+// ─── POST /ai/admin/youtube/health/reset ────────────────────────────────────
+// Manually resets the circuit breaker for one or all Invidious instances.
+// Useful when the admin has just restarted their self-hosted Invidious and
+// wants to immediately re-probe it (instead of waiting for the 60-second
+// cooldown).
+//
+// Request body (optional):
+//   { "instanceUrl": "https://invidious.your-domain.com" }
+//
+// If `instanceUrl` is omitted, all configured instances are reset.
+//
+// Response: 200 OK
+//   { "reset": true }
+router.post("/ai/admin/youtube/health/reset", async (req: Request, res: Response) => {
+  try {
+    const instanceUrl = typeof req.body?.instanceUrl === "string" ? req.body.instanceUrl : null;
+    await resetInvidiousCircuits(instanceUrl);
+    res.json({ reset: true });
+  } catch (err) {
+    logger.error({ err }, "AI admin: YouTube circuit reset failed");
+    res.status(500).json({ error: "Failed to reset circuit breakers." });
+  }
+});
+
 // ─── POST /ai/admin/kb/sources/youtube ───────────────────────────────────────
 // Auto-fetches YouTube video metadata + transcript given just a URL.
 //
 // This endpoint is the "auto-scrape" path — the admin pastes a YouTube URL,
-// the server fetches the video's title/channel/thumbnail (via oEmbed, no auth)
-// and the transcript (via youtubei.js — InnerTube API). The result is a
-// fully-populated source ready for the "AI Chunk" step.
+// the server fetches the video's title/channel/thumbnail + transcript using
+// a 3-tier backend strategy (no cookies required since the 2026-09 redesign).
 //
 // Strategy (see lib/youtubeTranscript.ts for full rationale):
-//   1. Try youtubei.js with no auth (works on residential IP).
-//   2. If bot-challenged AND YOUTUBE_SESSION_COOKIE env var is set, retry with cookie.
-//   3. If still bot-challenged, return metadata-only (via oEmbed) + a 422
-//      asking the admin to paste the transcript manually.
+//   1. Try Invidious JSON API (multi-instance failover + circuit breaker).
+//      Works on any IP, no auth required. Production: self-host an instance
+//      and set INVIDIOUS_INSTANCES.
+//   2. Try youtubei.js InnerTube API with no auth (works on residential IP).
+//   3. If all backends fail, return metadata-only (via oEmbed) + a 422
+//      asking the admin to upload a .vtt/.srt transcript file.
 //
 // The route ALWAYS creates a source row (even on manual-fallback) so the
 // admin doesn't lose the metadata they already have. On manual-fallback,
-// `rawText` is empty and `processing_status = 'pending'` — the admin can
-// edit the source to paste the transcript later.
+// `rawText` is a placeholder sentinel (TRANSCRIPT_PLACEHOLDER_PREFIX) and
+// `processing_status = 'pending'` — the admin can edit the source to paste
+// the real transcript later.
 //
 // Rate limiting: youtubeFetchLimiter (10/hour per admin). See
 // middlewares/rateLimiter.ts for why this needs a dedicated limiter (a
@@ -2359,9 +2424,10 @@ router.post(
 //
 // This is the "third mode" of KB ingestion (alongside "manual paste" and
 // "YouTube URL auto-fetch"). It exists because the YouTube auto-fetcher has
-// 4 tiers but all of them can fail on:
+// 3 tiers but all of them can fail on:
 //   - Locked-down videos (age-restricted, region-locked, member-only)
-//   - Aggressive bot protection (rare but happens on some datacenter IPs)
+//   - All Invidious instances down or circuit-broken
+//   - Bot protection on the InnerTube backend (datacenter IPs)
 //   - Videos with no captions (lecture recordings, music videos)
 //
 // When auto-fetch fails, the admin can still download a .vtt/.srt file
