@@ -3,51 +3,50 @@
  *
  * ─── Strategy overview (2026-09 redesign) ──────────────────────────────────
  *
- * The previous design used a 3-tier strategy with Tier 2 being a
- * YOUTUBE_SESSION_COOKIE retry path. That path was removed because:
+ * The fetcher uses a 4-tier strategy that handles YouTube's 2026
+ * anti-scraping measures (Proof-of-Origin Token enforcement, JS
+ * challenge pages, datacenter-IP bot detection).
  *
- *   1. HttpOnly cookies (__Secure-1PSID, __Secure-3PSID, HSID, SSID)
- *      can't be captured via `document.cookie` snippets — admins who
- *      followed console-copy instructions always missed them.
- *   2. A partially-cookie'd session is WORSE than no cookies — YouTube
- *      sees a bot faking a real session and returns LOGIN_REQUIRED.
- *   3. Cookies expire (~30-day cycle), silently breaking the system.
- *
- * The new 3-tier strategy removes cookies entirely:
- *
- *   1. Tier 1 — Invidious JSON API (multi-instance failover + circuit
- *      breaker). Requests never touch YouTube directly, so the
- *      datacenter-IP bot challenge is bypassed. Production deployments
- *      should self-host one Invidious instance and set
- *      INVIDIOUS_INSTANCES to point at it (most reliable).
- *   2. Tier 2 — youtubei.js InnerTube API, no auth. Works on residential
- *      IPs (admin laptop, dev environment). Bot-challenged on datacenter
- *      IPs without a cookie — but we removed the cookie path, so this
- *      tier succeeds in dev/local and fails gracefully on cloud.
- *   3. Tier 3 — Fall back to oEmbed metadata only + manual-fallback
+ *   1. Tier 1 — yt-dlp subprocess (NEW, recommended primary).
+ *      Spawns yt-dlp which generates POT by executing YouTube's player
+ *      JS at runtime. Works on residential IPs without any extra
+ *      configuration. 3-8s per video. Requires yt-dlp installed on
+ *      the server (pip install yt-dlp).
+ *   2. Tier 2 — Invidious JSON API (multi-instance failover + circuit
+ *      breaker). Requests never touch YouTube directly. Use this when
+ *      yt-dlp is not available (e.g. on Render without yt-dlp installed).
+ *      Production deployments should self-host one Invidious instance.
+ *   3. Tier 3 — youtubei.js InnerTube API, no auth. Works on residential
+ *      IPs but fails with UNPLAYABLE in 2026 due to POT enforcement
+ *      (youtubei.js v18 has a parser bug + no POT generation).
+ *      Kept as a fallback for older youtubei.js versions or future fixes.
+ *   4. Tier 4 — Fall back to oEmbed metadata only + manual-fallback
  *      reason asking the admin to upload a .vtt/.srt file.
  *
  * Outcome:
- *   - Local dev (residential IP):           Tier 2 succeeds (Invidious
- *      may also succeed, but Tier 2 is tried second).
- *   - Render/Vercel (datacenter IP):          Tier 1 succeeds IF a
- *      self-hosted or working public Invidious instance is configured.
- *      Otherwise falls through to Tier 3 metadata-only + .vtt upload.
- *   - On Render without Invidious configured:  Tier 3 metadata-only
- *      fallback → admin uploads .vtt/.srt file.
+ *   - Phone-as-server / residential IP + yt-dlp: Tier 1 succeeds (fast).
+ *   - Phone / residential IP without yt-dlp: Tier 2 (Invidious) or Tier 3
+ *     may succeed, otherwise Tier 4 metadata-only + manual upload.
+ *   - Render / Vercel (datacenter IP) without yt-dlp: Tier 2 (Invidious
+ *     self-hosted) or Tier 4 metadata-only + manual upload.
  *
  * No silent failures, no broken feature — always returns *something*
  * useful. The admin health endpoint (`GET /api/ai/admin/youtube/health`)
  * shows which backends are currently working.
  *
- * ─── Why Invidious for Tier 1 ──────────────────────────────────────────────
+ * ─── Why yt-dlp is the primary backend (2026-09) ───────────────────────────
  *
- * Invidious is a privacy-focused YouTube frontend that proxies YouTube
- * content. Its JSON API is documented, stable, and never touches YouTube
- * directly — so YouTube's bot challenge doesn't apply. Multi-instance
- * failover + circuit breaker means one bad instance doesn't break the
- * system. See `youtubeInvidious.ts` for full rationale + production
- * setup instructions.
+ * In 2026, YouTube enforces POT on ALL InnerTube API and direct
+ * /api/timedtext calls. Only yt-dlp successfully generates POT by
+ * downloading and executing YouTube's player JavaScript at runtime.
+ * Other libraries (youtubei.js, youtube-transcript, etc.) don't have
+ * POT generation and return empty/UNPLAYABLE responses.
+ *
+ * yt-dlp also has the best anti-bot evasion (rotating user agents,
+ * proper impersonation, JS runtime fallbacks). It's actively maintained
+ * with weekly updates to counter YouTube changes.
+ *
+ * See `youtubeYtDlp.ts` for the full implementation + setup instructions.
  *
  * ─── Caching ─────────────────────────────────────────────────────────────
  *
@@ -80,6 +79,7 @@
 import { Innertube } from "youtubei.js";
 import { logger } from "./logger";
 import { fetchViaInvidious } from "./youtubeInvidious";
+import { fetchViaYtDlp } from "./youtubeYtDlp";
 
 // ─── Shared constants ───────────────────────────────────────────────────────
 
@@ -129,15 +129,16 @@ export interface YoutubeTranscriptResult {
   segmentCount: number;
   /**
    * Which path produced the transcript (for logging/debugging).
-   *   - `invidious`         — Tier 1: Invidious JSON API (multi-instance)
-   *   - `innertube-noauth`  — Tier 2: youtubei.js InnerTube API, no cookie
-   *   - `manual-fallback`   — Tier 3: oEmbed metadata only, transcript empty
+   *   - `ytdlp`             — Tier 1: yt-dlp subprocess (generates POT)
+   *   - `invidious`         — Tier 2: Invidious JSON API (multi-instance)
+   *   - `innertube-noauth`  — Tier 3: youtubei.js InnerTube API, no auth
+   *   - `manual-fallback`   — Tier 4: oEmbed metadata only, transcript empty
    *
    * For uploaded .vtt/.srt files (transcript-file route), the value is
    * `file-upload` — but that path doesn't go through fetchYoutubeTranscript,
    * it sets rawMetadata.fetchedVia directly when creating the source.
    */
-  fetchedVia: "invidious" | "innertube-noauth" | "manual-fallback";
+  fetchedVia: "ytdlp" | "invidious" | "innertube-noauth" | "manual-fallback";
   /**
    * If fetchedVia === "manual-fallback", transcript is empty and this
    * contains a human-readable explanation for the admin (e.g. "YouTube
@@ -574,10 +575,10 @@ const INNERTUBE_TIMEOUT_MS = Number(process.env.YOUTUBE_FETCH_TIMEOUT_MS ?? 15_0
  * Fetches YouTube video metadata + transcript given a URL.
  *
  * Strategy (see file header for full rationale):
- *   1. Tier 1 — Try Invidious JSON API (multi-instance failover + circuit
- *      breaker). Works on any IP, no auth required.
- *   2. Tier 2 — Try Innertube with no auth (works on residential IP).
- *   3. Tier 3 — Fall back to oEmbed metadata only with a manual-fallback
+ *   1. Tier 1 — Try yt-dlp subprocess (generates POT, works on residential IP).
+ *   2. Tier 2 — Try Invidious JSON API (multi-instance failover + circuit breaker).
+ *   3. Tier 3 — Try Innertube with no auth (works on residential IP, fails in 2026).
+ *   4. Tier 4 — Fall back to oEmbed metadata only with a manual-fallback
  *      reason explaining the admin should upload a .vtt/.srt file or
  *      use the Invidious backend with a self-hosted instance.
  *
@@ -596,7 +597,53 @@ export async function fetchYoutubeTranscript(url: string): Promise<YoutubeTransc
   }
   const { videoId } = parsed;
 
-  // ─── Tier 1: Try Invidious JSON API ───
+  // ─── Tier 1: Try yt-dlp subprocess (recommended primary) ───
+  // yt-dlp generates the Proof-of-Origin Token (POT) by executing
+  // YouTube's player JavaScript at runtime. This is the only backend
+  // that works reliably on residential IPs in 2026 (after YouTube
+  // started enforcing POT on all InnerTube API and direct timedtext
+  // calls).
+  //
+  // Requires yt-dlp installed on the server. On Termux (phone):
+  //   pkg install -y python python-pip ffmpeg && pip install -U yt-dlp
+  //
+  // If yt-dlp is not installed, this returns null and we fall through
+  // to Tier 2 (Invidious) / Tier 3 (InnerTube) / Tier 4 (oEmbed).
+  try {
+    const result = await fetchViaYtDlp(videoId, null);
+    if (result) {
+      logger.info(
+        {
+          videoId,
+          tier: 1,
+          segments: result.segmentCount,
+          lang: result.detectedLanguage,
+        },
+        "YouTube: fetched transcript via yt-dlp",
+      );
+      return {
+        metadata: {
+          videoId,
+          ...result.metadata,
+          detectedLanguage: result.detectedLanguage,
+        },
+        transcript: result.transcript,
+        segmentCount: result.segmentCount,
+        fetchedVia: "ytdlp",
+        manualFallbackReason: null,
+      };
+    }
+  } catch (err) {
+    // fetchViaYtDlp is designed to never throw (it returns null on
+    // failure), but we defend against unexpected exceptions so the
+    // caller never sees a crash.
+    logger.warn(
+      { videoId, err: (err as Error).message.slice(0, 200) },
+      "YouTube: yt-dlp backend threw unexpected error, falling through to Tier 2 (Invidious)",
+    );
+  }
+
+  // ─── Tier 2: Try Invidious JSON API ───
   // Works on any IP (including datacenter IPs that get bot-challenged
   // by youtubei.js). Multi-instance failover with circuit breaker.
   // No auth, no cookies, no admin configuration beyond INVIDIOUS_INSTANCES
