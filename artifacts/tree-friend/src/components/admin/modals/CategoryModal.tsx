@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@clerk/react";
 import { useCreateCategory, useUpdateCategory, getListCategoriesQueryKey } from "@workspace/api-client-react";
@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { X } from "lucide-react";
+import { X, Loader2, UploadIcon } from "lucide-react";
+import { toast } from "sonner";
 
 /**
  * Add/Edit form for a single category OR subcategory.
@@ -18,6 +19,11 @@ import { X } from "lucide-react";
  *
  * `fixedParentId` is passed in by the parent page and is not editable here.
  */
+
+// Match the backend multer fileSize limit (artifacts/api-server/src/routes/assets.ts:11).
+// Validated client-side so we don't waste a round-trip on an obviously-too-big file.
+const MAX_UPLOAD_SIZE = 5 * 1024 * 1024; // 5 MB
+
 export function CategoryModal({
   category,
   fixedParentId,
@@ -42,6 +48,19 @@ export function CategoryModal({
     displayOrder: category?.displayOrder ?? 0,
   });
 
+  // Track which upload is in-flight so we can show a spinner + disable the
+  // button. Keys match the form field the upload populates.
+  const [uploading, setUploading] = useState<null | "iconImage" | "image">(null);
+
+  // Refs to the hidden <input type="file"> elements. We need to reset their
+  // `value` to "" after every upload attempt (success OR failure) so the
+  // user can re-select the same file. Without this, if the user uploads
+  // icon.png, clicks X to delete it, then tries to upload icon.png again,
+  // the onChange event won't fire because the input's value didn't change.
+  // This is a well-known React gotcha with file inputs.
+  const iconInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
   const isSubcategory = fixedParentId !== null;
 
   function handleSubmit(e: React.FormEvent) {
@@ -64,6 +83,73 @@ export function CategoryModal({
       createCategory.mutate({ data }, {
         onSuccess: () => { qc.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); onClose(); },
       });
+    }
+  }
+
+  /**
+   * Shared upload handler for icon + category images. Fixes several bugs:
+   *
+   * 1. **File size validation**: checked client-side before the fetch, so
+   *    the user gets instant feedback instead of a 413 from multer.
+   * 2. **HTTP error handling**: checks `res.ok` and surfaces the actual
+   *    error message from the JSON body (or the HTTP status text as
+   *    fallback). The old code silently did nothing on non-OK responses.
+   * 3. **Loading state**: `uploading` is set before the fetch and cleared
+   *    in `finally`, so the button shows a spinner + is disabled during
+   *    upload — prevents double-clicks from firing duplicate requests.
+   * 4. **File input reset**: the input's `value` is reset to "" after
+   *    every attempt, so the user can re-select the same file.
+   * 5. **Toast feedback**: success/error toasts via sonner, replacing the
+   *    old bare `alert("Upload failed")` which gave zero diagnostic info.
+   */
+  async function uploadAsset(
+    file: File,
+    field: "iconImage" | "image",
+    inputRef: React.RefObject<HTMLInputElement | null>,
+  ) {
+    if (file.size > MAX_UPLOAD_SIZE) {
+      toast.error(`File is too large`, {
+        description: `Maximum size is 5 MB. "${file.name}" is ${(file.size / 1024 / 1024).toFixed(1)} MB.`,
+      });
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
+
+    setUploading(field);
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const token = await getToken();
+      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/assets/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+
+      // Parse the response body regardless of status — the backend always
+      // returns JSON (either { url } on success or { error } on failure).
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        const msg = data?.error || data?.message || `Upload failed (HTTP ${res.status})`;
+        toast.error("Upload failed", { description: msg });
+        return;
+      }
+
+      if (data.url) {
+        setForm(f => ({ ...f, [field]: data.url }));
+        toast.success("Image uploaded", { description: field === "iconImage" ? "Icon updated." : "Category image updated." });
+      } else {
+        toast.error("Upload failed", { description: "Server did not return a URL." });
+      }
+    } catch {
+      toast.error("Upload failed", { description: "Network error — please check your connection and try again." });
+    } finally {
+      setUploading(null);
+      // Critical: reset the input value so the same file can be selected
+      // again. Without this, the user can never re-upload the same file
+      // after deleting it (onChange won't fire if the value didn't change).
+      if (inputRef.current) inputRef.current.value = "";
     }
   }
 
@@ -137,21 +223,34 @@ export function CategoryModal({
                 onChange={e => setForm(f => ({ ...f, iconImage: e.target.value }))}
                 className="rounded-xl flex-1"
                 placeholder="Paste icon image URL or upload"
+                disabled={uploading === "iconImage"}
               />
-              <label className="cursor-pointer shrink-0 px-3 py-2 rounded-xl border border-border text-sm hover:bg-muted transition-colors">
-                Upload
-                <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const fd = new FormData();
-                  fd.append("file", file);
-                  try {
-                    const token = await getToken();
-                    const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/assets/upload`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd });
-                    const data = await res.json();
-                    if (data.url) setForm(f => ({ ...f, iconImage: data.url }));
-                  } catch { alert("Upload failed"); }
-                }} />
+              <label className={(
+                "cursor-pointer shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border text-sm hover:bg-muted transition-colors " +
+                (uploading === "iconImage" ? "pointer-events-none opacity-60" : "")
+              )}>
+                {uploading === "iconImage" ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Uploading
+                  </>
+                ) : (
+                  <>
+                    <UploadIcon className="h-3.5 w-3.5" />
+                    Upload
+                  </>
+                )}
+                <input
+                  ref={iconInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  disabled={uploading === "iconImage"}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) uploadAsset(file, "iconImage", iconInputRef);
+                  }}
+                />
               </label>
             </div>
             {form.iconImage && (
@@ -162,6 +261,7 @@ export function CategoryModal({
                   onClick={() => setForm(f => ({ ...f, iconImage: "" }))}
                   className="absolute -top-1.5 -right-1.5 bg-foreground/60 hover:bg-foreground/80 text-background rounded-full p-1 transition-colors"
                   title="Remove icon image"
+                  disabled={uploading === "iconImage"}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -178,21 +278,34 @@ export function CategoryModal({
                 onChange={e => setForm(f => ({ ...f, image: e.target.value }))}
                 className="rounded-xl flex-1"
                 placeholder="Paste image URL or upload"
+                disabled={uploading === "image"}
               />
-              <label className="cursor-pointer shrink-0 px-3 py-2 rounded-xl border border-border text-sm hover:bg-muted transition-colors">
-                Upload
-                <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const fd = new FormData();
-                  fd.append("file", file);
-                  try {
-                    const token = await getToken();
-                    const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/assets/upload`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd });
-                    const data = await res.json();
-                    if (data.url) setForm(f => ({ ...f, image: data.url }));
-                  } catch { alert("Upload failed"); }
-                }} />
+              <label className={(
+                "cursor-pointer shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border text-sm hover:bg-muted transition-colors " +
+                (uploading === "image" ? "pointer-events-none opacity-60" : "")
+              )}>
+                {uploading === "image" ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Uploading
+                  </>
+                ) : (
+                  <>
+                    <UploadIcon className="h-3.5 w-3.5" />
+                    Upload
+                  </>
+                )}
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  disabled={uploading === "image"}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) uploadAsset(file, "image", imageInputRef);
+                  }}
+                />
               </label>
             </div>
             {form.image && (
@@ -203,6 +316,7 @@ export function CategoryModal({
                   onClick={() => setForm(f => ({ ...f, image: "" }))}
                   className="absolute top-1.5 right-1.5 bg-foreground/60 hover:bg-foreground/80 text-background rounded-full p-1 transition-colors"
                   title="Remove image"
+                  disabled={uploading === "image"}
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -220,7 +334,7 @@ export function CategoryModal({
             />
           </div>
           <div className="flex gap-3 pt-2">
-            <Button type="submit" disabled={createCategory.isPending || updateCategory.isPending} className="flex-1 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground">
+            <Button type="submit" disabled={createCategory.isPending || updateCategory.isPending || uploading !== null} className="flex-1 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground">
               {category ? "Update" : "Add"} {isSubcategory ? "Subcategory" : "Category"}
             </Button>
             <Button type="button" variant="outline" onClick={onClose} className="rounded-xl">Cancel</Button>

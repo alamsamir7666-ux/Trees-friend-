@@ -31,8 +31,25 @@ export interface Category {
   name: string;
   slug: string;
   /** @nullable */
+  description?: string | null;
+  /** @nullable */
   icon: string | null;
+  /**
+     * URL of an uploaded icon image (alternative to the emoji `icon` field). When both are set, this takes priority.
+     * @nullable
+     */
+  iconImage?: string | null;
+  /**
+     * URL of the category's main display image (used as the card background in the collection slider).
+     * @nullable
+     */
+  image?: string | null;
   displayOrder: number;
+  /**
+     * NULL for top-level categories, set to the parent category's id for subcategories.
+     * @nullable
+     */
+  parentId?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -41,8 +58,28 @@ export interface CreateCategoryBody {
   name: string;
   slug?: string;
   /** @nullable */
+  description?: string | null;
+  /**
+     * Emoji or short text icon (e.g. "🌳"). Shown when `iconImage` is not set.
+     * @nullable
+     */
   icon?: string | null;
+  /**
+     * URL of an uploaded icon image. When set, takes priority over the emoji `icon` field.
+     * @nullable
+     */
+  iconImage?: string | null;
+  /**
+     * URL of the category's main display image.
+     * @nullable
+     */
+  image?: string | null;
   displayOrder?: number;
+  /**
+     * NULL to create a top-level category, or the parent category's id to create a subcategory.
+     * @nullable
+     */
+  parentId?: number | null;
 }
 
 export interface ProductVariant {
@@ -330,7 +367,6 @@ export interface AddressBody {
 
 export interface Order {
   id: number;
-  orderNumber?: number | null;
   trackingId: string;
   userId: string;
   /**
@@ -358,18 +394,6 @@ export interface Order {
   giftWrap?: string;
   /** @nullable */
   giftMessage?: string | null;
-  /** @nullable */
-  paymentSessionId?: number | null;
-  /** @nullable */
-  checkoutSessionId?: string | null;
-  /** @nullable */
-  confirmedAt?: string | null;
-  /** @nullable */
-  shippedAt?: string | null;
-  /** @nullable */
-  deliveredAt?: string | null;
-  /** @nullable */
-  cancelledAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -445,7 +469,7 @@ export const CreatePlatformPaymentConfigBodyProvider = {
 } as const;
 
 /**
- * provider defaults to "bkash" if omitted. All four merchant credential fields are required. This is the bKash merchant credential set, held by the admin account (under the post-migration platform-custodial payments model, sellers no longer register their own merchant credentials).
+ * provider defaults to "bkash" if omitted. All four merchant credential fields are required. This is the bKash merchant credential set, held by the admin account (under the post-migration platform- custodial payments model, sellers no longer register their own merchant credentials).
  */
 export interface CreatePlatformPaymentConfigBody {
   provider?: CreatePlatformPaymentConfigBodyProvider;
@@ -731,31 +755,38 @@ export interface OrderTracking {
 }
 
 /**
- * Per-seller-group payment method override, keyed by sellerId as a string ("null" for the admin-direct group). Each seller only accepts the payment methods enabled on their listings (plan doc §7) -- the buyer picks per group at checkout, not once globally.
+ * Per-cart-line payment method choice, keyed by cart line id as a string. Values are "bkash" or "cod". Replaces the old sellerPaymentMethods (per-seller map) — now each line can independently be COD or Advance, so a single seller with both splits into two orders.
+ */
+export type CreateOrderBodyItemPaymentMethods = {[key: string]: string};
+
+/**
+ * DEPRECATED — kept for backward compat. Use itemPaymentMethods instead. Per-seller-group payment method override, keyed by sellerId as a string ("null" for the admin-direct group).
  */
 export type CreateOrderBodySellerPaymentMethods = {[key: string]: string};
 
 /**
- * Per-seller-group bKash sending number override, keyed by sellerId as a string ("null" for the admin-direct group) -- same key convention as sellerPaymentMethods. Added in Part 5: previously a single top-level senderNumber was reused across every seller group resolving to "bkash", which doesn't hold up once a cart has multiple sellers with separate bKash merchant accounts (PHASE3_HANDOFF.md flagged this as a known gap).
+ * Per-seller-group bKash sending number override, keyed by sellerId as a string ("null" for the admin-direct group).
  */
 export type CreateOrderBodySellerSenderNumbers = {[key: string]: string | null};
 
 /**
- * A cart spanning multiple sellers splits into one order per seller group (plan doc §2, §7). paymentMethod is the fallback/default used for any group not present in sellerPaymentMethods; a single-seller or all-admin-direct cart can just send paymentMethod and omit sellerPaymentMethods entirely.
+ * A cart with mixed payment methods (COD + Advance) splits into one order per (seller × payment method) combo. All sibling orders share a checkoutSessionId so the buyer can see them together. paymentMethod is the fallback for admin-direct lines and lines without an explicit per-line choice; itemPaymentMethods (keyed by cart line id) lets the buyer choose per-line, matching the bag page's per-item selector.
  */
 export interface CreateOrderBody {
-  /** Fallback payment method for any seller group not present in sellerPaymentMethods. */
+  /** Fallback payment method for lines not in itemPaymentMethods (admin-direct lines, or when itemPaymentMethods is omitted). */
   paymentMethod?: string;
-  /** Per-seller-group payment method override, keyed by sellerId as a string ("null" for the admin-direct group). Each seller only accepts the payment methods enabled on their listings (plan doc §7) -- the buyer picks per group at checkout, not once globally. */
+  /** Per-cart-line payment method choice, keyed by cart line id as a string. Values are "bkash" or "cod". Replaces the old sellerPaymentMethods (per-seller map) — now each line can independently be COD or Advance, so a single seller with both splits into two orders. */
+  itemPaymentMethods?: CreateOrderBodyItemPaymentMethods;
+  /** DEPRECATED — kept for backward compat. Use itemPaymentMethods instead. Per-seller-group payment method override, keyed by sellerId as a string ("null" for the admin-direct group). */
   sellerPaymentMethods?: CreateOrderBodySellerPaymentMethods;
   /** @nullable */
   transactionId?: string | null;
   /**
-     * Fallback bKash sending number for any seller group not present in sellerSenderNumbers. Required when the resolved payment method for a group is "bkash" and that group has no override in sellerSenderNumbers.
+     * Fallback bKash sending number for COD orders that record it. bKash orders no longer use senderNumber.
      * @nullable
      */
   senderNumber?: string | null;
-  /** Per-seller-group bKash sending number override, keyed by sellerId as a string ("null" for the admin-direct group) -- same key convention as sellerPaymentMethods. Added in Part 5: previously a single top-level senderNumber was reused across every seller group resolving to "bkash", which doesn't hold up once a cart has multiple sellers with separate bKash merchant accounts (PHASE3_HANDOFF.md flagged this as a known gap). */
+  /** Per-seller-group bKash sending number override, keyed by sellerId as a string ("null" for the admin-direct group). */
   sellerSenderNumbers?: CreateOrderBodySellerSenderNumbers;
   shippingAddress: AddressBody;
   /** @nullable */
@@ -1272,11 +1303,20 @@ export interface SellerListing {
   approvalStatus: SellerListingApprovalStatus;
   /** @nullable */
   rejectionReason?: string | null;
-  /** Admin-owned variety name (e.g. "Langra Mango") from the parent productsTable row. @nullable */
+  /**
+     * Admin-owned variety name (e.g. "Langra Mango") from the parent productsTable row.
+     * @nullable
+     */
   productName?: string | null;
-  /** URL slug of the parent product (for linking to the variety detail page). @nullable */
+  /**
+     * URL slug of the parent product (for linking to the variety detail page).
+     * @nullable
+     */
   productSlug?: string | null;
-  /** First image of the parent product (fallback thumbnail when the listing has no images of its own). @nullable */
+  /**
+     * First image of the parent product (fallback thumbnail when the listing has no images of its own).
+     * @nullable
+     */
   productImage?: string | null;
   variants: SellerListingVariant[];
   createdAt: string;

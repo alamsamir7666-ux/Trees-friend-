@@ -6025,6 +6025,7 @@ export const useCreateSellerCourierConfig = <TError = ErrorType<unknown>,
       > => {
       return useMutation(getCreateSellerCourierConfigMutationOptions(options));
     }
+
 export const getGetPlatformPaymentConfigUrl = () => {
 
 
@@ -8950,6 +8951,7 @@ export const useRejectSellerVerification = <TError = ErrorType<unknown>,
       > => {
       return useMutation(getRejectSellerVerificationMutationOptions(options));
     }
+
 export const getListAdminSellerCourierConfigsUrl = (params?: ListAdminSellerCourierConfigsParams,) => {
   const normalizedParams = new URLSearchParams();
 

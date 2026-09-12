@@ -2598,10 +2598,21 @@ components:
           type: string
         slug:
           type: string
+        description:
+          type: ["string", "null"]
         icon:
           type: ["string", "null"]
+        iconImage:
+          type: ["string", "null"]
+          description: URL of an uploaded icon image (alternative to the emoji `icon` field). When both are set, this takes priority.
+        image:
+          type: ["string", "null"]
+          description: URL of the category's main display image (used as the card background in the collection slider).
         displayOrder:
           type: integer
+        parentId:
+          type: ["integer", "null"]
+          description: NULL for top-level categories, set to the parent category's id for subcategories.
         createdAt:
           type: string
         updatedAt:
@@ -2622,10 +2633,22 @@ components:
           type: string
         slug:
           type: string
+        description:
+          type: ["string", "null"]
         icon:
           type: ["string", "null"]
+          description: Emoji or short text icon (e.g. "🌳"). Shown when `iconImage` is not set.
+        iconImage:
+          type: ["string", "null"]
+          description: URL of an uploaded icon image. When set, takes priority over the emoji `icon` field.
+        image:
+          type: ["string", "null"]
+          description: URL of the category's main display image.
         displayOrder:
           type: integer
+        parentId:
+          type: ["integer", "null"]
+          description: NULL to create a top-level category, or the parent category's id to create a subcategory.
       required:
         - name
 

@@ -36,8 +36,12 @@ export const ListCategoriesResponseItem = zod.object({
   "id": zod.number(),
   "name": zod.string(),
   "slug": zod.string(),
+  "description": zod.string().nullish(),
   "icon": zod.string().nullable(),
+  "iconImage": zod.string().nullish().describe('URL of an uploaded icon image (alternative to the emoji `icon` field). When both are set, this takes priority.'),
+  "image": zod.string().nullish().describe('URL of the category\'s main display image (used as the card background in the collection slider).'),
   "displayOrder": zod.number(),
+  "parentId": zod.number().nullish().describe('NULL for top-level categories, set to the parent category\'s id for subcategories.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })
@@ -50,8 +54,12 @@ export const ListCategoriesResponse = zod.array(ListCategoriesResponseItem)
 export const CreateCategoryBody = zod.object({
   "name": zod.string(),
   "slug": zod.string().optional(),
-  "icon": zod.string().nullish(),
-  "displayOrder": zod.number().optional()
+  "description": zod.string().nullish(),
+  "icon": zod.string().nullish().describe('Emoji or short text icon (e.g. \"🌳\"). Shown when `iconImage` is not set.'),
+  "iconImage": zod.string().nullish().describe('URL of an uploaded icon image. When set, takes priority over the emoji `icon` field.'),
+  "image": zod.string().nullish().describe('URL of the category\'s main display image.'),
+  "displayOrder": zod.number().optional(),
+  "parentId": zod.number().nullish().describe('NULL to create a top-level category, or the parent category\'s id to create a subcategory.')
 })
 
 
@@ -65,16 +73,24 @@ export const UpdateCategoryParams = zod.object({
 export const UpdateCategoryBody = zod.object({
   "name": zod.string(),
   "slug": zod.string().optional(),
-  "icon": zod.string().nullish(),
-  "displayOrder": zod.number().optional()
+  "description": zod.string().nullish(),
+  "icon": zod.string().nullish().describe('Emoji or short text icon (e.g. \"🌳\"). Shown when `iconImage` is not set.'),
+  "iconImage": zod.string().nullish().describe('URL of an uploaded icon image. When set, takes priority over the emoji `icon` field.'),
+  "image": zod.string().nullish().describe('URL of the category\'s main display image.'),
+  "displayOrder": zod.number().optional(),
+  "parentId": zod.number().nullish().describe('NULL to create a top-level category, or the parent category\'s id to create a subcategory.')
 })
 
 export const UpdateCategoryResponse = zod.object({
   "id": zod.number(),
   "name": zod.string(),
   "slug": zod.string(),
+  "description": zod.string().nullish(),
   "icon": zod.string().nullable(),
+  "iconImage": zod.string().nullish().describe('URL of an uploaded icon image (alternative to the emoji `icon` field). When both are set, this takes priority.'),
+  "image": zod.string().nullish().describe('URL of the category\'s main display image (used as the card background in the collection slider).'),
   "displayOrder": zod.number(),
+  "parentId": zod.number().nullish().describe('NULL for top-level categories, set to the parent category\'s id for subcategories.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })
@@ -903,11 +919,11 @@ export const ListOrdersResponse = zod.array(ListOrdersResponseItem)
  */
 export const CreateOrderBody = zod.object({
   "paymentMethod": zod.string().optional().describe('Fallback payment method for lines not in itemPaymentMethods (admin-direct lines, or when itemPaymentMethods is omitted).'),
-  "itemPaymentMethods": zod.record(zod.string(), zod.string()).optional().describe('Per-cart-line payment method choice, keyed by cart line id as a string. Values are "bkash" or "cod". Replaces the old sellerPaymentMethods (per-seller map) — now each line can independently be COD or Advance, so a single seller with both splits into two orders.'),
-  "sellerPaymentMethods": zod.record(zod.string(), zod.string()).optional().describe('DEPRECATED — kept for backward compat. Use itemPaymentMethods instead. Per-seller-group payment method override, keyed by sellerId as a string ("null" for the admin-direct group).'),
+  "itemPaymentMethods": zod.record(zod.string(), zod.string()).optional().describe('Per-cart-line payment method choice, keyed by cart line id as a string. Values are \"bkash\" or \"cod\". Replaces the old sellerPaymentMethods (per-seller map) — now each line can independently be COD or Advance, so a single seller with both splits into two orders.'),
+  "sellerPaymentMethods": zod.record(zod.string(), zod.string()).optional().describe('DEPRECATED — kept for backward compat. Use itemPaymentMethods instead. Per-seller-group payment method override, keyed by sellerId as a string (\"null\" for the admin-direct group).'),
   "transactionId": zod.string().nullish(),
   "senderNumber": zod.string().nullish().describe('Fallback bKash sending number for COD orders that record it. bKash orders no longer use senderNumber.'),
-  "sellerSenderNumbers": zod.record(zod.string(), zod.string().nullable()).optional().describe('Per-seller-group bKash sending number override, keyed by sellerId as a string (\"null\" for the admin-direct group) -- same key convention as sellerPaymentMethods. Added in Part 5: previously a single top-level senderNumber was reused across every seller group resolving to \"bkash\", which doesn\'t hold up once a cart has multiple sellers with separate bKash merchant accounts (PHASE3_HANDOFF.md flagged this as a known gap).'),
+  "sellerSenderNumbers": zod.record(zod.string(), zod.string().nullable()).optional().describe('Per-seller-group bKash sending number override, keyed by sellerId as a string (\"null\" for the admin-direct group).'),
   "shippingAddress": zod.object({
   "fullName": zod.string(),
   "phone": zod.string(),
@@ -921,7 +937,7 @@ export const CreateOrderBody = zod.object({
   "loyaltyPointsToRedeem": zod.number().optional(),
   "giftWrap": zod.boolean().optional(),
   "giftMessage": zod.string().nullish()
-}).describe('A cart with mixed payment methods (COD + Advance) splits into one order per (seller × payment method) combo. All sibling orders share a checkoutSessionId so the buyer can see them together. paymentMethod is the fallback for admin-direct lines and lines without an explicit per-line choice; itemPaymentMethods (keyed by cart line id) lets the buyer choose per-line, matching the bag page per-item selector.')
+}).describe('A cart with mixed payment methods (COD + Advance) splits into one order per (seller × payment method) combo. All sibling orders share a checkoutSessionId so the buyer can see them together. paymentMethod is the fallback for admin-direct lines and lines without an explicit per-line choice; itemPaymentMethods (keyed by cart line id) lets the buyer choose per-line, matching the bag page\'s per-item selector.')
 
 
 /**
@@ -1907,9 +1923,9 @@ export const ListMySellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
-  "productName": zod.string().nullish(),
-  "productSlug": zod.string().nullish(),
-  "productImage": zod.string().nullish(),
+  "productName": zod.string().nullish().describe('Admin-owned variety name (e.g. \"Langra Mango\") from the parent productsTable row.'),
+  "productSlug": zod.string().nullish().describe('URL slug of the parent product (for linking to the variety detail page).'),
+  "productImage": zod.string().nullish().describe('First image of the parent product (fallback thumbnail when the listing has no images of its own).'),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -1994,9 +2010,9 @@ export const GetSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
-  "productName": zod.string().nullish(),
-  "productSlug": zod.string().nullish(),
-  "productImage": zod.string().nullish(),
+  "productName": zod.string().nullish().describe('Admin-owned variety name (e.g. \"Langra Mango\") from the parent productsTable row.'),
+  "productSlug": zod.string().nullish().describe('URL slug of the parent product (for linking to the variety detail page).'),
+  "productImage": zod.string().nullish().describe('First image of the parent product (fallback thumbnail when the listing has no images of its own).'),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2085,9 +2101,9 @@ export const UpdateSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
-  "productName": zod.string().nullish(),
-  "productSlug": zod.string().nullish(),
-  "productImage": zod.string().nullish(),
+  "productName": zod.string().nullish().describe('Admin-owned variety name (e.g. \"Langra Mango\") from the parent productsTable row.'),
+  "productSlug": zod.string().nullish().describe('URL slug of the parent product (for linking to the variety detail page).'),
+  "productImage": zod.string().nullish().describe('First image of the parent product (fallback thumbnail when the listing has no images of its own).'),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2153,9 +2169,9 @@ export const ListProductSellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
-  "productName": zod.string().nullish(),
-  "productSlug": zod.string().nullish(),
-  "productImage": zod.string().nullish(),
+  "productName": zod.string().nullish().describe('Admin-owned variety name (e.g. \"Langra Mango\") from the parent productsTable row.'),
+  "productSlug": zod.string().nullish().describe('URL slug of the parent product (for linking to the variety detail page).'),
+  "productImage": zod.string().nullish().describe('First image of the parent product (fallback thumbnail when the listing has no images of its own).'),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2221,9 +2237,9 @@ export const ListSellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
-  "productName": zod.string().nullish(),
-  "productSlug": zod.string().nullish(),
-  "productImage": zod.string().nullish(),
+  "productName": zod.string().nullish().describe('Admin-owned variety name (e.g. \"Langra Mango\") from the parent productsTable row.'),
+  "productSlug": zod.string().nullish().describe('URL slug of the parent product (for linking to the variety detail page).'),
+  "productImage": zod.string().nullish().describe('First image of the parent product (fallback thumbnail when the listing has no images of its own).'),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2320,9 +2336,9 @@ export const ListAdminSellerListingsResponseItem = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
-  "productName": zod.string().nullish(),
-  "productSlug": zod.string().nullish(),
-  "productImage": zod.string().nullish(),
+  "productName": zod.string().nullish().describe('Admin-owned variety name (e.g. \"Langra Mango\") from the parent productsTable row.'),
+  "productSlug": zod.string().nullish().describe('URL slug of the parent product (for linking to the variety detail page).'),
+  "productImage": zod.string().nullish().describe('First image of the parent product (fallback thumbnail when the listing has no images of its own).'),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2375,9 +2391,9 @@ export const ApproveSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
-  "productName": zod.string().nullish(),
-  "productSlug": zod.string().nullish(),
-  "productImage": zod.string().nullish(),
+  "productName": zod.string().nullish().describe('Admin-owned variety name (e.g. \"Langra Mango\") from the parent productsTable row.'),
+  "productSlug": zod.string().nullish().describe('URL slug of the parent product (for linking to the variety detail page).'),
+  "productImage": zod.string().nullish().describe('First image of the parent product (fallback thumbnail when the listing has no images of its own).'),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2430,9 +2446,9 @@ export const RejectSellerListingResponse = zod.object({
   "hiddenReason": zod.string().nullish(),
   "approvalStatus": zod.enum(['pending', 'approved', 'rejected']),
   "rejectionReason": zod.string().nullish(),
-  "productName": zod.string().nullish(),
-  "productSlug": zod.string().nullish(),
-  "productImage": zod.string().nullish(),
+  "productName": zod.string().nullish().describe('Admin-owned variety name (e.g. \"Langra Mango\") from the parent productsTable row.'),
+  "productSlug": zod.string().nullish().describe('URL slug of the parent product (for linking to the variety detail page).'),
+  "productImage": zod.string().nullish().describe('First image of the parent product (fallback thumbnail when the listing has no images of its own).'),
   "variants": zod.array(zod.object({
   "id": zod.number(),
   "sellerListingId": zod.number(),
@@ -2515,7 +2531,7 @@ export const CreatePlatformPaymentConfigBody = zod.object({
   "merchantAppSecret": zod.string(),
   "merchantUsername": zod.string(),
   "merchantPassword": zod.string()
-}).describe('provider defaults to \"bkash\" if omitted. All four merchant credential fields are required. This is the bKash merchant credential set, held by the admin account (under the post-migration platform-custodial payments model, sellers no longer register their own merchant credentials).')
+}).describe('provider defaults to \"bkash\" if omitted. All four merchant credential fields are required. This is the bKash merchant credential set, held by the admin account (under the post-migration platform- custodial payments model, sellers no longer register their own merchant credentials).')
 
 
 /**
