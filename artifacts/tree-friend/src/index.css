@@ -407,6 +407,110 @@
   display: none; /* Chrome/Safari/Android WebView */
 }
 
+/* ── Skeleton shimmer ───────────────────────────────────────────────────────
+   Industry-standard shimmer effect: a soft diagonal highlight sweeps left →
+   right across the skeleton block, giving the impression of content loading
+   underneath. Superior to `animate-pulse` (uniform opacity throb) because:
+
+     1. Directional motion signals "loading in progress" more clearly than a
+        uniform pulse (which can read as a static stripe pattern once the
+        eye settles on it).
+     2. Lower perceived flicker — the gradient transition is gentler on the
+        vestibular system than a binary opacity toggle.
+     3. Matches the pattern used by Facebook, YouTube, LinkedIn, Linear,
+        Vercel, GitHub (2024 redesign), and Stripe.
+
+   Implementation notes:
+     - The skeleton block has a base background of `hsl(var(--primary) / 6%)`
+       (a faint forest-green tint on the cream card surface — invisible on
+       the eye but distinguishes the skeleton from a plain white box).
+     - The moving highlight is a 200%-wide linear-gradient that translates
+       -100% → 100% over 1.6s, ease-in-out, infinite.
+     - `background-size: 200% 100%` is set on the element so the gradient
+       has room to slide. The keyframe animates `background-position`.
+     - Duration 1.6s is the sweet spot: 1.2s feels rushed, 2s+ feels
+       broken. 1.6s matches GitHub 2024 / Linear.
+     - `prefers-reduced-motion: reduce` (defined further down) globally
+       nukes `animation` so this gracefully degrades to a static tinted
+       block, which is the correct behavior per WCAG 2.3.3.
+   ─────────────────────────────────────────────────────────────────── */
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.skeleton-shimmer {
+  /* Base tint + gradient sweep layered. The gradient is mostly transparent
+     in the middle so the base tint shows through, with one brighter band
+     that sweeps across. */
+  background-color: hsl(var(--primary) / 6%);
+  background-image: linear-gradient(
+    90deg,
+    hsl(var(--primary) / 6%) 0%,
+    hsl(var(--primary) / 6%) 40%,
+    hsl(var(--primary) / 14%) 50%,
+    hsl(var(--primary) / 6%) 60%,
+    hsl(var(--primary) / 6%) 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+/* Staggered fade-in for skeleton grids. Apply to the parent container; each
+   direct child fades in with a 60ms delay per index (capped at 10 to avoid
+   long waits on huge lists). Purely visual polish — gives the skeleton a
+   sense of "progressive rendering" instead of slamming in all at once. */
+@keyframes skeleton-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.skeleton-stagger > * {
+  animation: skeleton-fade-in 0.4s ease-out both;
+}
+.skeleton-stagger > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.skeleton-stagger > *:nth-child(2) {
+  animation-delay: 60ms;
+}
+.skeleton-stagger > *:nth-child(3) {
+  animation-delay: 120ms;
+}
+.skeleton-stagger > *:nth-child(4) {
+  animation-delay: 180ms;
+}
+.skeleton-stagger > *:nth-child(5) {
+  animation-delay: 240ms;
+}
+.skeleton-stagger > *:nth-child(6) {
+  animation-delay: 300ms;
+}
+.skeleton-stagger > *:nth-child(7) {
+  animation-delay: 360ms;
+}
+.skeleton-stagger > *:nth-child(8) {
+  animation-delay: 420ms;
+}
+.skeleton-stagger > *:nth-child(9) {
+  animation-delay: 480ms;
+}
+.skeleton-stagger > *:nth-child(10) {
+  animation-delay: 540ms;
+}
+.skeleton-stagger > *:nth-child(n + 11) {
+  animation-delay: 600ms;
+}
+
 /* ── prefers-reduced-motion ────────────────────────────────────────────────
    v6.2 Part 6 (P2-15): respect the user's OS / browser setting for reduced
    motion. When `prefers-reduced-motion: reduce` is active (System Settings

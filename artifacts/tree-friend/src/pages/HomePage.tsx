@@ -4,7 +4,17 @@ import { ArrowRight, ShieldCheck, Leaf, Truck, ChevronLeft, ChevronRight } from 
 import { Button } from "@/components/ui/button";
 import { ProductCard } from "@/components/ui/ProductCard";
 import { HomepageProductCard } from "@/components/ui/HomepageProductCard";
-import { ProductCardSkeleton, ProductGridSkeleton } from "@/components/ui/ProductCardSkeleton";
+import {
+  ProductCardSkeleton,
+  ProductGridSkeleton,
+  HomepageProductGridSkeleton,
+  HeroSkeleton,
+  CollectionSliderSkeleton,
+  WhyChooseUsSkeleton,
+  InstagramFeedSkeleton,
+  TabsSkeleton,
+  SectionHeaderSkeleton,
+} from "@/components/ui/ProductCardSkeleton";
 import {
   useListProducts,
   useListCategories,
@@ -26,41 +36,50 @@ const DEFAULT_CATEGORY_IMAGE =
   "https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=600&q=80&fm=webp";
 const DEFAULT_CATEGORY_BG = "hsl(var(--secondary))";
 
-function CollectionSliderSkeleton() {
-  return (
-    <section className="pt-16 pb-8 bg-muted/20">
-      <div className="container mx-auto px-4">
-        <div className="flex items-end justify-between mb-8">
-          <div className="space-y-2">
-            <Skeleton className="h-3 w-36 rounded-full" />
-            <Skeleton className="h-8 w-52" />
-          </div>
-        </div>
-        <div className="flex gap-4 overflow-hidden">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="shrink-0 w-[220px] h-[300px] rounded-2xl" />
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
+/**
+ * Full-page homepage skeleton — a 1:1 structural mirror of the real
+ * homepage. Each section matches the real section's height, grid, and
+ * gap so when content swaps in there is zero CLS (Cumulative Layout
+ * Shift). All skeleton primitives use the shimmer effect defined in
+ * `index.css` (industry-standard moving gradient sweep, respects
+ * prefers-reduced-motion).
+ *
+ * The skeleton is shown only while `trendingLoading || newArrivalsLoading`
+ * — once either resolves we have enough content to render the real page
+ * (the per-section loaders take over for category/section data that's
+ * still loading).
+ */
 function HomePageSkeleton() {
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen" aria-busy="true" aria-label="Loading homepage">
+      <HeroSkeleton />
       <CollectionSliderSkeleton />
-      <section className="pt-8 pb-16 bg-background">
+
+      {/* Trending / New Arrivals — 2-col horizontal cards */}
+      <section className="pt-14 pb-16 bg-background">
         <div className="container mx-auto px-4">
-          <div className="flex items-end justify-between mb-10">
-            <div className="space-y-2">
-              <Skeleton className="h-3 w-28 rounded-full" />
-              <Skeleton className="h-10 w-56" />
-            </div>
+          <div className="mb-10">
+            <SectionHeaderSkeleton eyebrowWidth="w-28" titleWidth="w-72" />
+            <Skeleton className="h-4 w-72 max-w-full mb-6" />
+            <TabsSkeleton count={2} />
           </div>
-          <ProductGridSkeleton count={4} />
+          <HomepageProductGridSkeleton count={4} />
         </div>
       </section>
+
+      {/* Best Plants & Trees by Category — 4-col vertical cards */}
+      <section className="py-16 bg-muted/10 border-t">
+        <div className="container mx-auto px-4">
+          <div className="mb-10">
+            <SectionHeaderSkeleton eyebrowWidth="w-36" titleWidth="w-64" />
+            <TabsSkeleton count={4} className="mt-2" />
+          </div>
+          <ProductGridSkeleton count={8} />
+        </div>
+      </section>
+
+      <WhyChooseUsSkeleton />
+      <InstagramFeedSkeleton />
     </div>
   );
 }
@@ -495,11 +514,7 @@ export function HomePage() {
 
             {/* Category tabs — scrollable on mobile, pill group style */}
             {sectionsLoading ? (
-              <div className="flex gap-2 mt-2 mb-2">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="h-9 w-28 rounded-full bg-muted animate-pulse" />
-                ))}
-              </div>
+              <TabsSkeleton count={4} className="mt-2" />
             ) : BEST_TABS.length === 0 ? null : (
               <div
                 className="flex items-center rounded-full border border-border bg-muted/40 p-1 gap-1 mt-2 overflow-x-auto max-w-full"
