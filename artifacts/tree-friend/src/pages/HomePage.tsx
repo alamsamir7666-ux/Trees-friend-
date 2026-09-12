@@ -119,7 +119,7 @@ function CollectionSlider() {
               Browse by Collection
             </p>
             <h2 className="font-serif text-3xl md:text-4xl font-medium leading-tight">
-              Our Collections
+              Tree Collections
             </h2>
           </div>
           <div className="flex gap-2">
