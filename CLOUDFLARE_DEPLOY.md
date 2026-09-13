@@ -75,9 +75,16 @@ git pull origin main
    | **Production branch** | `main` |
    | **Framework preset** | None (leave as "None" — we use a custom build command) |
    | **Root directory** | `/` (repo root — leave blank) |
-   | **Build command** | `npm install -g pnpm@9.15.0 && pnpm install --no-frozen-lockfile && pnpm --filter tree-friend run build` |
+   | **Build command** | `pnpm --filter tree-friend run build` |
    | **Build output directory** | `artifacts/tree-friend/dist/public` |
    | **Node version** | 22 (set via env var `NODE_VERSION=22`) |
+
+   **Note:** Cloudflare Pages auto-detects pnpm from the `packageManager`
+   field in `package.json` and runs `pnpm install --frozen-lockfile`
+   automatically before your build command runs. You do NOT need to
+   install pnpm or run `pnpm install` in the build command — that would
+   cause an `EEXIST` error (pnpm is already installed) and redundant
+   work (deps are already installed).
 
 5. Click **Save and Deploy**
 
@@ -191,8 +198,12 @@ When you buy a domain (e.g. `treefriend.com`):
 
 ## Troubleshooting
 
-### Build fails with "pnpm: command not found"
-The build command includes `npm install -g pnpm@9.15.0` which installs pnpm globally before running the build. If this fails, check that `NODE_VERSION=22` is set in the env vars.
+### Build fails with "EEXIST: file already exists" for pnpm
+Cloudflare Pages already has pnpm pre-installed (it auto-detects from
+your `package.json` `packageManager` field). Remove `npm install -g pnpm@9.15.0`
+from your build command — just use `pnpm --filter tree-friend run build`.
+Cloudflare also automatically runs `pnpm install --frozen-lockfile` before
+your build command, so you don't need that either.
 
 ### API calls return 502 Bad Gateway
 The `/api/*` proxy function can't reach the Render API server. Check:
