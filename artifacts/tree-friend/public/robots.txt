@@ -10,7 +10,11 @@ Disallow: /profile
 Disallow: /cart
 
 # Sitemaps
-Sitemap: https://envyenhance.com/sitemap.xml
+# FIX: was `https://envyenhance.com/sitemap.xml` (leftover from a previous
+# project). Using a relative path so robots.txt works regardless of the
+# production domain (treefriend.pages.dev now, custom domain later).
+# Search engines resolve relative sitemap paths against the request host.
+Sitemap: /sitemap.xml
 
 # Crawl-delay for aggressive bots
 User-agent: AhrefsBot

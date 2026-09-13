@@ -49,6 +49,11 @@ Thumbs.db
 # .env.example is intentionally kept — it documents required env vars
 # without containing any secrets. This is the industry-standard practice.
 
+# Cloudflare Pages local dev secrets — wrangler reads .dev.vars
+# automatically when running `wrangler pages dev`. Same rules as .env:
+# never commit, only the .example template is tracked.
+.dev.vars
+
 # Replit — not needed outside Replit
 .replit
 .replitignore

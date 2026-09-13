@@ -1,0 +1,22 @@
+# Cloudflare Pages redirects — https://developers.cloudflare.com/pages/configuration/redirects/
+#
+# This file handles client-side routing for the SPA. Cloudflare Pages
+# processes rules top-to-bottom, and static assets (HTML, JS, CSS,
+# images) are always served first — `_redirects` only kicks in when no
+# static file matches the request path.
+#
+# Rules:
+#   1. /api/* — handled by functions/api/[[path]].ts (Pages Function),
+#      NOT by this file. The Pages Function takes precedence over
+#      _redirects for /api/* paths.
+#   2. /sitemap.xml — handled by functions/sitemap.xml.ts (Pages Function).
+#   3. /products/:id — handled by functions/products/[id].ts (Pages Function)
+#      for bot detection + OG meta tag injection. Human browsers fall
+#      through to the SPA fallback.
+#   4. /blog/:slug — handled by functions/blog/[slug].ts (same pattern).
+#   5. Everything else — serve index.html so wouter (client-side router)
+#      can handle the route. Status 200 (not 302) so the URL in the
+#      address bar stays the same.
+
+# SPA fallback — all non-static, non-function routes serve index.html.
+/*    /index.html    200

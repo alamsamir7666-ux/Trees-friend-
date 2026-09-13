@@ -1,0 +1,31 @@
+# Cloudflare Pages configuration — https://developers.cloudflare.com/pages/functions/wrangler-configuration/
+#
+# This file configures `wrangler pages dev` for local development and
+# provides defaults for `wrangler pages deploy`.
+#
+# Production deployment is done via the Cloudflare Pages dashboard
+# (connected to the GitHub repo) — this file is NOT used by the dashboard
+# build process, but it documents the expected configuration.
+#
+# Local dev:
+#   pnpm --filter tree-friend run build
+#   npx wrangler pages dev dist/public --compatibility-date=2024-09-23
+#
+# The dev server serves the built static assets + runs the Pages
+# Functions in /functions locally. Set env vars in a .dev.vars file
+# (gitignored) for local testing:
+#
+#   .dev.vars (create this file, do NOT commit):
+#     API_BASE_URL=https://trees-friend-tt53.onrender.com
+
+name = "treefriend"
+compatibility_date = "2024-09-23"
+pages_build_output_dir = "./dist/public"
+
+# Bindings — these are available in Pages Functions as `env.<NAME>`.
+# `API_BASE_URL` is the only binding needed; it's set in the Cloudflare
+# Pages dashboard (Settings → Environment variables) for production.
+# For local dev, set it in `.dev.vars` (see comment above).
+[vars]
+# No hardcoded vars here — all env vars are set in the dashboard so the
+# same code works across preview deployments, production, and local dev.

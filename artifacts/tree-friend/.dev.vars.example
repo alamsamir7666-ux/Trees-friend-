@@ -1,0 +1,13 @@
+# Cloudflare Pages Functions — local dev environment variables.
+#
+# Copy this file to `.dev.vars` (gitignored) and fill in the values
+# for local `wrangler pages dev` testing. The `.dev.vars` file is the
+# Pages Functions equivalent of `.env` — wrangler reads it automatically
+# when running `wrangler pages dev`.
+#
+# In production, these are set in the Cloudflare Pages dashboard under
+# Settings → Environment variables.
+
+# Backend API server URL. The catch-all /api/* Pages Function proxies
+# requests here. Required for the proxy to work.
+API_BASE_URL=https://trees-friend-tt53.onrender.com

@@ -81,8 +81,8 @@ function WhatsAppIcon() {
 
 const socials = [
   { label: "Facebook", href: "https://www.facebook.com/profile.php?id=61583932632838", icon: FacebookIcon },
-  { label: "Instagram", href: "https://www.instagram.com/envyenhance?igsh=YzhiemswcWE3a3li", icon: InstagramIcon },
-  { label: "TikTok", href: "https://www.tiktok.com/@envyenhance", icon: TikTokIcon },
+  { label: "Instagram", href: "https://www.instagram.com/treefriend", icon: InstagramIcon },
+  { label: "TikTok", href: "https://www.tiktok.com/@treefriend", icon: TikTokIcon },
   { label: "WhatsApp", href: "https://wa.me/01636575741", icon: WhatsAppIcon },
 ];
 

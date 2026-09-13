@@ -14,17 +14,35 @@ export default defineConfig({
     react(),
     tailwindcss({ optimize: true }),
   ],
+  // Define block — inlines env vars into the JS bundle at build time.
+  // Vite auto-inlines any `VITE_*` env var by default, but the explicit
+  // list below documents the complete set of supported vars and ensures
+  // they're always defined (even if unset, they resolve to `""` instead
+  // of `undefined`, which would crash optional integrations like Clerk).
+  //
+  // NOTE: when adding a new VITE_* env var to the codebase, add it here
+  // too — otherwise it won't be inlined into the production bundle.
   define: {
     'import.meta.env.VITE_CLERK_PUBLISHABLE_KEY': JSON.stringify(process.env.VITE_CLERK_PUBLISHABLE_KEY ?? ''),
     'import.meta.env.VITE_CLERK_PROXY_URL': JSON.stringify(process.env.VITE_CLERK_PROXY_URL ?? ''),
     'import.meta.env.VITE_API_BASE_URL': JSON.stringify(process.env.VITE_API_BASE_URL ?? ''),
-    'import.meta.env.VITE_GA_ID': JSON.stringify(process.env.VITE_GA_ID ?? ''),
+    // FIX: was `VITE_GA_ID` — mismatched the source code which reads
+    // `VITE_GA_MEASUREMENT_ID` (src/lib/analytics.ts:20). GA never
+    // initialized in production.
+    'import.meta.env.VITE_GA_MEASUREMENT_ID': JSON.stringify(process.env.VITE_GA_MEASUREMENT_ID ?? ''),
     'import.meta.env.VITE_META_PIXEL_ID': JSON.stringify(process.env.VITE_META_PIXEL_ID ?? ''),
+    // FIX: was missing entirely — src/lib/pushNotifications.ts:17 reads
+    // `VITE_VAPID_PUBLIC_KEY`. Push notifications silently no-op'd even
+    // if the env var was set in the deployment dashboard.
+    'import.meta.env.VITE_VAPID_PUBLIC_KEY': JSON.stringify(process.env.VITE_VAPID_PUBLIC_KEY ?? ''),
   },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),
-      "@assets": path.resolve(import.meta.dirname, "..", "..", "attached_assets"),
+      // REMOVED: `@assets` alias pointed at `../../attached_assets` which
+      // doesn't exist in the repo (leftover from the Replit-era scaffold).
+      // No source file imports `@assets/` — verified via grep. Removing
+      // to avoid confusion for new contributors.
     },
     dedupe: ["react", "react-dom"],
   },

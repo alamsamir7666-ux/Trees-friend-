@@ -61,8 +61,33 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Tree Friend" />
 
-    <!-- Canonical -->
-    <link rel="canonical" href="https://treefriend.com/" />
+    <!-- Canonical — set dynamically by the inline script below + seo.ts
+         on route change. Uses a placeholder URL that the script overrides
+         with the actual deployment origin on page load. We can't use
+         href="/" here because Vite's HTML asset processor tries to read
+         it as a file path during build. -->
+    <link rel="canonical" href="https://treefriend.pages.dev/" />
+    <script>
+      // Fix canonical + JSON-LD urls to use the actual deployment origin.
+      // Without this, OG previews on treefriend.pages.dev (or any custom
+      // domain) would show the wrong canonical URL.
+      (function () {
+        var origin = window.location.origin;
+        var canonical = document.querySelector('link[rel="canonical"]');
+        if (canonical) canonical.href = origin + '/';
+        // Update JSON-LD structured data urls to use the actual origin.
+        document.querySelectorAll('script[type="application/ld+json"]').forEach(function (s) {
+          try {
+            var data = JSON.parse(s.textContent);
+            if (data.url) data.url = origin;
+            if (data.potentialAction && data.potentialAction.target && data.potentialAction.target.urlTemplate) {
+              data.potentialAction.target.urlTemplate = origin + '/products?q={search_term_string}';
+            }
+            s.textContent = JSON.stringify(data);
+          } catch (e) { /* ignore parse errors */ }
+        });
+      })();
+    </script>
 
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -73,8 +98,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="preconnect" href="https://images.unsplash.com" crossorigin />
     <link rel="preconnect" href="https://res.cloudinary.com" crossorigin />
-    <link rel="preconnect" href="https://trees-friend-tt53.onrender.com" crossorigin />
-    <link rel="dns-prefetch" href="https://clerk.treefriend.com" />
+    <!-- Removed: dns-prefetch for clerk.treefriend.com — domain not in use.
+         VITE_CLERK_PROXY_URL (if set) points at the Render API server's
+         /api/__clerk endpoint, not a custom subdomain. -->
 
     <!-- Preload LCP hero image so browser fetches it immediately.
          PERF-6b: added f_auto,q_auto Cloudinary transformations — f_auto

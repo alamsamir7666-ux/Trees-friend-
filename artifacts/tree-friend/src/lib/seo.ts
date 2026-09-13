@@ -65,7 +65,12 @@ export function updateSEO(opts: SEOOptions = {}) {
   // Open Graph
   setMeta("og:title", title, true);
   setMeta("og:description", description, true);
-  setMeta("og:image", image.startsWith("http") ? image : `https://treefriend.com${image}`, true);
+  // FIX: was hardcoded `https://treefriend.com${image}` — broke OG image
+  // previews on any other domain (treefriend.pages.dev, staging, preview
+  // deploys, future custom domains). Using window.location.origin makes
+  // relative image paths resolve correctly regardless of where the app
+  // is deployed.
+  setMeta("og:image", image.startsWith("http") ? image : `${window.location.origin}${image}`, true);
   setMeta("og:url", canonicalUrl, true);
   setMeta(
     "og:type",
@@ -103,7 +108,7 @@ export function updateSEO(opts: SEOOptions = {}) {
   setMeta("twitter:card", "summary_large_image");
   setMeta("twitter:title", title);
   setMeta("twitter:description", description);
-  setMeta("twitter:image", image.startsWith("http") ? image : `https://treefriend.com${image}`);
+  setMeta("twitter:image", image.startsWith("http") ? image : `${window.location.origin}${image}`);
 
   // Canonical link tag
   let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
