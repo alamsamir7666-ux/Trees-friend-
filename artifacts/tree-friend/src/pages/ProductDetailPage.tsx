@@ -19,6 +19,7 @@ import { Star, Heart, ShoppingBag, ChevronLeft, Check, ShieldCheck, Package, Pen
 } from "lucide-react";
 import { ProductCard } from "@/components/ui/ProductCard";
 import { NoImagePlaceholder } from "@/components/ui/NoImagePlaceholder";
+import { StoreIcon } from "@/components/ui/StoreIcon";
 import { saveRecentlyViewed, useRecentlyViewed } from "@/hooks/useRecentlyViewed";
 import { ProductQA } from "@/components/ui/ProductQA";
 import { SellerListingsSection } from "@/components/ui/SellerListingsSection";
@@ -284,7 +285,7 @@ export function ProductDetailPage() {
               <p className="text-sm text-muted-foreground italic mb-3">{product.scientificName}</p>
             )}
 
-            <div className="flex items-center gap-3 mb-6">
+            <div className="flex items-center gap-3 mb-6 flex-wrap">
               <div className="flex items-center gap-2">
                 <div className="flex">
                   {Array.from({ length: 5 }).map((_, i) => (
@@ -293,6 +294,23 @@ export function ProductDetailPage() {
                 </div>
                 <span className="text-sm text-muted-foreground">({product.reviewCount} reviews)</span>
               </div>
+
+              {/* View Seller listing — pill button with storefront icon + arrow.
+                  Links to the dedicated seller-listings page for this product
+                  (/products/:id/seller-listings), which shows every seller
+                  offering this product with their prices, variants, and stock.
+                  Matches the approved reference design: deep forest green
+                  (bg-primary), pill-shaped, auto-width, 48px tall. */}
+              <Link href={`/products/${product.id}/seller-listings`}>
+                <Button
+                  className="h-12 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground px-5 sm:px-6 gap-2 font-semibold shadow-sm hover:shadow-md transition-all"
+                >
+                  <StoreIcon className="h-4 w-4 shrink-0" />
+                  <span className="text-sm">View Seller listing</span>
+                  <ArrowRight className="h-4 w-4 shrink-0" />
+                </Button>
+              </Link>
+
               <Button variant="outline" size="icon" className="rounded-full h-9 w-9 ml-auto" onClick={handleWishlist}>
                 <Heart className={`h-4 w-4 ${isWishlisted ? "fill-destructive text-destructive" : ""}`} />
               </Button>
