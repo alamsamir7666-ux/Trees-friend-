@@ -77,6 +77,7 @@ git pull origin main
    | **Root directory** | `/` (repo root — leave blank) |
    | **Build command** | `pnpm --filter tree-friend run build` |
    | **Build output directory** | `artifacts/tree-friend/dist/public` |
+   | **Deploy command** | Leave EMPTY (Cloudflare auto-uploads the build output directory) |
    | **Node version** | 22 (set via env var `NODE_VERSION=22`) |
 
    **Note:** Cloudflare Pages auto-detects pnpm from the `packageManager`
@@ -85,6 +86,13 @@ git pull origin main
    install pnpm or run `pnpm install` in the build command — that would
    cause an `EEXIST` error (pnpm is already installed) and redundant
    work (deps are already installed).
+
+   **IMPORTANT — Deploy command must be EMPTY:** If Cloudflare auto-fills
+   a deploy command (e.g. `npx wrangler deploy`), clear it. Pages
+   deployments via the Git integration don't need a deploy command —
+   Cloudflare automatically uploads everything in the build output
+   directory to the edge CDN after the build finishes. Setting a deploy
+   command will cause a "workspace root" error if you have a monorepo.
 
 5. Click **Save and Deploy**
 
@@ -197,6 +205,14 @@ When you buy a domain (e.g. `treefriend.com`):
 5. Update `public/robots.txt` if you want the sitemap URL to be absolute (currently uses relative `/sitemap.xml` which works on any domain)
 
 ## Troubleshooting
+
+### Deploy fails with "The Cloudflare application detection logic has been run in the root of a workspace"
+Cloudflare auto-detected a `wrangler.toml` and tried to run
+`npx wrangler deploy` (Workers deploy) instead of doing a Pages deploy.
+Fix: go to **Settings** → **Build & deployments** → clear the
+**Deploy command** field (leave it empty). Pages deployments via the
+Git integration don't need a deploy command — Cloudflare auto-uploads
+the build output directory.
 
 ### Build fails with "EEXIST: file already exists" for pnpm
 Cloudflare Pages already has pnpm pre-installed (it auto-detects from
