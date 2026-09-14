@@ -13,18 +13,18 @@ This guide walks you through deploying the TreeFriend frontend to Cloudflare Pag
 │  │  Includes Dhaka POP — fast for BD users                 │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Pages Functions (functions/)                           │   │
-│  │  • /api/* → proxy to Render (hides Render URL)          │   │
+│  │  Pages Functions (functions/) — SEO only                │   │
 │  │  • /sitemap.xml → dynamic sitemap generator             │   │
 │  │  • /products/:id → bot detection + OG meta injection    │   │
 │  │  • /blog/:slug → bot detection + OG meta injection      │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼ (proxied by /api/* function)
+        │ browser API calls (direct, with CORS)
+        ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Render (trees-friend-tt53.onrender.com)                       │
 │  Express API server — 230 routes, Drizzle ORM, WebSocket chat  │
+│  ALLOWED_ORIGINS must include treefriend.pages.dev             │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -34,12 +34,25 @@ This guide walks you through deploying the TreeFriend frontend to Cloudflare Pag
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**Why direct API calls (no proxy)?**
+The frontend calls the Render API directly from the browser, same as
+the original Vercel setup. This is necessary because:
+1. WebSocket connections (real-time chat, presence) can't go through
+   an HTTP proxy — they need a direct connection to Render.
+2. Cloudflare Pages Functions have a 30-second CPU limit, but SSE
+   streaming (AI chat) can last minutes.
+3. Direct calls are simpler and match the original architecture.
+
+The only server-side functions are for SEO (sitemap + OG meta tags for
+social media crawlers). These run on Cloudflare's edge and fetch data
+from the Render API server-side.
+
 ## What Changed from Vercel
 
 | Aspect | Vercel (old) | Cloudflare Pages (new) |
 |--------|-------------|----------------------|
 | Static hosting | Vercel CDN | Cloudflare CDN (300+ POPs, Dhaka edge) |
-| API proxy | `vercel.json` routes | `functions/api/[[path]].ts` Pages Function |
+| API calls | Direct to Render (CORS) | Direct to Render (CORS) — same |
 | Sitemap | `api/sitemap.ts` (Vercel serverless) | `functions/sitemap.xml.ts` (Pages Function) |
 | OG meta for bots | `api/og-product.ts`, `api/og-blog.ts` | `functions/products/[id].ts`, `functions/blog/[slug].ts` |
 | SPA fallback | `vercel.json` route `/(.*) → /index.html` | `public/_redirects` with `/* → /index.html 200` |
@@ -105,9 +118,9 @@ git pull origin main
 
    | Variable name | Value | Required? |
    |---------------|-------|-----------|
-   | `VITE_API_BASE_URL` | `https://trees-friend-tt53.onrender.com` | **Yes** — your Render API URL |
+   | `VITE_API_BASE_URL` | `https://trees-friend-tt53.onrender.com` | **Yes** — your Render API URL. The frontend calls Render directly (same as Vercel). |
    | `VITE_CLERK_PUBLISHABLE_KEY` | `pk_live_...` or `pk_test_...` | **Yes** — from Clerk dashboard |
-   | `API_BASE_URL` | `https://trees-friend-tt53.onrender.com` | **Yes** — used by the `/api/*` proxy function (note: no `VITE_` prefix — this is the server-side function env var, not the client-side Vite one) |
+   | `API_BASE_URL` | `https://trees-friend-tt53.onrender.com` | **Yes** — used by the SEO Pages Functions (sitemap, OG meta) to fetch data from Render server-side. Note: no `VITE_` prefix — this is the server-side env var. |
    | `NODE_VERSION` | `22` | Yes — Cloudflare Pages defaults to Node 18, your project needs 22 |
 
    Optional (leave blank for now, set later if needed):
@@ -115,6 +128,14 @@ git pull origin main
    - `VITE_GA_MEASUREMENT_ID` — Google Analytics 4 ID (e.g. `G-XXXXXXXX`)
    - `VITE_META_PIXEL_ID` — Meta/Facebook Pixel ID
    - `VITE_VAPID_PUBLIC_KEY` — Web Push VAPID public key
+
+   **Important:** Both `VITE_API_BASE_URL` and `API_BASE_URL` have the
+   same value, but serve different purposes:
+   - `VITE_API_BASE_URL` → client-side, inlined into the browser bundle
+     by Vite at build time. Used for browser-to-Render API calls.
+   - `API_BASE_URL` → server-side, read by the Pages Functions at
+     runtime. Used for the sitemap and OG meta functions to fetch data
+     from Render.
 
 3. Click **Save**
 
